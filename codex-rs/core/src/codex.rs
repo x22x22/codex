@@ -273,6 +273,8 @@ pub(crate) struct Session {
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
     session_manager: ExecSessionManager,
+    /// OpenTelemetry span for the lifetime of this session
+    session_span: Mutex<Option<tracing::Span>>,
 
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
@@ -308,6 +310,12 @@ impl TurnContext {
         path.as_ref()
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
+    }
+
+    pub fn end_session_span(&self) {
+        if let Some(span) = self.session_span.lock().unwrap().take() {
+            drop(span);
+        }
     }
 }
 

@@ -24,6 +24,7 @@ use tracing::error;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
+use codex_telemetry as telemetry;
 
 mod app;
 mod app_backtrack;
@@ -186,6 +187,15 @@ pub async fn run_main(
         cli.config_profile.clone(),
     )?;
 
+    // Build OTEL layer and compose into subscriber.
+    let telemetry = telemetry::build_layer(&telemetry::Settings {
+        enabled: true,
+        exporter: telemetry::Exporter::OtlpFile { path: PathBuf::new(), rotate_mb: Some(100) },
+        service_name: "codex".to_string(),
+        service_version: env!("CARGO_PKG_VERSION").to_string(),
+        codex_home: Some(config.codex_home.clone()),
+    });
+
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
@@ -225,7 +235,20 @@ pub async fn run_main(
             .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
     }
 
-    let _ = tracing_subscriber::registry().with(file_layer).try_init();
+    let _telemetry_guard = if let Some((guard, tracer)) = telemetry {
+        let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(otel_layer)
+            .try_init();
+        Some(guard)
+    } else {
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .try_init();
+        None
+    };
+
 
     run_ratatui_app(cli, config, should_show_trust_screen)
         .await
