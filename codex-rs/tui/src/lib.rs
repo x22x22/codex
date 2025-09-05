@@ -246,16 +246,16 @@ pub async fn run_main(
     }
 
     let _telemetry_guard = if let Some((guard, tracer)) = telemetry {
-        let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
+        let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::telemetry_init::codex_export_filter),
+        );
         let _ = tracing_subscriber::registry()
             .with(file_layer)
             .with(otel_layer)
             .try_init();
         Some(guard)
     } else {
-        let _ = tracing_subscriber::registry()
-            .with(file_layer)
-            .try_init();
+        let _ = tracing_subscriber::registry().with(file_layer).try_init();
         None
     };
 
