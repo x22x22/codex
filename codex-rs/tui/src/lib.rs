@@ -443,10 +443,8 @@ fn determine_repo_trust_state(
     } else if config_toml.is_cwd_trusted(&config.cwd) {
         // if the current cwd project is trusted and no config has been set
         // skip the trust flow and set the approval policy and sandbox mode
-        // Respect any workspace‑write settings from config.toml (e.g.,
-        // writable_roots, exclude_tmpdir_env_var, exclude_slash_tmp,
-        // network_access) instead of always using defaults.
         config.approval_policy = AskForApproval::OnRequest;
+        // Respect workspace‑write settings from config.toml
         config.sandbox_policy = if config_toml.sandbox_workspace_write.is_some() {
             config_toml.derive_sandbox_policy(Some(SandboxMode::WorkspaceWrite))
         } else {
@@ -577,7 +575,9 @@ mod tests {
             .expect("determine trust state");
         assert!(!show_trust);
 
-        // expected config should have updated approval and policy, with workspace-write policy preserved
+        // expected config should have updated approval and sandbox mode:
+        // default isread-only, should now be workspace-write with
+        // workspace-write policy preserved
         let expected_cfg = Config::load_from_base_config_with_overrides(
             config_toml.clone(),
             ConfigOverrides {
