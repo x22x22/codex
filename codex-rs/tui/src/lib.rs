@@ -447,13 +447,8 @@ fn determine_repo_trust_state(
         // writable_roots, exclude_tmpdir_env_var, exclude_slash_tmp,
         // network_access) instead of always using defaults.
         config.approval_policy = AskForApproval::OnRequest;
-        config.sandbox_policy = if let Some(ws) = &config_toml.sandbox_workspace_write {
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: ws.writable_roots.clone(),
-                network_access: ws.network_access,
-                exclude_tmpdir_env_var: ws.exclude_tmpdir_env_var,
-                exclude_slash_tmp: ws.exclude_slash_tmp,
-            }
+        config.sandbox_policy = if config_toml.sandbox_workspace_write.is_some() {
+            config_toml.derive_sandbox_policy(Some(SandboxMode::WorkspaceWrite))
         } else {
             SandboxPolicy::new_workspace_write_policy()
         };
@@ -494,6 +489,7 @@ mod tests {
     use super::*;
     use codex_core::config::ProjectConfig;
     use codex_core::config_types::SandboxWorkspaceWrite;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     fn make_config(preferred: AuthMode) -> Config {
@@ -505,125 +501,6 @@ mod tests {
         .expect("load default config");
         cfg.preferred_auth_method = preferred;
         cfg
-    }
-
-    #[test]
-    fn trust_path_respects_workspace_write_from_config() -> std::io::Result<()> {
-        // Arrange a temporary project directory and mark it trusted in config_toml
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path().join("proj");
-        std::fs::create_dir_all(&project_dir)?;
-
-        // Build a Config instance and set its cwd to the trusted project dir
-        let mut cfg = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            tmp.path().to_path_buf(),
-        )?;
-        cfg.cwd = project_dir.clone();
-
-        // Extra writable root we expect to be propagated into the policy
-        let extra_root = tmp.path().join("extra-root");
-
-        // Prepare ConfigToml with a trusted project and workspace-write settings
-        let mut projects = std::collections::HashMap::new();
-        projects.insert(
-            project_dir.to_string_lossy().to_string(),
-            ProjectConfig {
-                trust_level: Some("trusted".to_string()),
-            },
-        );
-        let config_toml = ConfigToml {
-            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
-                writable_roots: vec![extra_root.clone()],
-                network_access: true,
-                exclude_tmpdir_env_var: true,
-                exclude_slash_tmp: false,
-            }),
-            projects: Some(projects),
-            ..Default::default()
-        };
-
-        // Act: determine_repo_trust_state should skip UI and set policy+approval
-        let show_trust = determine_repo_trust_state(&mut cfg, &config_toml, None, None, None)?;
-
-        // Assert: no onboarding, on-request approval, and policy mirrors config_toml
-        assert!(!show_trust);
-        assert_eq!(
-            cfg.approval_policy,
-            codex_core::protocol::AskForApproval::OnRequest
-        );
-        match &cfg.sandbox_policy {
-            codex_core::protocol::SandboxPolicy::WorkspaceWrite {
-                writable_roots,
-                network_access,
-                exclude_tmpdir_env_var,
-                exclude_slash_tmp,
-            } => {
-                assert!(*network_access);
-                assert!(*exclude_tmpdir_env_var);
-                assert!(!*exclude_slash_tmp);
-                assert!(writable_roots.contains(&extra_root));
-            }
-            other => panic!("expected WorkspaceWrite policy, got {other:?}"),
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    fn trust_path_defaults_to_workspace_write_defaults() -> std::io::Result<()> {
-        // Arrange a temporary project directory and mark it trusted in config_toml
-        let tmp = TempDir::new().unwrap();
-        let project_dir = tmp.path().join("proj");
-        std::fs::create_dir_all(&project_dir)?;
-
-        // Build a Config instance and set its cwd to the trusted project dir
-        let mut cfg = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            tmp.path().to_path_buf(),
-        )?;
-        cfg.cwd = project_dir.clone();
-
-        // Prepare ConfigToml with a trusted project and NO sandbox_workspace_write section
-        let mut projects = std::collections::HashMap::new();
-        projects.insert(
-            project_dir.to_string_lossy().to_string(),
-            ProjectConfig {
-                trust_level: Some("trusted".to_string()),
-            },
-        );
-        let config_toml = ConfigToml {
-            projects: Some(projects),
-            ..Default::default()
-        };
-
-        // Act: determine_repo_trust_state should skip UI and set policy+approval
-        let show_trust = determine_repo_trust_state(&mut cfg, &config_toml, None, None, None)?;
-
-        // Assert: no onboarding, on-request approval, and policy uses defaults
-        assert!(!show_trust);
-        assert_eq!(
-            cfg.approval_policy,
-            codex_core::protocol::AskForApproval::OnRequest
-        );
-        match &cfg.sandbox_policy {
-            codex_core::protocol::SandboxPolicy::WorkspaceWrite {
-                writable_roots,
-                network_access,
-                exclude_tmpdir_env_var,
-                exclude_slash_tmp,
-            } => {
-                assert!(writable_roots.is_empty());
-                assert!(!*network_access);
-                assert!(!*exclude_tmpdir_env_var);
-                assert!(!*exclude_slash_tmp);
-            }
-            other => panic!("expected WorkspaceWrite policy, got {other:?}"),
-        }
-
-        Ok(())
     }
 
     #[test]
@@ -660,5 +537,106 @@ mod tests {
             LoginStatus::AuthMode(AuthMode::ChatGPT),
             &cfg
         ))
+    }
+
+    #[test]
+    fn trust_path_respects_workspace_write_from_config() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let project_dir = tmp.path().join("proj");
+        std::fs::create_dir_all(&project_dir).expect("create project dir");
+        let extra_root = tmp.path().join("extra-root");
+
+        let mut projects = std::collections::HashMap::new();
+        projects.insert(
+            project_dir.to_string_lossy().to_string(),
+            ProjectConfig {
+                trust_level: Some("trusted".to_string()),
+            },
+        );
+        let config_toml = ConfigToml {
+            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+                writable_roots: vec![extra_root.clone()],
+                network_access: true,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: false,
+            }),
+            projects: Some(projects),
+            ..Default::default()
+        };
+
+        // Build a Config instance and set its cwd to the trusted project dir
+        let mut cfg = Config::load_from_base_config_with_overrides(
+            config_toml.clone(),
+            ConfigOverrides::default(),
+            tmp.path().to_path_buf(),
+        )
+        .expect("load default config");
+        cfg.cwd = project_dir.clone();
+
+        let show_trust = determine_repo_trust_state(&mut cfg, &config_toml, None, None, None)
+            .expect("determine trust state");
+        assert!(!show_trust);
+
+        // expected config should have updated approval and policy, with workspace-write policy preserved
+        let expected_cfg = Config::load_from_base_config_with_overrides(
+            config_toml.clone(),
+            ConfigOverrides {
+                cwd: Some(project_dir.clone()),
+                sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+                approval_policy: Some(codex_core::protocol::AskForApproval::OnRequest),
+                ..Default::default()
+            },
+            tmp.path().to_path_buf(),
+        )
+        .expect("load expected config");
+        assert_eq!(cfg, expected_cfg);
+    }
+
+    #[test]
+    fn trust_path_defaults_to_workspace_write_defaults() {
+        let tmp = TempDir::new().expect("create temp dir");
+        let project_dir = tmp.path().join("proj");
+        std::fs::create_dir_all(&project_dir).expect("create project dir");
+
+        let mut projects = std::collections::HashMap::new();
+        projects.insert(
+            project_dir.to_string_lossy().to_string(),
+            ProjectConfig {
+                trust_level: Some("trusted".to_string()),
+            },
+        );
+        let config_toml = ConfigToml {
+            projects: Some(projects),
+            ..Default::default()
+        };
+
+        let mut cfg = Config::load_from_base_config_with_overrides(
+            config_toml.clone(),
+            ConfigOverrides {
+                cwd: Some(project_dir.clone()),
+                ..Default::default()
+            },
+            tmp.path().to_path_buf(),
+        )
+        .expect("load default config");
+
+        let show_trust = determine_repo_trust_state(&mut cfg, &config_toml, None, None, None)
+            .expect("determine trust state");
+        assert!(!show_trust);
+
+        // expected config should match defaults, with the default workspace-write policy
+        let mut expected_cfg = Config::load_from_base_config_with_overrides(
+            config_toml.clone(),
+            ConfigOverrides {
+                cwd: Some(project_dir.clone()),
+                approval_policy: Some(codex_core::protocol::AskForApproval::OnRequest),
+                ..Default::default()
+            },
+            tmp.path().to_path_buf(),
+        )
+        .expect("load expected config");
+        expected_cfg.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+
+        assert_eq!(cfg, expected_cfg);
     }
 }
