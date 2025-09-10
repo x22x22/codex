@@ -23,12 +23,12 @@ use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
-use codex_telemetry as telemetry;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -99,9 +99,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Build fmt layer (existing logging) to compose with OTEL layer.
     let default_level = "error";
+
+    // Build env_filter separately and attach via with_filter.
+    let env_filter = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new(default_level))
+        .unwrap_or_else(|_| EnvFilter::new(default_level));
+
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_ansi(stderr_with_ansi)
-        .with_writer(std::io::stderr);
+        .with_writer(std::io::stderr)
+        .with_filter(env_filter);
 
     let sandbox_mode = if full_auto {
         Some(SandboxMode::WorkspaceWrite)
@@ -157,34 +164,21 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
 
-    // Build OTEL layer and compose into subscriber.
-    let telemetry = codex_core::telemetry_init::build_otel_layer_from_config(
-        &config,
-        "codex",
-        env!("CARGO_PKG_VERSION"),
-    );
-    let _telemetry_guard = if let Some((guard, tracer)) = telemetry {
-        let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer).with_filter(
-            tracing_subscriber::filter::filter_fn(codex_core::telemetry_init::codex_export_filter),
+    let otel = codex_core::otel_init::build_provider(&config, env!("CARGO_PKG_VERSION"));
+
+    if let Some(provider) = otel {
+        let tracer = provider.tracer();
+        let otel_layer = OpenTelemetryLayer::new(tracer).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
         );
-        // Build env_filter separately and attach via with_filter.
-        let env_filter = EnvFilter::try_from_default_env()
-            .or_else(|_| EnvFilter::try_new(default_level))
-            .unwrap_or_else(|_| EnvFilter::new(default_level));
+
         let _ = tracing_subscriber::registry()
-            .with(fmt_layer.with_filter(env_filter))
+            .with(fmt_layer)
             .with(otel_layer)
             .try_init();
-        Some(guard)
     } else {
-        let env_filter = EnvFilter::try_from_default_env()
-            .or_else(|_| EnvFilter::try_new(default_level))
-            .unwrap_or_else(|_| EnvFilter::new(default_level));
-        let _ = tracing_subscriber::registry()
-            .with(fmt_layer.with_filter(env_filter))
-            .try_init();
-        None
-    };
+        let _ = tracing_subscriber::registry().with(fmt_layer).try_init();
+    }
 
     let mut event_processor: Box<dyn EventProcessor> = if json_mode {
         Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
@@ -288,30 +282,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let items: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
     let initial_prompt_task_id = conversation.submit(Op::UserInput { items }).await?;
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
-
-    // If stdin is an interactive TTY, watch for EOF (Ctrl+D) and request a graceful shutdown.
-    if std::io::stdin().is_terminal() {
-        let codex_for_eof = codex.clone();
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            use tokio::io::stdin;
-            let mut stdin = stdin();
-            let mut buf = [0u8; 1];
-            loop {
-                match stdin.read(&mut buf).await {
-                    Ok(0) => {
-                        let _ = codex_for_eof.submit(Op::Shutdown).await;
-                        break;
-                    }
-                    Ok(_) => {
-                        // discard any input; exec does not read interactive input
-                        continue;
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-    }
 
     // Run the loop until the task is complete.
     while let Some(event) = rx.recv().await {

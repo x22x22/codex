@@ -16,7 +16,10 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
+use tracing::Instrument;
+use tracing::Span;
 use tracing::debug;
+use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
@@ -42,6 +45,7 @@ use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::util::backoff;
+use codex_otel::otel_provider::OtelProvider;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
@@ -106,13 +110,24 @@ impl ModelClient {
     /// Dispatches to either the Responses or Chat implementation depending on
     /// the provider config.  Public callers always invoke `stream()` – the
     /// specialised helpers are private to avoid accidental misuse.
+    #[tracing::instrument(
+        skip(self),
+        fields(
+            session_id = %self.session_id,
+            model = %self.config.model,
+            model_slug = %self.config.model_family.slug,
+            model_provider = %self.config.model_provider.name,
+        ),
+    )]
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
         match self.provider.wire_api {
             WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => {
                 // Create the raw streaming connection first.
                 let response_stream = stream_chat_completions(
+                    &self.session_id,
                     prompt,
+                    &self.config.model,
                     &self.config.model_family,
                     &self.client,
                     &self.provider,
@@ -148,6 +163,15 @@ impl ModelClient {
     }
 
     /// Implementation for the OpenAI *Responses* experimental API.
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            session_id = %self.session_id,
+            model = %self.config.model,
+            model_slug = %self.config.model_family.slug,
+            model_provider = %self.config.model_provider.name,
+        ),
+    )]
     async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
@@ -234,16 +258,27 @@ impl ModelClient {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
 
-            let res = req_builder.send().await;
+            let request_span =
+                info_span!("request", request_id = tracing::field::Empty).or_current();
+
+            let tracing_headers = OtelProvider::headers(&request_span);
+
+            req_builder = req_builder.headers(tracing_headers);
+
+            let res = req_builder.send().instrument(request_span.clone()).await;
+
             if let Ok(resp) = &res {
+                let request_id = resp
+                    .headers()
+                    .get("x-request-id")
+                    .map(|v| v.to_str().unwrap_or_default())
+                    .unwrap_or_default();
                 trace!(
                     "Response status: {}, request-id: {}",
                     resp.status(),
-                    resp.headers()
-                        .get("x-request-id")
-                        .map(|v| v.to_str().unwrap_or_default())
-                        .unwrap_or_default()
+                    request_id
                 );
+                request_span.record("request_id", request_id);
             }
 
             match res {
@@ -365,6 +400,10 @@ impl ModelClient {
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
     }
+
+    pub fn get_session_id(&self) -> Uuid {
+        self.session_id.clone()
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -483,6 +522,8 @@ async fn process_sse<S>(
                 continue;
             }
         };
+
+        Span::current().record("otel.name", event.kind.as_str());
 
         match event.kind.as_str() {
             // Individual output item finalised. Forward immediately so the
