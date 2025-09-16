@@ -3,6 +3,8 @@ use crate::CodexAuth;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
+use crate::codex::compact::content_items_to_text;
+use crate::codex::compact::is_session_prefix_message;
 use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
@@ -168,8 +170,9 @@ fn truncate_after_nth_user_message(history: InitialHistory, n: usize) -> Initial
     // Find indices of user message inputs in rollout order.
     let mut user_positions: Vec<usize> = Vec::new();
     for (idx, item) in items.iter().enumerate() {
-        if let RolloutItem::ResponseItem(ResponseItem::Message { role, .. }) = item
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
             && role == "user"
+            && content_items_to_text(content).is_some_and(|text| !is_session_prefix_message(&text))
         {
             user_positions.push(idx);
         }
@@ -194,6 +197,7 @@ fn truncate_after_nth_user_message(history: InitialHistory, n: usize) -> Initial
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::make_session_and_context;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
@@ -267,5 +271,36 @@ mod tests {
             .collect();
         let truncated2 = truncate_after_nth_user_message(InitialHistory::Forked(initial2), 2);
         assert!(matches!(truncated2, InitialHistory::New));
+    }
+
+    #[test]
+    fn ignores_session_prefix_messages_when_truncating() {
+        let (session, turn_context) = make_session_and_context();
+        let mut items = session.build_initial_context(&turn_context);
+        items.push(user_msg("feature request"));
+        items.push(assistant_msg("ack"));
+        items.push(user_msg("second question"));
+        items.push(assistant_msg("answer"));
+
+        let rollout_items: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+
+        let truncated = truncate_after_nth_user_message(InitialHistory::Forked(rollout_items), 1);
+        let got_items = truncated.get_rollout_items();
+
+        let expected: Vec<RolloutItem> = vec![
+            RolloutItem::ResponseItem(items[0].clone()),
+            RolloutItem::ResponseItem(items[1].clone()),
+            RolloutItem::ResponseItem(items[2].clone()),
+            RolloutItem::ResponseItem(items[3].clone()),
+        ];
+
+        assert_eq!(
+            serde_json::to_value(&got_items).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
     }
 }
