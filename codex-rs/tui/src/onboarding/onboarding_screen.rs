@@ -24,7 +24,6 @@ use crate::tui::TuiEvent;
 use color_eyre::eyre::Result;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::Instant;
 
 #[allow(clippy::large_enum_variant)]
 enum Step {
@@ -73,11 +72,10 @@ impl OnboardingScreen {
         } = args;
         let cwd = config.cwd.clone();
         let codex_home = config.codex_home;
-        let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
-            is_logged_in: !matches!(login_status, LoginStatus::NotAuthenticated),
-            request_frame: tui.frame_requester(),
-            start: Instant::now(),
-        })];
+        let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget::new(
+            !matches!(login_status, LoginStatus::NotAuthenticated),
+            tui.frame_requester(),
+        ))];
         if show_login_screen {
             steps.push(Step::Auth(AuthModeWidget {
                 request_frame: tui.frame_requester(),
@@ -271,7 +269,7 @@ impl WidgetRef for &OnboardingScreen {
 impl KeyboardHandler for Step {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self {
-            Step::Welcome(_) => (),
+            Step::Welcome(widget) => widget.handle_key_event(key_event),
             Step::Auth(widget) => widget.handle_key_event(key_event),
             Step::TrustDirectory(widget) => widget.handle_key_event(key_event),
         }
