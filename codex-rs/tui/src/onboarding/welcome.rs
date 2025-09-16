@@ -13,7 +13,8 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
 use crate::ascii_animation::AsciiAnimation;
-use crate::onboarding::onboarding_screen::{KeyboardHandler, StepStateProvider};
+use crate::onboarding::onboarding_screen::KeyboardHandler;
+use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::tui::FrameRequester;
 
 use super::onboarding_screen::StepState;
@@ -92,6 +93,10 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 
+    static VARIANT_A: [&str; 1] = ["frame-a"];
+    static VARIANT_B: [&str; 1] = ["frame-b"];
+    static VARIANTS: [&[&str]; 2] = [&VARIANT_A, &VARIANT_B];
+
     #[test]
     fn welcome_renders_animation_on_first_draw() {
         let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
@@ -116,6 +121,23 @@ mod tests {
         assert!(
             measured_rows >= MIN_ANIMATION_HEIGHT,
             "expected measurement to report at least {MIN_ANIMATION_HEIGHT} rows, got {measured_rows}"
+        );
+    }
+
+    #[test]
+    fn ctrl_dot_changes_animation_variant() {
+        let mut widget = WelcomeWidget {
+            is_logged_in: false,
+            animation: AsciiAnimation::with_variants(FrameRequester::test_dummy(), &VARIANTS, 0),
+        };
+
+        let before = widget.animation.current_frame();
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::CONTROL));
+        let after = widget.animation.current_frame();
+
+        assert_ne!(
+            before, after,
+            "expected ctrl+. to switch welcome animation variant"
         );
     }
 }
