@@ -3260,6 +3260,9 @@ async fn exit_review_mode(
 }
 
 #[cfg(test)]
+pub(crate) use tests::make_session_and_context;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
@@ -3661,6 +3664,3 @@ mod tests {
         (rollout_items, live_history.contents())
     }
 }
-
-#[cfg(test)]
-pub(crate) use tests::make_session_and_context;
