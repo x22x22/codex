@@ -13,12 +13,12 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
 use crate::ascii_animation::AsciiAnimation;
-use crate::onboarding::onboarding_screen::StepStateProvider;
+use crate::onboarding::onboarding_screen::{KeyboardHandler, StepStateProvider};
 use crate::tui::FrameRequester;
 
 use super::onboarding_screen::StepState;
 
-const MIN_ANIMATION_HEIGHT: u16 = 21;
+const MIN_ANIMATION_HEIGHT: u16 = 20;
 const MIN_ANIMATION_WIDTH: u16 = 60;
 
 pub(crate) struct WelcomeWidget {
@@ -26,20 +26,23 @@ pub(crate) struct WelcomeWidget {
     animation: AsciiAnimation,
 }
 
+impl KeyboardHandler for WelcomeWidget {
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
+        if key_event.kind == KeyEventKind::Press
+            && key_event.code == KeyCode::Char('.')
+            && key_event.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            tracing::warn!("Welcome background to press '.'");
+            let _ = self.animation.pick_random_variant();
+        }
+    }
+}
+
 impl WelcomeWidget {
     pub(crate) fn new(is_logged_in: bool, request_frame: FrameRequester) -> Self {
         Self {
             is_logged_in,
             animation: AsciiAnimation::new(request_frame),
-        }
-    }
-
-    pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if key_event.kind == KeyEventKind::Press
-            && key_event.code == KeyCode::Char('.')
-            && key_event.modifiers.contains(KeyModifiers::CONTROL)
-        {
-            let _ = self.animation.pick_random_variant();
         }
     }
 }
@@ -80,5 +83,39 @@ impl StepStateProvider for WelcomeWidget {
             true => StepState::Hidden,
             false => StepState::Complete,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    #[test]
+    fn welcome_renders_animation_on_first_draw() {
+        let widget = WelcomeWidget::new(false, FrameRequester::test_dummy());
+        let area = Rect::new(0, 0, MIN_ANIMATION_WIDTH, MIN_ANIMATION_HEIGHT);
+        let mut buf = Buffer::empty(area);
+        (&widget).render(area, &mut buf);
+
+        let mut found = false;
+        let mut last_non_empty: Option<u16> = None;
+        for y in 0..area.height {
+            for x in 0..area.width {
+                if !buf[(x, y)].symbol().trim().is_empty() {
+                    found = true;
+                    last_non_empty = Some(y);
+                    break;
+                }
+            }
+        }
+
+        assert!(found, "expected welcome animation to render characters");
+        let measured_rows = last_non_empty.map(|v| v + 2).unwrap_or(0);
+        assert!(
+            measured_rows >= MIN_ANIMATION_HEIGHT,
+            "expected measurement to report at least {MIN_ANIMATION_HEIGHT} rows, got {measured_rows}"
+        );
     }
 }

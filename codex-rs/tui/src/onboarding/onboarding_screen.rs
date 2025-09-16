@@ -7,6 +7,7 @@ use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
+use ratatui::style::Color;
 use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 
@@ -224,8 +225,12 @@ impl WidgetRef for &OnboardingScreen {
             for yy in 0..height {
                 let mut any = false;
                 for xx in 0..width {
-                    let sym = tmp[(xx, yy)].symbol();
-                    if !sym.trim().is_empty() {
+                    let cell = &tmp[(xx, yy)];
+                    let has_symbol = !cell.symbol().trim().is_empty();
+                    let has_style = cell.fg != Color::Reset
+                        || cell.bg != Color::Reset
+                        || !cell.modifier.is_empty();
+                    if has_symbol || has_style {
                         any = true;
                         break;
                     }
