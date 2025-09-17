@@ -3,6 +3,7 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
+use AskForApproval::*;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 
@@ -18,6 +19,11 @@ pub enum SafetyCheck {
     Reject { reason: String },
 }
 
+/// Forbidden escalation is when the model asks for escalated permissions when it should not have to
+/// Rules:
+/// The model shouldn't ask for escalated permissions if the command is trusted
+/// The model shouldn't ask for escalated permissions if the approval policy is Never
+/// The model shouldn't ask for escalated permissions if the approval policy is OnFailure and it hasn't failed
 fn reject_forbidden_escalation(
     approval_policy: AskForApproval,
     with_escalated_permissions: bool,
@@ -26,8 +32,6 @@ fn reject_forbidden_escalation(
     if !with_escalated_permissions {
         return None;
     }
-
-    use AskForApproval::*;
 
     let reason = match approval_policy {
         Never => Some(
@@ -129,6 +133,7 @@ pub fn assess_command_safety(
     // the session _because_ they know it needs to run outside a sandbox.
     let command_is_trusted = is_known_safe_command(command) || approved.contains(command);
 
+    // reject function calls when the model asks for escalated permissions when it should not have to
     if let Some(decision) = reject_forbidden_escalation(
         approval_policy,
         with_escalated_permissions,
