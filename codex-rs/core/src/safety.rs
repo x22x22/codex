@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(
             safety_check,
             SafetyCheck::Reject {
-                reason: "auto-rejected because approval policy never allows escalated permissions"
+                reason: "auto-rejected. You should not ask for escalated permissions if the approval policy is Never"
                     .to_string(),
             }
         );
@@ -431,7 +431,7 @@ mod tests {
             safety_check,
             SafetyCheck::Reject {
                 reason:
-                    "auto-rejected because sandbox retry is required before requesting escalated permissions"
+                    "auto-rejected. You should not ask for escalated permissions if the approval policy is OnFailure and it hasn't failed"
                         .to_string(),
             }
         );
@@ -450,7 +450,7 @@ mod tests {
         assert_eq!(
             safety_check,
             SafetyCheck::Reject {
-                reason: "auto-rejected because command is already trusted under the UnlessTrusted approval policy"
+                reason: "auto-rejected. The command is already trusted under the UnlessTrusted approval policy. You do not need to ask for escalated permissions"
                     .to_string(),
             }
         );
