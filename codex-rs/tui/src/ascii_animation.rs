@@ -86,7 +86,6 @@ impl AsciiAnimation {
             next = rng.random_range(0..self.variants.len());
         }
         self.variant_idx = next;
-        // self.restart();
         self.request_frame.schedule_frame();
         true
     }
@@ -97,10 +96,6 @@ impl AsciiAnimation {
 
     fn frames(&self) -> &'static [&'static str] {
         self.variants[self.variant_idx]
-    }
-
-    fn restart(&mut self) {
-        self.start = Instant::now();
     }
 }
 
