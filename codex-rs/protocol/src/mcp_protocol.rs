@@ -747,7 +747,7 @@ mod tests {
 
         assert_eq!(
             json!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
-            serde_json::to_value(&id).unwrap()
+            serde_json::to_value(id).unwrap()
         );
     }
 
