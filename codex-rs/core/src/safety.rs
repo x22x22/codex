@@ -18,6 +18,35 @@ pub enum SafetyCheck {
     Reject { reason: String },
 }
 
+fn reject_forbidden_escalation(
+    approval_policy: AskForApproval,
+    with_escalated_permissions: bool,
+    command_is_trusted: bool,
+) -> Option<SafetyCheck> {
+    if !with_escalated_permissions {
+        return None;
+    }
+
+    use AskForApproval::*;
+
+    let reason = match approval_policy {
+        Never => Some(
+            "auto-rejected because approval policy never allows escalated permissions".to_string(),
+        ),
+        OnFailure => Some(
+            "auto-rejected because sandbox retry is required before requesting escalated permissions"
+                .to_string(),
+        ),
+        UnlessTrusted if command_is_trusted => Some(
+            "auto-rejected because command is already trusted under the UnlessTrusted approval policy"
+                .to_string(),
+        ),
+        OnRequest | UnlessTrusted => None,
+    }?;
+
+    Some(SafetyCheck::Reject { reason })
+}
+
 pub fn assess_patch_safety(
     action: &ApplyPatchAction,
     policy: AskForApproval,
@@ -98,7 +127,17 @@ pub fn assess_command_safety(
     // would probably be fine to run the command in a sandbox, but when
     // `approved.contains(command)` is `true`, the user may have approved it for
     // the session _because_ they know it needs to run outside a sandbox.
-    if is_known_safe_command(command) || approved.contains(command) {
+    let command_is_trusted = is_known_safe_command(command) || approved.contains(command);
+
+    if let Some(decision) = reject_forbidden_escalation(
+        approval_policy,
+        with_escalated_permissions,
+        command_is_trusted,
+    ) {
+        return decision;
+    }
+
+    if command_is_trusted {
         return SafetyCheck::AutoApprove {
             sandbox_type: SandboxType::None,
         };
@@ -114,6 +153,12 @@ pub(crate) fn assess_safety_for_untrusted_command(
 ) -> SafetyCheck {
     use AskForApproval::*;
     use SandboxPolicy::*;
+
+    if let Some(decision) =
+        reject_forbidden_escalation(approval_policy, with_escalated_permissions, false)
+    {
+        return decision;
+    }
 
     match (approval_policy, sandbox_policy) {
         (UnlessTrusted, _) => {
@@ -346,5 +391,63 @@ mod tests {
             None => SafetyCheck::AskUser,
         };
         assert_eq!(safety_check, expected);
+    }
+
+    #[test]
+    fn test_escalation_rejected_when_policy_is_never() {
+        let command = vec!["git".to_string(), "status".to_string()];
+        let approval_policy = AskForApproval::Never;
+        let sandbox_policy = SandboxPolicy::ReadOnly;
+        let approved = HashSet::new();
+
+        let safety_check =
+            assess_command_safety(&command, approval_policy, &sandbox_policy, &approved, true);
+
+        assert_eq!(
+            safety_check,
+            SafetyCheck::Reject {
+                reason: "auto-rejected because approval policy never allows escalated permissions"
+                    .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_escalation_rejected_for_on_failure_policy() {
+        let command = vec!["git".to_string(), "status".to_string()];
+        let approval_policy = AskForApproval::OnFailure;
+        let sandbox_policy = SandboxPolicy::ReadOnly;
+        let approved = HashSet::new();
+
+        let safety_check =
+            assess_command_safety(&command, approval_policy, &sandbox_policy, &approved, true);
+
+        assert_eq!(
+            safety_check,
+            SafetyCheck::Reject {
+                reason:
+                    "auto-rejected because sandbox retry is required before requesting escalated permissions"
+                        .to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_escalation_rejected_when_trusted_under_unless_trusted() {
+        let command = vec!["just".to_string(), "fmt".to_string()];
+        let approval_policy = AskForApproval::UnlessTrusted;
+        let sandbox_policy = SandboxPolicy::ReadOnly;
+        let approved = HashSet::from([command.clone()]);
+
+        let safety_check =
+            assess_command_safety(&command, approval_policy, &sandbox_policy, &approved, true);
+
+        assert_eq!(
+            safety_check,
+            SafetyCheck::Reject {
+                reason: "auto-rejected because command is already trusted under the UnlessTrusted approval policy"
+                    .to_string(),
+            }
+        );
     }
 }

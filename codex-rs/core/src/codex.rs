@@ -470,8 +470,6 @@ impl Session {
             client,
             tools_config: ToolsConfig::new(&ToolsConfigParams {
                 model_family: &config.model_family,
-                approval_policy,
-                sandbox_policy: sandbox_policy.clone(),
                 include_plan_tool: config.include_plan_tool,
                 include_apply_patch_tool: config.include_apply_patch_tool,
                 include_web_search_request: config.tools_web_search_request,
@@ -1241,8 +1239,6 @@ async fn submission_loop(
 
                 let tools_config = ToolsConfig::new(&ToolsConfigParams {
                     model_family: &effective_family,
-                    approval_policy: new_approval_policy,
-                    sandbox_policy: new_sandbox_policy.clone(),
                     include_plan_tool: config.include_plan_tool,
                     include_apply_patch_tool: config.include_apply_patch_tool,
                     include_web_search_request: config.tools_web_search_request,
@@ -1329,8 +1325,6 @@ async fn submission_loop(
                         client,
                         tools_config: ToolsConfig::new(&ToolsConfigParams {
                             model_family: &model_family,
-                            approval_policy,
-                            sandbox_policy: sandbox_policy.clone(),
                             include_plan_tool: config.include_plan_tool,
                             include_apply_patch_tool: config.include_apply_patch_tool,
                             include_web_search_request: config.tools_web_search_request,
@@ -1539,8 +1533,6 @@ async fn spawn_review_thread(
         .unwrap_or_else(|| parent_turn_context.client.get_model_family());
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
-        approval_policy: parent_turn_context.approval_policy,
-        sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         include_plan_tool: false,
         include_apply_patch_tool: config.include_apply_patch_tool,
         include_web_search_request: false,
@@ -3520,8 +3512,6 @@ mod tests {
         );
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &config.model_family,
-            approval_policy: config.approval_policy,
-            sandbox_policy: config.sandbox_policy.clone(),
             include_plan_tool: config.include_plan_tool,
             include_apply_patch_tool: config.include_apply_patch_tool,
             include_web_search_request: config.tools_web_search_request,
