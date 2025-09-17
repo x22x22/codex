@@ -17,15 +17,26 @@ use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
+use uuid::Error;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Hash)]
 #[ts(type = "string")]
-pub struct ConversationId(pub Uuid);
+pub struct ConversationId {
+    uuid: Uuid,
+}
 
 impl ConversationId {
     pub fn new() -> Self {
-        Self(Uuid::new_v4())
+        Self {
+            uuid: Uuid::now_v7(),
+        }
+    }
+
+    pub fn from_string(s: &str) -> Result<Self, Error> {
+        Ok(Self {
+            uuid: Uuid::parse_str(s)?,
+        })
     }
 }
 
@@ -37,19 +48,7 @@ impl Default for ConversationId {
 
 impl Display for ConversationId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<Uuid> for ConversationId {
-    fn from(value: Uuid) -> Self {
-        Self(value)
-    }
-}
-
-impl From<ConversationId> for Uuid {
-    fn from(value: ConversationId) -> Self {
-        value.0
+        write!(f, "{}", self.uuid)
     }
 }
 
@@ -719,6 +718,6 @@ mod tests {
     #[test]
     fn test_conversation_id_default_is_not_zeroes() {
         let id = ConversationId::default();
-        assert_ne!(id.0, Uuid::nil());
+        assert_ne!(id.uuid, Uuid::nil());
     }
 }

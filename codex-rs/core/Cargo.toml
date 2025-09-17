@@ -4,9 +4,9 @@ name = "codex-core"
 version = { workspace = true }
 
 [lib]
+doctest = false
 name = "codex_core"
 path = "src/lib.rs"
-doctest = false
 
 [lints]
 workspace = true
@@ -41,7 +41,12 @@ similar = "2.7.0"
 strum_macros = "0.27.2"
 tempfile = "3"
 thiserror = "2.0.16"
-time = { version = "0.3", features = ["formatting", "parsing", "local-offset", "macros"] }
+time = { version = "0.3", features = [
+    "formatting",
+    "parsing",
+    "local-offset",
+    "macros",
+] }
 tokio = { version = "1", features = [
     "io-std",
     "macros",
@@ -55,7 +60,7 @@ toml_edit = "0.23.4"
 tracing = { version = "0.1.41", features = ["log"] }
 tree-sitter = "0.25.9"
 tree-sitter-bash = "0.25.0"
-uuid = { version = "1", features = ["serde", "v4"] }
+uuid = { version = "1", features = ["serde", "v7"] }
 which = "6"
 wildmatch = "2.5.0"
 
