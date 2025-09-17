@@ -35,14 +35,14 @@ fn reject_forbidden_escalation(
 
     let reason = match approval_policy {
         Never => Some(
-            "auto-rejected because approval policy never allows escalated permissions".to_string(),
+            "auto-rejected. You should not ask for escalated permissions if the approval policy is Never".to_string(),
         ),
         OnFailure => Some(
-            "auto-rejected because sandbox retry is required before requesting escalated permissions"
+            "auto-rejected. You should not ask for escalated permissions if the approval policy is OnFailure and it hasn't failed"
                 .to_string(),
         ),
         UnlessTrusted if command_is_trusted => Some(
-            "auto-rejected because command is already trusted under the UnlessTrusted approval policy"
+            "auto-rejected. The command is already trusted under the UnlessTrusted approval policy. You do not need to ask for escalated permissions"
                 .to_string(),
         ),
         OnRequest | UnlessTrusted => None,
