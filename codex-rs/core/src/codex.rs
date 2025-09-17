@@ -67,6 +67,7 @@ use crate::exec_command::ExecSessionManager;
 use crate::exec_command::WRITE_STDIN_TOOL_NAME;
 use crate::exec_command::WriteStdinParams;
 use crate::exec_env::create_env;
+use crate::git_worktree::WorktreeHandle;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
@@ -108,6 +109,7 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
+use crate::protocol::WorktreeRemovedEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
 use crate::safety::SafetyCheck;
@@ -119,6 +121,7 @@ use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+use anyhow::Context;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::custom_prompts::CustomPrompt;
@@ -293,6 +296,7 @@ pub(crate) struct Session {
     /// Optional rollout recorder for persisting the conversation transcript so
     /// sessions can be replayed or inspected later.
     rollout: Mutex<Option<RolloutRecorder>>,
+    worktree: Mutex<Option<WorktreeHandle>>,
     state: Mutex<State>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     user_shell: shell::Shell,
@@ -456,6 +460,30 @@ impl Session {
             }
         }
 
+        // Prepare the per-session working directory. When git worktrees are enabled
+        // we create (or reuse) a linked checkout under `cwd/codex/<conversation>`.
+        let mut effective_cwd = cwd.clone();
+        let mut worktree_handle_opt = None;
+        let mut worktree_path_opt = None;
+        if config.enable_git_worktree {
+            match WorktreeHandle::create(&cwd, &conversation_id).await {
+                Ok(handle) => {
+                    let path = handle.path().to_path_buf();
+                    worktree_path_opt = Some(path.clone());
+                    effective_cwd = path;
+                    worktree_handle_opt = Some(handle);
+                }
+                Err(e) => {
+                    let message = format!("Failed to create git worktree: {e:#}");
+                    error!("{message}");
+                    post_session_configured_error_events.push(Event {
+                        id: INITIAL_SUBMIT_ID.to_owned(),
+                        msg: EventMsg::Error(ErrorEvent { message }),
+                    });
+                }
+            }
+        }
+
         // Now that the conversation id is final (may have been updated by resume),
         // construct the model client.
         let client = ModelClient::new(
@@ -484,7 +512,7 @@ impl Session {
             approval_policy,
             sandbox_policy,
             shell_environment_policy: config.shell_environment_policy.clone(),
-            cwd,
+            cwd: effective_cwd.clone(),
             is_review_mode: false,
         };
         let sess = Arc::new(Session {
@@ -496,6 +524,7 @@ impl Session {
             notify,
             state: Mutex::new(state),
             rollout: Mutex::new(Some(rollout_recorder)),
+            worktree: Mutex::new(worktree_handle_opt),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -517,6 +546,7 @@ impl Session {
                 history_entry_count,
                 initial_messages,
                 rollout_path,
+                worktree_path: worktree_path_opt,
             }),
         })
         .chain(post_session_configured_error_events.into_iter());
@@ -749,6 +779,33 @@ impl Session {
             && let Err(e) = rec.record_items(items).await
         {
             error!("failed to record rollout items: {e:#}");
+        }
+    }
+
+    async fn send_error<S: Into<String>>(&self, sub_id: &str, message: S) {
+        let event = Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::Error(ErrorEvent {
+                message: message.into(),
+            }),
+        };
+        self.send_event(event).await;
+    }
+
+    async fn remove_worktree(&self) -> anyhow::Result<Option<PathBuf>> {
+        let handle_opt = {
+            let mut guard = self.worktree.lock_unchecked();
+            guard.take()
+        };
+        if let Some(handle) = handle_opt {
+            let path = handle.path().to_path_buf();
+            handle
+                .remove()
+                .await
+                .with_context(|| format!("failed to remove git worktree `{}`", path.display()))?;
+            Ok(Some(path))
+        } else {
+            Ok(None)
         }
     }
 
@@ -1518,6 +1575,24 @@ async fn submission_loop(
                 )
                 .await;
             }
+            Op::RemoveWorktree => match sess.remove_worktree().await {
+                Ok(Some(path)) => {
+                    let event = Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::WorktreeRemoved(WorktreeRemovedEvent { path }),
+                    };
+                    sess.send_event(event).await;
+                }
+                Ok(None) => {
+                    sess.send_error(&sub.id, "No git worktree is active for this session")
+                        .await;
+                }
+                Err(e) => {
+                    error!("failed to remove git worktree: {e:#}");
+                    sess.send_error(&sub.id, format!("Failed to remove git worktree: {e:#}"))
+                        .await;
+                }
+            },
             _ => {
                 // Ignore unknown ops; enum is non_exhaustive to allow extensions.
             }
@@ -3548,6 +3623,7 @@ mod tests {
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notify: None,
             rollout: Mutex::new(None),
+            worktree: Mutex::new(None),
             state: Mutex::new(State {
                 history: ConversationHistory::new(),
                 ..Default::default()
