@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -1092,7 +1093,7 @@ impl Session {
 }
 
 async fn maybe_initialize_worktree(
-    base_cwd: &PathBuf,
+    base_cwd: &Path,
     conversation_id: &ConversationId,
     enable_git_worktree: bool,
 ) -> (
@@ -1102,7 +1103,7 @@ async fn maybe_initialize_worktree(
     Option<Event>,
 ) {
     if !enable_git_worktree {
-        return (base_cwd.clone(), None, None, None);
+        return (base_cwd.to_path_buf(), None, None, None);
     }
 
     match WorktreeHandle::create(base_cwd, conversation_id).await {
@@ -1114,7 +1115,7 @@ async fn maybe_initialize_worktree(
             let message = format!("Failed to create git worktree: {e:#}");
             error!("{message}");
             (
-                base_cwd.clone(),
+                base_cwd.to_path_buf(),
                 None,
                 None,
                 Some(Event {
