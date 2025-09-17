@@ -19,38 +19,6 @@ pub enum SafetyCheck {
     Reject { reason: String },
 }
 
-/// Forbidden escalation is when the model asks for escalated permissions when it should not have to
-/// Rules:
-/// The model shouldn't ask for escalated permissions if the command is trusted
-/// The model shouldn't ask for escalated permissions if the approval policy is Never
-/// The model shouldn't ask for escalated permissions if the approval policy is OnFailure and it hasn't failed
-fn reject_forbidden_escalation(
-    approval_policy: AskForApproval,
-    with_escalated_permissions: bool,
-    command_is_trusted: bool,
-) -> Option<SafetyCheck> {
-    if !with_escalated_permissions {
-        return None;
-    }
-
-    let reason = match approval_policy {
-        Never => Some(
-            "auto-rejected. You should not ask for escalated permissions if the approval policy is Never".to_string(),
-        ),
-        OnFailure => Some(
-            "auto-rejected. You should not ask for escalated permissions if the approval policy is OnFailure and it hasn't failed"
-                .to_string(),
-        ),
-        UnlessTrusted if command_is_trusted => Some(
-            "auto-rejected. The command is already trusted under the UnlessTrusted approval policy. You do not need to ask for escalated permissions"
-                .to_string(),
-        ),
-        OnRequest | UnlessTrusted => None,
-    }?;
-
-    Some(SafetyCheck::Reject { reason })
-}
-
 pub fn assess_patch_safety(
     action: &ApplyPatchAction,
     policy: AskForApproval,
@@ -224,6 +192,38 @@ pub fn get_platform_sandbox() -> Option<SandboxType> {
     } else {
         None
     }
+}
+
+/// Forbidden escalation is when the model asks for escalated permissions when it should not have to
+/// Rules:
+/// The model shouldn't ask for escalated permissions if the command is trusted
+/// The model shouldn't ask for escalated permissions if the approval policy is Never
+/// The model shouldn't ask for escalated permissions if the approval policy is OnFailure and it hasn't failed
+fn reject_forbidden_escalation(
+    approval_policy: AskForApproval,
+    with_escalated_permissions: bool,
+    command_is_trusted: bool,
+) -> Option<SafetyCheck> {
+    if !with_escalated_permissions {
+        return None;
+    }
+
+    let reason = match approval_policy {
+        Never => Some(
+            "auto-rejected. You should not ask for escalated permissions if the approval policy is Never".to_string(),
+        ),
+        OnFailure => Some(
+            "auto-rejected. You should not ask for escalated permissions if the approval policy is OnFailure and it hasn't failed"
+                .to_string(),
+        ),
+        UnlessTrusted if command_is_trusted => Some(
+            "auto-rejected. The command is already trusted under the UnlessTrusted approval policy. You do not need to ask for escalated permissions"
+                .to_string(),
+        ),
+        OnRequest | UnlessTrusted => None,
+    }?;
+
+    Some(SafetyCheck::Reject { reason })
 }
 
 fn is_write_patch_constrained_to_writable_paths(
