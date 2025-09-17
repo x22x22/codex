@@ -24,7 +24,7 @@ pub struct WorktreeHandle {
 
 impl WorktreeHandle {
     /// Create (or reuse) a worktree rooted at
-    /// `<repo_root>/codex/<conversation_id>`.
+    /// `<repo_root>/codex/worktree/<conversation_id>`.
     pub async fn create(repo_root: &Path, conversation_id: &ConversationId) -> Result<Self> {
         if !repo_root.exists() {
             return Err(anyhow!(
@@ -35,14 +35,17 @@ impl WorktreeHandle {
 
         let repo_root = repo_root.to_path_buf();
         let codex_dir = repo_root.join("codex");
-        fs::create_dir_all(&codex_dir).await.with_context(|| {
-            format!(
-                "failed to create codex worktree directory at `{}`",
-                codex_dir.display()
-            )
-        })?;
+        let codex_worktree_dir = codex_dir.join("worktree");
+        fs::create_dir_all(&codex_worktree_dir)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create codex worktree directory at `{}`",
+                    codex_worktree_dir.display()
+                )
+            })?;
 
-        let path = codex_dir.join(conversation_id.to_string());
+        let path = codex_worktree_dir.join(conversation_id.to_string());
         let is_registered = worktree_registered(&repo_root, &path).await?;
 
         if is_registered {
