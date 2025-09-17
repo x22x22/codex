@@ -49,14 +49,41 @@ impl WorktreeHandle {
         let is_registered = worktree_registered(&repo_root, &path).await?;
 
         if is_registered {
-            if let Err(err) = ensure_codex_excluded(&repo_root).await {
-                warn!("failed to add codex worktree path to git exclude: {err:#}");
+            if path.exists() {
+                if let Err(err) = ensure_codex_excluded(&repo_root).await {
+                    warn!("failed to add codex worktree path to git exclude: {err:#}");
+                }
+                info!(
+                    worktree = %path.display(),
+                    "reusing existing git worktree for conversation"
+                );
+                return Ok(Self { repo_root, path });
             }
+
+            warn!(
+                worktree = %path.display(),
+                "git worktree is registered but missing on disk; pruning stale entry"
+            );
+            run_git_command(&repo_root, ["worktree", "prune", "--expire", "now"])
+                .await
+                .with_context(|| {
+                    format!(
+                        "failed to prune git worktrees while recovering `{}`",
+                        path.display()
+                    )
+                })?;
+
+            if worktree_registered(&repo_root, &path).await? {
+                return Err(anyhow!(
+                    "git worktree `{}` is registered but missing on disk; run `git worktree prune --expire now` to remove the stale entry",
+                    path.display()
+                ));
+            }
+
             info!(
                 worktree = %path.display(),
-                "reusing existing git worktree for conversation"
+                "recreating git worktree for conversation after pruning stale registration"
             );
-            return Ok(Self { repo_root, path });
         }
 
         if path.exists() {
