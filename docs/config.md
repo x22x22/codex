@@ -662,6 +662,3 @@ detached HEAD state so Codex never clashes with a branch you already have checke
 want to commit, run `git switch -c <branch>` (or attach to an existing branch) inside the worktree
 and work as usual. Codex automatically appends `/codex/` to `.git/info/exclude` so these
 directories stay out of `git status` without touching your tracked `.gitignore`.
-
-To remove the checkout after you’re done, use `git worktree remove --force <path>` or send the
-`RemoveWorktree` operation from Codex.
