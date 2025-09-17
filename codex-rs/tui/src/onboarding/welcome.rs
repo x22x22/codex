@@ -19,6 +19,7 @@ use crate::tui::FrameRequester;
 
 use super::onboarding_screen::StepState;
 
+const FRAME_TICK: Duration = FRAME_TICK_DEFAULT;
 const MIN_ANIMATION_HEIGHT: u16 = 20;
 const MIN_ANIMATION_WIDTH: u16 = 60;
 
