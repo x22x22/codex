@@ -462,26 +462,10 @@ impl Session {
 
         // Prepare the per-session working directory. When git worktrees are enabled
         // we create (or reuse) a linked checkout under `cwd/codex/<conversation>`.
-        let mut effective_cwd = cwd.clone();
-        let mut worktree_handle_opt = None;
-        let mut worktree_path_opt = None;
-        if config.enable_git_worktree {
-            match WorktreeHandle::create(&cwd, &conversation_id).await {
-                Ok(handle) => {
-                    let path = handle.path().to_path_buf();
-                    worktree_path_opt = Some(path.clone());
-                    effective_cwd = path;
-                    worktree_handle_opt = Some(handle);
-                }
-                Err(e) => {
-                    let message = format!("Failed to create git worktree: {e:#}");
-                    error!("{message}");
-                    post_session_configured_error_events.push(Event {
-                        id: INITIAL_SUBMIT_ID.to_owned(),
-                        msg: EventMsg::Error(ErrorEvent { message }),
-                    });
-                }
-            }
+        let (effective_cwd, worktree_handle_opt, worktree_path_opt, worktree_error_event) =
+            maybe_initialize_worktree(&cwd, &conversation_id, config.enable_git_worktree).await;
+        if let Some(event) = worktree_error_event {
+            post_session_configured_error_events.push(event);
         }
 
         // Now that the conversation id is final (may have been updated by resume),
@@ -1103,6 +1087,41 @@ impl Session {
         // Fire-and-forget – we do not wait for completion.
         if let Err(e) = command.spawn() {
             warn!("failed to spawn notifier '{}': {e}", notify_command[0]);
+        }
+    }
+}
+
+async fn maybe_initialize_worktree(
+    base_cwd: &PathBuf,
+    conversation_id: &ConversationId,
+    enable_git_worktree: bool,
+) -> (
+    PathBuf,
+    Option<WorktreeHandle>,
+    Option<PathBuf>,
+    Option<Event>,
+) {
+    if !enable_git_worktree {
+        return (base_cwd.clone(), None, None, None);
+    }
+
+    match WorktreeHandle::create(base_cwd, conversation_id).await {
+        Ok(handle) => {
+            let path = handle.path().to_path_buf();
+            (path.clone(), Some(handle), Some(path), None)
+        }
+        Err(e) => {
+            let message = format!("Failed to create git worktree: {e:#}");
+            error!("{message}");
+            (
+                base_cwd.clone(),
+                None,
+                None,
+                Some(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::Error(ErrorEvent { message }),
+                }),
+            )
         }
     }
 }

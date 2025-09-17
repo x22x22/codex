@@ -7,6 +7,8 @@ use anyhow::Result;
 use anyhow::anyhow;
 use codex_protocol::mcp_protocol::ConversationId;
 use tokio::fs;
+use tokio::fs::OpenOptions;
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::info;
 use tracing::warn;
@@ -44,6 +46,9 @@ impl WorktreeHandle {
         let is_registered = worktree_registered(&repo_root, &path).await?;
 
         if is_registered {
+            if let Err(err) = ensure_codex_excluded(&repo_root).await {
+                warn!("failed to add codex worktree path to git exclude: {err:#}");
+            }
             info!(
                 worktree = %path.display(),
                 "reusing existing git worktree for conversation"
@@ -75,6 +80,10 @@ impl WorktreeHandle {
         )
         .await
         .with_context(|| format!("failed to create git worktree at `{}`", path.display()))?;
+
+        if let Err(err) = ensure_codex_excluded(&repo_root).await {
+            warn!("failed to add codex worktree path to git exclude: {err:#}");
+        }
 
         info!(
             worktree = %path.display(),
@@ -165,6 +174,41 @@ async fn run_git_command<'a>(
     }
 
     Ok(output)
+}
+
+async fn ensure_codex_excluded(repo_root: &Path) -> Result<()> {
+    const PATTERN: &str = "/codex/";
+
+    let git_dir_out = run_git_command(repo_root, ["rev-parse", "--git-dir"]).await?;
+    let git_dir_str = String::from_utf8(git_dir_out.stdout)?.trim().to_string();
+    let git_dir_path = if Path::new(&git_dir_str).is_absolute() {
+        PathBuf::from(&git_dir_str)
+    } else {
+        repo_root.join(&git_dir_str)
+    };
+
+    let info_dir = git_dir_path.join("info");
+    fs::create_dir_all(&info_dir).await?;
+    let exclude_path = info_dir.join("exclude");
+
+    let existing_bytes = fs::read(&exclude_path).await.unwrap_or_default();
+    let existing = String::from_utf8(existing_bytes).unwrap_or_default();
+    if existing.lines().any(|line| line.trim() == PATTERN) {
+        return Ok(());
+    }
+
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&exclude_path)
+        .await?;
+
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        file.write_all(b"\n").await?;
+    }
+    file.write_all(PATTERN.as_bytes()).await?;
+    file.write_all(b"\n").await?;
+    Ok(())
 }
 
 #[cfg(test)]

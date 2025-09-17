@@ -660,4 +660,8 @@ Enabling `[Experimental] enable_git_worktree` creates a linked checkout at
 `<cwd>/codex/<conversation_id>` via `git worktree add --detach HEAD`. The worktree starts in a
 detached HEAD state so Codex never clashes with a branch you already have checked out. When you
 want to commit, run `git switch -c <branch>` (or attach to an existing branch) inside the worktree
-and work as usual.
+and work as usual. Codex automatically appends `/codex/` to `.git/info/exclude` so these
+directories stay out of `git status` without touching your tracked `.gitignore`.
+
+To remove the checkout after you’re done, use `git worktree remove --force <path>` or send the
+`RemoveWorktree` operation from Codex.
