@@ -87,6 +87,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 - **Automating Codex**
   - [GitHub Action](https://github.com/openai/codex-action)
   - [TypeScript SDK](./sdk/typescript/README.md)
+  - [App Server Protocol](./docs/app-server.md)
   - [Non-interactive mode (`codex exec`)](./docs/exec.md)
 - [**Advanced**](./docs/advanced.md)
   - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
