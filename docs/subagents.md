@@ -1,98 +1,98 @@
-# Subagents
+# Subagents（子代理）
 
-This document explains the subagent architecture in Codex.
+本文档介绍 Codex 中的子代理（subagent）架构。
 
-## What are Subagents?
+## 什么是子代理？
 
-Subagents are specialized, internal AI agents that handle specific tasks within Codex. They operate independently from the main conversation flow but are spawned by the primary Codex session to handle specialized workloads. Each subagent has its own configuration, prompt, and purpose.
+子代理是在 Codex 内部处理特定任务的专用 AI 代理。它们独立于主对话流程运行，由主 Codex 会话生成来处理专门的工作负载。每个子代理都有自己的配置、提示词和用途。
 
-## Subagents vs Orchestrator
+## 子代理 vs 编排器（Orchestrator）
 
-It's important to distinguish between **subagents** and the **orchestrator**:
+区分**子代理**和**编排器**非常重要：
 
-- **Orchestrator** (`codex-rs/core/src/tools/orchestrator.rs`): This is not a subagent. The orchestrator is a tool execution system that manages tool calls, handles approvals, manages sandboxing, and coordinates retry logic for tool execution. It's part of the core infrastructure that helps execute commands and tools safely.
+- **编排器（Orchestrator）**（`codex-rs/core/src/tools/orchestrator.rs`）：这不是一个子代理。编排器是一个工具执行系统，负责管理工具调用、处理审批、管理沙箱环境以及协调工具执行的重试逻辑。它是核心基础设施的一部分，帮助安全地执行命令和工具。
 
-- **Subagents**: These are specialized AI agent instances that run separate conversations for specific purposes. They are implemented as `SessionSource::SubAgent(SubAgentSource)` in the protocol.
+- **子代理（Subagents）**：这些是专门的 AI 代理实例，为特定目的运行独立的对话。它们在协议中实现为 `SessionSource::SubAgent(SubAgentSource)`。
 
-## Available Subagents
+## 可用的子代理
 
-Codex currently has **two built-in subagents**:
+Codex 目前有**两个内置子代理**：
 
-### 1. Review Subagent (`SubAgentSource::Review`)
+### 1. 审查子代理（Review Subagent）（`SubAgentSource::Review`）
 
-**Purpose**: Performs automated code reviews on proposed changes.
+**用途**：对提议的代码更改执行自动化代码审查。
 
-**Implementation**: `codex-rs/core/src/tasks/review.rs`
+**实现**：`codex-rs/core/src/tasks/review.rs`
 
-**How it works**:
-- Triggered by the `/review` slash command in the CLI
-- Runs as a separate Codex conversation with specialized review instructions
-- Uses the `review_model` configuration (default: `gpt-5.1-codex`)
-- Operates with a dedicated review prompt (`codex-rs/core/review_prompt.md`) that contains guidelines for:
-  - Identifying bugs and issues
-  - Determining severity levels (P0-P3 priorities)
-  - Providing actionable feedback
-  - Evaluating overall patch correctness
-- Outputs structured findings in JSON format with:
-  - Title and description of each issue
-  - Confidence scores
-  - Priority levels
-  - Specific code locations (file paths and line ranges)
-  - Overall correctness verdict
+**工作原理**：
+- 通过 CLI 中的 `/review` 斜杠命令触发
+- 作为独立的 Codex 对话运行，使用专门的审查指令
+- 使用 `review_model` 配置（默认：`gpt-5.1-codex`）
+- 使用专用的审查提示词（`codex-rs/core/review_prompt.md`），其中包含以下指南：
+  - 识别错误和问题
+  - 确定严重程度级别（P0-P3 优先级）
+  - 提供可操作的反馈
+  - 评估整体补丁的正确性
+- 以 JSON 格式输出结构化的发现，包括：
+  - 每个问题的标题和描述
+  - 置信度分数
+  - 优先级
+  - 具体的代码位置（文件路径和行范围）
+  - 整体正确性判断
 
-**Configuration**:
+**配置**：
 ```toml
-# In ~/.codex/config.toml
+# 在 ~/.codex/config.toml 中
 review_model = "gpt-5.1-codex"
 ```
 
-**Special behavior**:
-- Runs without user instructions (uses only the review rubric)
-- Does not load project documentation to focus on the changes
-- Disables certain features like web search and image viewing
-- Suppresses agent message deltas in favor of structured output
+**特殊行为**：
+- 不使用用户指令运行（仅使用审查规则）
+- 不加载项目文档，专注于更改内容
+- 禁用某些功能，如网络搜索和图像查看
+- 抑制代理消息增量，转而使用结构化输出
 
-### 2. Compact Subagent (`SubAgentSource::Compact`)
+### 2. 压缩子代理（Compact Subagent）（`SubAgentSource::Compact`）
 
-**Purpose**: Summarizes conversation history to prevent hitting context limits.
+**用途**：总结对话历史以防止达到上下文限制。
 
-**Implementation**: `codex-rs/core/src/tasks/compact.rs`
+**实现**：`codex-rs/core/src/tasks/compact.rs`
 
-**How it works**:
-- Triggered by the `/compact` slash command or automatically when approaching token limits
-- Can run in two modes:
-  - **Remote compaction**: When authenticated with ChatGPT, uses a remote service
-  - **Local compaction**: Uses a local LLM call to summarize the conversation
-- Uses specialized summarization prompts (`codex-rs/core/templates/compact/prompt.md`)
-- Generates a compressed version of the conversation history
-- Emits a `ContextCompactedEvent` with the summarized content
+**工作原理**：
+- 通过 `/compact` 斜杠命令触发，或在接近令牌限制时自动触发
+- 可以在两种模式下运行：
+  - **远程压缩**：当使用 ChatGPT 身份验证时，使用远程服务
+  - **本地压缩**：使用本地 LLM 调用来总结对话
+- 使用专门的总结提示词（`codex-rs/core/templates/compact/prompt.md`）
+- 生成对话历史的压缩版本
+- 发出包含总结内容的 `ContextCompactedEvent`
 
-**Configuration**:
+**配置**：
 ```toml
-# In ~/.codex/config.toml
-# Override auto-compact behavior (default: model family specific)
-model_auto_compact_token_limit = 0  # disable
+# 在 ~/.codex/config.toml 中
+# 覆盖自动压缩行为（默认：特定于模型家族）
+model_auto_compact_token_limit = 0  # 禁用
 
-# Custom compact prompt
+# 自定义压缩提示词
 compact_prompt = "your custom prompt"
 
-# Or load from file
+# 或从文件加载
 experimental_compact_prompt_file = "path/to/compact_prompt.txt"
 ```
 
-**Key files**:
-- Summarization prompt: `codex-rs/core/templates/compact/prompt.md`
-- Summary prefix template: `codex-rs/core/templates/compact/summary_prefix.md`
+**关键文件**：
+- 总结提示词：`codex-rs/core/templates/compact/prompt.md`
+- 总结前缀模板：`codex-rs/core/templates/compact/summary_prefix.md`
 
-## Extensibility
+## 可扩展性
 
-The subagent architecture supports extension through `SubAgentSource::Other(String)`, which allows for custom subagent types to be added in the future without modifying the core protocol definition.
+子代理架构通过 `SubAgentSource::Other(String)` 支持扩展，允许在未来添加自定义子代理类型，而无需修改核心协议定义。
 
-## Technical Details
+## 技术细节
 
-### Protocol Definition
+### 协议定义
 
-Subagents are defined in `codex-rs/protocol/src/protocol.rs`:
+子代理在 `codex-rs/protocol/src/protocol.rs` 中定义：
 
 ```rust
 pub enum SessionSource {
@@ -107,28 +107,28 @@ pub enum SessionSource {
 pub enum SubAgentSource {
     Review,
     Compact,
-    Other(String),  // For future extensibility
+    Other(String),  // 用于未来的可扩展性
 }
 ```
 
-### Task Implementation
+### 任务实现
 
-Both subagents implement the `SessionTask` trait defined in `codex-rs/core/src/tasks/mod.rs`, which provides:
-- A `kind()` method to identify the task type
-- A `run()` method to execute the task asynchronously
-- An optional `abort()` method for cleanup on cancellation
+两个子代理都实现了 `codex-rs/core/src/tasks/mod.rs` 中定义的 `SessionTask` trait，它提供：
+- `kind()` 方法来识别任务类型
+- `run()` 方法来异步执行任务
+- 可选的 `abort()` 方法用于取消时的清理
 
-### HTTP Headers
+### HTTP 头部
 
-When subagents make API calls, they include an `x-openai-subagent` header to identify themselves:
-- Review subagent: `x-openai-subagent: review`
-- Compact subagent: `x-openai-subagent: compact`
-- Custom subagents: `x-openai-subagent: <custom_name>`
+当子代理进行 API 调用时，它们会包含 `x-openai-subagent` 头部来标识自己：
+- 审查子代理：`x-openai-subagent: review`
+- 压缩子代理：`x-openai-subagent: compact`
+- 自定义子代理：`x-openai-subagent: <custom_name>`
 
-This header helps with telemetry and debugging.
+此头部有助于遥测和调试。
 
-## See Also
+## 另请参阅
 
-- [Slash Commands](./slash_commands.md) - Interactive commands including `/review` and `/compact`
-- [Configuration](./config.md) - Configuration options for models and behavior
-- [Getting Started](./getting-started.md) - Basic usage and features
+- [斜杠命令](./slash_commands.md) - 包括 `/review` 和 `/compact` 的交互式命令
+- [配置](./config.md) - 模型和行为的配置选项
+- [入门指南](./getting-started.md) - 基本使用和功能
