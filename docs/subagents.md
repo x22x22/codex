@@ -88,6 +88,164 @@ experimental_compact_prompt_file = "path/to/compact_prompt.txt"
 
 子代理架构通过 `SubAgentSource::Other(String)` 支持扩展，允许在未来添加自定义子代理类型，而无需修改核心协议定义。
 
+## 如何创建自定义子代理
+
+如果你想创建自己的子代理来处理专门的任务，可以按照以下步骤操作：
+
+### 1. 实现 SessionTask Trait
+
+首先，创建一个实现 `SessionTask` trait 的新结构体。例如：
+
+```rust
+use std::sync::Arc;
+use async_trait::async_trait;
+use codex_protocol::user_input::UserInput;
+use tokio_util::sync::CancellationToken;
+
+use crate::codex::TurnContext;
+use crate::state::TaskKind;
+use crate::tasks::{SessionTask, SessionTaskContext};
+
+// 定义你的自定义子代理
+pub(crate) struct MyCustomTask {
+    // 添加任何必要的配置字段
+}
+
+#[async_trait]
+impl SessionTask for MyCustomTask {
+    fn kind(&self) -> TaskKind {
+        // 返回任务类型（可能需要在 TaskKind 枚举中添加新变体）
+        TaskKind::Regular
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        session: Arc<SessionTaskContext>,
+        ctx: Arc<TurnContext>,
+        input: Vec<UserInput>,
+        cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        // 实现你的子代理逻辑
+        // 这里可以：
+        // 1. 创建一个新的配置
+        // 2. 设置自定义的系统提示词
+        // 3. 使用 run_codex_conversation_one_shot 启动子代理对话
+        
+        None
+    }
+}
+```
+
+### 2. 使用子代理委托功能
+
+使用 `run_codex_conversation_one_shot` 函数来启动子代理会话：
+
+```rust
+use crate::codex_delegate::run_codex_conversation_one_shot;
+
+async fn start_custom_conversation(
+    session: Arc<SessionTaskContext>,
+    ctx: Arc<TurnContext>,
+    input: Vec<UserInput>,
+    cancellation_token: CancellationToken,
+) -> Option<async_channel::Receiver<Event>> {
+    let config = ctx.client.config();
+    let mut sub_agent_config = config.as_ref().clone();
+    
+    // 自定义配置
+    sub_agent_config.user_instructions = None;
+    sub_agent_config.base_instructions = Some("你的自定义系统提示词".to_string());
+    
+    // 启动子代理对话
+    (run_codex_conversation_one_shot(
+        sub_agent_config,
+        session.auth_manager(),
+        input,
+        session.clone_session(),
+        ctx.clone(),
+        cancellation_token,
+        None,
+    )
+    .await)
+        .ok()
+        .map(|io| io.rx_event)
+}
+```
+
+### 3. 使用 SubAgentSource::Other 标识
+
+当创建子代理会话时，使用 `SubAgentSource::Other("your-agent-name")` 来标识你的自定义子代理：
+
+```rust
+use codex_protocol::protocol::{SessionSource, SubAgentSource};
+
+// 在 Codex::spawn 中使用
+SessionSource::SubAgent(SubAgentSource::Other("my-custom-agent".to_string()))
+```
+
+### 4. 处理子代理事件
+
+订阅并处理子代理发出的事件：
+
+```rust
+async fn process_custom_events(
+    session: Arc<SessionTaskContext>,
+    ctx: Arc<TurnContext>,
+    receiver: async_channel::Receiver<Event>,
+) {
+    while let Ok(event) = receiver.recv().await {
+        match event.msg {
+            EventMsg::AgentMessage(msg) => {
+                // 处理代理消息
+                session.clone_session().send_event(ctx.as_ref(), EventMsg::AgentMessage(msg)).await;
+            }
+            EventMsg::TaskComplete(_) => {
+                // 任务完成
+                break;
+            }
+            _ => {
+                // 转发其他事件
+                session.clone_session().send_event(ctx.as_ref(), event.msg).await;
+            }
+        }
+    }
+}
+```
+
+### 5. 注册和触发你的子代理
+
+将你的子代理集成到 Codex 中：
+
+```rust
+// 在适当的位置调用你的任务
+session.spawn_task(
+    turn_context,
+    input,
+    MyCustomTask { /* 配置 */ }
+).await;
+```
+
+### 实践示例参考
+
+查看现有子代理的实现作为参考：
+
+- **审查子代理**：`codex-rs/core/src/tasks/review.rs`
+  - 展示了如何设置自定义系统提示词
+  - 如何处理结构化输出
+  - 如何过滤和转发事件
+
+- **压缩子代理**：`codex-rs/core/src/tasks/compact.rs`
+  - 展示了更简单的子代理实现
+  - 如何调用内部函数来完成特定任务
+
+### 关键考虑事项
+
+1. **配置隔离**：每个子代理应该有自己的配置副本，避免影响主会话
+2. **事件处理**：决定哪些事件应该转发给父会话，哪些应该在子代理内部处理
+3. **取消令牌**：正确处理 `cancellation_token`，确保子代理可以被优雅地取消
+4. **错误处理**：妥善处理子代理执行过程中可能出现的错误
+5. **遥测标识**：使用有意义的名称作为 `SubAgentSource::Other` 的参数，便于调试和遥测
+
 ## 技术细节
 
 ### 协议定义
