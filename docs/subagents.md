@@ -27,7 +27,7 @@ Codex currently has **two built-in subagents**:
 **How it works**:
 - Triggered by the `/review` slash command in the CLI
 - Runs as a separate Codex conversation with specialized review instructions
-- Uses the `review_model` configuration (default: `gpt-5.1-codex-max`)
+- Uses the `review_model` configuration (default: `gpt-5.1-codex`)
 - Operates with a dedicated review prompt (`codex-rs/core/review_prompt.md`) that contains guidelines for:
   - Identifying bugs and issues
   - Determining severity levels (P0-P3 priorities)
@@ -43,7 +43,7 @@ Codex currently has **two built-in subagents**:
 **Configuration**:
 ```toml
 # In ~/.codex/config.toml
-review_model = "gpt-5.1-codex-max"
+review_model = "gpt-5.1-codex"
 ```
 
 **Special behavior**:
