@@ -92,6 +92,7 @@ See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that gover
 - **Automating Codex**
   - [GitHub Action](https://github.com/openai/codex-action)
   - [TypeScript SDK](./sdk/typescript/README.md)
+  - [App Server Protocol](./docs/app-server.md)
   - [Non-interactive mode (`codex exec`)](./docs/exec.md)
 - [**Advanced**](./docs/advanced.md)
   - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
