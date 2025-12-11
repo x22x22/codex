@@ -13,6 +13,17 @@ Codex 的 Skills 加载机制**不是真正的热加载（Hot Loading）**，而
 
 目前**不支持运行时动态重载** - 如果您修改了 SKILL.md 文件，需要重启 Codex 才能生效。
 
+### 如何启用 Skills 功能
+
+Skills 功能默认是**禁用**的，需要在 `config.toml` 中显式启用：
+
+```toml
+[features]
+skills = true
+```
+
+> **注意**：配置 key 是 `skills`，不是 `enable_experimental_skills`。这定义在 `codex-rs/core/src/features.rs` 中的 `FEATURES` 常量中。
+
 ## 2. 加载流程图
 
 ```
