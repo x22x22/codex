@@ -22,6 +22,7 @@ Control Codex’s behavior during an interactive session with slash commands.
 | `/undo`      | ask Codex to undo a turn                                    |
 | `/diff`      | show git diff (including untracked files)                   |
 | `/mention`   | mention a file                                              |
+| `/plan`      | create or update a task plan                                |
 | `/status`    | show current session configuration and token usage          |
 | `/mcp`       | list configured MCP tools                                   |
 | `/logout`    | log out of Codex                                            |

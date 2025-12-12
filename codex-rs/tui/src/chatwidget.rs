@@ -1597,6 +1597,9 @@ impl ChatWidget {
             SlashCommand::Mention => {
                 self.insert_str("@");
             }
+            SlashCommand::Plan => {
+                self.insert_str("Create a plan for this task with clear steps");
+            }
             SlashCommand::Skills => {
                 self.insert_str("$");
             }
