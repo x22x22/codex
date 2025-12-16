@@ -1600,6 +1600,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::Review { review_request } => {
                 handlers::review(&sess, &config, sub.id.clone(), review_request).await;
             }
+            Op::RunCustomAgent { agent_name, items } => {
+                handlers::run_custom_agent(&sess, sub.id.clone(), agent_name, items).await;
+            }
             _ => {} // Ignore unknown ops; enum is non_exhaustive to allow extensions.
         }
     }
@@ -1618,6 +1621,7 @@ mod handlers {
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::review_prompts::resolve_review_request;
     use crate::tasks::CompactTask;
+    use crate::tasks::CustomAgentTask;
     use crate::tasks::RegularTask;
     use crate::tasks::UndoTask;
     use crate::tasks::UserShellCommandTask;
@@ -1631,6 +1635,7 @@ mod handlers {
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
+    use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::WarningEvent;
 
@@ -1892,6 +1897,54 @@ mod handlers {
             }),
         };
         sess.send_event_raw(event).await;
+    }
+
+    pub async fn run_custom_agent(
+        sess: &Arc<Session>,
+        sub_id: String,
+        agent_name: String,
+        items: Vec<codex_protocol::user_input::UserInput>,
+    ) {
+        let turn_context = sess
+            .new_turn_with_sub_id(sub_id.clone(), SessionSettingsUpdate::default())
+            .await;
+
+        // Look up the custom agent
+        let agent = if let Some(dir) = crate::custom_agents::default_agents_dir() {
+            let agents = crate::custom_agents::discover_agents_in(&dir).await;
+            agents.into_iter().find(|a| a.name == agent_name)
+        } else {
+            None
+        };
+
+        match agent {
+            Some(agent) => {
+                // Parse sandbox policy
+                let sandbox_policy = agent
+                    .sandbox
+                    .as_deref()
+                    .and_then(crate::custom_agents::parse_sandbox_policy)
+                    .unwrap_or_else(SandboxPolicy::new_read_only_policy);
+
+                let task = CustomAgentTask::new(
+                    agent.name,
+                    agent.instructions,
+                    agent.model,
+                    sandbox_policy,
+                );
+                sess.spawn_task(turn_context, items, task).await;
+            }
+            None => {
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: format!("Custom agent '{}' not found", agent_name),
+                        codex_error_info: Some(CodexErrorInfo::Other),
+                    }),
+                };
+                sess.send_event(&turn_context, event.msg).await;
+            }
+        }
     }
 
     pub async fn undo(sess: &Arc<Session>, sub_id: String) {

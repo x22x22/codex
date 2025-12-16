@@ -199,6 +199,14 @@ pub enum Op {
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
+    /// Run a custom agent.
+    RunCustomAgent {
+        /// Name of the custom agent to run.
+        agent_name: String,
+        /// User input items to send to the agent.
+        items: Vec<UserInput>,
+    },
+
     /// Request to shut down codex instance.
     Shutdown,
 
