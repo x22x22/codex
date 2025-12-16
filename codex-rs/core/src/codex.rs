@@ -1567,6 +1567,9 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             Op::ListCustomPrompts => {
                 handlers::list_custom_prompts(&sess, sub.id.clone()).await;
             }
+            Op::ListCustomAgents => {
+                handlers::list_custom_agents(&sess, sub.id.clone()).await;
+            }
             Op::Undo => {
                 handlers::undo(&sess, sub.id.clone()).await;
             }
@@ -1623,6 +1626,7 @@ mod handlers {
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::ListCustomAgentsResponseEvent;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
     use codex_protocol::protocol::Op;
     use codex_protocol::protocol::ReviewDecision;
@@ -1856,6 +1860,35 @@ mod handlers {
             id: sub_id,
             msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
                 custom_prompts,
+            }),
+        };
+        sess.send_event_raw(event).await;
+    }
+
+    pub async fn list_custom_agents(sess: &Session, sub_id: String) {
+        let custom_agents: Vec<codex_protocol::custom_agents::CustomAgent> =
+            if let Some(dir) = crate::custom_agents::default_agents_dir() {
+                let agents = crate::custom_agents::discover_agents_in(&dir).await;
+                // Convert from core::CustomAgent to protocol::CustomAgent
+                agents
+                    .into_iter()
+                    .map(|a| codex_protocol::custom_agents::CustomAgent {
+                        name: a.name,
+                        path: a.path,
+                        instructions: a.instructions,
+                        description: a.description,
+                        model: a.model,
+                        sandbox: a.sandbox,
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+        let event = Event {
+            id: sub_id,
+            msg: EventMsg::ListCustomAgentsResponse(ListCustomAgentsResponseEvent {
+                custom_agents,
             }),
         };
         sess.send_event_raw(event).await;
