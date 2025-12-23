@@ -46,7 +46,7 @@ Supported features:
 | `apply_patch_freeform`                |  false  | Beta         | Include the freeform `apply_patch` tool               |
 | `view_image_tool`                     |  true   | Stable       | Include the `view_image` tool                         |
 | `web_search_request`                  |  false  | Stable       | Allow the model to issue web searches                 |
-| `ghost_commit`                        |  false  | Experimental | Create a ghost commit each turn                       |
+| `ghost_commit`                        |  false  | Experimental | Create a ghost commit each turn for undo support      |
 | `enable_experimental_windows_sandbox` |  false  | Experimental | Use the Windows restricted-token sandbox              |
 | `tui2`                                |  false  | Experimental | Use the experimental TUI v2 (viewport) implementation |
 
@@ -54,6 +54,26 @@ Notes:
 
 - Omit a key to accept its default.
 - Legacy booleans such as `experimental_use_exec_command_tool`, `experimental_use_unified_exec_tool`, `include_apply_patch_tool`, and similar `experimental_use_*` keys are deprecated; setting the corresponding `[features].<key>` avoids repeated warnings.
+
+### Ghost commits and undo
+
+When `ghost_commit` is enabled, Codex creates a snapshot of your working tree before each turn. These "ghost commits" are special Git commits that:
+
+- Capture the complete state of your repository (tracked, untracked, and optionally ignored files)
+- Do not affect your actual Git history (HEAD is not moved)
+- Enable the `/undo` command to restore files to their state before the last turn
+
+To enable ghost commits:
+
+```toml
+[features]
+ghost_commit = true
+```
+
+Once enabled, you can use the `/undo` slash command to revert all file changes made during the most recent turn. This is useful when Codex makes changes you want to discard.
+
+> [!NOTE]
+> Currently, `/undo` only restores to the most recent snapshot. It does not provide a way to select from multiple historical snapshots or jump to an arbitrary point in the conversation history.
 
 ## Model selection
 
