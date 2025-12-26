@@ -85,6 +85,8 @@ See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that gover
 - [**Configuration**](./docs/config.md)
   - [Example config](./docs/example-config.md)
   - [Langfuse Integration (LLM Observability)](./docs/langfuse-integration.md)
+    - [Quick Start Guide](./docs/langfuse-quickstart.md)
+    - [Example Langfuse Config](./docs/example-langfuse-config.toml)
 - [**Sandbox & approvals**](./docs/sandbox.md)
 - [**Execpolicy quickstart**](./docs/execpolicy.md)
 - [**Authentication**](./docs/authentication.md)
