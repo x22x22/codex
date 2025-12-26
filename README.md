@@ -96,6 +96,7 @@ See the [Execpolicy quickstart](./docs/execpolicy.md) to set up rules that gover
 - [**Advanced**](./docs/advanced.md)
   - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
   - [Model Context Protocol (MCP)](./docs/advanced.md#model-context-protocol-mcp)
+  - [Subagents](./docs/subagents.md)
 - [**Zero data retention (ZDR)**](./docs/zdr.md)
 - [**Contributing**](./docs/contributing.md)
 - [**Install & build**](./docs/install.md)
