@@ -1,0 +1,189 @@
+# Example Codex Configuration with Langfuse Integration
+# This file shows how to configure Codex to send telemetry data to Langfuse
+# Copy this to ~/.codex/config.toml and customize as needed
+
+# Basic Codex configuration
+model = "gpt-5.1"
+
+# ============================================================================
+# Langfuse Integration via OpenTelemetry
+# ============================================================================
+
+[otel]
+# Environment tag for traces (dev, staging, production, test)
+environment = "production"
+
+# Whether to log the full user prompt text in traces
+# Set to false to protect user privacy (default)
+# Set to true if you need full prompt logging for debugging
+log_user_prompt = false
+
+# Set the exporter type to enable telemetry export
+# Options: "none" (default, disabled), "otlp-http", "otlp-grpc"
+# For Langfuse, use "otlp-http" (Langfuse does not support gRPC)
+exporter = "otlp-http"
+
+# Optional: Separate trace exporter configuration
+# If not specified, uses the same exporter as logs
+trace_exporter = "otlp-http"
+
+# ============================================================================
+# Option 1: Langfuse Cloud (EU Region)
+# ============================================================================
+[otel.exporter."otlp-http"]
+# Langfuse Cloud EU endpoint
+endpoint = "https://cloud.langfuse.com/api/public/otel"
+
+# Use binary protocol for better performance (recommended)
+# Options: "binary" (protobuf), "json"
+protocol = "binary"
+
+[otel.exporter."otlp-http".headers]
+# Replace YOUR_LANGFUSE_AUTH with base64(public_key:secret_key)
+# Generate with: echo -n "pk-lf-...:sk-lf-..." | base64
+"Authorization" = "Basic YOUR_LANGFUSE_AUTH"
+
+# ============================================================================
+# Option 2: Langfuse Cloud (US Region)
+# Uncomment this section and comment out Option 1 if you prefer US region
+# ============================================================================
+# [otel.exporter."otlp-http"]
+# endpoint = "https://us.cloud.langfuse.com/api/public/otel"
+# protocol = "binary"
+#
+# [otel.exporter."otlp-http".headers]
+# "Authorization" = "Basic YOUR_LANGFUSE_AUTH"
+
+# ============================================================================
+# Option 3: Self-Hosted Langfuse
+# Uncomment this section if you're running your own Langfuse instance
+# ============================================================================
+# [otel.exporter."otlp-http"]
+# endpoint = "http://localhost:3000/api/public/otel"
+# # or "https://langfuse.yourcompany.com/api/public/otel"
+# protocol = "binary"
+#
+# [otel.exporter."otlp-http".headers]
+# "Authorization" = "Basic YOUR_LANGFUSE_AUTH"
+
+# ============================================================================
+# Option 4: Self-Hosted with Custom TLS
+# Uncomment if you need custom CA certificate or mutual TLS
+# ============================================================================
+# [otel.exporter."otlp-http"]
+# endpoint = "https://langfuse.yourcompany.com/api/public/otel"
+# protocol = "binary"
+#
+# [otel.exporter."otlp-http".headers]
+# "Authorization" = "Basic YOUR_LANGFUSE_AUTH"
+#
+# [otel.exporter."otlp-http".tls]
+# # Path to custom CA certificate (relative to ~/.codex/ or absolute)
+# ca-certificate = "certs/ca.pem"
+# # Optional: Client certificate for mutual TLS
+# client-certificate = "certs/client.pem"
+# client-private-key = "certs/client-key.pem"
+
+# ============================================================================
+# Option 5: Using Environment Variables for Secrets
+# More secure - keeps credentials out of config file
+# ============================================================================
+# [otel.exporter."otlp-http"]
+# endpoint = "https://cloud.langfuse.com/api/public/otel"
+# protocol = "binary"
+#
+# [otel.exporter."otlp-http".headers]
+# # Reference environment variable
+# "Authorization" = "${LANGFUSE_AUTH}"
+#
+# # Then set in your shell:
+# # export LANGFUSE_AUTH="Basic $(echo -n 'pk-lf-...:sk-lf-...' | base64)"
+
+# ============================================================================
+# Additional Codex Configuration Examples
+# ============================================================================
+
+# Model provider configuration (optional)
+# [model_providers.custom]
+# name = "Custom Provider"
+# base_url = "https://api.custom.com/v1"
+# env_key = "CUSTOM_API_KEY"
+
+# MCP Servers configuration (optional)
+# [mcp_servers.example]
+# command = "npx"
+# args = ["-y", "mcp-server-example"]
+
+# Shell environment policy (optional)
+# [shell_environment_policy]
+# inherit = "all"
+# include_only = ["PATH", "HOME", "USER"]
+
+# Feature flags (optional)
+# [features]
+# web_search_request = true
+# view_image_tool = true
+
+# ============================================================================
+# Generating the Langfuse Authorization Header
+# ============================================================================
+#
+# Step 1: Get your Langfuse API keys from https://cloud.langfuse.com
+#   - Public Key: pk-lf-...
+#   - Secret Key: sk-lf-...
+#
+# Step 2: Generate the base64 encoded authorization string:
+#
+# Linux/macOS:
+#   echo -n "pk-lf-YOUR-PUBLIC-KEY:sk-lf-YOUR-SECRET-KEY" | base64
+#
+# For long keys on GNU systems (to avoid line wrapping):
+#   echo -n "pk-lf-YOUR-PUBLIC-KEY:sk-lf-YOUR-SECRET-KEY" | base64 -w 0
+#
+# Windows (PowerShell):
+#   $text = "pk-lf-YOUR-PUBLIC-KEY:sk-lf-YOUR-SECRET-KEY"
+#   $bytes = [System.Text.Encoding]::UTF8.GetBytes($text)
+#   [Convert]::ToBase64String($bytes)
+#
+# Step 3: Replace YOUR_LANGFUSE_AUTH in the config above with the result
+#
+# Example:
+# "Authorization" = "Basic cGstbGYteW91ci1wdWJsaWMta2V5OnNrLWxmLXlvdXItc2VjcmV0LWtleQ=="
+
+# ============================================================================
+# Verification
+# ============================================================================
+#
+# After configuration:
+# 1. Run: codex
+# 2. Have a conversation with the agent
+# 3. Check Langfuse UI at https://cloud.langfuse.com
+# 4. Navigate to your project's "Traces" page
+# 5. You should see traces from your Codex sessions
+#
+# Each trace will include:
+# - Conversation metadata (id, model, user info)
+# - API requests and responses
+# - Tool calls and results
+# - Token usage statistics
+# - Timing information
+
+# ============================================================================
+# Troubleshooting
+# ============================================================================
+#
+# No traces appearing in Langfuse:
+# - Ensure exporter = "otlp-http" (not "none")
+# - Verify the Authorization header is correct
+# - Check network connectivity to Langfuse endpoint
+# - Review Codex logs for error messages
+#
+# Authentication errors (401):
+# - Verify API keys are correct
+# - Ensure base64 encoding has no extra spaces/newlines
+# - Confirm you're using the right public + secret key pair
+#
+# For self-hosted Langfuse:
+# - Ensure Langfuse version >= v3.22.0
+# - Check that the endpoint URL is correct
+# - Verify firewall rules allow outbound HTTPS

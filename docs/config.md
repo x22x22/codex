@@ -544,6 +544,10 @@ tool-approval decisions, and the result of every tool invocation. Export is
 **disabled by default** so local runs remain self-contained. Opt in by adding an
 `[otel]` table and choosing an exporter.
 
+**For LLM-specific observability**, Codex integrates seamlessly with [Langfuse](https://langfuse.com/), 
+an open-source LLM engineering platform. See the [Langfuse Integration Guide](./langfuse-integration.md) 
+for detailed setup instructions and [example configuration](./example-langfuse-config.toml).
+
 ```toml
 [otel]
 environment = "staging"   # defaults to "dev"
