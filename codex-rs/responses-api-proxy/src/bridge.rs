@@ -156,10 +156,7 @@ pub fn transform_chat_sse_to_responses(line: &str) -> Option<String> {
         .unwrap_or("resp-1");
 
     // Process choices
-    let choices = match chat_event.get("choices").and_then(|v| v.as_array()) {
-        Some(c) => c,
-        None => return None,
-    };
+    let choices = chat_event.get("choices").and_then(|v| v.as_array())?;
 
     let mut responses_events = Vec::new();
 
@@ -248,15 +245,15 @@ pub fn transform_chat_sse_to_responses(line: &str) -> Option<String> {
         }
 
         // Handle finish_reason
-        if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
-            if finish_reason == "stop" || finish_reason == "tool_calls" {
-                responses_events.push(json!({
-                    "type": "response.completed",
-                    "response": {
-                        "id": response_id
-                    }
-                }));
-            }
+        if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str())
+            && (finish_reason == "stop" || finish_reason == "tool_calls")
+        {
+            responses_events.push(json!({
+                "type": "response.completed",
+                "response": {
+                    "id": response_id
+                }
+            }));
         }
     }
 
@@ -298,7 +295,10 @@ mod tests {
 
         let chat_req = transform_request_to_chat(responses_req).unwrap();
 
-        assert_eq!(chat_req.get("model").and_then(|v| v.as_str()), Some("gpt-4"));
+        assert_eq!(
+            chat_req.get("model").and_then(|v| v.as_str()),
+            Some("gpt-4")
+        );
         assert_eq!(chat_req.get("stream"), Some(&json!(true)));
 
         let messages = chat_req.get("messages").and_then(|v| v.as_array()).unwrap();
@@ -315,7 +315,8 @@ mod tests {
 
     #[test]
     fn test_transform_chat_sse_content() {
-        let chat_sse = r#"data: {"id":"chatcmpl-123","choices":[{"delta":{"content":"Hello"},"index":0}]}"#;
+        let chat_sse =
+            r#"data: {"id":"chatcmpl-123","choices":[{"delta":{"content":"Hello"},"index":0}]}"#;
 
         let result = transform_chat_sse_to_responses(chat_sse).unwrap();
 

@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::fs::{self};
-use std::io::Write;
 use std::io::BufRead;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::path::Path;
@@ -174,8 +174,8 @@ fn forward_request(
 
     // Transform request body if in bridge mode
     let body = if config.bridge_to_chat {
-        let responses_body: serde_json::Value = serde_json::from_slice(&body)
-            .context("parsing Responses API request body")?;
+        let responses_body: serde_json::Value =
+            serde_json::from_slice(&body).context("parsing Responses API request body")?;
         let chat_body = bridge::transform_request_to_chat(responses_body)
             .context("transforming request to Chat Completions format")?;
         serde_json::to_vec(&chat_body).context("serializing Chat Completions request")?
@@ -227,10 +227,7 @@ fn forward_request(
     }
 }
 
-fn forward_direct_response(
-    req: Request,
-    upstream_resp: reqwest::blocking::Response,
-) -> Result<()> {
+fn forward_direct_response(req: Request, upstream_resp: reqwest::blocking::Response) -> Result<()> {
     // We have to create an adapter between a `reqwest::blocking::Response`
     // and a `tiny_http::Response`. Fortunately, `reqwest::blocking::Response`
     // implements `Read`, so we can use it directly as the body of the
@@ -271,10 +268,7 @@ fn forward_direct_response(
     Ok(())
 }
 
-fn forward_bridge_response(
-    req: Request,
-    upstream_resp: reqwest::blocking::Response,
-) -> Result<()> {
+fn forward_bridge_response(req: Request, upstream_resp: reqwest::blocking::Response) -> Result<()> {
     let status = upstream_resp.status();
 
     // Build response headers
