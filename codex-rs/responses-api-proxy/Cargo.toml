@@ -21,8 +21,12 @@ clap = { workspace = true, features = ["derive"] }
 codex-process-hardening = { workspace = true }
 ctor = { workspace = true }
 libc = { workspace = true }
+os_pipe = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "json", "rustls-tls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tiny_http = { workspace = true }
 zeroize = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
