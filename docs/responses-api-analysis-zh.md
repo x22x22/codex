@@ -72,17 +72,40 @@ Codex 采用**声明式方法**：
 
 **代码位置**：`codex-rs/tui/src/exec_cell/model.rs:105-107`
 
-一个 cell 被判断为 "exploring cell" 需要满足：
-- 所有的调用 (calls) 都必须是 "exploring call"
+**源码**：
+```rust
+pub(crate) fn is_exploring_cell(&self) -> bool {
+    self.calls.iter().all(Self::is_exploring_call)
+}
+```
+
+**分析**：一个 cell 被判断为 "exploring cell" 需要满足：
+- 所有的调用 (calls) 都必须是 "exploring call"（通过 `all()` 方法检查）
 
 #### 2.2 Exploring Call 的定义
 
 **代码位置**：`codex-rs/tui/src/exec_cell/model.rs:128-139`
 
-一个调用是 "exploring call" 需要满足：
-1. **不是用户 shell 命令**：`source != ExecCommandSource::UserShell`
+**源码**：
+```rust
+pub(super) fn is_exploring_call(call: &ExecCall) -> bool {
+    !matches!(call.source, ExecCommandSource::UserShell)
+        && !call.parsed.is_empty()
+        && call.parsed.iter().all(|p| {
+            matches!(
+                p,
+                ParsedCommand::Read { .. }
+                    | ParsedCommand::ListFiles { .. }
+                    | ParsedCommand::Search { .. }
+            )
+        })
+}
+```
+
+**分析**：一个调用是 "exploring call" 需要满足三个条件（使用 `&&` 连接）：
+1. **不是用户 shell 命令**：`!matches!(call.source, ExecCommandSource::UserShell)`
 2. **parsed 不为空**：`!call.parsed.is_empty()`
-3. **所有 parsed 命令都是探索性类型**：
+3. **所有 parsed 命令都是探索性类型**：使用 `all()` 确保每个命令都是：
    - `ParsedCommand::Read { .. }`
    - `ParsedCommand::ListFiles { .. }`
    - `ParsedCommand::Search { .. }`
@@ -91,19 +114,80 @@ Codex 采用**声明式方法**：
 
 **代码位置**：`codex-rs/tui/src/exec_cell/model.rs:42-68`（`with_added_call` 方法）
 
-当满足以下条件时，新的调用会被添加到当前 cell 中：
-1. 当前 cell 已经是 exploring cell
-2. 新添加的 call 也是 exploring call
-3. 这时新 call 会被添加到同一个 cell 的 calls 列表中
+**源码**：
+```rust
+pub(crate) fn with_added_call(
+    &self,
+    call_id: String,
+    command: Vec<String>,
+    parsed: Vec<ParsedCommand>,
+    source: ExecCommandSource,
+    interaction_input: Option<String>,
+) -> Option<Self> {
+    let call = ExecCall {
+        call_id,
+        command,
+        parsed,
+        output: None,
+        source,
+        start_time: Some(Instant::now()),
+        duration: None,
+        interaction_input,
+    };
+    if self.is_exploring_cell() && Self::is_exploring_call(&call) {
+        Some(Self {
+            calls: [self.calls.clone(), vec![call]].concat(),
+            animations_enabled: self.animations_enabled,
+        })
+    } else {
+        None
+    }
+}
+```
+
+**分析**：当满足以下条件时，新的调用会被添加到当前 cell 中：
+1. **当前 cell 已经是 exploring cell**：`self.is_exploring_cell()` 返回 true
+2. **新添加的 call 也是 exploring call**：`Self::is_exploring_call(&call)` 返回 true
+3. **返回新的 ExecCell**：将新 call 添加到 calls 列表中（`[self.calls.clone(), vec![call]].concat()`）
+4. **如果条件不满足**：返回 `None`，调用者会创建新的 cell
 
 #### 2.4 显示时的合并逻辑
 
 **代码位置**：`codex-rs/tui/src/exec_cell/render.rs:271-292`
 
-在渲染时还会进行进一步的合并：
-- 如果连续多个 call 都只包含 `Read` 操作，它们会被合并显示在同一行
-- 合并时会去重文件名（使用 `.unique()`）
-- 最终以逗号分隔的方式显示：`Read auth.rs, shimmer.rs`
+**源码**：
+```rust
+let mut calls = self.calls.clone();
+let mut out_indented = Vec::new();
+while !calls.is_empty() {
+    let mut call = calls.remove(0);
+    if call
+        .parsed
+        .iter()
+        .all(|parsed| matches!(parsed, ParsedCommand::Read { .. }))
+    {
+        while let Some(next) = calls.first() {
+            if next
+                .parsed
+                .iter()
+                .all(|parsed| matches!(parsed, ParsedCommand::Read { .. }))
+            {
+                call.parsed.extend(next.parsed.clone());
+                calls.remove(0);
+            } else {
+                break;
+            }
+        }
+    }
+    // ... 继续处理
+}
+```
+
+**分析**：在渲染时还会进行进一步的合并：
+- **检查是否全是 Read 操作**：使用 `all()` 确保 call 中所有 parsed 都是 `ParsedCommand::Read`
+- **合并连续的 Read 调用**：如果下一个 call 也全是 Read，则使用 `extend()` 合并到当前 call
+- **去重和显示**：后续代码会去重文件名（使用 `.unique()`）
+- **最终格式**：以逗号分隔的方式显示：`Read auth.rs, shimmer.rs`
 
 ### 不会合并的情况
 
@@ -143,8 +227,25 @@ if let Some(cell) = self.active_cell.as_mut()
 
 **代码位置**：`codex-rs/tui/src/exec_cell/model.rs:130`
 
-如果 `ExecCommandBeginEvent.parsed_cmd` 是空数组 `[]`：
-- `is_exploring_call` 会返回 `false`
+**源码**（`is_exploring_call` 函数的第二个条件）：
+```rust
+pub(super) fn is_exploring_call(call: &ExecCall) -> bool {
+    !matches!(call.source, ExecCommandSource::UserShell)
+        && !call.parsed.is_empty()  // ← 这里检查 parsed 不为空
+        && call.parsed.iter().all(|p| {
+            matches!(
+                p,
+                ParsedCommand::Read { .. }
+                    | ParsedCommand::ListFiles { .. }
+                    | ParsedCommand::Search { .. }
+            )
+        })
+}
+```
+
+**分析**：如果 `ExecCommandBeginEvent.parsed_cmd` 是空数组 `[]`：
+- 第二个条件 `!call.parsed.is_empty()` 会返回 `false`
+- 整个 `is_exploring_call` 返回 `false`（因为使用 `&&` 连接）
 - 无法合并，会创建新的独立 cell
 
 **错误报文示例**：
@@ -162,9 +263,26 @@ if let Some(cell) = self.active_cell.as_mut()
 
 **代码位置**：`codex-rs/tui/src/exec_cell/model.rs:131-138`
 
-必须全部是 `Read`、`ListFiles` 或 `Search` 类型。如果包含 `Unknown` 类型：
-- 不满足 exploring call 的条件
-- 无法合并，会创建新的独立 cell
+**源码**（`is_exploring_call` 函数的第三个条件）：
+```rust
+pub(super) fn is_exploring_call(call: &ExecCall) -> bool {
+    !matches!(call.source, ExecCommandSource::UserShell)
+        && !call.parsed.is_empty()
+        && call.parsed.iter().all(|p| {  // ← 这里检查所有命令都是探索性类型
+            matches!(
+                p,
+                ParsedCommand::Read { .. }
+                    | ParsedCommand::ListFiles { .. }
+                    | ParsedCommand::Search { .. }
+            )
+        })
+}
+```
+
+**分析**：必须全部是 `Read`、`ListFiles` 或 `Search` 类型：
+- 使用 `all()` 确保每个 parsed 命令都匹配这三种类型之一
+- 如果包含 `Unknown` 或其他类型，`all()` 返回 `false`
+- 不满足 exploring call 的条件，无法合并
 
 **错误报文示例**：
 ```json
@@ -181,7 +299,25 @@ if let Some(cell) = self.active_cell.as_mut()
 
 **代码位置**：`codex-rs/tui/src/exec_cell/model.rs:129`
 
-如果 `ExecCommandBeginEvent.source = "user_shell"`：
+**源码**（`is_exploring_call` 函数的第一个条件）：
+```rust
+pub(super) fn is_exploring_call(call: &ExecCall) -> bool {
+    !matches!(call.source, ExecCommandSource::UserShell)  // ← 这里检查不是用户命令
+        && !call.parsed.is_empty()
+        && call.parsed.iter().all(|p| {
+            matches!(
+                p,
+                ParsedCommand::Read { .. }
+                    | ParsedCommand::ListFiles { .. }
+                    | ParsedCommand::Search { .. }
+            )
+        })
+}
+```
+
+**分析**：如果 `ExecCommandBeginEvent.source = "user_shell"`：
+- 第一个条件 `!matches!(call.source, ExecCommandSource::UserShell)` 返回 `false`
+- 整个函数短路返回 `false`（因为使用 `&&` 连接）
 - 即使命令是探索性的，也不会合并
 - 用户手动命令总是单独显示
 
@@ -240,34 +376,77 @@ TUI 显示 loading/working 指示器由 `TaskStartedEvent` 和 `TaskCompleteEven
 
 #### 开始显示（第 561-570 行）
 
-收到 `TaskStartedEvent` 后：
+**源码**：
+```rust
+fn on_task_started(&mut self) {
+    self.bottom_pane.clear_ctrl_c_quit_hint();
+    self.bottom_pane.set_task_running(true);  // ← 关键：设置为 true
+    self.retry_status_header = None;
+    self.bottom_pane.set_interrupt_hint_visible(true);
+    self.set_status_header(String::from("Working"));
+    self.full_reasoning_buffer.clear();
+    self.reasoning_buffer.clear();
+    self.request_redraw();
+}
+```
+
+**分析**：收到 `TaskStartedEvent` 后的处理流程：
 1. 调用 `on_task_started()`
-2. 执行 `self.bottom_pane.set_task_running(true)`
-3. 创建 `StatusIndicatorWidget`（底部的 spinner/loading indicator）
-4. 显示 "Working" 状态
+2. 执行 `self.bottom_pane.set_task_running(true)` ← **这是关键**
+3. 内部创建 `StatusIndicatorWidget`（底部的 spinner/loading indicator）
+4. 设置状态头为 "Working"
+5. 请求重绘界面
 
 #### 停止显示（第 572-582 行）
 
-收到 `TaskCompleteEvent` 后：
+**源码**：
+```rust
+fn on_task_complete(&mut self, last_agent_message: Option<String>) {
+    // If a stream is currently active, finalize it.
+    self.flush_answer_stream_with_separator();
+    self.flush_wait_cell();
+    // Mark task stopped and request redraw now that all content is in history.
+    self.bottom_pane.set_task_running(false);  // ← 关键：设置为 false
+    self.running_commands.clear();
+    self.suppressed_exec_calls.clear();
+    self.last_unified_wait = None;
+    self.request_redraw();
+    // ... 更多代码
+}
+```
+
+**分析**：收到 `TaskCompleteEvent` 后的处理流程：
 1. 调用 `on_task_complete()`
-2. 执行 `self.bottom_pane.set_task_running(false)`
-3. 隐藏 status indicator
+2. 刷新活跃的流和 cell
+3. 执行 `self.bottom_pane.set_task_running(false)` ← **这是关键**
+4. 清理运行状态（running_commands, suppressed_exec_calls 等）
+5. 请求重绘界面，隐藏 status indicator
 
 ### Loading 不显示但 Agent 仍在工作的情况
 
 #### 4.1 缺少 `TaskStartedEvent`
 
-如果 agent 开始新一轮请求时，**没有发送 `TaskStartedEvent`**：
-- TUI 不会调用 `set_task_running(true)`
+**原因分析**：如果 agent 开始新一轮请求时，**没有发送 `TaskStartedEvent`**：
+- TUI 不会调用 `on_task_started()`
+- `set_task_running(true)` 不会被执行
 - `StatusIndicatorWidget` 不会被创建/显示
-- 用户看不到 loading 样式，但 agent 可能正在后台与 LLM 通信
+- **结果**：用户看不到 loading 样式，但 agent 可能正在后台与 LLM 通信
 
 #### 4.2 提前发送 `TaskCompleteEvent`
 
-如果在 agent 还需要继续工作时，错误地发送了 `TaskCompleteEvent`：
+**源码引用**：
+```rust
+fn on_task_complete(&mut self, last_agent_message: Option<String>) {
+    // ...
+    self.bottom_pane.set_task_running(false);  // 第 577 行
+    // ...
+}
+```
+
+**原因分析**：如果在 agent 还需要继续工作时，错误地发送了 `TaskCompleteEvent`：
 - 第 577 行会执行 `set_task_running(false)`
 - Loading 消失，但后续的 LLM 请求没有对应的 `TaskStartedEvent`
-- 造成"无 loading 但在工作"的状态
+- **结果**：造成"无 loading 但在工作"的状态
 
 #### 4.3 意外的状态重置
 
@@ -339,12 +518,48 @@ Codex 的 `TaskStartedEvent` 和 `TaskCompleteEvent` 是在本地生成的，但
 
 #### 5.1 缺少 `response.completed` 事件（最关键）
 
-**代码位置**：`codex-rs/codex-api/src/sse/responses.rs:247-275`
+**代码位置**：`codex-rs/codex-api/src/sse/responses.rs:261-275` 和 `codex-rs/core/src/codex.rs:2616-2628`
+
+**SSE 处理源码**：
+```rust
+"response.completed" => {
+    if let Some(resp_val) = event.response {
+        match serde_json::from_value::<ResponseCompleted>(resp_val) {
+            Ok(r) => {
+                response_completed = Some(r);  // ← 设置 completed 标志
+            }
+            Err(e) => {
+                let error = format!("failed to parse ResponseCompleted: {e}");
+                debug!(error);
+                response_error = Some(ApiError::Stream(error));
+                continue;
+            }
+        };
+    };
+}
+```
+
+**响应循环源码**：
+```rust
+ResponseEvent::Completed {
+    response_id: _,
+    token_usage,
+} => {
+    sess.update_token_usage_info(&turn_context, token_usage.as_ref())
+        .await;
+    should_emit_turn_diff = true;
+
+    break Ok(TurnRunResult {  // ← 只有收到 Completed 才 break
+        needs_follow_up,
+        last_agent_message,
+    });
+}
+```
 
 **问题描述**：
 - 流必须以 `response.completed` 结束
 - 如果 API 只发送了 `output_item.done` 事件但从不发送 `completed`
-- Codex 的响应循环（`codex.rs:2616-2628`）永远不会 break
+- Codex 的响应循环永远不会执行 `break`
 - `TurnRunResult` 永不返回 → `TaskCompleteEvent` 永不发送
 
 **影响**：
@@ -367,7 +582,27 @@ Codex 的 `TaskStartedEvent` 和 `TaskCompleteEvent` 是在本地生成的，但
 
 #### 5.3 `local_shell_call` 数据不完整
 
-**代码位置**：`codex-rs/protocol/src/models.rs:133+`
+**代码位置**：
+- `codex-rs/protocol/src/models.rs:133+`（ResponseItem 定义）
+- `codex-rs/tui/src/exec_cell/model.rs:130`（parsed 检查）
+
+**ResponseItem 定义片段**（注释说明了预期格式）：
+```rust
+// Emitted by the Responses API when the agent triggers a web search.
+// Example payload (from SSE `response.output_item.done`):
+// {
+//   "id":"ws_...",
+//   "type":"web_search_call",
+//   "status":"completed",
+//   "action": {"type":"search","query":"weather: San Francisco, CA"}
+// }
+WebSearchCall {
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    id: Option<String>,
+    // ...
+}
+```
 
 **问题描述**：
 API 返回的 `local_shell_call` 项中 `action.command` 为空数组或格式错误：
@@ -386,8 +621,21 @@ API 返回的 `local_shell_call` 项中 `action.command` 为空数组或格式�
 }
 ```
 
+**源码引用**（检查 parsed 不为空）：
+```rust
+pub(super) fn is_exploring_call(call: &ExecCall) -> bool {
+    !matches!(call.source, ExecCommandSource::UserShell)
+        && !call.parsed.is_empty()  // ← 如果 command 为空，parsed 也为空
+        && call.parsed.iter().all(|p| {
+            // ...
+        })
+}
+```
+
+**分析**：
 - Codex 解析时会得到空的 command
 - `parsed_cmd` 为空
+- `is_exploring_call` 返回 `false`（因为 `!call.parsed.is_empty()` 为 `false`）
 - 不满足 exploring call 的条件
 
 **影响**：
@@ -399,10 +647,51 @@ API 返回的 `local_shell_call` 项中 `action.command` 为空数组或格式�
 - `codex-rs/codex-api/src/sse/responses.rs:192-202`（output_item.done）
 - `codex-rs/codex-api/src/sse/responses.rs:276-286`（output_item.added）
 
+**SSE 事件处理源码**：
+```rust
+"response.output_item.done" => {
+    let Some(item_val) = event.item else { continue };
+    let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
+        debug!("failed to parse ResponseItem from output_item.done");
+        continue;
+    };
+
+    let event = ResponseEvent::OutputItemDone(item);
+    if tx_event.send(Ok(event)).await.is_err() {
+        return;
+    }
+}
+// ...
+"response.output_item.added" => {
+    let Some(item_val) = event.item else { continue };
+    let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
+        debug!("failed to parse ResponseItem from output_item.done");
+        continue;
+    };
+
+    let event = ResponseEvent::OutputItemAdded(item);
+    if tx_event.send(Ok(event)).await.is_err() {
+        return;
+    }
+}
+```
+
 **问题描述**：
 API 错误地交错发送事件，例如：
 ```
 response.output_item.done (local_shell_call #1)
+response.output_text.delta (assistant message)  ← 错误插入
+response.output_item.done (local_shell_call #2)
+```
+
+**分析**：
+- 两个事件处理器独立工作，按接收顺序处理
+- 中间的 `output_text.delta` 会被发送到 TUI
+- TUI 收到 `AgentMessage` 相关事件时会调用 `flush_active_cell()`
+- 打断了 explore 序列，第二个 call 创建新 cell
+
+**影响**：
+- ⚠️ Explore 操作无法合并，尽管它们本应是连续的探索性调用
 response.output_text.delta (assistant message)  ← 错误插入
 response.output_item.done (local_shell_call #2)
 ```
