@@ -1666,6 +1666,8 @@ dependencies = [
  "codex-process-hardening",
  "ctor 0.5.0",
  "libc",
+ "os_pipe",
+ "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
