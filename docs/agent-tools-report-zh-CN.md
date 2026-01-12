@@ -54,7 +54,22 @@ Agent 有多种执行 Shell 命令的方式：
 >
 > **处理程序**: [`codex-rs/core/src/tools/handlers/shell.rs`](../codex-rs/core/src/tools/handlers/shell.rs)
 >
-> **TUI 显示**: 在 TUI 中显示为带语法高亮的命令行
+> **TUI 显示**: `• Ran <命令>` 或 `• Running <命令>`（执行中）
+>
+> **TUI 显示源码**: [`codex-rs/tui/src/exec_cell/render.rs:370-378`](../codex-rs/tui/src/exec_cell/render.rs#L370-L378)
+
+**TUI 显示代码**:
+```rust
+let title = if is_interaction {
+    ""
+} else if self.is_active() {
+    "Running"
+} else if call.is_user_shell_command() {
+    "You ran"
+} else {
+    "Ran"
+};
+```
 
 **描述**: 运行 Shell 命令并返回输出
 
@@ -91,7 +106,9 @@ ToolSpec::Function(ResponsesApiTool {
 >
 > **处理程序**: [`codex-rs/core/src/tools/handlers/shell.rs`](../codex-rs/core/src/tools/handlers/shell.rs)
 >
-> **TUI 显示**: 在 TUI 中显示为带语法高亮的命令行
+> **TUI 显示**: `• Ran <命令>` 或 `• Running <命令>`（执行中）
+>
+> **TUI 显示源码**: [`codex-rs/tui/src/exec_cell/render.rs:370-378`](../codex-rs/tui/src/exec_cell/render.rs#L370-L378)
 
 **描述**: 在用户默认 Shell 中执行脚本命令
 
@@ -124,7 +141,9 @@ ToolSpec::Function(ResponsesApiTool {
 >
 > **处理程序**: [`codex-rs/core/src/tools/handlers/unified_exec.rs`](../codex-rs/core/src/tools/handlers/unified_exec.rs)
 >
-> **TUI 显示**: 在 TUI 中显示为 `Interacted with` 或 `Waited for` 前缀
+> **TUI 显示**: `• Ran <命令>` 或 `• Running <命令>`（执行中）
+>
+> **TUI 显示源码**: [`codex-rs/tui/src/exec_cell/render.rs:370-378`](../codex-rs/tui/src/exec_cell/render.rs#L370-L378)
 
 **描述**: 在 PTY 中运行命令，返回输出或会话 ID 用于持续交互
 
@@ -158,7 +177,27 @@ ToolSpec::Function(ResponsesApiTool {
 >
 > **处理程序**: [`codex-rs/core/src/tools/handlers/unified_exec.rs`](../codex-rs/core/src/tools/handlers/unified_exec.rs)
 >
-> **TUI 显示**: 在 TUI 中显示为 `Interacted with ... sent ...`
+> **TUI 显示**: `Interacted with <命令>, sent <输入>` 或 `Waited for <命令>`
+>
+> **TUI 显示源码**: [`codex-rs/tui/src/exec_cell/render.rs:61-73`](../codex-rs/tui/src/exec_cell/render.rs#L61-L73)
+
+**TUI 显示代码**:
+```rust
+fn format_unified_exec_interaction(command: &[String], input: Option<&str>) -> String {
+    let command_display = if let Some((_, script)) = extract_bash_command(command) {
+        script.to_string()
+    } else {
+        command.join(" ")
+    };
+    match input {
+        Some(data) if !data.is_empty() => {
+            let preview = summarize_interaction_input(data);
+            format!("Interacted with `{command_display}`, sent `{preview}`")
+        }
+        _ => format!("Waited for `{command_display}`"),
+    }
+}
+```
 
 **描述**: 向现有的统一执行会话写入字符并返回最近的输出
 
@@ -190,7 +229,28 @@ ToolSpec::Function(ResponsesApiTool {
 >
 > **语法定义**: [`codex-rs/core/src/tools/handlers/tool_apply_patch.lark`](../codex-rs/core/src/tools/handlers/tool_apply_patch.lark)
 >
-> **TUI 显示**: 显示为带颜色的 diff 摘要，绿色为添加，红色为删除
+> **TUI 显示**: 
+> - 单文件：`• Added <文件>`, `• Deleted <文件>`, 或 `• Edited <文件> (+N -M)`
+> - 多文件：`• Edited N files (+X -Y)`
+>
+> **TUI 显示源码**: [`codex-rs/tui/src/diff_render.rs:154-169`](../codex-rs/tui/src/diff_render.rs#L154-L169)
+
+**TUI 显示代码**:
+```rust
+if let [row] = &rows[..] {
+    let verb = match &row.change {
+        FileChange::Add { .. } => "Added",
+        FileChange::Delete { .. } => "Deleted",
+        _ => "Edited",
+    };
+    header_spans.push(verb.bold());
+    // ...
+} else {
+    header_spans.push("Edited".bold());
+    header_spans.push(format!(" {file_count} {noun} ").into());
+    // ...
+}
+```
 
 **描述**: 使用补丁格式编辑文件。这是一个自由格式工具，不需要将补丁包装在 JSON 中。
 
@@ -283,7 +343,20 @@ eof_line: "*** End of File" LF
 
 > **源码位置**: [`codex-rs/core/src/tools/handlers/plan.rs:20-60`](../codex-rs/core/src/tools/handlers/plan.rs#L20-L60)
 >
-> **TUI 显示**: 显示为计划列表，带有 ✓（已完成）、○（进行中）、⊘（待定）状态图标
+> **TUI 显示**: `• Updated Plan` 后跟步骤列表，带有状态图标
+>
+> **TUI 显示源码**: [`codex-rs/tui/src/history_cell.rs:1587-1610`](../codex-rs/tui/src/history_cell.rs#L1587-L1610)
+
+**TUI 显示代码**:
+```rust
+let mut lines: Vec<Line<'static>> = vec![];
+lines.push(vec!["• ".dim(), "Updated Plan".bold()].into());
+
+// 步骤显示（带状态图标）
+for PlanItemArg { step, status } in self.plan.iter() {
+    indented_lines.extend(render_step(status, step));
+}
+```
 
 **描述**: 更新任务计划。提供可选说明和计划项列表，每个项目包含步骤和状态。
 
@@ -507,7 +580,7 @@ MCP（Model Context Protocol）是一种协议，允许 Codex 连接到外部 MC
 >
 > **处理程序**: [`codex-rs/core/src/tools/handlers/mcp_resource.rs`](../codex-rs/core/src/tools/handlers/mcp_resource.rs)
 >
-> **TUI 显示**: 显示为 `/mcp` 命令输出格式
+> **TUI 显示**: 不在 TUI 中单独显示，结果直接返回给模型
 
 **描述**: 列出 MCP 服务器提供的资源。资源允许服务器共享为语言模型提供上下文的数据，如文件、数据库架构或应用程序特定信息。
 
@@ -537,7 +610,7 @@ ToolSpec::Function(ResponsesApiTool {
 >
 > **处理程序**: [`codex-rs/core/src/tools/handlers/mcp_resource.rs`](../codex-rs/core/src/tools/handlers/mcp_resource.rs)
 >
-> **TUI 显示**: 显示为 `/mcp` 命令输出格式
+> **TUI 显示**: 不在 TUI 中单独显示，结果直接返回给模型
 
 **描述**: 列出 MCP 服务器提供的资源模板。参数化资源模板允许服务器共享接受参数的数据。
 
@@ -567,7 +640,7 @@ ToolSpec::Function(ResponsesApiTool {
 >
 > **处理程序**: [`codex-rs/core/src/tools/handlers/mcp_resource.rs`](../codex-rs/core/src/tools/handlers/mcp_resource.rs)
 >
-> **TUI 显示**: 显示为 `/mcp` 命令输出格式
+> **TUI 显示**: 不在 TUI 中单独显示，结果直接返回给模型
 
 **描述**: 根据服务器名称和资源 URI 从 MCP 服务器读取特定资源
 
@@ -593,7 +666,21 @@ ToolSpec::Function(ResponsesApiTool {
 
 > **MCP 工具处理程序**: [`codex-rs/core/src/tools/handlers/mcp.rs`](../codex-rs/core/src/tools/handlers/mcp.rs)
 >
-> **TUI 显示**: 显示为 `server__tool(args)` 格式，带有服务器名称和工具名称 (参见 [`codex-rs/tui/src/history_cell.rs:1719-1732`](../codex-rs/tui/src/history_cell.rs#L1719-L1732))
+> **TUI 显示**: `• Called <server>__<tool>(args)` 或 `• Calling <server>__<tool>(args)`（执行中）
+>
+> **TUI 显示源码**: [`codex-rs/tui/src/history_cell.rs:1170-1200`](../codex-rs/tui/src/history_cell.rs#L1170-L1200)
+
+**TUI 显示代码**:
+```rust
+let header_text = if self.result.is_some() {
+    "Called"
+} else {
+    "Calling"
+};
+
+let invocation_line = line_to_static(&format_mcp_invocation(self.invocation.clone()));
+let mut compact_spans = vec![bullet.clone(), " ".into(), header_text.bold(), " ".into()];
+```
 
 MCP 服务器可以提供自定义工具，这些工具在 Codex 启动时动态注册。工具名称使用完全限定格式：`<服务器名称>__<工具名称>`
 
