@@ -6,6 +6,28 @@
 
 ---
 
+## 工具总结表
+
+| 类型 | TUI 显示名 | 报文中的名字 | 真实名字 | 工具描述 |
+|------|-----------|-------------|----------|----------|
+| Shell 命令 | `• Ran <命令>` / `• Running <命令>` | `shell` | `shell` | 运行 Shell 命令并返回输出（命令作为数组） |
+| Shell 命令 | `• Ran <命令>` / `• Running <命令>` | `shell_command` | `shell_command` | 在用户默认 Shell 中执行脚本命令（命令作为字符串） |
+| Shell 命令 | `• Ran <命令>` / `• Running <命令>` | `exec_command` | `exec_command` | 在 PTY 中运行命令，返回输出或会话 ID 用于持续交互 |
+| Shell 交互 | `Interacted with <命令>` / `Waited for <命令>` | `write_stdin` | `write_stdin` | 向现有的统一执行会话写入字符并返回最近的输出 |
+| 文件编辑 | `• Added <文件>` / `• Edited <文件>` / `• Deleted <文件>` | `apply_patch` | `apply_patch` | 使用补丁格式编辑文件（Freeform 或 JSON 格式） |
+| 计划管理 | `• Updated Plan` | `update_plan` | `update_plan` | 更新任务计划，提供步骤列表和状态 |
+| 文件读取 | 无（结果直接返回模型） | `read_file` | `read_file` | 读取本地文件，支持切片和缩进感知块模式（实验性） |
+| 目录列表 | 无（结果直接返回模型） | `list_dir` | `list_dir` | 列出本地目录中的条目（实验性） |
+| 文件搜索 | 无（结果直接返回模型） | `grep_files` | `grep_files` | 查找内容匹配模式的文件（实验性） |
+| 图像查看 | `• Viewed Image` | `view_image` | `view_image` | 将本地图像附加到线程上下文中 |
+| MCP 资源 | 无（结果直接返回模型） | `list_mcp_resources` | `list_mcp_resources` | 列出 MCP 服务器提供的资源 |
+| MCP 资源 | 无（结果直接返回模型） | `list_mcp_resource_templates` | `list_mcp_resource_templates` | 列出 MCP 服务器提供的资源模板 |
+| MCP 资源 | 无（结果直接返回模型） | `read_mcp_resource` | `read_mcp_resource` | 从 MCP 服务器读取特定资源 |
+| MCP 工具 | `• Called <server>__<tool>` / `• Calling <server>__<tool>` | `<server>__<tool>` | 动态注册 | MCP 服务器提供的自定义工具 |
+| 网页搜索 | 内置工具结果 | `web_search` | `web_search` | 执行网页搜索以获取最新信息（内置于 OpenAI API） |
+
+---
+
 ## 目录
 
 1. [工具概述](#工具概述)
