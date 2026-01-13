@@ -299,4 +299,32 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn build_default_headers_includes_authorization() -> Result<()> {
+        let mut http_headers = HashMap::new();
+        http_headers.insert("Authorization".to_string(), "Bearer test_token".to_string());
+
+        let headers = build_default_headers(Some(http_headers), None)?;
+
+        assert!(headers.contains_key("authorization"));
+        assert_eq!(
+            headers.get("authorization").unwrap().to_str()?,
+            "Bearer test_token"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn build_default_headers_case_insensitive() -> Result<()> {
+        let mut http_headers = HashMap::new();
+        http_headers.insert("authorization".to_string(), "Bearer token123".to_string());
+
+        let headers = build_default_headers(Some(http_headers), None)?;
+
+        assert!(headers.contains_key("authorization"));
+
+        Ok(())
+    }
 }

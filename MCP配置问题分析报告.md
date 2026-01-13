@@ -19,7 +19,56 @@ url = "https://open.bigmodel.cn/api/mcp/web_search_prime/mcp"
 http_headers = { "Authorization" = "Bearer key" }
 ```
 
-## 问题分析
+## 更新：问题根本原因已确定 ✅
+
+经过深入源码分析，确认问题**不是服务器端的问题**（用户已通过 `@modelcontextprotocol/inspector` 验证服务器正常），而是 **Codex 客户端代码的 bug**。
+
+### Bug 位置
+
+文件：`codex-rs/rmcp-client/src/rmcp_client.rs`，第196-206行
+
+### Bug 详情
+
+当用户通过 `http_headers` 配置 Authorization 头时：
+
+```toml
+http_headers = { "Authorization" = "Bearer key" }
+```
+
+Codex 的处理流程如下：
+
+1. `http_headers` 被传递给 `build_default_headers()` 函数，构建为 reqwest 的 `HeaderMap`
+2. 这些 headers 通过 `apply_default_headers()` 被设置为 reqwest Client 的默认 headers
+3. **但是**，`rmcp` 库的 `StreamableHttpClientTransportConfig` 需要通过 `auth_header()` 方法显式设置认证信息
+4. 当前代码只在 `bearer_token` (通过环境变量读取) 存在时才调用 `auth_header()`
+5. **导致**：虽然 reqwest client 有 Authorization header，但 rmcp transport 层没有正确获取到认证信息
+
+### 问题代码
+
+```rust
+} else {
+    let mut http_config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
+    if let Some(bearer_token) = bearer_token.clone() {
+        http_config = http_config.auth_header(bearer_token);  // 只在 bearer_token 存在时设置
+    }
+
+    let http_client =
+        apply_default_headers(reqwest::Client::builder(), &default_headers).build()?;
+
+    let transport = StreamableHttpClientTransport::with_client(http_client, http_config);
+    PendingTransport::StreamableHttp { transport }
+}
+```
+
+### 为什么 `@modelcontextprotocol/inspector` 能工作
+
+官方的 MCP inspector 正确实现了 HTTP header 的处理，它会：
+- 直接将用户提供的 headers 添加到每个 HTTP 请求中
+- 不依赖于底层 HTTP 客户端的默认 headers
+
+而 Codex 使用的 `rmcp` 库在 Streamable HTTP 传输中有特定的 header 处理机制，需要通过 `auth_header()` 显式设置。
+
+## 问题分析（原始分析）
 
 ### 1. MCP 传输协议
 
@@ -98,7 +147,38 @@ MCP 初始化过程包括：
 
 ## 解决方案
 
-### 方案 1：验证 API 端点和认证
+### 方案 0：代码修复（推荐）⭐
+
+需要修改 `codex-rs/rmcp-client/src/rmcp_client.rs` 文件，使其正确处理 `http_headers` 中的 Authorization 头。
+
+**修复方案A**：从 `http_headers` 中提取 Authorization 并传递给 `auth_header()`
+
+在 `new_streamable_http_client` 函数中（大约第196行），需要：
+
+1. 检查 `http_headers` 中是否包含 "Authorization" 或 "authorization"
+2. 如果存在且格式为 "Bearer xxx"，提取 token 值
+3. 将提取的 token 传递给 `http_config.auth_header()`
+
+**修复方案B**：让 `rmcp` 库支持从 reqwest client 的 default headers 中读取
+
+这需要修改 `rmcp` 库本身，或者找到配置方式让 transport 使用 client 的 default headers。
+
+**临时解决方案**：
+
+在修复代码之前，用户可以使用 `bearer_token_env_var` 配置方式：
+
+```toml
+[mcp_servers.web-search-prime]
+url = "https://open.bigmodel.cn/api/mcp/web_search_prime/mcp"
+bearer_token_env_var = "ZHIPU_API_KEY"
+```
+
+然后设置环境变量（注意：只需要 token 值，**不要包含** "Bearer " 前缀）：
+```bash
+export ZHIPU_API_KEY="your-actual-key-here"  # 不要包含 "Bearer " 前缀
+```
+
+### 方案 1：验证 API 端点和认证（已验证不是问题）
 
 1. **检查智谱 AI 官方文档**
    - 确认是否提供 MCP 协议支持
@@ -226,18 +306,49 @@ Streamable HTTP 传输要求服务器支持：
 
 ## 结论
 
-该问题的根本原因是：**智谱 AI 的 MCP 端点可能不完全兼容 MCP Streamable HTTP 协议标准**，或者需要特定的配置参数。
+该问题的根本原因是：**Codex 的 MCP HTTP 客户端实现存在 bug**，当使用 `http_headers` 配置 Authorization 头时，该 header 未被正确传递给底层的 `rmcp` 传输层。
 
-**建议采取的行动：**
+**核心问题：**
+- `http_headers` 中的 Authorization 被添加到 reqwest HTTP 客户端的默认 headers
+- 但 `rmcp` 库的 `StreamableHttpClientTransportConfig` 需要通过 `auth_header()` 方法显式设置认证
+- 由于认证信息缺失，MCP 握手过程中服务器拒绝连接或提前关闭连接
 
-1. **首要任务**：查看智谱 AI 官方文档，确认 MCP 支持的状态和正确配置方式
-2. **次要任务**：使用环境变量存储 API Key，并尝试不同的认证 header
-3. **验证任务**：先测试一个已知可用的 MCP 服务器，确保 Codex 本身的 HTTP MCP 功能正常
-4. **最后手段**：联系智谱 AI 技术支持，询问 MCP 服务的正确使用方式
+**已实施的修复：**
 
-如果智谱 AI 暂不支持标准 MCP 协议，可能需要等待官方更新，或者使用其他方式集成（如自己编写一个 MCP 服务器包装器来调用智谱 AI 的 REST API）。
+修改了 `codex-rs/rmcp-client/src/rmcp_client.rs` 文件，使其：
+1. 从 `http_headers` 中检测 Authorization header（不区分大小写）
+2. 提取 "Bearer " 后的 token 值
+3. 将 token 传递给 `StreamableHttpClientTransportConfig::auth_header()`
 
-## 参考资源
+**修复后的效果：**
+- 用户可以直接使用 `http_headers = { "Authorization" = "Bearer key" }` 配置
+- 也可以继续使用 `bearer_token_env_var` 方式
+- 两种方式都能正确工作
+
+**对用户的建议：**
+
+1. **等待修复合并后**：可以直接使用原来的配置方式
+   ```toml
+   [mcp_servers.web-search-prime]
+   url = "https://open.bigmodel.cn/api/mcp/web_search_prime/mcp"
+   http_headers = { "Authorization" = "Bearer your-key" }
+   ```
+
+2. **修复合并前的临时方案**：使用环境变量方式
+   ```toml
+   [mcp_servers.web-search-prime]
+   url = "https://open.bigmodel.cn/api/mcp/web_search_prime/mcp"
+   bearer_token_env_var = "ZHIPU_API_KEY"
+   ```
+   
+   设置环境变量（注意：只需要 token 值，不要包含 "Bearer " 前缀）：
+   ```bash
+   export ZHIPU_API_KEY="your-actual-key-here"
+   ```
+
+**感谢用户的反馈！** 通过 `@modelcontextprotocol/inspector` 的测试结果，我们能够确定这不是服务器问题，而是客户端实现的 bug。这个 bug 修复将使所有使用 `http_headers` 配置 Authorization 的 MCP 服务器都能正常工作。
+
+## 技术细节（原始分析）
 
 - MCP 官方规范：https://modelcontextprotocol.io/specification/2025-06-18/basic
 - Codex 文档：https://developers.openai.com/codex
