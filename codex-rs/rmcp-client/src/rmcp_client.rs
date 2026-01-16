@@ -167,7 +167,7 @@ impl RmcpClient {
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
     ) -> Result<Self> {
-        let default_headers = build_default_headers(http_headers, env_http_headers)?;
+        let default_headers = build_default_headers(http_headers.clone(), env_http_headers)?;
 
         let initial_oauth_tokens = match bearer_token {
             Some(_) => None,
@@ -195,8 +195,32 @@ impl RmcpClient {
             }
         } else {
             let mut http_config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
-            if let Some(bearer_token) = bearer_token.clone() {
-                http_config = http_config.auth_header(bearer_token);
+
+            // If bearer_token is provided via env var, use it
+            let auth_token = if let Some(bearer_token) = bearer_token.clone() {
+                Some(bearer_token)
+            } else {
+                // Otherwise, try to extract Authorization header from http_headers
+                http_headers.as_ref().and_then(|headers| {
+                    headers
+                        .iter()
+                        .find(|(k, _)| k.eq_ignore_ascii_case("authorization"))
+                        .map(|(_, v)| {
+                            // Extract token from "Bearer <token>" format
+                            if let Some(token) = v.strip_prefix("Bearer ") {
+                                token.to_string()
+                            } else if let Some(token) = v.strip_prefix("bearer ") {
+                                token.to_string()
+                            } else {
+                                // If not in Bearer format, use the entire value
+                                v.clone()
+                            }
+                        })
+                })
+            };
+
+            if let Some(token) = auth_token {
+                http_config = http_config.auth_header(token);
             }
 
             let http_client =
