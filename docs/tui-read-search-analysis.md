@@ -4,6 +4,455 @@
 
 本报告分析了 Codex TUI（终端用户界面）中 "Read" 和 "Search" 字样的显示触发机制，包括相关的事件消息格式和数据流程。
 
+---
+
+## 解析技术说明
+
+### 使用的解析技术
+
+Codex 使用**混合解析策略**，结合了以下两种技术：
+
+1. **AST 解析（抽象语法树）**：使用 `tree-sitter-bash` 库解析 bash 脚本
+2. **模式匹配 + 手工解析**：使用 Rust 的 `match` 语句和 `shlex` 库进行命令词元分析
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     解析流程                                  │
+│                                                              │
+│  输入: ["bash", "-lc", "cat src/main.rs"]                   │
+│                    ↓                                         │
+│  ┌──────────────────────────────────────────────┐           │
+│  │ Step 1: 检测是否为 bash/zsh 包装             │           │
+│  │ extract_bash_command() → ("bash", "cat ...")  │           │
+│  └──────────────────────────────────────────────┘           │
+│                    ↓                                         │
+│  ┌──────────────────────────────────────────────┐           │
+│  │ Step 2: tree-sitter-bash 解析脚本            │           │
+│  │ try_parse_shell() → AST 语法树               │           │
+│  └──────────────────────────────────────────────┘           │
+│                    ↓                                         │
+│  ┌──────────────────────────────────────────────┐           │
+│  │ Step 3: 提取命令词元                         │           │
+│  │ try_parse_word_only_commands_sequence()      │           │
+│  │ → [["cat", "src/main.rs"]]                   │           │
+│  └──────────────────────────────────────────────┘           │
+│                    ↓                                         │
+│  ┌──────────────────────────────────────────────┐           │
+│  │ Step 4: 命令类型识别（模式匹配）             │           │
+│  │ summarize_main_tokens()                      │           │
+│  │ 匹配 "cat" → ParsedCommand::Read             │           │
+│  └──────────────────────────────────────────────┘           │
+│                    ↓                                         │
+│  输出: ParsedCommand::Read {                                │
+│      cmd: "cat src/main.rs",                                │
+│      name: "main.rs",                                       │
+│      path: "src/main.rs"                                    │
+│  }                                                          │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 为什么使用混合策略？
+
+| 技术 | 用途 | 优势 |
+|------|------|------|
+| tree-sitter AST | 解析复杂 bash 语法（管道、逻辑运算符等） | 准确处理嵌套和转义 |
+| shlex 词元化 | 分割命令行参数 | 正确处理引号和空格 |
+| 模式匹配 | 识别特定命令类型 | 灵活扩展、易于维护 |
+
+---
+
+## 教学级示例
+
+### 简单示例 1：读取单个文件
+
+**输入命令**：
+```bash
+cat README.md
+```
+
+**解析步骤详解**：
+
+```
+步骤 1: 词元化
+┌────────────────────────────────────────┐
+│ 输入: "cat README.md"                  │
+│ shlex 分割 → ["cat", "README.md"]      │
+└────────────────────────────────────────┘
+            ↓
+步骤 2: 命令识别（模式匹配）
+┌────────────────────────────────────────┐
+│ match main_cmd.split_first() {         │
+│   Some(("cat", tail)) => {             │  ← 匹配 "cat" 命令
+│     // tail = ["README.md"]            │
+│   }                                    │
+│ }                                      │
+└────────────────────────────────────────┘
+            ↓
+步骤 3: 提取文件路径
+┌────────────────────────────────────────┐
+│ single_non_flag_operand(tail, &[])     │
+│ → Some("README.md")                    │
+│                                        │
+│ short_display_path("README.md")        │
+│ → "README.md"  (提取文件名)            │
+└────────────────────────────────────────┘
+            ↓
+步骤 4: 构造结果
+┌────────────────────────────────────────┐
+│ ParsedCommand::Read {                  │
+│   cmd: "cat README.md",                │
+│   name: "README.md",    ← TUI 显示用   │
+│   path: "README.md"                    │
+│ }                                      │
+└────────────────────────────────────────┘
+```
+
+**TUI 渲染效果**：
+```
+• Explored
+  └ Read README.md
+```
+
+---
+
+### 简单示例 2：搜索关键词
+
+**输入命令**：
+```bash
+rg "TODO" src
+```
+
+**解析步骤详解**：
+
+```
+步骤 1: 词元化
+┌────────────────────────────────────────┐
+│ 输入: "rg \"TODO\" src"                │
+│ shlex 分割 → ["rg", "TODO", "src"]     │
+└────────────────────────────────────────┘
+            ↓
+步骤 2: 命令识别（模式匹配）
+┌────────────────────────────────────────┐
+│ match main_cmd.split_first() {         │
+│   Some(("rg", tail)) => {              │  ← 匹配 "rg" 命令
+│     // tail = ["TODO", "src"]          │
+│   }                                    │
+│ }                                      │
+└────────────────────────────────────────┘
+            ↓
+步骤 3: 检查是否为 --files 模式
+┌────────────────────────────────────────┐
+│ has_files_flag = false                 │
+│ （不是列出文件，是搜索模式）           │
+└────────────────────────────────────────┘
+            ↓
+步骤 4: 提取搜索参数
+┌────────────────────────────────────────┐
+│ non_flags = ["TODO", "src"]            │
+│ query = non_flags[0] = "TODO"          │
+│ path = short_display_path("src")       │
+│      = "src"                           │
+└────────────────────────────────────────┘
+            ↓
+步骤 5: 构造结果
+┌────────────────────────────────────────┐
+│ ParsedCommand::Search {                │
+│   cmd: "rg TODO src",                  │
+│   query: Some("TODO"),  ← TUI 显示用   │
+│   path: Some("src")                    │
+│ }                                      │
+└────────────────────────────────────────┘
+```
+
+**TUI 渲染效果**：
+```
+• Explored
+  └ Search TODO in src
+```
+
+---
+
+### 复杂示例 1：bash 包装 + 管道过滤
+
+**输入命令**：
+```bash
+bash -lc "cat tui/Cargo.toml | sed -n '1,200p'"
+```
+
+**解析步骤详解**：
+
+```
+步骤 1: 检测 bash 包装
+┌────────────────────────────────────────────────────┐
+│ extract_bash_command()                             │
+│ 输入: ["bash", "-lc", "cat ... | sed ..."]         │
+│ 检测: shell="bash", flag="-lc" ✓                   │
+│ 输出: script = "cat tui/Cargo.toml | sed -n '1,200p'" │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 2: tree-sitter AST 解析
+┌────────────────────────────────────────────────────┐
+│ try_parse_shell(script)                            │
+│                                                    │
+│ AST 结构:                                          │
+│ program                                            │
+│ └─ pipeline                                        │
+│    ├─ command: "cat tui/Cargo.toml"               │
+│    │  ├─ command_name: "cat"                      │
+│    │  └─ word: "tui/Cargo.toml"                   │
+│    └─ command: "sed -n '1,200p'"                  │
+│       ├─ command_name: "sed"                      │
+│       ├─ word: "-n"                               │
+│       └─ raw_string: "'1,200p'"                   │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 3: 提取命令序列
+┌────────────────────────────────────────────────────┐
+│ try_parse_word_only_commands_sequence()            │
+│ → [["cat", "tui/Cargo.toml"],                     │
+│    ["sed", "-n", "1,200p"]]                       │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 4: 过滤辅助命令
+┌────────────────────────────────────────────────────┐
+│ is_small_formatting_command(["sed", "-n", ...])    │
+│ → true (sed -n 无文件参数时是管道格式化命令)        │
+│                                                    │
+│ 但 sed -n 有范围参数，保留为 Read 命令             │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 5: 合并为 Read 命令
+┌────────────────────────────────────────────────────┐
+│ ParsedCommand::Read {                              │
+│   cmd: "cat tui/Cargo.toml | sed -n '1,200p'",    │
+│   name: "Cargo.toml",                             │
+│   path: "tui/Cargo.toml"                          │
+│ }                                                 │
+└────────────────────────────────────────────────────┘
+```
+
+**TUI 渲染效果**：
+```
+• Explored
+  └ Read Cargo.toml
+```
+
+---
+
+### 复杂示例 2：cd + 搜索 + 管道
+
+**输入命令**：
+```bash
+bash -lc "cd codex-rs && rg -n 'codex_api' src -S | head -n 50"
+```
+
+**解析步骤详解**：
+
+```
+步骤 1: 检测 bash 包装
+┌────────────────────────────────────────────────────┐
+│ extract_bash_command()                             │
+│ → script = "cd codex-rs && rg ... | head ..."     │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 2: tree-sitter AST 解析
+┌────────────────────────────────────────────────────┐
+│ AST 结构:                                          │
+│ program                                            │
+│ └─ list                                            │
+│    ├─ command: "cd codex-rs"        (&&)          │
+│    └─ pipeline                                     │
+│       ├─ command: "rg -n 'codex_api' src -S"      │
+│       └─ command: "head -n 50"                    │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 3: 提取命令序列
+┌────────────────────────────────────────────────────┐
+│ → [["cd", "codex-rs"],                            │
+│    ["rg", "-n", "codex_api", "src", "-S"],        │
+│    ["head", "-n", "50"]]                          │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 4: 处理 cd 命令（目录跟踪）
+┌────────────────────────────────────────────────────┐
+│ cd_target(["codex-rs"]) → Some("codex-rs")        │
+│ cwd = "codex-rs"                                  │
+│ （cd 命令被过滤，但记住了目录）                    │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 5: 处理 rg 命令
+┌────────────────────────────────────────────────────┐
+│ summarize_main_tokens(["rg", "-n", ...])          │
+│                                                    │
+│ skip_flag_values() 跳过 -n, -S 等参数             │
+│ non_flags = ["codex_api", "src"]                  │
+│ query = "codex_api"                               │
+│ path = "src"                                      │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 6: 过滤 head 命令
+┌────────────────────────────────────────────────────┐
+│ is_small_formatting_command(["head", "-n", "50"]) │
+│ → true (管道末端的格式化命令)                      │
+│ 被过滤掉                                          │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 7: 构造结果
+┌────────────────────────────────────────────────────┐
+│ ParsedCommand::Search {                            │
+│   cmd: "rg -n codex_api src -S",                  │
+│   query: Some("codex_api"),                       │
+│   path: Some("src")                               │
+│ }                                                 │
+└────────────────────────────────────────────────────┘
+```
+
+**TUI 渲染效果**：
+```
+• Explored
+  └ Search codex_api in src
+```
+
+---
+
+### 复杂示例 3：多命令组合（搜索 + 读取）
+
+**输入命令**：
+```bash
+bash -lc "rg --files src | head -n 40 && cat src/main.rs"
+```
+
+**解析步骤详解**：
+
+```
+步骤 1: tree-sitter AST 解析
+┌────────────────────────────────────────────────────┐
+│ AST 结构:                                          │
+│ program                                            │
+│ └─ list                                            │
+│    ├─ pipeline                          (&&)      │
+│    │  ├─ command: "rg --files src"                │
+│    │  └─ command: "head -n 40"                    │
+│    └─ command: "cat src/main.rs"                  │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 2: 提取并分类命令
+┌────────────────────────────────────────────────────┐
+│ 命令 1: ["rg", "--files", "src"]                  │
+│   → has_files_flag = true                         │
+│   → ParsedCommand::ListFiles { path: "src" }      │
+│                                                    │
+│ 命令 2: ["head", "-n", "40"]                      │
+│   → is_small_formatting_command() = true          │
+│   → 被过滤                                        │
+│                                                    │
+│ 命令 3: ["cat", "src/main.rs"]                    │
+│   → ParsedCommand::Read {                         │
+│       name: "main.rs",                            │
+│       path: "src/main.rs"                         │
+│     }                                             │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 3: 判断是否为探索模式
+┌────────────────────────────────────────────────────┐
+│ is_exploring_call() 检查:                         │
+│ - 所有命令都是 Read/Search/ListFiles? ✓           │
+│ - 不是用户直接输入的 shell 命令? ✓                │
+│ → 进入探索模式                                    │
+└────────────────────────────────────────────────────┘
+            ↓
+步骤 4: 最终结果
+┌────────────────────────────────────────────────────┐
+│ [                                                 │
+│   ParsedCommand::ListFiles { path: "src" },       │
+│   ParsedCommand::Read { name: "main.rs", ... }    │
+│ ]                                                 │
+└────────────────────────────────────────────────────┘
+```
+
+**TUI 渲染效果**：
+```
+• Explored
+  └ List src
+    Read main.rs
+```
+
+---
+
+## 解析函数详解
+
+### 核心解析函数
+
+```rust
+// 文件: codex-rs/core/src/parse_command.rs
+
+/// 主入口函数
+pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
+    let parsed = parse_command_impl(command);
+    // 去重连续相同的命令
+    dedup(parsed)
+}
+
+/// 实现细节
+fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
+    // 1. 尝试解析 bash -lc "..." 格式
+    if let Some(commands) = parse_shell_lc_commands(command) {
+        return commands;
+    }
+    
+    // 2. 回退到直接词元分析
+    let tokens = normalize_tokens(command);
+    let parts = split_on_connectors(&tokens);  // 按 && || | ; 分割
+    
+    // 3. 逐个处理子命令
+    for tokens in parts {
+        let parsed = summarize_main_tokens(&tokens);
+        // ...
+    }
+}
+
+/// 命令类型识别（模式匹配）
+fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
+    match main_cmd.split_first() {
+        // cat 命令 → Read
+        Some(("cat", tail)) => { /* ... */ }
+        
+        // rg/grep 命令 → Search
+        Some(("rg", tail)) | Some(("grep", tail)) => { /* ... */ }
+        
+        // ls/tree 命令 → ListFiles
+        Some(("ls", tail)) | Some(("tree", tail)) => { /* ... */ }
+        
+        // 其他 → Unknown
+        _ => ParsedCommand::Unknown { cmd: shlex_join(main_cmd) }
+    }
+}
+```
+
+### AST 解析函数
+
+```rust
+// 文件: codex-rs/core/src/bash.rs
+
+/// 使用 tree-sitter-bash 解析脚本
+pub fn try_parse_shell(shell_lc_arg: &str) -> Option<Tree> {
+    let mut parser = Parser::new();
+    parser.set_language(&BASH.into()).expect("load bash grammar");
+    parser.parse(shell_lc_arg, None)
+}
+
+/// 从 AST 提取命令词元序列
+pub fn try_parse_word_only_commands_sequence(
+    tree: &Tree, 
+    src: &str
+) -> Option<Vec<Vec<String>>> {
+    // 遍历 AST，只接受简单的 word-only 命令
+    // 拒绝包含重定向、替换等复杂语法的命令
+}
+```
+
+---
+
 ## 核心发现
 
 ### 1. 显示效果
