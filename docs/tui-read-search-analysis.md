@@ -710,13 +710,276 @@ if call.parsed.iter().all(|parsed| matches!(parsed, ParsedCommand::Read { .. }))
 }
 ```
 
+---
+
+## 其他 TUI 显示类型
+
+除了 `Read` 和 `Search` 之外，TUI 还有以下几种显示类型：
+
+### 1. List（列出文件）
+
+**触发命令**：`ls`、`tree`、`rg --files`、`find`、`fd` 等
+
+**显示效果**：
+```
+• Explored
+  └ List src
+```
+
+**解析示例**：
+
+```
+输入: rg --files src
+      ↓
+ParsedCommand::ListFiles {
+    cmd: "rg --files src",
+    path: Some("src")
+}
+      ↓
+TUI 渲染: "List src"
+```
+
+**相关命令列表**：
+
+| 命令 | 示例 | TUI 显示 |
+|------|------|----------|
+| `ls` | `ls -la src` | List src |
+| `tree` | `tree -L 2 .` | List . |
+| `rg --files` | `rg --files src` | List src |
+| `git ls-files` | `git ls-files` | List |
+| `fd` | `fd -t f` | List |
+| `find` | `find . -type f` | List . |
+| `eza`/`exa` | `eza src` | List src |
+| `du` | `du -d 2 .` | List . |
+
+---
+
+### 2. Run（运行命令）
+
+当命令无法被识别为 Read、Search 或 List 时，会被解析为 `Unknown` 类型，在 TUI 中显示为 "Run"。
+
+**触发命令**：任何非探索类命令，如 `npm run build`、`git status` 等
+
+**显示效果**：
+```
+• Explored
+  └ Run npm run build
+```
+
+**解析示例**：
+
+```
+输入: git status
+      ↓
+ParsedCommand::Unknown {
+    cmd: "git status"
+}
+      ↓
+TUI 渲染: "Run git status"
+```
+
+**注意**：包含 `Unknown` 类型的命令**不会**进入"探索模式"，而是显示为普通命令执行。
+
+---
+
+### 3. Edited（编辑文件）
+
+当 Agent 修改文件时，会触发 `Edited` 显示。这不是通过命令解析实现的，而是通过 `PatchApplyEndEvent` 事件。
+
+**显示效果**：
+```
+• Edited src/main.rs (+15 -3)
+```
+
+或多文件：
+```
+• Edited 3 files (+45 -12)
+  └ src/main.rs (+15 -3)
+  └ src/lib.rs (+20 -5)
+  └ Cargo.toml (+10 -4)
+```
+
+**事件格式**：
+
+```json
+{
+    "type": "PatchApplyEnd",
+    "changes": {
+        "src/main.rs": {
+            "type": "update",
+            "unified_diff": "...",
+            "move_path": null
+        }
+    }
+}
+```
+
+**相关代码**：
+
+```rust
+// 文件: codex-rs/tui/src/diff_render.rs
+let verb = match &row.change {
+    FileChange::Add { .. } => "Added",     // 新增文件
+    FileChange::Delete { .. } => "Deleted", // 删除文件
+    _ => "Edited",                          // 修改文件
+};
+```
+
+---
+
+### 4. Called（调用 MCP 工具）
+
+当 Agent 调用 MCP（Model Context Protocol）工具时，显示为 "Called" 或 "Calling"。
+
+**显示效果**：
+```
+• Calling github-mcp-server.search_repositories(query: "rust async")
+```
+
+完成后：
+```
+• Called github-mcp-server.search_repositories(query: "rust async")
+  └ Found 42 repositories matching the query...
+```
+
+**事件格式**：
+
+```json
+{
+    "type": "McpToolCallBegin",
+    "call_id": "call-123",
+    "invocation": {
+        "server_name": "github-mcp-server",
+        "tool_name": "search_repositories",
+        "arguments": {
+            "query": "rust async"
+        }
+    }
+}
+```
+
+---
+
+### 5. Searched（网络搜索）
+
+当 Agent 执行网络搜索时，显示为 "Searched"。
+
+**显示效果**：
+```
+• Searched rust async programming best practices
+```
+
+**事件格式**：
+
+```json
+{
+    "type": "WebSearchEnd",
+    "query": "rust async programming best practices"
+}
+```
+
+---
+
+### 6. Plan Update（计划更新）
+
+当 Agent 更新执行计划时，显示计划步骤列表。
+
+**显示效果**：
+```
+Thinking... Organize imports
+
+☐ Review existing import structure
+⋯ Consolidate duplicate imports
+✓ Update module re-exports
+```
+
+**状态图标**：
+- `☐` - 待完成（Pending）
+- `⋯` - 进行中（InProgress）
+- `✓` - 已完成（Completed）
+- `✗` - 已跳过（Skipped）
+
+---
+
+### 7. Running/Ran（命令执行）
+
+当命令不符合"探索模式"条件时，会显示为普通命令执行。
+
+**显示效果**（执行中）：
+```
+• Running npm run build
+```
+
+**显示效果**（已完成）：
+```
+• Ran npm run build
+  └ Build completed successfully
+```
+
+**显示效果**（用户执行）：
+```
+• You ran git status
+  └ On branch main...
+```
+
+---
+
+### 8. 审批决定（Approval Decision）
+
+当用户批准或拒绝命令执行时显示。
+
+**显示效果**：
+```
+✔ You approved codex to run rm -rf node_modules this time
+```
+
+```
+✗ You did not approve codex to run sudo rm -rf /
+```
+
+---
+
+## TUI 显示类型汇总
+
+| 类型 | 触发条件 | 显示文字 | 事件类型 |
+|------|----------|----------|----------|
+| Read | cat/head/tail 等命令 | "Read 文件名" | ExecCommandBegin |
+| Search | rg/grep 等搜索命令 | "Search 关键词 in 路径" | ExecCommandBegin |
+| List | ls/tree/rg --files 等 | "List 路径" | ExecCommandBegin |
+| Run | 未识别的探索命令 | "Run 命令" | ExecCommandBegin |
+| Running/Ran | 非探索模式命令 | "Running/Ran 命令" | ExecCommandBegin |
+| Edited | 文件修改 | "Edited 文件名" | PatchApplyEnd |
+| Called | MCP 工具调用 | "Called 工具名" | McpToolCallBegin |
+| Searched | 网络搜索 | "Searched 查询" | WebSearchEnd |
+| Plan | 计划更新 | 计划步骤列表 | PlanUpdate |
+
+---
+
 ## 总结
 
-TUI 中 "Read" 和 "Search" 的显示是由以下因素共同决定的：
+TUI 中的显示类型可分为以下几类：
 
-1. **事件触发**: `ExecCommandBeginEvent` 包含 `parsed_cmd` 字段
-2. **命令解析**: `parse_command()` 函数将原始命令解析为结构化的 `ParsedCommand`
-3. **模式判断**: `is_exploring_call()` 判断是否为探索模式
-4. **渲染逻辑**: `exploring_display_lines()` 将 ParsedCommand 类型映射为显示文本
+### 命令解析类（探索模式）
 
-只有当命令被解析为 `Read`、`Search` 或 `ListFiles` 类型，并且不是用户直接输入的 shell 命令时，才会触发简化的探索模式显示。
+通过 `parse_command()` 函数解析命令，使用混合策略（AST + shlex + 模式匹配）：
+
+1. **Read** - 读取文件内容
+2. **Search** - 搜索文件内容
+3. **List** - 列出文件/目录
+4. **Run** - 未识别的命令（不触发探索模式）
+
+### 事件驱动类
+
+直接由特定事件触发，不经过命令解析：
+
+1. **Edited** - 文件修改（`PatchApplyEnd`）
+2. **Called** - MCP 工具调用（`McpToolCallBegin`）
+3. **Searched** - 网络搜索（`WebSearchEnd`）
+4. **Plan** - 计划更新（`PlanUpdate`）
+
+### 状态显示类
+
+1. **Running/Ran** - 普通命令执行状态
+2. **Approval** - 用户审批决定
+
+只有当命令被解析为 `Read`、`Search` 或 `ListFiles` 类型，并且不是用户直接输入的 shell 命令时，才会触发简化的"探索模式"显示。
