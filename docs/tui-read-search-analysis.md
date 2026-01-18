@@ -243,9 +243,11 @@ fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
     Read shimmer.rs, status_indicator_widget.rs  ← 多个文件合并
 ```
 
-这个优化在 `exploring_display_lines()` 方法中实现：
+这个优化在 `exploring_display_lines()` 方法中实现（简化示意）：
 
 ```rust
+// 实际代码见: codex-rs/tui/src/exec_cell/render.rs
+// 以下为简化的逻辑示意
 if call.parsed.iter().all(|parsed| matches!(parsed, ParsedCommand::Read { .. })) {
     // 合并连续的 Read 命令
     while let Some(next) = calls.first() {
