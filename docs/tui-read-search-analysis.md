@@ -886,18 +886,28 @@ let verb = match &row.change {
 
 **显示效果**：
 ```
-Thinking... Organize imports
-
-☐ Review existing import structure
-⋯ Consolidate duplicate imports
-✓ Update module re-exports
+• Updated Plan
+  └ Implement error handling
+    ✔ Define error types (已完成)
+    □ Add error conversion (进行中)
+    □ Update return types (待完成)
 ```
 
-**状态图标**：
-- `☐` - 待完成（Pending）
-- `⋯` - 进行中（InProgress）
-- `✓` - 已完成（Completed）
-- `✗` - 已跳过（Skipped）
+**状态图标**（注：InProgress 和 Pending 使用相同的 `□` 符号，但通过不同样式区分）：
+- `✔ ` - 已完成（Completed）- 带删除线、灰色
+- `□ ` - 进行中（InProgress）- 青色（cyan）、加粗
+- `□ ` - 待完成（Pending）- 灰色（dim）
+
+**相关代码**：
+
+```rust
+// 文件: codex-rs/tui/src/history_cell.rs
+let (box_str, step_style) = match status {
+    StepStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
+    StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
+    StepStatus::Pending => ("□ ", Style::default().dim()),
+};
+```
 
 ---
 
@@ -939,6 +949,120 @@ Thinking... Organize imports
 
 ---
 
+### 9. Viewed Image（查看图片）
+
+当 Agent 使用 `view_image` 工具查看图片时显示。
+
+**显示效果**：
+```
+• Viewed Image
+  └ path/to/image.png
+```
+
+**事件格式**：
+
+```json
+{
+    "type": "ViewImageToolCall",
+    "call_id": "call-123",
+    "path": "/path/to/image.png"
+}
+```
+
+---
+
+### 10. Warning（警告）
+
+当系统产生警告信息时显示。
+
+**显示效果**：
+```
+⚠ This is a warning message
+```
+
+**事件格式**：
+
+```json
+{
+    "type": "Warning",
+    "message": "This is a warning message"
+}
+```
+
+---
+
+### 11. Error（错误）
+
+当系统产生错误时显示。
+
+**显示效果**：
+```
+■ Error message in red
+```
+
+**事件格式**：
+
+```json
+{
+    "type": "Error",
+    "message": "Error message"
+}
+```
+
+---
+
+### 12. Reasoning Summary（推理摘要）
+
+当模型输出推理内容时，会以摘要形式显示。
+
+**显示效果**：
+```
+• Detailed reasoning goes here...
+```
+
+推理摘要以斜体和灰色样式显示，通常显示模型的思考过程。
+
+**相关代码**：
+
+```rust
+// 文件: codex-rs/tui/src/history_cell.rs
+impl ReasoningSummaryCell {
+    fn lines(&self, width: u16) -> Vec<Line<'static>> {
+        let summary_style = Style::default().dim().italic();
+        // ...
+    }
+}
+```
+
+---
+
+### 13. Added/Deleted（新增/删除文件）
+
+除了 Edited 之外，还有针对新增和删除文件的特殊显示。
+
+**新增文件**：
+```
+• Added src/new_file.rs (+25 -0)
+```
+
+**删除文件**：
+```
+• Deleted src/old_file.rs (+0 -30)
+```
+
+**相关代码**：
+
+```rust
+// 文件: codex-rs/tui/src/diff_render.rs
+let verb = match &row.change {
+    FileChange::Add { .. } => "Added",     // 新增文件
+    FileChange::Delete { .. } => "Deleted", // 删除文件
+    _ => "Edited",                          // 修改文件
+};
+```
+
+---
+
 ## TUI 显示类型汇总
 
 | 类型 | 触发条件 | 显示文字 | 事件类型 |
@@ -948,10 +1072,19 @@ Thinking... Organize imports
 | List | ls/tree/rg --files 等 | "List 路径" | ExecCommandBegin |
 | Run | 未识别的探索命令 | "Run 命令" | ExecCommandBegin |
 | Running/Ran | 非探索模式命令 | "Running/Ran 命令" | ExecCommandBegin |
-| Edited | 文件修改 | "Edited 文件名" | PatchApplyEnd |
-| Called | MCP 工具调用 | "Called 工具名" | McpToolCallBegin |
+| Edited/Added/Deleted | 文件修改/新增/删除 | "Edited/Added/Deleted 文件名" | PatchApplyEnd |
+| Called | MCP 工具调用 | "Called/Calling 工具名" | McpToolCallBegin |
 | Searched | 网络搜索 | "Searched 查询" | WebSearchEnd |
-| Plan | 计划更新 | 计划步骤列表 | PlanUpdate |
+| Updated Plan | 计划更新 | 计划步骤列表 | PlanUpdate |
+| Viewed Image | 查看图片 | "Viewed Image" | ViewImageToolCall |
+| Warning | 警告信息 | "⚠ 警告内容" | Warning |
+| Error | 错误信息 | "■ 错误内容" | Error |
+| Reasoning | 推理摘要 | "• 推理内容" | AgentReasoning* |
+| Approval | 用户审批 | "✔/✗ You approved/denied..." | UI 交互事件 |
+
+**注**：
+- `AgentReasoning*` 包括 `AgentReasoning`、`AgentReasoningDelta` 等多个相关事件
+- "UI 交互事件"指用户在审批对话框中做出决定后触发的内部 UI 状态更新
 
 ---
 
@@ -972,10 +1105,14 @@ TUI 中的显示类型可分为以下几类：
 
 直接由特定事件触发，不经过命令解析：
 
-1. **Edited** - 文件修改（`PatchApplyEnd`）
+1. **Edited/Added/Deleted** - 文件修改（`PatchApplyEnd`）
 2. **Called** - MCP 工具调用（`McpToolCallBegin`）
 3. **Searched** - 网络搜索（`WebSearchEnd`）
-4. **Plan** - 计划更新（`PlanUpdate`）
+4. **Updated Plan** - 计划更新
+5. **Viewed Image** - 图片查看（`ViewImageToolCall`）
+6. **Warning** - 警告信息（`Warning`）
+7. **Error** - 错误信息（`Error`）
+8. **Reasoning** - 推理摘要
 
 ### 状态显示类
 
