@@ -23,10 +23,19 @@ windows_modules!(
 );
 
 #[cfg(target_os = "windows")]
+#[path = "conpty/mod.rs"]
+mod conpty;
+
+#[cfg(target_os = "windows")]
+#[path = "elevated/ipc_framed.rs"]
+pub mod ipc_framed;
+
+#[cfg(target_os = "windows")]
 #[path = "setup_orchestrator.rs"]
 mod setup;
 
 #[cfg(target_os = "windows")]
+#[path = "elevated/elevated_impl.rs"]
 mod elevated_impl;
 
 #[cfg(target_os = "windows")]
@@ -34,6 +43,18 @@ mod setup_error;
 
 #[cfg(target_os = "windows")]
 pub use acl::add_deny_write_ace;
+
+#[cfg(target_os = "windows")]
+#[path = "elevated/runner_pipe.rs"]
+mod runner_pipe;
+
+#[cfg(target_os = "windows")]
+#[path = "unified_exec/session.rs"]
+mod session;
+
+#[cfg(target_os = "windows")]
+#[path = "sandbox_utils.rs"]
+mod sandbox_utils;
 #[cfg(target_os = "windows")]
 pub use acl::allow_null_device;
 #[cfg(target_os = "windows")]
@@ -77,7 +98,19 @@ pub use policy::parse_policy;
 #[cfg(target_os = "windows")]
 pub use policy::SandboxPolicy;
 #[cfg(target_os = "windows")]
+pub use conpty::spawn_conpty_process_as_user;
+#[cfg(target_os = "windows")]
 pub use process::create_process_as_user;
+#[cfg(target_os = "windows")]
+pub use process::read_handle_loop;
+#[cfg(target_os = "windows")]
+pub use process::spawn_process_with_pipes;
+#[cfg(target_os = "windows")]
+pub use process::PipeSpawnHandles;
+#[cfg(target_os = "windows")]
+pub use process::StderrMode;
+#[cfg(target_os = "windows")]
+pub use process::StdinMode;
 #[cfg(target_os = "windows")]
 pub use setup::run_elevated_setup;
 #[cfg(target_os = "windows")]
@@ -120,6 +153,10 @@ pub use windows_impl::run_windows_sandbox_capture;
 pub use windows_impl::run_windows_sandbox_legacy_preflight;
 #[cfg(target_os = "windows")]
 pub use windows_impl::CaptureResult;
+#[cfg(target_os = "windows")]
+pub use session::spawn_windows_sandbox_session_legacy;
+#[cfg(target_os = "windows")]
+pub use session::spawn_windows_sandbox_session_elevated;
 #[cfg(target_os = "windows")]
 pub use winutil::string_from_sid_bytes;
 #[cfg(target_os = "windows")]

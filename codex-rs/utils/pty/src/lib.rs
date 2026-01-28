@@ -13,8 +13,10 @@ pub use pipe::spawn_process as spawn_pipe_process;
 pub use pipe::spawn_process_no_stdin as spawn_pipe_process_no_stdin;
 /// Handle for interacting with a spawned process (PTY or pipe).
 pub use process::ProcessHandle;
+pub use process::ProcessDriver;
 /// Bundle of process handles plus output and exit receivers returned by spawn helpers.
 pub use process::SpawnedProcess;
+pub use process::spawn_from_driver;
 /// Backwards-compatible alias for ProcessHandle.
 pub type ExecCommandSession = ProcessHandle;
 /// Backwards-compatible alias for SpawnedProcess.

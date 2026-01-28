@@ -1,0 +1,109 @@
+//! Named pipe helpers for the elevated Windows sandbox runner.
+//!
+//! This module generates paired pipe names, creates server‑side pipes with permissive
+//! ACLs, and waits for the runner to connect. It is **elevated-path only** and is
+//! used by the parent to establish the IPC channel for both unified_exec sessions
+//! and elevated capture. The legacy restricted‑token path spawns the child directly
+//! and does not use these helpers.
+
+use crate::winutil::to_wide;
+use rand::rngs::SmallRng;
+use rand::Rng;
+use rand::SeedableRng;
+use std::io;
+use std::path::PathBuf;
+use std::ptr;
+use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+use windows_sys::Win32::Security::PSECURITY_DESCRIPTOR;
+use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+use windows_sys::Win32::System::Pipes::ConnectNamedPipe;
+use windows_sys::Win32::System::Pipes::CreateNamedPipeW;
+use windows_sys::Win32::System::Pipes::PIPE_READMODE_BYTE;
+use windows_sys::Win32::System::Pipes::PIPE_TYPE_BYTE;
+use windows_sys::Win32::System::Pipes::PIPE_WAIT;
+
+/// PIPE_ACCESS_INBOUND (win32 constant), not exposed in windows-sys 0.52.
+pub const PIPE_ACCESS_INBOUND: u32 = 0x0000_0001;
+/// PIPE_ACCESS_OUTBOUND (win32 constant), not exposed in windows-sys 0.52.
+pub const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
+
+/// Locates `codex-command-runner.exe` next to the current binary.
+/// weasel: was this moved from somewhere else? This must be pre-existing. make sure it isn't duplicated
+pub fn find_runner_exe() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("codex-command-runner.exe");
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from("codex-command-runner.exe")
+}
+
+/// Generates a unique named-pipe path used to communicate with the runner process.
+pub fn pipe_pair() -> (String, String) {
+    let mut rng = SmallRng::from_entropy();
+    let base = format!(r"\\.\pipe\codex-runner-{:x}", rng.gen::<u128>());
+    (format!("{base}-in"), format!("{base}-out"))
+}
+
+/// Creates a named pipe with permissive ACLs so the sandbox user can connect.
+pub fn create_named_pipe(name: &str, access: u32) -> io::Result<HANDLE> {
+    // Allow sandbox users to connect by granting Everyone full access on the pipe.
+    let sddl = to_wide("D:(A;;GA;;;WD)");
+    let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    let ok = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            1, // SDDL_REVISION_1
+            &mut sd,
+            ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::from_raw_os_error(unsafe {
+            GetLastError() as i32
+        }));
+    }
+    let mut sa = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: sd,
+        bInheritHandle: 0,
+    };
+    let wide = to_wide(name);
+    let h = unsafe {
+        CreateNamedPipeW(
+            wide.as_ptr(),
+            access,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+            1,
+            65536,
+            65536,
+            0,
+            &mut sa as *mut SECURITY_ATTRIBUTES,
+        )
+    };
+    if h == 0 || h == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+        return Err(io::Error::from_raw_os_error(unsafe {
+            GetLastError() as i32
+        }));
+    }
+    Ok(h)
+}
+
+/// Waits for a client connection on the named pipe, tolerating an existing connection.
+/// weasel: is this called from the cli or the runner (or both?)
+pub fn connect_pipe(h: HANDLE) -> io::Result<()> {
+    let ok = unsafe { ConnectNamedPipe(h, ptr::null_mut()) };
+    if ok == 0 {
+        let err = unsafe { GetLastError() };
+        const ERROR_PIPE_CONNECTED: u32 = 535;
+        if err != ERROR_PIPE_CONNECTED {
+            return Err(io::Error::from_raw_os_error(err as i32));
+        }
+    }
+    Ok(())
+}

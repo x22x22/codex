@@ -198,7 +198,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
-            .open_session_with_exec_env(&exec_env, req.tty)
+            .open_session_with_exec_env(&exec_env, req.tty, attempt.policy, attempt.sandbox_cwd)
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {
