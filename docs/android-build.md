@@ -48,6 +48,39 @@ adb shell chmod +x /data/local/tmp/codex
 adb shell /data/local/tmp/codex --help
 ```
 
+## Authentication on Android
+
+There are two reliable approaches when running the CLI from `adb shell`:
+
+1) ChatGPT login via device code (recommended)
+
+```bash
+adb shell /data/local/tmp/codex --device-auth
+```
+
+This prints a URL and code. Open the URL on your host and enter the code.
+
+2) MCP OAuth login via host browser + `adb forward`
+
+This flow uses a local callback server on the device. Forward the callback port
+from host to device so the redirect can reach the device.
+
+```bash
+# Forward host -> device:
+adb forward tcp:8765 tcp:8765
+
+# Start the login; the URL will be printed.
+adb shell /data/local/tmp/codex mcp login <server_name> --callback-port 8765 --host-browser
+```
+
+Open the printed URL on your host. When the provider redirects to
+`http://127.0.0.1:8765/...`, the port forward sends it to the device and the
+login completes. Remove the forward when done:
+
+```bash
+adb forward --remove tcp:8765
+```
+
 ## Notes
 
 - On Android, keyring-backed credential storage is unavailable; Codex falls back to file-backed storage under `CODEX_HOME`.

@@ -24,6 +24,7 @@ use codex_core::plugins::PluginsManager;
 use codex_protocol::protocol::McpAuthStatus;
 use codex_rmcp_client::delete_oauth_tokens;
 use codex_rmcp_client::perform_oauth_login;
+use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_utils_cli::CliConfigOverrides;
 use codex_utils_cli::format_env_display::format_env_display;
 
@@ -147,6 +148,18 @@ pub struct LoginArgs {
     /// Comma-separated list of OAuth scopes to request.
     #[arg(long, value_delimiter = ',', value_name = "SCOPE,SCOPE")]
     pub scopes: Vec<String>,
+
+    /// Override the OAuth callback port for this login attempt.
+    #[arg(long = "callback-port", value_name = "PORT")]
+    pub callback_port: Option<u16>,
+
+    /// Do not attempt to launch a browser; print the URL for manual use.
+    #[arg(long)]
+    pub no_browser: bool,
+
+    /// Print host-browser instructions (implies --no-browser).
+    #[arg(long)]
+    pub host_browser: bool,
 }
 
 #[derive(Debug, clap::Parser)]
@@ -226,6 +239,53 @@ async fn perform_oauth_login_retry_without_scopes(
                 env_http_headers,
                 &[],
                 oauth_resource,
+                callback_port,
+                callback_url,
+            )
+            .await
+        }
+        Err(err) => Err(err),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn perform_oauth_login_return_url_retry_without_scopes(
+    name: &str,
+    url: &str,
+    store_mode: codex_rmcp_client::OAuthCredentialsStoreMode,
+    http_headers: Option<HashMap<String, String>>,
+    env_http_headers: Option<HashMap<String, String>>,
+    resolved_scopes: &ResolvedMcpOAuthScopes,
+    oauth_resource: Option<&str>,
+    callback_port: Option<u16>,
+    callback_url: Option<&str>,
+) -> Result<codex_rmcp_client::OauthLoginHandle> {
+    match perform_oauth_login_return_url(
+        name,
+        url,
+        store_mode,
+        http_headers.clone(),
+        env_http_headers.clone(),
+        &resolved_scopes.scopes,
+        oauth_resource,
+        /*timeout_secs*/ None,
+        callback_port,
+        callback_url,
+    )
+    .await
+    {
+        Ok(handle) => Ok(handle),
+        Err(err) if should_retry_without_scopes(resolved_scopes, &err) => {
+            println!("OAuth provider rejected discovered scopes. Retrying without scopes…");
+            perform_oauth_login_return_url(
+                name,
+                url,
+                store_mode,
+                http_headers,
+                env_http_headers,
+                &[],
+                oauth_resource,
+                /*timeout_secs*/ None,
                 callback_port,
                 callback_url,
             )
@@ -393,7 +453,13 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
     let mcp_servers = mcp_manager.effective_servers(&config, /*auth*/ None);
 
-    let LoginArgs { name, scopes } = login_args;
+    let LoginArgs {
+        name,
+        scopes,
+        callback_port,
+        no_browser,
+        host_browser,
+    } = login_args;
 
     let Some(server) = mcp_servers.get(&name) else {
         bail!("No MCP server named '{name}' found.");
@@ -418,20 +484,71 @@ async fn run_login(config_overrides: &CliConfigOverrides, login_args: LoginArgs)
     let resolved_scopes =
         resolve_oauth_scopes(explicit_scopes, server.scopes.clone(), discovered_scopes);
 
-    perform_oauth_login_retry_without_scopes(
-        &name,
-        &url,
-        config.mcp_oauth_credentials_store_mode,
-        http_headers,
-        env_http_headers,
-        &resolved_scopes,
-        server.oauth_resource.as_deref(),
-        config.mcp_oauth_callback_port,
-        config.mcp_oauth_callback_url.as_deref(),
-    )
-    .await?;
+    let callback_port = callback_port.or(config.mcp_oauth_callback_port);
+    let callback_url = config.mcp_oauth_callback_url.as_deref();
+    let use_no_browser = no_browser || host_browser;
+    if use_no_browser {
+        let handle = perform_oauth_login_return_url_retry_without_scopes(
+            &name,
+            &url,
+            config.mcp_oauth_credentials_store_mode,
+            http_headers,
+            env_http_headers,
+            &resolved_scopes,
+            server.oauth_resource.as_deref(),
+            callback_port,
+            callback_url,
+        )
+        .await?;
+        print_oauth_login_instructions(
+            &name,
+            handle.authorization_url(),
+            host_browser,
+            callback_port,
+        );
+        handle.wait().await?;
+    } else {
+        perform_oauth_login_retry_without_scopes(
+            &name,
+            &url,
+            config.mcp_oauth_credentials_store_mode,
+            http_headers,
+            env_http_headers,
+            &resolved_scopes,
+            server.oauth_resource.as_deref(),
+            callback_port,
+            callback_url,
+        )
+        .await?;
+    }
     println!("Successfully logged in to MCP server '{name}'.");
     Ok(())
+}
+
+fn print_oauth_login_instructions(
+    name: &str,
+    auth_url: &str,
+    host_browser: bool,
+    callback_port: Option<u16>,
+) {
+    println!("Authorize `{name}` by opening this URL in your browser:\n{auth_url}\n");
+    if host_browser {
+        match callback_port {
+            Some(port) => {
+                println!(
+                    "If Codex is running on an Android device, forward the callback port from your host:\n  adb forward tcp:{port} tcp:{port}\n"
+                );
+            }
+            None => {
+                println!(
+                    "If Codex is running on an Android device, forward the callback port shown in the URL:\n  adb forward tcp:<PORT> tcp:<PORT>\n"
+                );
+            }
+        }
+        println!("(Host-browser mode: Codex is waiting for the OAuth callback.)");
+    } else {
+        println!("(Browser launch disabled; please open the URL manually.)");
+    }
 }
 
 async fn run_logout(config_overrides: &CliConfigOverrides, logout_args: LogoutArgs) -> Result<()> {
