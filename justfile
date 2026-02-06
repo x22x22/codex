@@ -75,6 +75,10 @@ bazel-remote-test:
 build-for-release:
     bazel build //codex-rs/cli:release_binaries --config=remote
 
+# Build codex for Android (arm64-v8a and x86_64).
+android-build:
+    CARGO_TARGET_DIR=target/android cargo ndk --platform 26 -t arm64-v8a -t x86_64 build -p codex-cli --release --bin codex
+
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"

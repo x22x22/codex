@@ -62,3 +62,7 @@ tail -F ~/.codex/log/codex-tui.log
 By comparison, the non-interactive mode (`codex exec`) defaults to `RUST_LOG=error`, but messages are printed inline, so there is no need to monitor a separate file.
 
 See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env_logger/#enabling-logging) for more information on the configuration options.
+
+## Android builds
+
+See `docs/android-build.md` for native Android build and `adb push` instructions (arm64-v8a and x86_64, API 26).
