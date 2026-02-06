@@ -12,7 +12,7 @@ path = "src/lib.rs"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { workspace = true, features = ["json"] }
 codex-backend-openapi-models = { path = "../codex-backend-openapi-models" }
 codex-client = { workspace = true }
 codex-protocol = { workspace = true }
