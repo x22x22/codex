@@ -1,6 +1,9 @@
 use dirs::home_dir;
 use std::path::PathBuf;
 
+#[cfg(target_os = "android")]
+const ANDROID_CODEX_HOME: &str = "/data/local/tmp/codex";
+
 /// Returns the path to the Codex configuration directory, which can be
 /// specified by the `CODEX_HOME` environment variable. If not set, defaults to
 /// `~/.codex`.
@@ -48,6 +51,10 @@ fn find_codex_home_from_env(codex_home_env: Option<&str>) -> std::io::Result<Pat
             }
         }
         None => {
+            #[cfg(target_os = "android")]
+            {
+                return Ok(PathBuf::from(ANDROID_CODEX_HOME));
+            }
             let mut p = home_dir().ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::NotFound,

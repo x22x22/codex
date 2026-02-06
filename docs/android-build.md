@@ -51,3 +51,4 @@ adb shell /data/local/tmp/codex --help
 ## Notes
 
 - On Android, keyring-backed credential storage is unavailable; Codex falls back to file-backed storage under `CODEX_HOME`.
+- If `CODEX_HOME` is not set, Codex defaults to `/data/local/tmp/codex` on Android.
