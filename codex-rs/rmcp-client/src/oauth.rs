@@ -43,6 +43,7 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tracing::warn;
 
+use codex_keyring_store::CredentialStoreError;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
 use rmcp::transport::auth::AuthorizationManager;
@@ -142,6 +143,9 @@ fn load_oauth_tokens_from_keyring_with_fallback_to_file<K: KeyringStore>(
         Ok(Some(tokens)) => Ok(Some(tokens)),
         Ok(None) => load_oauth_tokens_from_file(server_name, url),
         Err(error) => {
+            if is_keyring_unsupported(&error) {
+                return load_oauth_tokens_from_file(server_name, url);
+            }
             warn!("failed to read OAuth tokens from keyring: {error}");
             load_oauth_tokens_from_file(server_name, url)
                 .with_context(|| format!("failed to read OAuth tokens from keyring: {error}"))
@@ -163,7 +167,7 @@ fn load_oauth_tokens_from_keyring<K: KeyringStore>(
             Ok(Some(tokens))
         }
         Ok(None) => Ok(None),
-        Err(error) => Err(Error::new(error.into_error())),
+        Err(error) => Err(Error::new(error)),
     }
 }
 
@@ -202,12 +206,15 @@ fn save_oauth_tokens_with_keyring<K: KeyringStore>(
             Ok(())
         }
         Err(error) => {
+            if error.is_unsupported() {
+                return Err(Error::new(error));
+            }
             let message = format!(
                 "failed to write OAuth tokens to keyring: {}",
                 error.message()
             );
             warn!("{message}");
-            Err(Error::new(error.into_error()).context(message))
+            Err(Error::new(error).context(message))
         }
     }
 }
@@ -220,6 +227,9 @@ fn save_oauth_tokens_with_keyring_with_fallback_to_file<K: KeyringStore>(
     match save_oauth_tokens_with_keyring(keyring_store, server_name, tokens) {
         Ok(()) => Ok(()),
         Err(error) => {
+            if is_keyring_unsupported(&error) {
+                return save_oauth_tokens_to_file(tokens);
+            }
             let message = error.to_string();
             warn!("falling back to file storage for OAuth tokens: {message}");
             save_oauth_tokens_to_file(tokens)
@@ -248,11 +258,23 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
     let keyring_removed = match keyring_result {
         Ok(removed) => removed,
         Err(error) => {
+            if error.is_unsupported() {
+                return match store_mode {
+                    OAuthCredentialsStoreMode::Keyring => {
+                        Err(Error::msg("keyring unsupported on this platform"))
+                    }
+                    OAuthCredentialsStoreMode::Auto | OAuthCredentialsStoreMode::File => {
+                        let file_removed = delete_oauth_tokens_from_file(&key)?;
+                        Ok(file_removed)
+                    }
+                };
+            }
+
             let message = error.message();
             warn!("failed to delete OAuth tokens from keyring: {message}");
             match store_mode {
                 OAuthCredentialsStoreMode::Auto | OAuthCredentialsStoreMode::Keyring => {
-                    return Err(error.into_error())
+                    return Err(Error::new(error))
                         .context("failed to delete OAuth tokens from keyring");
                 }
                 OAuthCredentialsStoreMode::File => false,
@@ -262,6 +284,14 @@ fn delete_oauth_tokens_from_keyring_and_file<K: KeyringStore>(
 
     let file_removed = delete_oauth_tokens_from_file(&key)?;
     Ok(keyring_removed || file_removed)
+}
+
+fn is_keyring_unsupported(error: &Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<CredentialStoreError>()
+            .is_some_and(CredentialStoreError::is_unsupported)
+    })
 }
 
 #[derive(Clone)]
@@ -619,6 +649,32 @@ mod tests {
         _dir: tempfile::TempDir,
     }
 
+    #[derive(Debug)]
+    struct UnsupportedKeyringStore;
+
+    impl KeyringStore for UnsupportedKeyringStore {
+        fn load(
+            &self,
+            _service: &str,
+            _account: &str,
+        ) -> Result<Option<String>, CredentialStoreError> {
+            Err(CredentialStoreError::Unsupported)
+        }
+
+        fn save(
+            &self,
+            _service: &str,
+            _account: &str,
+            _value: &str,
+        ) -> Result<(), CredentialStoreError> {
+            Err(CredentialStoreError::Unsupported)
+        }
+
+        fn delete(&self, _service: &str, _account: &str) -> Result<bool, CredentialStoreError> {
+            Err(CredentialStoreError::Unsupported)
+        }
+    }
+
     impl TempCodexHome {
         fn new() -> Self {
             static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -703,6 +759,25 @@ mod tests {
     }
 
     #[test]
+    fn load_oauth_tokens_falls_back_when_keyring_unsupported() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = UnsupportedKeyringStore;
+        let tokens = sample_tokens();
+        let expected = tokens.clone();
+
+        super::save_oauth_tokens_to_file(&tokens)?;
+
+        let loaded = super::load_oauth_tokens_from_keyring_with_fallback_to_file(
+            &store,
+            &tokens.server_name,
+            &tokens.url,
+        )?
+        .expect("tokens should load from fallback");
+        assert_tokens_match_without_expiry(&loaded, &expected);
+        Ok(())
+    }
+
+    #[test]
     fn save_oauth_tokens_prefers_keyring_when_available() -> Result<()> {
         let _env = TempCodexHome::new();
         let store = MockKeyringStore::default();
@@ -751,6 +826,23 @@ mod tests {
             tokens.token_response.0.access_token().secret().as_str()
         );
         assert!(store.saved_value(&key).is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn save_oauth_tokens_writes_fallback_when_keyring_unsupported() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = UnsupportedKeyringStore;
+        let tokens = sample_tokens();
+
+        super::save_oauth_tokens_with_keyring_with_fallback_to_file(
+            &store,
+            &tokens.server_name,
+            &tokens,
+        )?;
+
+        let fallback_path = super::fallback_file_path()?;
+        assert!(fallback_path.exists(), "fallback file should be created");
         Ok(())
     }
 
@@ -815,6 +907,24 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(super::fallback_file_path().unwrap().exists());
+        Ok(())
+    }
+
+    #[test]
+    fn delete_oauth_tokens_falls_back_when_keyring_unsupported() -> Result<()> {
+        let _env = TempCodexHome::new();
+        let store = UnsupportedKeyringStore;
+        let tokens = sample_tokens();
+        super::save_oauth_tokens_to_file(&tokens)?;
+
+        let removed = super::delete_oauth_tokens_from_keyring_and_file(
+            &store,
+            OAuthCredentialsStoreMode::Auto,
+            &tokens.server_name,
+            &tokens.url,
+        )?;
+        assert!(removed);
+        assert!(!super::fallback_file_path()?.exists());
         Ok(())
     }
 

@@ -2,6 +2,7 @@ use super::*;
 use crate::token_data::IdTokenInfo;
 use anyhow::Context;
 use base64::Engine;
+use codex_keyring_store::CredentialStoreError;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use tempfile::tempdir;
@@ -142,6 +143,28 @@ fn assert_keyring_saved_auth_and_removed_fallback(
         !auth_file.exists(),
         "fallback auth.json should be removed after keyring save"
     );
+}
+
+#[derive(Debug)]
+struct UnsupportedKeyringStore;
+
+impl KeyringStore for UnsupportedKeyringStore {
+    fn load(&self, _service: &str, _account: &str) -> Result<Option<String>, CredentialStoreError> {
+        Err(CredentialStoreError::Unsupported)
+    }
+
+    fn save(
+        &self,
+        _service: &str,
+        _account: &str,
+        _value: &str,
+    ) -> Result<(), CredentialStoreError> {
+        Err(CredentialStoreError::Unsupported)
+    }
+
+    fn delete(&self, _service: &str, _account: &str) -> Result<bool, CredentialStoreError> {
+        Err(CredentialStoreError::Unsupported)
+    }
 }
 
 fn id_token_with_prefix(prefix: &str) -> IdTokenInfo {
@@ -411,5 +434,22 @@ fn auto_auth_storage_delete_removes_keyring_and_file() -> anyhow::Result<()> {
         !auth_file.exists(),
         "fallback auth.json should be removed after delete"
     );
+    Ok(())
+}
+
+#[test]
+fn auto_auth_storage_falls_back_when_keyring_unsupported() -> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let storage = create_auth_storage_with_keyring_store(
+        codex_home.path().to_path_buf(),
+        AuthCredentialsStoreMode::Auto,
+        Arc::new(UnsupportedKeyringStore),
+    );
+    let auth = auth_with_prefix("unsupported");
+
+    storage.save(&auth)?;
+    let loaded = storage.load()?;
+
+    assert_eq!(loaded, Some(auth));
     Ok(())
 }

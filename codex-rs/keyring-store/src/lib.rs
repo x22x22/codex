@@ -1,4 +1,6 @@
+#[cfg(not(target_os = "android"))]
 use keyring::Entry;
+#[cfg(not(target_os = "android"))]
 use keyring::Error as KeyringError;
 use std::error::Error;
 use std::fmt;
@@ -7,30 +9,35 @@ use tracing::trace;
 
 #[derive(Debug)]
 pub enum CredentialStoreError {
+    Unsupported,
+    #[cfg(not(target_os = "android"))]
     Other(KeyringError),
 }
 
 impl CredentialStoreError {
+    #[cfg(not(target_os = "android"))]
     pub fn new(error: KeyringError) -> Self {
         Self::Other(error)
     }
 
     pub fn message(&self) -> String {
         match self {
+            Self::Unsupported => "keyring unsupported on this platform".to_string(),
+            #[cfg(not(target_os = "android"))]
             Self::Other(error) => error.to_string(),
         }
     }
 
-    pub fn into_error(self) -> KeyringError {
-        match self {
-            Self::Other(error) => error,
-        }
+    pub fn is_unsupported(&self) -> bool {
+        matches!(self, Self::Unsupported)
     }
 }
 
 impl fmt::Display for CredentialStoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Unsupported => write!(f, "keyring unsupported on this platform"),
+            #[cfg(not(target_os = "android"))]
             Self::Other(error) => write!(f, "{error}"),
         }
     }
@@ -48,6 +55,27 @@ pub trait KeyringStore: Debug + Send + Sync {
 #[derive(Debug)]
 pub struct DefaultKeyringStore;
 
+#[cfg(target_os = "android")]
+impl KeyringStore for DefaultKeyringStore {
+    fn load(&self, _service: &str, _account: &str) -> Result<Option<String>, CredentialStoreError> {
+        Err(CredentialStoreError::Unsupported)
+    }
+
+    fn save(
+        &self,
+        _service: &str,
+        _account: &str,
+        _value: &str,
+    ) -> Result<(), CredentialStoreError> {
+        Err(CredentialStoreError::Unsupported)
+    }
+
+    fn delete(&self, _service: &str, _account: &str) -> Result<bool, CredentialStoreError> {
+        Err(CredentialStoreError::Unsupported)
+    }
+}
+
+#[cfg(not(target_os = "android"))]
 impl KeyringStore for DefaultKeyringStore {
     fn load(&self, service: &str, account: &str) -> Result<Option<String>, CredentialStoreError> {
         trace!("keyring.load start, service={service}, account={account}");
@@ -106,6 +134,7 @@ impl KeyringStore for DefaultKeyringStore {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 pub mod tests {
     use super::CredentialStoreError;
     use super::KeyringStore;

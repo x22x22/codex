@@ -170,10 +170,18 @@ impl KeyringAuthStorage {
                 ))
             }),
             Ok(None) => Ok(None),
-            Err(error) => Err(std::io::Error::other(format!(
-                "failed to load CLI auth from keyring: {}",
-                error.message()
-            ))),
+            Err(error) => {
+                if error.is_unsupported() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "keyring unsupported on this platform",
+                    ));
+                }
+                Err(std::io::Error::other(format!(
+                    "failed to load CLI auth from keyring: {}",
+                    error.message()
+                )))
+            }
         }
     }
 
@@ -181,6 +189,12 @@ impl KeyringAuthStorage {
         match self.keyring_store.save(KEYRING_SERVICE, key, value) {
             Ok(()) => Ok(()),
             Err(error) => {
+                if error.is_unsupported() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "keyring unsupported on this platform",
+                    ));
+                }
                 let message = format!(
                     "failed to write OAuth tokens to keyring: {}",
                     error.message()
@@ -215,6 +229,12 @@ impl AuthStorageBackend for KeyringAuthStorage {
             .keyring_store
             .delete(KEYRING_SERVICE, &key)
             .map_err(|err| {
+                if err.is_unsupported() {
+                    return std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "keyring unsupported on this platform",
+                    );
+                }
                 std::io::Error::other(format!("failed to delete auth from keyring: {err}"))
             })?;
         let file_removed = delete_file_if_exists(&self.codex_home)?;
@@ -243,6 +263,9 @@ impl AuthStorageBackend for AutoAuthStorage {
             Ok(Some(auth)) => Ok(Some(auth)),
             Ok(None) => self.file_storage.load(),
             Err(err) => {
+                if err.kind() == std::io::ErrorKind::Unsupported {
+                    return self.file_storage.load();
+                }
                 warn!("failed to load CLI auth from keyring, falling back to file storage: {err}");
                 self.file_storage.load()
             }
@@ -253,6 +276,9 @@ impl AuthStorageBackend for AutoAuthStorage {
         match self.keyring_storage.save(auth) {
             Ok(()) => Ok(()),
             Err(err) => {
+                if err.kind() == std::io::ErrorKind::Unsupported {
+                    return self.file_storage.save(auth);
+                }
                 warn!("failed to save auth to keyring, falling back to file storage: {err}");
                 self.file_storage.save(auth)
             }
@@ -261,7 +287,15 @@ impl AuthStorageBackend for AutoAuthStorage {
 
     fn delete(&self) -> std::io::Result<bool> {
         // Keyring storage will delete from disk as well
-        self.keyring_storage.delete()
+        match self.keyring_storage.delete() {
+            Ok(removed) => Ok(removed),
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::Unsupported {
+                    return self.file_storage.delete();
+                }
+                Err(err)
+            }
+        }
     }
 }
 

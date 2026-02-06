@@ -1,6 +1,10 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,6 +39,7 @@ use super::keyring_service;
 
 const SECRETS_VERSION: u8 = 1;
 const LOCAL_SECRETS_FILENAME: &str = "local.age";
+const LOCAL_PASSPHRASE_FILENAME: &str = ".passphrase";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct SecretsFile {
@@ -115,6 +120,10 @@ impl LocalSecretsBackend {
         self.secrets_dir().join(LOCAL_SECRETS_FILENAME)
     }
 
+    fn passphrase_path(&self) -> PathBuf {
+        self.secrets_dir().join(LOCAL_PASSPHRASE_FILENAME)
+    }
+
     fn load_file(&self) -> Result<SecretsFile> {
         let path = self.secrets_path();
         if !path.exists() {
@@ -158,25 +167,72 @@ impl LocalSecretsBackend {
 
     fn load_or_create_passphrase(&self) -> Result<SecretString> {
         let account = compute_keyring_account(&self.codex_home);
-        let loaded = self
-            .keyring_store
-            .load(keyring_service(), &account)
-            .map_err(|err| anyhow::anyhow!(err.message()))
-            .with_context(|| format!("failed to load secrets key from keyring for {account}"))?;
-        match loaded {
-            Some(existing) => Ok(SecretString::from(existing)),
-            None => {
+        match self.keyring_store.load(keyring_service(), &account) {
+            Ok(Some(existing)) => Ok(SecretString::from(existing)),
+            Ok(None) => {
                 // Generate a high-entropy key and persist it in the OS keyring.
                 // This keeps secrets out of plaintext config while remaining
                 // fully local/offline for the MVP.
                 let generated = generate_passphrase()?;
-                self.keyring_store
-                    .save(keyring_service(), &account, generated.expose_secret())
-                    .map_err(|err| anyhow::anyhow!(err.message()))
-                    .context("failed to persist secrets key in keyring")?;
-                Ok(generated)
+                match self.keyring_store.save(
+                    keyring_service(),
+                    &account,
+                    generated.expose_secret(),
+                ) {
+                    Ok(()) => Ok(generated),
+                    Err(err) => {
+                        if err.is_unsupported() {
+                            self.save_passphrase_to_file(&generated)?;
+                            return Ok(generated);
+                        }
+                        Err(anyhow::anyhow!(err.message()))
+                            .context("failed to persist secrets key in keyring")
+                    }
+                }
+            }
+            Err(err) => {
+                if err.is_unsupported() {
+                    return self.load_or_create_passphrase_from_file();
+                }
+                Err(anyhow::anyhow!(err.message())).with_context(|| {
+                    format!("failed to load secrets key from keyring for {account}")
+                })
             }
         }
+    }
+
+    fn load_or_create_passphrase_from_file(&self) -> Result<SecretString> {
+        if let Some(existing) = self.load_passphrase_from_file()? {
+            return Ok(existing);
+        }
+        let generated = generate_passphrase()?;
+        self.save_passphrase_to_file(&generated)?;
+        Ok(generated)
+    }
+
+    fn load_passphrase_from_file(&self) -> Result<Option<SecretString>> {
+        let path = self.passphrase_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let raw = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read secrets passphrase at {}", path.display()))?;
+        let trimmed = raw.trim_end();
+        anyhow::ensure!(
+            !trimmed.is_empty(),
+            "secrets passphrase file at {} is empty",
+            path.display()
+        );
+        Ok(Some(SecretString::from(trimmed.to_string())))
+    }
+
+    fn save_passphrase_to_file(&self, passphrase: &SecretString) -> Result<()> {
+        let dir = self.secrets_dir();
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("failed to create secrets dir {}", dir.display()))?;
+        let path = self.passphrase_path();
+        write_private_file_atomically(&path, passphrase.expose_secret().as_bytes())?;
+        Ok(())
     }
 }
 
@@ -270,6 +326,77 @@ fn write_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
     }
 }
 
+fn write_private_file_atomically(path: &Path, contents: &[u8]) -> Result<()> {
+    let dir = path.parent().with_context(|| {
+        format!(
+            "failed to compute parent directory for secrets file at {}",
+            path.display()
+        )
+    })?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos());
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("secrets");
+    let tmp_path = dir.join(format!(".{file_name}.tmp-{}-{nonce}", std::process::id()));
+
+    {
+        let mut options = fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            options.mode(0o600);
+        }
+        let mut tmp_file = options.open(&tmp_path).with_context(|| {
+            format!(
+                "failed to create temp secrets file at {}",
+                tmp_path.display()
+            )
+        })?;
+        tmp_file.write_all(contents).with_context(|| {
+            format!(
+                "failed to write temp secrets file at {}",
+                tmp_path.display()
+            )
+        })?;
+        tmp_file.sync_all().with_context(|| {
+            format!("failed to sync temp secrets file at {}", tmp_path.display())
+        })?;
+    }
+
+    match fs::rename(&tmp_path, path) {
+        Ok(()) => {
+            set_private_permissions(path)?;
+            Ok(())
+        }
+        Err(initial_error) => {
+            let _ = fs::remove_file(&tmp_path);
+            Err(initial_error).with_context(|| {
+                format!(
+                    "failed to atomically replace secrets file at {} with {}",
+                    path.display(),
+                    tmp_path.display()
+                )
+            })
+        }
+    }
+}
+
+fn set_private_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).with_context(|| {
+            format!(
+                "failed to set permissions for secrets file at {}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn generate_passphrase() -> Result<SecretString> {
     let mut bytes = [0_u8; 32];
     let mut rng = OsRng;
@@ -332,6 +459,7 @@ fn parse_canonical_key(canonical_key: &str) -> Option<SecretListEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_keyring_store::CredentialStoreError;
     use codex_keyring_store::tests::MockKeyringStore;
     use keyring::Error as KeyringError;
     use pretty_assertions::assert_eq;
@@ -406,6 +534,68 @@ mod tests {
             .collect();
         assert_eq!(filenames, vec![LOCAL_SECRETS_FILENAME.to_string()]);
         assert_eq!(backend.get(&scope, &name)?, Some("two".to_string()));
+        Ok(())
+    }
+
+    #[derive(Debug)]
+    struct UnsupportedKeyringStore;
+
+    impl KeyringStore for UnsupportedKeyringStore {
+        fn load(
+            &self,
+            _service: &str,
+            _account: &str,
+        ) -> Result<Option<String>, CredentialStoreError> {
+            Err(CredentialStoreError::Unsupported)
+        }
+
+        fn save(
+            &self,
+            _service: &str,
+            _account: &str,
+            _value: &str,
+        ) -> Result<(), CredentialStoreError> {
+            Err(CredentialStoreError::Unsupported)
+        }
+
+        fn delete(&self, _service: &str, _account: &str) -> Result<bool, CredentialStoreError> {
+            Err(CredentialStoreError::Unsupported)
+        }
+    }
+
+    #[test]
+    fn set_falls_back_to_passphrase_file_when_keyring_unsupported() -> Result<()> {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let backend = LocalSecretsBackend::new(
+            codex_home.path().to_path_buf(),
+            Arc::new(UnsupportedKeyringStore),
+        );
+        let scope = SecretScope::Global;
+        let name = SecretName::new("TEST_SECRET")?;
+
+        backend.set(&scope, &name, "secret-value")?;
+
+        let passphrase_path = backend.passphrase_path();
+        assert!(passphrase_path.exists(), "passphrase file should exist");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = passphrase_path.metadata()?.permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        assert_eq!(
+            backend.get(&scope, &name)?,
+            Some("secret-value".to_string())
+        );
+
+        let reload_backend = LocalSecretsBackend::new(
+            codex_home.path().to_path_buf(),
+            Arc::new(UnsupportedKeyringStore),
+        );
+        assert_eq!(
+            reload_backend.get(&scope, &name)?,
+            Some("secret-value".to_string())
+        );
         Ok(())
     }
 }
