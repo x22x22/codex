@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "android"))]
 use dirs::home_dir;
 use std::path::PathBuf;
 
