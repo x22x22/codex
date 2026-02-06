@@ -5,6 +5,7 @@ use keyring::Error as KeyringError;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
+#[cfg(not(target_os = "android"))]
 use tracing::trace;
 
 #[derive(Debug)]

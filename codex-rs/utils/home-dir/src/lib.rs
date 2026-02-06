@@ -50,21 +50,25 @@ fn find_codex_home_from_env(codex_home_env: Option<&str>) -> std::io::Result<Pat
                 })
             }
         }
-        None => {
-            #[cfg(target_os = "android")]
-            {
-                return Ok(PathBuf::from(ANDROID_CODEX_HOME));
-            }
-            let mut p = home_dir().ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "Could not find home directory",
-                )
-            })?;
-            p.push(".codex");
-            Ok(p)
-        }
+        None => default_codex_home(),
     }
+}
+
+#[cfg(target_os = "android")]
+fn default_codex_home() -> std::io::Result<PathBuf> {
+    Ok(PathBuf::from(ANDROID_CODEX_HOME))
+}
+
+#[cfg(not(target_os = "android"))]
+fn default_codex_home() -> std::io::Result<PathBuf> {
+    let mut p = home_dir().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Could not find home directory",
+        )
+    })?;
+    p.push(".codex");
+    Ok(p)
 }
 
 #[cfg(test)]
