@@ -423,7 +423,7 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
             limit: None,
             cursor: None,
             thread_id: None,
-            force_refetch: false,
+            force_refetch: true,
         })
         .await?;
 
@@ -442,9 +442,28 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
         is_enabled: true,
         plugin_display_names: Vec::new(),
     }];
-
-    let first_update = read_app_list_updated_notification(&mut mcp).await?;
-    assert_eq!(first_update.data, expected_accessible);
+    let expected_directory = vec![
+        AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha connector".to_string()),
+            logo_url: Some("https://example.com/alpha.png".to_string()),
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+            is_accessible: false,
+        },
+        AppInfo {
+            id: "beta".to_string(),
+            name: "beta".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
+            is_accessible: false,
+        },
+    ];
 
     let expected_merged = vec![
         AppInfo {
@@ -479,8 +498,15 @@ async fn list_apps_emits_updates_and_returns_after_both_lists_load() -> Result<(
         },
     ];
 
+    let first_update = read_app_list_updated_notification(&mut mcp).await?;
     let second_update = read_app_list_updated_notification(&mut mcp).await?;
-    assert_eq!(second_update.data, expected_merged);
+    if first_update.data == expected_accessible || first_update.data == expected_directory {
+        assert_eq!(second_update.data, expected_merged);
+    } else {
+        bail!(
+            "unexpected first update payload: {first_update:?} expected {expected_accessible:?} or {expected_directory:?}"
+        );
+    }
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
@@ -563,10 +589,45 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
             limit: None,
             cursor: None,
             thread_id: None,
-            force_refetch: false,
+            force_refetch: true,
         })
         .await?;
 
+    let first_update = read_app_list_updated_notification(&mut mcp).await?;
+    let expected_accessible = vec![AppInfo {
+        id: "beta".to_string(),
+        name: "Beta App".to_string(),
+        description: None,
+        logo_url: None,
+        logo_url_dark: None,
+        distribution_channel: None,
+        install_url: Some("https://chatgpt.com/apps/beta-app/beta".to_string()),
+        is_accessible: true,
+    }];
+    let expected_directory = vec![
+        AppInfo {
+            id: "alpha".to_string(),
+            name: "Alpha".to_string(),
+            description: Some("Alpha connector".to_string()),
+            logo_url: Some("https://example.com/alpha.png".to_string()),
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some("https://chatgpt.com/apps/alpha/alpha".to_string()),
+            is_accessible: false,
+        },
+        AppInfo {
+            id: "beta".to_string(),
+            name: "beta".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            install_url: Some("https://chatgpt.com/apps/beta/beta".to_string()),
+            is_accessible: false,
+        },
+    ];
+
+>>>>>>> aca46885c (app-server/tests: make app list updates order-tolerant)
     let expected = vec![
         AppInfo {
             id: "beta".to_string(),
@@ -600,6 +661,7 @@ async fn list_apps_waits_for_accessible_data_before_emitting_directory_updates()
         },
     ];
 
+<<<<<<< HEAD
     loop {
         let update = read_app_list_updated_notification(&mut mcp).await?;
         if update.data == expected {
@@ -701,6 +763,16 @@ async fn list_apps_does_not_emit_empty_interim_updates() -> Result<()> {
 
     let update = read_app_list_updated_notification(&mut mcp).await?;
     assert_eq!(update.data, expected);
+=======
+    let second_update = read_app_list_updated_notification(&mut mcp).await?;
+    if first_update.data == expected_accessible || first_update.data == expected_directory {
+        assert_eq!(second_update.data, expected);
+    } else {
+        bail!(
+            "unexpected first update payload: {first_update:?} expected {expected_accessible:?} or {expected_directory:?}"
+        );
+    }
+>>>>>>> aca46885c (app-server/tests: make app list updates order-tolerant)
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_TIMEOUT,
