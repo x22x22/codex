@@ -60,7 +60,7 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
 /// Build a minimal fallback model descriptor for missing/unknown slugs.
 pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
     warn!("Unknown model {slug} is used. This will use fallback model metadata.");
-    ModelInfo {
+    let model = ModelInfo {
         slug: slug.to_string(),
         display_name: slug.to_string(),
         description: None,
@@ -90,7 +90,24 @@ pub(crate) fn model_info_from_slug(slug: &str) -> ModelInfo {
         input_modalities: default_input_modalities(),
         used_fallback_model_metadata: true, // this is the fallback model metadata
         supports_search_tool: false,
+    };
+    #[cfg(any(test, feature = "test-support"))]
+    let model = add_test_tools(slug, model);
+    model
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn add_test_tools(slug: &str, mut model: ModelInfo) -> ModelInfo {
+    if !slug.starts_with("test-") {
+        return model;
     }
+    model.experimental_supported_tools = vec![
+        "test_sync_tool".to_string(),
+        "read_file".to_string(),
+        "grep_files".to_string(),
+        "list_dir".to_string(),
+    ];
+    model
 }
 
 fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {

@@ -145,6 +145,10 @@ assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 keyring = { workspace = true, features = ["crypto-rust"] }
 codex-arg0 = { workspace = true }
+codex-core = { path = ".", default-features = false, features = [
+    "deterministic_process_ids",
+    "test-support",
+] }
 codex-otel = { workspace = true, features = [
     "disable-default-metrics-exporter",
 ] }
