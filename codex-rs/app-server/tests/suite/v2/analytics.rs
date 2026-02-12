@@ -2,6 +2,7 @@ use anyhow::Result;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::types::OtelExporterKind;
 use codex_core::config::types::OtelHttpProtocol;
+use codex_core::config_loader::LoaderOverrides;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use tempfile::TempDir;
@@ -17,13 +18,24 @@ fn set_metrics_exporter(config: &mut codex_core::config::Config) {
     };
 }
 
+fn config_builder_without_mdm(codex_home: &TempDir) -> ConfigBuilder {
+    let mut loader_overrides = LoaderOverrides {
+        macos_managed_config_requirements_base64: Some(String::new()),
+        ..Default::default()
+    };
+    #[cfg(target_os = "macos")]
+    {
+        loader_overrides.managed_preferences_base64 = Some(String::new());
+    }
+    ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .loader_overrides(loader_overrides)
+}
+
 #[tokio::test]
 async fn app_server_default_analytics_disabled_without_flag() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await?;
+    let mut config = config_builder_without_mdm(&codex_home).build().await?;
     set_metrics_exporter(&mut config);
     config.analytics_enabled = None;
 
@@ -45,10 +57,7 @@ async fn app_server_default_analytics_disabled_without_flag() -> Result<()> {
 #[tokio::test]
 async fn app_server_default_analytics_enabled_with_flag() -> Result<()> {
     let codex_home = TempDir::new()?;
-    let mut config = ConfigBuilder::default()
-        .codex_home(codex_home.path().to_path_buf())
-        .build()
-        .await?;
+    let mut config = config_builder_without_mdm(&codex_home).build().await?;
     set_metrics_exporter(&mut config);
     config.analytics_enabled = None;
 

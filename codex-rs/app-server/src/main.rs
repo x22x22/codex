@@ -12,6 +12,8 @@ use std::path::PathBuf;
 // Debug-only test hook: lets integration tests point the server at a temporary
 // managed config file without writing to /etc.
 const MANAGED_CONFIG_PATH_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_CONFIG_PATH";
+const MANAGED_PREFERENCES_BASE64_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_PREFERENCES_BASE64";
+const MANAGED_REQUIREMENTS_BASE64_ENV_VAR: &str = "CODEX_APP_SERVER_MANAGED_REQUIREMENTS_BASE64";
 
 #[derive(Debug, Parser)]
 struct AppServerArgs {
@@ -41,10 +43,17 @@ fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
         let args = AppServerArgs::parse();
         let managed_config_path = managed_config_path_from_debug_env();
-        let loader_overrides = LoaderOverrides {
+        let mut loader_overrides = LoaderOverrides {
             managed_config_path,
             ..Default::default()
         };
+        #[cfg(target_os = "macos")]
+        if let Some(value) = managed_preferences_base64_from_debug_env() {
+            loader_overrides.managed_preferences_base64 = Some(value);
+        }
+        if let Some(value) = managed_requirements_base64_from_debug_env() {
+            loader_overrides.macos_managed_config_requirements_base64 = Some(value);
+        }
         let transport = args.listen;
         let session_source = args.session_source;
         let auth = args.auth.try_into_settings()?;
@@ -75,5 +84,25 @@ fn managed_config_path_from_debug_env() -> Option<PathBuf> {
         }
     }
 
+    None
+}
+
+fn managed_preferences_base64_from_debug_env() -> Option<String> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var(MANAGED_PREFERENCES_BASE64_ENV_VAR).ok()
+    }
+
+    #[cfg(not(debug_assertions))]
+    None
+}
+
+fn managed_requirements_base64_from_debug_env() -> Option<String> {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var(MANAGED_REQUIREMENTS_BASE64_ENV_VAR).ok()
+    }
+
+    #[cfg(not(debug_assertions))]
     None
 }
