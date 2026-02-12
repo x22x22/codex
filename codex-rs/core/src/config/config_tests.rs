@@ -1786,8 +1786,8 @@ async fn managed_config_overrides_oauth_store_mode() -> anyhow::Result<()> {
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path.clone()),
         #[cfg(target_os = "macos")]
-        managed_preferences_base64: None,
-        macos_managed_config_requirements_base64: None,
+        managed_preferences_base64: Some(String::new()),
+        macos_managed_config_requirements_base64: Some(String::new()),
     };
 
     let cwd = codex_home.path().abs();
@@ -1916,8 +1916,8 @@ async fn managed_config_wins_over_cli_overrides() -> anyhow::Result<()> {
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
         #[cfg(target_os = "macos")]
-        managed_preferences_base64: None,
-        macos_managed_config_requirements_base64: None,
+        managed_preferences_base64: Some(String::new()),
+        macos_managed_config_requirements_base64: Some(String::new()),
     };
 
     let cwd = codex_home.path().abs();

@@ -205,8 +205,8 @@ extra = true
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
         #[cfg(target_os = "macos")]
-        managed_preferences_base64: None,
-        macos_managed_config_requirements_base64: None,
+        managed_preferences_base64: Some(String::new()),
+        macos_managed_config_requirements_base64: Some(String::new()),
     };
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
@@ -245,7 +245,7 @@ async fn returns_empty_when_all_layers_missing() {
         // Force managed preferences to resolve as empty so this test does not
         // inherit non-empty machine-specific managed state.
         managed_preferences_base64: Some(String::new()),
-        macos_managed_config_requirements_base64: None,
+        macos_managed_config_requirements_base64: Some(String::new()),
     };
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");
@@ -342,7 +342,7 @@ flag = false
         managed_preferences_base64: Some(
             base64::prelude::BASE64_STANDARD.encode(raw_managed_preferences.as_bytes()),
         ),
-        macos_managed_config_requirements_base64: None,
+        macos_managed_config_requirements_base64: Some(String::new()),
     };
 
     let cwd = AbsolutePathBuf::try_from(tmp.path()).expect("cwd");

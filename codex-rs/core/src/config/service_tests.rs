@@ -181,8 +181,8 @@ async fn read_includes_origins_and_layers() {
         LoaderOverrides {
             managed_config_path: Some(managed_path.clone()),
             #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(String::new()),
         },
         CloudRequirementsLoader::default(),
     );
@@ -304,8 +304,8 @@ async fn write_value_reports_override() {
         LoaderOverrides {
             managed_config_path: Some(managed_path.clone()),
             #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(String::new()),
         },
         CloudRequirementsLoader::default(),
     );
@@ -408,8 +408,8 @@ async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
         LoaderOverrides {
             managed_config_path: Some(managed_path.clone()),
             #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(String::new()),
         },
         CloudRequirementsLoader::default(),
     );
@@ -473,8 +473,8 @@ async fn write_value_rejects_feature_requirement_conflict() {
         LoaderOverrides {
             managed_config_path: None,
             #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(String::new()),
         },
         CloudRequirementsLoader::new(async {
             Ok(Some(ConfigRequirementsToml {
@@ -524,8 +524,8 @@ async fn write_value_rejects_profile_feature_requirement_conflict() {
         LoaderOverrides {
             managed_config_path: None,
             #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(String::new()),
         },
         CloudRequirementsLoader::new(async {
             Ok(Some(ConfigRequirementsToml {
@@ -586,8 +586,8 @@ async fn read_reports_managed_overrides_user_and_session_flags() {
         LoaderOverrides {
             managed_config_path: Some(managed_path.clone()),
             #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(String::new()),
         },
         CloudRequirementsLoader::default(),
     );
@@ -644,8 +644,8 @@ async fn write_value_reports_managed_override() {
         LoaderOverrides {
             managed_config_path: Some(managed_path.clone()),
             #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(String::new()),
         },
         CloudRequirementsLoader::default(),
     );
