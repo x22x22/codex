@@ -30,7 +30,10 @@ pub use crate::retry::backoff;
 pub use crate::retry::run_with_retry;
 pub use crate::sse::sse_stream;
 pub use crate::telemetry::RequestTelemetry;
+pub use crate::transport::AnyTransport;
 pub use crate::transport::ByteStream;
 pub use crate::transport::HttpTransport;
 pub use crate::transport::ReqwestTransport;
 pub use crate::transport::StreamResponse;
+#[cfg(unix)]
+pub use crate::transport::UdsTransport;

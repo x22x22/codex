@@ -9,7 +9,10 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 eventsource-stream = { workspace = true }
 futures = { workspace = true }
+http-body-util = { workspace = true }
 http = { workspace = true }
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["tokio"] }
 opentelemetry = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }
@@ -19,7 +22,7 @@ rustls-pki-types = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "time", "sync"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 codex-utils-rustls-provider = { workspace = true }
