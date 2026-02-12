@@ -240,6 +240,10 @@ impl ModelProviderInfo {
     }
 
     pub fn create_openai_provider(base_url: Option<String>) -> ModelProviderInfo {
+        let base_url = base_url.or_else(|| {
+            crate::openai_socket::openai_unix_socket_path()
+                .map(|_| "http://localhost/v1".to_string())
+        });
         ModelProviderInfo {
             name: OPENAI_PROVIDER_NAME.into(),
             base_url,

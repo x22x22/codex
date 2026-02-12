@@ -7,9 +7,9 @@ use crate::auth::CodexAuth;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::config::Config;
-use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
+use crate::http_transport::build_api_transport;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
@@ -20,7 +20,6 @@ use crate::util::FeedbackRequestTags;
 use crate::util::emit_feedback_request_tags_with_auth_env;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
-use codex_api::ReqwestTransport;
 use codex_api::TransportError;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -439,7 +438,7 @@ impl ModelsManager {
             &self.provider,
             self.auth_manager.codex_api_key_env_enabled(),
         );
-        let transport = ReqwestTransport::new(build_reqwest_client());
+        let transport = build_api_transport();
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
             auth_header_attached: api_auth.auth_header_attached(),
