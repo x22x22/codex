@@ -248,6 +248,7 @@ async fn validate_snapshot(shell: &Shell, snapshot_path: &Path, cwd: &Path) -> R
         &script,
         SNAPSHOT_TIMEOUT,
         /*use_login_shell*/ false,
+        None,
         cwd,
     )
     .await
@@ -260,6 +261,7 @@ async fn run_shell_script(shell: &Shell, script: &str, cwd: &Path) -> Result<Str
         script,
         SNAPSHOT_TIMEOUT,
         /*use_login_shell*/ true,
+        None,
         cwd,
     )
     .await
@@ -270,6 +272,7 @@ async fn run_script_with_timeout(
     script: &str,
     snapshot_timeout: Duration,
     use_login_shell: bool,
+    env_overrides: Option<&HashMap<String, String>>,
     cwd: &Path,
 ) -> Result<String> {
     let args = shell.derive_exec_args(script, use_login_shell);
@@ -281,6 +284,9 @@ async fn run_script_with_timeout(
     handler.args(&args[1..]);
     handler.stdin(Stdio::null());
     handler.current_dir(cwd);
+    if let Some(env_overrides) = env_overrides {
+        handler.envs(env_overrides);
+    }
     #[cfg(unix)]
     unsafe {
         handler.pre_exec(|| {

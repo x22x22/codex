@@ -8,8 +8,11 @@ use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::CommandExecutionStatus;
+use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -88,8 +91,23 @@ async fn turn_interrupt_aborts_running_turn() -> Result<()> {
     .await??;
     let TurnStartResponse { turn } = to_response::<TurnStartResponse>(turn_resp)?;
 
-    // Give the command a brief moment to start.
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let started_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let started_notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(started_notif.params.clone().expect("item/started params"))?;
+            if let ThreadItem::CommandExecution { .. } = started.item {
+                return Ok::<ThreadItem, anyhow::Error>(started.item);
+            }
+        }
+    })
+    .await??;
+    let ThreadItem::CommandExecution { status, .. } = started_command_execution else {
+        unreachable!("loop ensures we break on command execution items");
+    };
+    assert_eq!(status, CommandExecutionStatus::InProgress);
 
     let thread_id = thread.id.clone();
     // Interrupt the in-progress turn by id (v2 API).

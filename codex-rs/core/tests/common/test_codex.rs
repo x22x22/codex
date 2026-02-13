@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::mem::swap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -17,12 +18,14 @@ use codex_core::ModelProviderInfo;
 use codex_core::ThreadManager;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
+use codex_core::config::types::ShellEnvironmentPolicy;
+use codex_core::config::types::ShellEnvironmentPolicyInherit;
+use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
 use codex_exec_server::CreateDirectoryOptions;
 use codex_exec_server::ExecutorFileSystem;
-use codex_features::Feature;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -564,6 +567,21 @@ impl TestCodexBuilder {
         let mut config = load_default_config_for_test(home).await;
         config.cwd = cwd.abs();
         config.model_provider = model_provider;
+        let shell_home = home.path().join("shell-home");
+        std::fs::create_dir_all(&shell_home)?;
+        let shell_home_value = shell_home.to_string_lossy().to_string();
+        config.shell_environment_policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::Core,
+            ignore_default_excludes: true,
+            exclude: Vec::new(),
+            r#set: HashMap::from([
+                ("HOME".to_string(), shell_home_value.clone()),
+                ("ZDOTDIR".to_string(), shell_home_value),
+                ("BASH_ENV".to_string(), "/dev/null".to_string()),
+            ]),
+            include_only: Vec::new(),
+            use_profile: false,
+        };
         for hook in self.pre_build_hooks.drain(..) {
             hook(home.path());
         }

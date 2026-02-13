@@ -269,9 +269,20 @@ async fn snapshot_shell_does_not_inherit_stdin() -> Result<()> {
         "HOME=\"{home_display}\"; export HOME; {}",
         bash_snapshot_script()
     );
-    let output = run_script_with_timeout(&shell, &script, Duration::from_secs(2), true, home)
-        .await
-        .context("run snapshot command")?;
+    let env_overrides = HashMap::from([
+        ("HOME".to_string(), home_display.to_string()),
+        ("BASH_ENV".to_string(), String::new()),
+    ]);
+    let output = run_script_with_timeout(
+        &shell,
+        &script,
+        Duration::from_secs(2),
+        true,
+        Some(&env_overrides),
+        home,
+    )
+    .await
+    .context("run snapshot command")?;
     let read_status = fs::read_to_string(&read_status_path)
         .await
         .context("read stdin probe status")?;
@@ -307,7 +318,7 @@ async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
 
-    let err = run_script_with_timeout(&shell, &script, Duration::from_secs(1), true, dir.path())
+    let err = run_script_with_timeout(&shell, &script, Duration::from_secs(1), true, None, dir.path())
         .await
         .expect_err("snapshot shell should time out");
     assert!(
