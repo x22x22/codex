@@ -2,6 +2,7 @@ use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
 use crate::config::types::AppsConfigToml;
+use crate::config::types::CollabInboxDeliveryRole;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
 use crate::config::types::McpServerConfig;
@@ -370,6 +371,9 @@ pub struct Config {
 
     /// Memories subsystem settings.
     pub memories: MemoriesConfig,
+
+    /// How inbound collaboration messages are delivered to non-subagent threads.
+    pub collab_inbox_delivery_role: CollabInboxDeliveryRole,
 
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
@@ -1204,6 +1208,9 @@ pub struct ConfigToml {
     /// Agent-related settings (thread limits, etc.).
     pub agents: Option<AgentsToml>,
 
+    /// How inbound collaboration messages are delivered to non-subagent threads.
+    pub agent_delivery_role: Option<CollabInboxDeliveryRole>,
+
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
 
@@ -1357,10 +1364,22 @@ pub struct AgentsToml {
     pub roles: BTreeMap<String, AgentRoleToml>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRoleSpawnMode {
+    Spawn,
+    #[default]
+    Fork,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentRoleConfig {
     /// Human-facing role documentation used in spawn tool guidance.
     pub description: Option<String>,
+    /// Optional model override applied by this role.
+    pub model: Option<String>,
+    /// Optional default spawn mode when `spawn_agent` omits `spawn_mode`.
+    pub spawn_mode: Option<AgentRoleSpawnMode>,
     /// Path to a role-specific config layer.
     pub config_file: Option<PathBuf>,
 }
@@ -1370,6 +1389,12 @@ pub struct AgentRoleConfig {
 pub struct AgentRoleToml {
     /// Human-facing role documentation used in spawn tool guidance.
     pub description: Option<String>,
+
+    /// Optional model override applied by this role.
+    pub model: Option<String>,
+
+    /// Optional default spawn mode when `spawn_agent` omits `spawn_mode`.
+    pub spawn_mode: Option<AgentRoleSpawnMode>,
 
     /// Path to a role-specific config layer.
     /// Relative paths are resolved relative to the `config.toml` that defines them.
@@ -1817,6 +1842,7 @@ impl Config {
             .as_ref()
             .and_then(|agents| agents.max_threads)
             .or(DEFAULT_AGENT_MAX_THREADS);
+        let collab_inbox_delivery_role = cfg.agent_delivery_role.unwrap_or_default();
         if agent_max_threads == Some(0) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -1849,6 +1875,8 @@ impl Config {
                             name.clone(),
                             AgentRoleConfig {
                                 description: role.description.clone(),
+                                model: role.model.clone(),
+                                spawn_mode: role.spawn_mode,
                                 config_file,
                             },
                         ))
@@ -2143,6 +2171,7 @@ impl Config {
             memories: cfg.memories.unwrap_or_default().into(),
             agent_max_spawn_depth,
             agent_job_max_runtime_seconds,
+            collab_inbox_delivery_role,
             codex_home,
             sqlite_home,
             log_dir,
@@ -2530,6 +2559,16 @@ phase_2_model = "gpt-5"
                 phase_1_model: Some("gpt-5-mini".to_string()),
                 phase_2_model: Some("gpt-5".to_string()),
             }
+        );
+
+        let agent_delivery_role = r#"
+agent_delivery_role = "assistant"
+"#;
+        let agent_delivery_role_cfg = toml::from_str::<ConfigToml>(agent_delivery_role)
+            .expect("TOML deserialization should succeed");
+        assert_eq!(
+            Some(CollabInboxDeliveryRole::Assistant),
+            agent_delivery_role_cfg.agent_delivery_role
         );
     }
 
@@ -4486,6 +4525,7 @@ model = "gpt-5.1-codex"
                     AgentRoleToml {
                         description: Some("Research role".to_string()),
                         config_file: Some(AbsolutePathBuf::from_absolute_path(missing_path)?),
+                        ..Default::default()
                     },
                 )]),
             }),
@@ -4521,6 +4561,8 @@ model = "gpt-5.1-codex"
             codex_home.path().join(CONFIG_TOML_FILE),
             r#"[agents.researcher]
 description = "Research role"
+model = "gpt-5.3-codex-spark"
+spawn_mode = "spawn"
 config_file = "./agents/researcher.toml"
 "#,
         )
@@ -4537,6 +4579,20 @@ config_file = "./agents/researcher.toml"
                 .get("researcher")
                 .and_then(|role| role.config_file.as_ref()),
             Some(&role_config_path)
+        );
+        assert_eq!(
+            config
+                .agent_roles
+                .get("researcher")
+                .and_then(|role| role.model.as_deref()),
+            Some("gpt-5.3-codex-spark")
+        );
+        assert_eq!(
+            config
+                .agent_roles
+                .get("researcher")
+                .and_then(|role| role.spawn_mode),
+            Some(AgentRoleSpawnMode::Spawn)
         );
 
         Ok(())
@@ -4756,6 +4812,7 @@ model_verbosity = "high"
                 memories: MemoriesConfig::default(),
                 agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
                 agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+                collab_inbox_delivery_role: CollabInboxDeliveryRole::Tool,
                 codex_home: fixture.codex_home(),
                 sqlite_home: fixture.codex_home(),
                 log_dir: fixture.codex_home().join("log"),
@@ -4882,6 +4939,7 @@ model_verbosity = "high"
             memories: MemoriesConfig::default(),
             agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+            collab_inbox_delivery_role: CollabInboxDeliveryRole::Tool,
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
@@ -5006,6 +5064,7 @@ model_verbosity = "high"
             memories: MemoriesConfig::default(),
             agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+            collab_inbox_delivery_role: CollabInboxDeliveryRole::Tool,
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
@@ -5116,6 +5175,7 @@ model_verbosity = "high"
             memories: MemoriesConfig::default(),
             agent_max_spawn_depth: DEFAULT_AGENT_MAX_SPAWN_DEPTH,
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
+            collab_inbox_delivery_role: CollabInboxDeliveryRole::Tool,
             codex_home: fixture.codex_home(),
             sqlite_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
@@ -5207,8 +5267,8 @@ model_verbosity = "high"
             ]),
             mcp_servers: None,
             rules: None,
-            enforce_residency: None,
             network: None,
+            enforce_residency: None,
         };
         let requirement_source = crate::config_loader::RequirementSource::Unknown;
         let requirement_source_for_error = requirement_source.clone();
@@ -5811,8 +5871,8 @@ mcp_oauth_callback_url = "https://example.com/callback"
             allowed_web_search_modes: None,
             mcp_servers: None,
             rules: None,
-            enforce_residency: None,
             network: None,
+            enforce_residency: None,
         };
 
         let config = ConfigBuilder::default()

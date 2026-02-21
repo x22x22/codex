@@ -6,6 +6,13 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "AgentRoleSpawnMode": {
+      "enum": [
+        "spawn",
+        "fork"
+      ],
+      "type": "string"
+    },
     "AgentRoleToml": {
       "additionalProperties": false,
       "properties": {
@@ -20,6 +27,18 @@
         "description": {
           "description": "Human-facing role documentation used in spawn tool guidance.",
           "type": "string"
+        },
+        "model": {
+          "description": "Optional model override applied by this role.",
+          "type": "string"
+        },
+        "spawn_mode": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AgentRoleSpawnMode"
+            }
+          ],
+          "description": "Optional default spawn mode when `spawn_agent` omits `spawn_mode`."
         }
       },
       "type": "object"
@@ -282,6 +301,14 @@
           "type": "string"
         }
       ]
+    },
+    "CollabInboxDeliveryRole": {
+      "enum": [
+        "developer",
+        "tool",
+        "assistant"
+      ],
+      "type": "string"
     },
     "ConfigProfile": {
       "additionalProperties": false,
@@ -1504,6 +1531,14 @@
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
   "properties": {
+    "agent_delivery_role": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CollabInboxDeliveryRole"
+        }
+      ],
+      "description": "How inbound collaboration messages are delivered to non-subagent threads."
+    },
     "agents": {
       "allOf": [
         {
