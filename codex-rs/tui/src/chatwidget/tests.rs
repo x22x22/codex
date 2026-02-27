@@ -1710,7 +1710,6 @@ async fn make_chatwidget_manual(
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
         pending_nudges: VecDeque::new(),
-        pending_suppressed_legacy_agent_messages: 0,
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
         pending_notification: None,
