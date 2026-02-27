@@ -48,6 +48,7 @@ use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::config_loader::LoaderOverrides;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
@@ -635,6 +636,7 @@ pub(crate) struct App {
     pub(crate) active_profile: Option<String>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
+    loader_overrides: LoaderOverrides,
     runtime_approval_policy_override: Option<AskForApproval>,
     runtime_sandbox_policy_override: Option<SandboxPolicy>,
 
@@ -751,6 +753,7 @@ impl App {
             .codex_home(self.config.codex_home.clone())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
+            .loader_overrides(self.loader_overrides.clone())
             .build()
             .await
             .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
@@ -1495,6 +1498,7 @@ impl App {
         mut config: Config,
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
+        loader_overrides: LoaderOverrides,
         active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
@@ -1704,6 +1708,7 @@ impl App {
             active_profile,
             cli_kv_overrides,
             harness_overrides,
+            loader_overrides,
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
@@ -4364,6 +4369,7 @@ mod tests {
             active_profile: None,
             cli_kv_overrides: Vec::new(),
             harness_overrides: ConfigOverrides::default(),
+            loader_overrides: LoaderOverrides::default(),
             runtime_approval_policy_override: None,
             runtime_sandbox_policy_override: None,
             file_search,
@@ -4424,6 +4430,7 @@ mod tests {
                 active_profile: None,
                 cli_kv_overrides: Vec::new(),
                 harness_overrides: ConfigOverrides::default(),
+                loader_overrides: LoaderOverrides::default(),
                 runtime_approval_policy_override: None,
                 runtime_sandbox_policy_override: None,
                 file_search,

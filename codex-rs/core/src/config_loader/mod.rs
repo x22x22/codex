@@ -134,6 +134,10 @@ pub async fn load_config_layers_state(
     // Honor the system requirements.toml location.
     let requirements_toml_file = system_requirements_toml_file()?;
     load_requirements_toml(&mut config_requirements_toml, requirements_toml_file).await?;
+    if let Some(requirements_toml_file) = overrides.requirements_toml_file.as_ref() {
+        load_session_requirements_toml(&mut config_requirements_toml, requirements_toml_file)
+            .await?;
+    }
 
     // Make a best-effort to support the legacy `managed_config.toml` as a
     // requirements specification.
@@ -347,6 +351,37 @@ async fn load_requirements_toml(
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     requirements_toml_file: impl AsRef<Path>,
 ) -> io::Result<()> {
+    load_requirements_toml_with_source(
+        config_requirements_toml,
+        requirements_toml_file,
+        MissingRequirementsTomlBehavior::Ignore,
+    )
+    .await
+}
+
+async fn load_session_requirements_toml(
+    config_requirements_toml: &mut ConfigRequirementsWithSources,
+    requirements_toml_file: impl AsRef<Path>,
+) -> io::Result<()> {
+    load_requirements_toml_with_source(
+        config_requirements_toml,
+        requirements_toml_file,
+        MissingRequirementsTomlBehavior::Error,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum MissingRequirementsTomlBehavior {
+    Ignore,
+    Error,
+}
+
+async fn load_requirements_toml_with_source(
+    config_requirements_toml: &mut ConfigRequirementsWithSources,
+    requirements_toml_file: impl AsRef<Path>,
+    missing_behavior: MissingRequirementsTomlBehavior,
+) -> io::Result<()> {
     let requirements_toml_file =
         AbsolutePathBuf::from_absolute_path(requirements_toml_file.as_ref())?;
     match tokio::fs::read_to_string(&requirements_toml_file).await {
@@ -369,7 +404,14 @@ async fn load_requirements_toml(
             );
         }
         Err(e) => {
-            if e.kind() != io::ErrorKind::NotFound {
+            if e.kind() == io::ErrorKind::NotFound
+                && matches!(missing_behavior, MissingRequirementsTomlBehavior::Ignore)
+            {
+                return Ok(());
+            }
+            if e.kind() != io::ErrorKind::NotFound
+                || matches!(missing_behavior, MissingRequirementsTomlBehavior::Error)
+            {
                 return Err(io::Error::new(
                     e.kind(),
                     format!(
@@ -380,7 +422,6 @@ async fn load_requirements_toml(
             }
         }
     }
-
     Ok(())
 }
 

@@ -203,6 +203,7 @@ extra = true
 
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
+        requirements_toml_file: None,
         #[cfg(target_os = "macos")]
         managed_preferences_base64: None,
         macos_managed_config_requirements_base64: None,
@@ -240,6 +241,7 @@ async fn returns_empty_when_all_layers_missing() {
 
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
+        requirements_toml_file: None,
         #[cfg(target_os = "macos")]
         // Force managed preferences to resolve as empty so this test does not
         // inherit non-empty machine-specific managed state.
@@ -338,6 +340,7 @@ flag = false
 
     let overrides = LoaderOverrides {
         managed_config_path: Some(managed_path),
+        requirements_toml_file: None,
         managed_preferences_base64: Some(
             base64::prelude::BASE64_STANDARD.encode(raw_managed_preferences.as_bytes()),
         ),
@@ -392,6 +395,7 @@ async fn managed_preferences_requirements_are_applied() -> anyhow::Result<()> {
         &[] as &[(String, TomlValue)],
         LoaderOverrides {
             managed_config_path: Some(tmp.path().join("managed_config.toml")),
+            requirements_toml_file: None,
             managed_preferences_base64: Some(String::new()),
             macos_managed_config_requirements_base64: Some(
                 base64::prelude::BASE64_STANDARD.encode(
@@ -455,6 +459,7 @@ async fn managed_preferences_requirements_take_precedence() -> anyhow::Result<()
         &[] as &[(String, TomlValue)],
         LoaderOverrides {
             managed_config_path: Some(managed_path),
+            requirements_toml_file: None,
             managed_preferences_base64: Some(String::new()),
             macos_managed_config_requirements_base64: Some(
                 base64::prelude::BASE64_STANDARD.encode(
@@ -555,6 +560,69 @@ enforce_residency = "us"
     Ok(())
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn load_requirements_toml_from_loader_overrides() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("session-requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+allowed_approval_policies = ["never"]
+"#,
+    )
+    .await?;
+
+    let layers = load_config_layers_state(
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            requirements_toml_file: Some(requirements_file.clone()),
+            ..LoaderOverrides::default()
+        },
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    assert_eq!(
+        layers.requirements_toml().allowed_approval_policies,
+        Some(vec![AskForApproval::Never])
+    );
+    assert_eq!(
+        layers.requirements().approval_policy.value(),
+        AskForApproval::Never
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_session_requirements_toml_from_loader_overrides_errors() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("missing-requirements.toml");
+
+    let err = load_config_layers_state(
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            requirements_toml_file: Some(requirements_file.clone()),
+            ..LoaderOverrides::default()
+        },
+        CloudRequirementsLoader::default(),
+    )
+    .await
+    .expect_err("missing session requirements should fail");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    assert!(
+        err.to_string()
+            .contains(&requirements_file.display().to_string())
+    );
+
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn cloud_requirements_take_precedence_over_mdm_requirements() -> anyhow::Result<()> {
@@ -566,6 +634,7 @@ async fn cloud_requirements_take_precedence_over_mdm_requirements() -> anyhow::R
         Some(AbsolutePathBuf::try_from(tmp.path())?),
         &[] as &[(String, TomlValue)],
         LoaderOverrides {
+            requirements_toml_file: None,
             macos_managed_config_requirements_base64: Some(
                 base64::prelude::BASE64_STANDARD.encode(
                     r#"
