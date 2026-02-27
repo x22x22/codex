@@ -100,6 +100,7 @@ pub mod types;
 pub use codex_config::Constrained;
 pub use codex_config::ConstraintError;
 pub use codex_config::ConstraintResult;
+pub use codex_network_proxy::NetworkProxyAuditMetadata;
 
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
@@ -116,9 +117,23 @@ pub use codex_git::GhostSnapshotConfig;
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 pub(crate) const DEFAULT_AGENT_MAX_THREADS: Option<usize> = Some(6);
 pub(crate) const DEFAULT_AGENT_MAX_DEPTH: i32 = 1;
+pub(crate) const DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS: Option<u64> = None;
 
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 
+fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
+    let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(trimmed);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        Some(resolved_cwd.join(path))
+    }
+}
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
     let codex_home = tempdir().expect("create temp dir");
@@ -139,6 +154,15 @@ pub struct Permissions {
     pub sandbox_policy: Constrained<SandboxPolicy>,
     /// Effective network configuration applied to all spawned processes.
     pub network: Option<NetworkProxySpec>,
+    /// Whether the model may request a login shell for shell-based tools.
+    /// Default to `true`
+    ///
+    /// If `true`, the model may request a login shell (`login = true`), and
+    /// omitting `login` defaults to using a login shell.
+    /// If `false`, the model can never use a login shell: `login = true`
+    /// requests are rejected, and omitting `login` defaults to a non-login
+    /// shell.
+    pub allow_login_shell: bool,
     /// Policy used to build process environments for shell/unified exec.
     pub shell_environment_policy: ShellEnvironmentPolicy,
     /// Effective Windows sandbox mode derived from `[windows].sandbox` or
@@ -271,6 +295,9 @@ pub struct Config {
     /// `current-dir`.
     pub tui_status_line: Option<Vec<String>>,
 
+    /// Syntax highlighting theme override (kebab-case name).
+    pub tui_theme: Option<String>,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -320,6 +347,8 @@ pub struct Config {
 
     /// Maximum number of agent threads that can be open concurrently.
     pub agent_max_threads: Option<usize>,
+    /// Maximum runtime in seconds for agent job workers before they are failed.
+    pub agent_job_max_runtime_seconds: Option<u64>,
 
     /// Maximum nesting depth allowed for spawned agent threads.
     pub agent_max_depth: i32,
@@ -333,6 +362,9 @@ pub struct Config {
     /// Directory containing all Codex state (defaults to `~/.codex` but can be
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: PathBuf,
+
+    /// Directory where Codex stores the SQLite state DB.
+    pub sqlite_home: PathBuf,
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
@@ -355,6 +387,11 @@ pub struct Config {
     /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
 
+    /// Path to the `codex-execve-wrapper` executable used for shell
+    /// escalation. This cannot be set in the config file: it must be set in
+    /// code via [`ConfigOverrides`].
+    pub main_execve_wrapper_exe: Option<PathBuf>,
+
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<PathBuf>,
 
@@ -367,6 +404,13 @@ pub struct Config {
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    /// Optional Plan-mode-specific reasoning effort override used by the TUI.
+    ///
+    /// When unset, Plan mode uses the built-in Plan preset default (currently
+    /// `medium`). When explicitly set (including `none`), this overrides the
+    /// Plan preset. The `none` value means "no reasoning" (not "inherit the
+    /// global default").
+    pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
 
     /// If not "none", the value to use for `reasoning.summary` when making a
     /// request using the Responses API.
@@ -385,6 +429,14 @@ pub struct Config {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
+    /// connection) without changing normal provider HTTP requests.
+    pub experimental_realtime_ws_base_url: Option<String>,
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport backend prompt (the `Op::RealtimeConversation`
+    /// `/ws` session.create backend_prompt) without changing normal prompts.
+    pub experimental_realtime_ws_backend_prompt: Option<String>,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -587,7 +639,8 @@ impl Config {
     /// designed to use [AskForApproval::Never] exclusively.
     ///
     /// Further, [ConfigOverrides] contains some options that are not supported
-    /// in [ConfigToml], such as `cwd` and `codex_linux_sandbox_exe`.
+    /// in [ConfigToml], such as `cwd`, `codex_linux_sandbox_exe`, and
+    /// `main_execve_wrapper_exe`.
     pub async fn load_with_cli_overrides_and_harness_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
@@ -640,7 +693,7 @@ pub(crate) fn deserialize_config_toml_with_base(
 
 fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> {
     let file_contents = std::fs::read_to_string(path)?;
-    serde_json::from_str::<ModelsResponse>(&file_contents).map_err(|err| {
+    let catalog = serde_json::from_str::<ModelsResponse>(&file_contents).map_err(|err| {
         std::io::Error::new(
             ErrorKind::InvalidData,
             format!(
@@ -648,7 +701,17 @@ fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> 
                 path.display()
             ),
         )
-    })
+    })?;
+    if catalog.models.is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "model_catalog_json path `{}` must contain at least one model",
+                path.display()
+            ),
+        ));
+    }
+    Ok(catalog)
 }
 
 fn load_model_catalog(
@@ -952,6 +1015,16 @@ pub struct ConfigToml {
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
+    /// Whether the model may request a login shell for shell-based tools.
+    /// Default to `true`
+    ///
+    /// If `true`, the model may request a login shell (`login = true`), and
+    /// omitting `login` defaults to using a login shell.
+    /// If `false`, the model can never use a login shell: `login = true`
+    /// requests are rejected, and omitting `login` defaults to a non-login
+    /// shell.
+    pub allow_login_shell: Option<bool>,
+
     /// Sandbox mode to use.
     pub sandbox_mode: Option<SandboxMode>,
 
@@ -1041,7 +1114,7 @@ pub struct ConfigToml {
 
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
-    pub background_terminal_timeout: Option<u64>,
+    pub background_terminal_max_timeout: Option<u64>,
 
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<AbsolutePathBuf>,
@@ -1063,6 +1136,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub history: Option<History>,
 
+    /// Directory where Codex stores the SQLite state DB.
+    /// Defaults to `$CODEX_SQLITE_HOME` when set. Otherwise uses `$CODEX_HOME`.
+    pub sqlite_home: Option<AbsolutePathBuf>,
+
     /// Directory where Codex writes log files, for example `codex-tui.log`.
     /// Defaults to `$CODEX_HOME/log`.
     pub log_dir: Option<AbsolutePathBuf>,
@@ -1083,6 +1160,7 @@ pub struct ConfigToml {
     pub show_raw_agent_reasoning: Option<bool>,
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub plan_mode_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
@@ -1090,8 +1168,8 @@ pub struct ConfigToml {
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
-    /// Optional path to a JSON file containing a complete model catalog.
-    /// When set, this replaces the bundled catalog for this process.
+    /// Optional path to a JSON model catalog (applied on startup only).
+    /// Per-thread `config` overrides are accepted but do not reapply this (no-ops).
     pub model_catalog_json: Option<AbsolutePathBuf>,
 
     /// Optionally specify a personality for the model
@@ -1100,6 +1178,14 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport base URL (the `Op::RealtimeConversation` `/ws`
+    /// connection) without changing normal provider HTTP requests.
+    pub experimental_realtime_ws_base_url: Option<String>,
+    /// Experimental / do not use. Overrides only the realtime conversation
+    /// websocket transport backend prompt (the `Op::RealtimeConversation`
+    /// `/ws` session.create backend_prompt) without changing normal prompts.
+    pub experimental_realtime_ws_backend_prompt: Option<String>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -1241,11 +1327,13 @@ pub struct AgentsToml {
     /// When unset, no limit is enforced.
     #[schemars(range(min = 1))]
     pub max_threads: Option<usize>,
-
     /// Maximum nesting depth allowed for spawned agent threads.
     /// Root sessions start at depth 0.
     #[schemars(range(min = 1))]
     pub max_depth: Option<i32>,
+    /// Default maximum runtime in seconds for agent job workers.
+    #[schemars(range(min = 1))]
+    pub job_max_runtime_seconds: Option<u64>,
 
     /// User-defined role declarations keyed by role name.
     ///
@@ -1438,6 +1526,7 @@ pub struct ConfigOverrides {
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub main_execve_wrapper_exe: Option<PathBuf>,
     pub js_repl_node_path: Option<PathBuf>,
     pub js_repl_node_module_dirs: Option<Vec<PathBuf>>,
     pub zsh_path: Option<PathBuf>,
@@ -1567,6 +1656,7 @@ impl Config {
             model_provider,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
+            main_execve_wrapper_exe,
             js_repl_node_path: js_repl_node_path_override,
             js_repl_node_module_dirs: js_repl_node_module_dirs_override,
             zsh_path: zsh_path_override,
@@ -1710,6 +1800,7 @@ impl Config {
             .clone();
 
         let shell_environment_policy = cfg.shell_environment_policy.into();
+        let allow_login_shell = cfg.allow_login_shell.unwrap_or(true);
 
         let history = cfg.history.unwrap_or_default();
 
@@ -1758,8 +1849,27 @@ impl Config {
             })
             .transpose()?
             .unwrap_or_default();
+        let agent_job_max_runtime_seconds = cfg
+            .agents
+            .as_ref()
+            .and_then(|agents| agents.job_max_runtime_seconds)
+            .or(DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS);
+        if agent_job_max_runtime_seconds == Some(0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.job_max_runtime_seconds must be at least 1",
+            ));
+        }
+        if let Some(max_runtime_seconds) = agent_job_max_runtime_seconds
+            && max_runtime_seconds > i64::MAX as u64
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "agents.job_max_runtime_seconds must fit within a 64-bit signed integer",
+            ));
+        }
         let background_terminal_max_timeout = cfg
-            .background_terminal_timeout
+            .background_terminal_max_timeout
             .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
             .max(MIN_EMPTY_YIELD_TIME_MS);
 
@@ -1866,7 +1976,12 @@ impl Config {
         let review_model = override_review_model.or(cfg.review_model);
 
         let check_for_update_on_startup = cfg.check_for_update_on_startup.unwrap_or(true);
-        let model_catalog = load_model_catalog(cfg.model_catalog_json.clone())?;
+        let model_catalog = load_model_catalog(
+            config_profile
+                .model_catalog_json
+                .clone()
+                .or(cfg.model_catalog_json.clone()),
+        )?;
 
         let log_dir = cfg
             .log_dir
@@ -1877,6 +1992,12 @@ impl Config {
                 p.push("log");
                 p
             });
+        let sqlite_home = cfg
+            .sqlite_home
+            .as_ref()
+            .map(AbsolutePathBuf::to_path_buf)
+            .or_else(|| resolve_sqlite_home_env(&resolved_cwd))
+            .unwrap_or_else(|| codex_home.to_path_buf());
 
         // Ensure that every field of ConfigRequirements is applied to the final
         // Config.
@@ -1950,6 +2071,7 @@ impl Config {
                 approval_policy: constrained_approval_policy.value,
                 sandbox_policy: constrained_sandbox_policy.value,
                 network,
+                allow_login_shell,
                 shell_environment_policy,
                 windows_sandbox_mode,
                 macos_seatbelt_profile_extensions: None,
@@ -1992,13 +2114,16 @@ impl Config {
             agent_max_depth,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
+            agent_job_max_runtime_seconds,
             codex_home,
+            sqlite_home,
             log_dir,
             config_layer_stack,
             history,
             ephemeral: ephemeral.unwrap_or_default(),
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
+            main_execve_wrapper_exe,
             js_repl_node_path,
             js_repl_node_module_dirs,
             zsh_path,
@@ -2011,6 +2136,9 @@ impl Config {
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort),
+            plan_mode_reasoning_effort: config_profile
+                .plan_mode_reasoning_effort
+                .or(cfg.plan_mode_reasoning_effort),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
@@ -2022,6 +2150,8 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+            experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
+            experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,
@@ -2067,6 +2197,7 @@ impl Config {
                 .map(|t| t.alternate_screen)
                 .unwrap_or_default(),
             tui_status_line: cfg.tui.as_ref().and_then(|t| t.status_line.clone()),
+            tui_theme: cfg.tui.as_ref().and_then(|t| t.theme.clone()),
             otel: {
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
@@ -2252,6 +2383,7 @@ mod tests {
     use crate::config::types::Notifications;
     use crate::config_loader::RequirementSource;
     use crate::features::Feature;
+    use codex_config::CONFIG_TOML_FILE;
 
     use super::*;
     use core_test_support::test_absolute_path;
@@ -2401,6 +2533,7 @@ allowed_domains = ["openai.com"]
                 allow_upstream_proxy: Some(false),
                 dangerously_allow_non_loopback_proxy: None,
                 dangerously_allow_non_loopback_admin: None,
+                dangerously_allow_all_unix_sockets: None,
                 mode: None,
                 allowed_domains: Some(vec!["openai.com".to_string()]),
                 denied_domains: None,
@@ -2464,6 +2597,30 @@ allowed_domains = ["openai.com"]
     }
 
     #[test]
+    fn tui_theme_deserializes_from_toml() {
+        let cfg = r#"
+[tui]
+theme = "dracula"
+"#;
+        let parsed =
+            toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+        assert_eq!(
+            parsed.tui.as_ref().and_then(|t| t.theme.as_deref()),
+            Some("dracula"),
+        );
+    }
+
+    #[test]
+    fn tui_theme_defaults_to_none() {
+        let cfg = r#"
+[tui]
+"#;
+        let parsed =
+            toml::from_str::<ConfigToml>(cfg).expect("TOML deserialization should succeed");
+        assert_eq!(parsed.tui.as_ref().and_then(|t| t.theme.as_deref()), None);
+    }
+
+    #[test]
     fn tui_config_missing_notifications_field_defaults_to_enabled() {
         let cfg = r#"
 [tui]
@@ -2482,6 +2639,7 @@ allowed_domains = ["openai.com"]
                 show_tooltips: true,
                 alternate_screen: AltScreenMode::Auto,
                 status_line: None,
+                theme: None,
             }
         );
     }
@@ -2785,6 +2943,23 @@ trust_level = "trusted"
                 other => panic!("expected workspace-write policy, got {other:?}"),
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn sqlite_home_defaults_to_codex_home_for_workspace_write() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides {
+                sandbox_mode: Some(SandboxMode::WorkspaceWrite),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(config.sqlite_home, codex_home.path().to_path_buf());
 
         Ok(())
     }
@@ -4294,6 +4469,7 @@ model = "gpt-5.1-codex"
             agents: Some(AgentsToml {
                 max_threads: None,
                 max_depth: None,
+                job_max_runtime_seconds: None,
                 roles: BTreeMap::from([(
                     "researcher".to_string(),
                     AgentRoleToml {
@@ -4379,6 +4555,32 @@ config_file = "./agents/researcher.toml"
         )?;
 
         assert_eq!(config.model_catalog, Some(catalog));
+        Ok(())
+    }
+
+    #[test]
+    fn model_catalog_json_rejects_empty_catalog() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let catalog_path = codex_home.path().join("catalog.json");
+        std::fs::write(&catalog_path, r#"{"models":[]}"#)?;
+
+        let cfg = ConfigToml {
+            model_catalog_json: Some(AbsolutePathBuf::from_absolute_path(catalog_path)?),
+            ..Default::default()
+        };
+
+        let err = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect_err("empty custom catalog should fail config load");
+
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("must contain at least one model"),
+            "unexpected error: {err}"
+        );
         Ok(())
     }
 
@@ -4518,6 +4720,7 @@ model_verbosity = "high"
                     approval_policy: Constrained::allow_any(AskForApproval::Never),
                     sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                     network: None,
+                    allow_login_shell: true,
                     shell_environment_policy: ShellEnvironmentPolicy::default(),
                     windows_sandbox_mode: None,
                     macos_seatbelt_profile_extensions: None,
@@ -4540,7 +4743,9 @@ model_verbosity = "high"
                 agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
                 agent_roles: BTreeMap::new(),
                 memories: MemoriesConfig::default(),
+                agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
                 codex_home: fixture.codex_home(),
+                sqlite_home: fixture.codex_home(),
                 log_dir: fixture.codex_home().join("log"),
                 config_layer_stack: Default::default(),
                 startup_warnings: Vec::new(),
@@ -4548,18 +4753,22 @@ model_verbosity = "high"
                 ephemeral: false,
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
+                main_execve_wrapper_exe: None,
                 js_repl_node_path: None,
                 js_repl_node_module_dirs: Vec::new(),
                 zsh_path: None,
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: Some(ReasoningEffort::High),
+                plan_mode_reasoning_effort: None,
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_supports_reasoning_summaries: None,
                 model_catalog: None,
                 model_verbosity: None,
                 personality: Some(Personality::Pragmatic),
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                experimental_realtime_ws_base_url: None,
+                experimental_realtime_ws_backend_prompt: None,
                 base_instructions: None,
                 developer_instructions: None,
                 compact_prompt: None,
@@ -4587,6 +4796,7 @@ model_verbosity = "high"
                 feedback_enabled: true,
                 tui_alternate_screen: AltScreenMode::Auto,
                 tui_status_line: None,
+                tui_theme: None,
                 otel: OtelConfig::default(),
             },
             o3_profile_config
@@ -4636,6 +4846,7 @@ model_verbosity = "high"
                 approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
@@ -4658,7 +4869,9 @@ model_verbosity = "high"
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
+            agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
+            sqlite_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
@@ -4666,18 +4879,22 @@ model_verbosity = "high"
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
+            main_execve_wrapper_exe: None,
             js_repl_node_path: None,
             js_repl_node_module_dirs: Vec::new(),
             zsh_path: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
+            plan_mode_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4705,6 +4922,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_theme: None,
             otel: OtelConfig::default(),
         };
 
@@ -4752,6 +4970,7 @@ model_verbosity = "high"
                 approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
@@ -4774,7 +4993,9 @@ model_verbosity = "high"
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
+            agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
+            sqlite_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
@@ -4782,18 +5003,22 @@ model_verbosity = "high"
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
+            main_execve_wrapper_exe: None,
             js_repl_node_path: None,
             js_repl_node_module_dirs: Vec::new(),
             zsh_path: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: None,
+            plan_mode_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: None,
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4821,6 +5046,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_theme: None,
             otel: OtelConfig::default(),
         };
 
@@ -4854,6 +5080,7 @@ model_verbosity = "high"
                 approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
                 network: None,
+                allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 windows_sandbox_mode: None,
                 macos_seatbelt_profile_extensions: None,
@@ -4876,7 +5103,9 @@ model_verbosity = "high"
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
+            agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
             codex_home: fixture.codex_home(),
+            sqlite_home: fixture.codex_home(),
             log_dir: fixture.codex_home().join("log"),
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
@@ -4884,18 +5113,22 @@ model_verbosity = "high"
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
+            main_execve_wrapper_exe: None,
             js_repl_node_path: None,
             js_repl_node_module_dirs: Vec::new(),
             zsh_path: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
             model_reasoning_effort: Some(ReasoningEffort::High),
+            plan_mode_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_supports_reasoning_summaries: None,
             model_catalog: None,
             model_verbosity: Some(Verbosity::High),
             personality: Some(Personality::Pragmatic),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_realtime_ws_base_url: None,
+            experimental_realtime_ws_backend_prompt: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4923,6 +5156,7 @@ model_verbosity = "high"
             feedback_enabled: true,
             tui_alternate_screen: AltScreenMode::Auto,
             tui_status_line: None,
+            tui_theme: None,
             otel: OtelConfig::default(),
         };
 
@@ -5429,6 +5663,27 @@ mcp_oauth_callback_port = 5678
     }
 
     #[test]
+    fn config_loads_allow_login_shell_from_toml() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+model = "gpt-5.1"
+allow_login_shell = false
+"#,
+        )
+        .expect("TOML deserialization should succeed for allow_login_shell");
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(!config.permissions.allow_login_shell);
+        Ok(())
+    }
+
+    #[test]
     fn config_loads_mcp_oauth_callback_url_from_toml() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let toml = r#"
@@ -5661,7 +5916,6 @@ trust_level = "untrusted"
         );
         Ok(())
     }
-
     #[tokio::test]
     async fn explicit_on_request_approval_falls_back_to_untrusted_when_disallowed_by_requirements()
     -> std::io::Result<()> {
@@ -5687,6 +5941,34 @@ trust_level = "untrusted"
         assert_eq!(
             config.permissions.approval_policy.value(),
             AskForApproval::UnlessTrusted
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        assert_eq!(
+            cfg.experimental_realtime_ws_base_url.as_deref(),
+            Some("http://127.0.0.1:8011")
+        );
+
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.experimental_realtime_ws_base_url.as_deref(),
+            Some("http://127.0.0.1:8011")
         );
         Ok(())
     }
@@ -5818,6 +6100,34 @@ allowed_approval_policies = ["untrusted"]
         assert_eq!(
             config.permissions.approval_policy.value(),
             AskForApproval::UnlessTrusted
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn experimental_realtime_ws_backend_prompt_loads_from_config_toml() -> std::io::Result<()> {
+        let cfg: ConfigToml = toml::from_str(
+            r#"
+experimental_realtime_ws_backend_prompt = "prompt from config"
+"#,
+        )
+        .expect("TOML deserialization should succeed");
+
+        assert_eq!(
+            cfg.experimental_realtime_ws_backend_prompt.as_deref(),
+            Some("prompt from config")
+        );
+
+        let codex_home = TempDir::new()?;
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert_eq!(
+            config.experimental_realtime_ws_backend_prompt.as_deref(),
+            Some("prompt from config")
         );
         Ok(())
     }
