@@ -324,6 +324,17 @@
           "default": {},
           "type": "object"
         },
+        "remote_control": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RemoteControlConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "review_model": {
           "type": [
             "string",
@@ -720,6 +731,17 @@
           "type": "string"
         }
       ]
+    },
+    "RemoteControlConfig": {
+      "properties": {
+        "base_url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "base_url"
+      ],
+      "type": "object"
     },
     "SandboxMode": {
       "enum": [

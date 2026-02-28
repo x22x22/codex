@@ -708,6 +708,13 @@ pub struct AppsConfig {
     pub apps: HashMap<String, AppConfig>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct RemoteControlConfig {
+    pub base_url: String,
+}
+
 const fn default_enabled() -> bool {
     true
 }
@@ -752,6 +759,9 @@ pub struct Config {
     #[experimental("config/read.apps")]
     #[serde(default)]
     pub apps: Option<AppsConfig>,
+    #[experimental("config/read.remote_control")]
+    #[serde(default)]
+    pub remote_control: Option<RemoteControlConfig>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
 }
@@ -7083,6 +7093,7 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            remote_control: None,
             additional: HashMap::new(),
         });
 
@@ -7116,6 +7127,7 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            remote_control: None,
             additional: HashMap::new(),
         });
 
@@ -7171,6 +7183,7 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            remote_control: None,
             additional: HashMap::new(),
         });
 
@@ -7220,6 +7233,7 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            remote_control: None,
             additional: HashMap::new(),
         });
 

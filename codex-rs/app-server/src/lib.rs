@@ -8,6 +8,7 @@ use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::config_loader::LoaderOverrides;
+use codex_features::Feature;
 use codex_utils_cli::CliConfigOverrides;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -29,8 +30,10 @@ use crate::transport::OutboundConnectionState;
 use crate::transport::TransportEvent;
 use crate::transport::auth::policy_from_settings;
 use crate::transport::route_outgoing_envelope;
+use crate::transport::start_remote_control;
 use crate::transport::start_stdio_connection;
 use crate::transport::start_websocket_acceptor;
+use crate::transport::validate_remote_control_auth;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -92,6 +95,37 @@ const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
 enum LogFormat {
     Default,
     Json,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TransportRuntimeMode {
+    single_client_mode: bool,
+    shutdown_when_no_connections: bool,
+    graceful_ctrl_c_restart_enabled: bool,
+    ctrl_c_shutdown_enabled: bool,
+}
+
+fn transport_runtime_mode(transport: AppServerTransport) -> TransportRuntimeMode {
+    match transport {
+        AppServerTransport::Stdio => TransportRuntimeMode {
+            single_client_mode: true,
+            shutdown_when_no_connections: true,
+            graceful_ctrl_c_restart_enabled: false,
+            ctrl_c_shutdown_enabled: false,
+        },
+        AppServerTransport::WebSocket { .. } => TransportRuntimeMode {
+            single_client_mode: false,
+            shutdown_when_no_connections: false,
+            graceful_ctrl_c_restart_enabled: true,
+            ctrl_c_shutdown_enabled: false,
+        },
+        AppServerTransport::Headless => TransportRuntimeMode {
+            single_client_mode: false,
+            shutdown_when_no_connections: false,
+            graceful_ctrl_c_restart_enabled: false,
+            ctrl_c_shutdown_enabled: true,
+        },
+    }
 }
 
 type StderrLogLayer = Box<dyn Layer<Registry> + Send + Sync + 'static>;
@@ -361,38 +395,6 @@ pub async fn run_main_with_transport(
     let (outbound_control_tx, mut outbound_control_rx) =
         mpsc::channel::<OutboundControlEvent>(CHANNEL_CAPACITY);
 
-    enum TransportRuntime {
-        Stdio,
-        WebSocket {
-            accept_handle: JoinHandle<()>,
-            shutdown_token: CancellationToken,
-        },
-    }
-
-    let mut stdio_handles = Vec::<JoinHandle<()>>::new();
-    let transport_runtime = match transport {
-        AppServerTransport::Stdio => {
-            start_stdio_connection(transport_event_tx.clone(), &mut stdio_handles).await?;
-            TransportRuntime::Stdio
-        }
-        AppServerTransport::WebSocket { bind_address } => {
-            let shutdown_token = CancellationToken::new();
-            let accept_handle = start_websocket_acceptor(
-                bind_address,
-                transport_event_tx.clone(),
-                shutdown_token.clone(),
-                policy_from_settings(&auth)?,
-            )
-            .await?;
-            TransportRuntime::WebSocket {
-                accept_handle,
-                shutdown_token,
-            }
-        }
-    };
-    let single_client_mode = matches!(&transport_runtime, TransportRuntime::Stdio);
-    let shutdown_when_no_connections = single_client_mode;
-    let graceful_signal_restart_enabled = !single_client_mode;
     // Parse CLI overrides once and derive the base Config eagerly so later
     // components do not need to work with raw TOML values.
     let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
@@ -556,6 +558,58 @@ pub async fn run_main_with_transport(
         }
     }
 
+    let transport_shutdown_token = CancellationToken::new();
+    let mut transport_accept_handles = Vec::<JoinHandle<()>>::new();
+    let runtime_mode = transport_runtime_mode(transport);
+
+    match transport {
+        AppServerTransport::Stdio => {
+            start_stdio_connection(transport_event_tx.clone(), &mut transport_accept_handles)
+                .await?;
+        }
+        AppServerTransport::WebSocket { bind_address } => {
+            let accept_handle = start_websocket_acceptor(
+                bind_address,
+                transport_event_tx.clone(),
+                transport_shutdown_token.clone(),
+                policy_from_settings(&auth)?,
+            )
+            .await?;
+            transport_accept_handles.push(accept_handle);
+        }
+        AppServerTransport::Headless => {}
+    }
+    let shutdown_when_no_connections = runtime_mode.shutdown_when_no_connections;
+    let graceful_ctrl_c_restart_enabled = runtime_mode.graceful_ctrl_c_restart_enabled;
+    let graceful_signal_restart_enabled = runtime_mode.graceful_ctrl_c_restart_enabled;
+
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        /*enable_codex_api_key_env*/ false,
+        config.cli_auth_credentials_store_mode,
+    );
+    auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
+
+    let remote_control_config = config.remote_control.clone();
+    if config.features.enabled(Feature::RemoteControl) {
+        validate_remote_control_auth(auth_manager.as_ref()).await?;
+        let accept_handle = start_remote_control(
+            remote_control_config.base_url,
+            config.codex_home.clone(),
+            auth_manager.clone(),
+            transport_event_tx.clone(),
+            transport_shutdown_token.clone(),
+        )
+        .await?;
+        transport_accept_handles.push(accept_handle);
+    }
+    if transport_accept_handles.is_empty() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "no transport configured; use --listen or enable remote control",
+        ));
+    }
+
     let outbound_handle = tokio::spawn(async move {
         let mut outbound_connections = HashMap::<ConnectionId, OutboundConnectionState>::new();
         loop {
@@ -632,10 +686,7 @@ pub async fn run_main_with_transport(
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();
-        let websocket_accept_shutdown = match &transport_runtime {
-            TransportRuntime::WebSocket { shutdown_token, .. } => Some(shutdown_token.clone()),
-            TransportRuntime::Stdio => None,
-        };
+        let transport_shutdown_token = transport_shutdown_token.clone();
         async move {
             let mut listen_for_threads = true;
             let mut shutdown_state = ShutdownState::default();
@@ -648,9 +699,7 @@ pub async fn run_main_with_transport(
                     shutdown_state.update(running_turn_count, connections.len()),
                     ShutdownAction::Finish
                 ) {
-                    if let Some(shutdown_token) = &websocket_accept_shutdown {
-                        shutdown_token.cancel();
-                    }
+                    transport_shutdown_token.cancel();
                     let _ = outbound_control_tx
                         .send(OutboundControlEvent::DisconnectAll)
                         .await;
@@ -661,6 +710,24 @@ pub async fn run_main_with_transport(
                     shutdown_signal_result = shutdown_signal(), if graceful_signal_restart_enabled && !shutdown_state.forced() => {
                         if let Err(err) = shutdown_signal_result {
                             warn!("failed to listen for shutdown signal during graceful restart drain: {err}");
+                        }
+                        let running_turn_count = *running_turn_count_rx.borrow();
+                        shutdown_state.on_signal(connections.len(), running_turn_count);
+                    }
+                    ctrl_c_result = tokio::signal::ctrl_c(), if runtime_mode.ctrl_c_shutdown_enabled => {
+                        if let Err(err) = ctrl_c_result {
+                            warn!("failed to listen for Ctrl-C during daemon shutdown: {err}");
+                        }
+                        info!("received Ctrl-C; shutting down codexd remote-control daemon");
+                        transport_shutdown_token.cancel();
+                        let _ = outbound_control_tx
+                            .send(OutboundControlEvent::DisconnectAll)
+                            .await;
+                        break;
+                    }
+                    ctrl_c_result = tokio::signal::ctrl_c(), if graceful_ctrl_c_restart_enabled && !shutdown_state.forced() => {
+                        if let Err(err) = ctrl_c_result {
+                            warn!("failed to listen for Ctrl-C during graceful restart drain: {err}");
                         }
                         let running_turn_count = *running_turn_count_rx.borrow();
                         shutdown_state.on_signal(connections.len(), running_turn_count);
@@ -844,16 +911,8 @@ pub async fn run_main_with_transport(
     let _ = processor_handle.await;
     let _ = outbound_handle.await;
 
-    if let TransportRuntime::WebSocket {
-        accept_handle,
-        shutdown_token,
-    } = transport_runtime
-    {
-        shutdown_token.cancel();
-        let _ = accept_handle.await;
-    }
-
-    for handle in stdio_handles {
+    transport_shutdown_token.cancel();
+    for handle in transport_accept_handles {
         let _ = handle.await;
     }
 
@@ -867,6 +926,9 @@ pub async fn run_main_with_transport(
 #[cfg(test)]
 mod tests {
     use super::LogFormat;
+    use super::TransportRuntimeMode;
+    use super::transport_runtime_mode;
+    use crate::AppServerTransport;
     use pretty_assertions::assert_eq;
 
     #[test]
@@ -882,5 +944,18 @@ mod tests {
         assert_eq!(LogFormat::from_env_value(Some("")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("text")), LogFormat::Default);
         assert_eq!(LogFormat::from_env_value(Some("jsonl")), LogFormat::Default);
+    }
+
+    #[test]
+    fn headless_transport_runtime_mode_uses_daemon_shutdown_behavior() {
+        assert_eq!(
+            transport_runtime_mode(AppServerTransport::Headless),
+            TransportRuntimeMode {
+                single_client_mode: false,
+                shutdown_when_no_connections: false,
+                graceful_ctrl_c_restart_enabled: false,
+                ctrl_c_shutdown_enabled: true,
+            }
+        );
     }
 }

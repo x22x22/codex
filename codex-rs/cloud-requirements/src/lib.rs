@@ -328,6 +328,7 @@ impl CloudRequirementsService {
             return Ok(None);
         };
         if !auth.is_chatgpt_auth()
+            || auth.is_external_chatgpt_tokens()
             || !matches!(
                 auth.account_plan_type(),
                 Some(PlanType::Business | PlanType::Enterprise)
