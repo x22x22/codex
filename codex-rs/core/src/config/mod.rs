@@ -495,6 +495,9 @@ pub struct Config {
     /// instructions inserted into developer messages when realtime becomes
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
+    /// Experimental / do not use. Provides the app-server remote control URL.
+    /// The app-server uses the presence of this field to opt into remote mode.
+    pub experimental_app_server_remote_control_url: Option<String>,
     /// When set, restricts ChatGPT login to a specific workspace identifier.
     pub forced_chatgpt_workspace_id: Option<String>,
 
@@ -1394,6 +1397,9 @@ pub struct ConfigToml {
     /// instructions inserted into developer messages when realtime becomes
     /// active.
     pub experimental_realtime_start_instructions: Option<String>,
+    /// Experimental / do not use. Provides the app-server remote control URL.
+    /// The app-server uses the presence of this field to opt into remote mode.
+    pub experimental_app_server_remote_control_url: Option<String>,
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// Controls the web search tool mode: disabled, cached, or live.
@@ -2711,6 +2717,8 @@ impl Config {
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
             experimental_realtime_ws_startup_context: cfg.experimental_realtime_ws_startup_context,
             experimental_realtime_start_instructions: cfg.experimental_realtime_start_instructions,
+            experimental_app_server_remote_control_url: cfg
+                .experimental_app_server_remote_control_url,
             forced_chatgpt_workspace_id,
             forced_login_method,
             include_apply_patch_tool: include_apply_patch_tool_flag,

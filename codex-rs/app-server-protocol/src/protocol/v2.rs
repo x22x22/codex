@@ -717,6 +717,8 @@ pub struct Config {
     #[experimental("config/read.apps")]
     #[serde(default)]
     pub apps: Option<AppsConfig>,
+    #[experimental("config/read.experimental_app_server_remote_control_url")]
+    pub experimental_app_server_remote_control_url: Option<String>,
     #[serde(default, flatten)]
     pub additional: HashMap<String, JsonValue>,
 }
@@ -6782,6 +6784,7 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            experimental_app_server_remote_control_url: None,
             additional: HashMap::new(),
         });
 
@@ -6815,6 +6818,7 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            experimental_app_server_remote_control_url: None,
             additional: HashMap::new(),
         });
 
@@ -6870,6 +6874,7 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            experimental_app_server_remote_control_url: None,
             additional: HashMap::new(),
         });
 
@@ -6919,6 +6924,7 @@ mod tests {
             service_tier: None,
             analytics: None,
             apps: None,
+            experimental_app_server_remote_control_url: None,
             additional: HashMap::new(),
         });
 

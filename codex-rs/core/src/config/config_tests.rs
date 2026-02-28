@@ -4252,6 +4252,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             realtime: RealtimeConfig::default(),
             experimental_realtime_ws_backend_prompt: None,
             experimental_realtime_ws_startup_context: None,
+            experimental_app_server_remote_control_url: None,
             base_instructions: None,
             developer_instructions: None,
             compact_prompt: None,
@@ -4391,6 +4392,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
+        experimental_app_server_remote_control_url: None,
         base_instructions: None,
         developer_instructions: None,
         compact_prompt: None,
@@ -4528,6 +4530,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
+        experimental_app_server_remote_control_url: None,
         base_instructions: None,
         developer_instructions: None,
         compact_prompt: None,
@@ -4651,6 +4654,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         realtime: RealtimeConfig::default(),
         experimental_realtime_ws_backend_prompt: None,
         experimental_realtime_ws_startup_context: None,
+        experimental_app_server_remote_control_url: None,
         base_instructions: None,
         developer_instructions: None,
         compact_prompt: None,
@@ -5908,6 +5912,34 @@ experimental_realtime_ws_startup_context = "startup context from config"
     assert_eq!(
         config.experimental_realtime_ws_startup_context.as_deref(),
         Some("startup context from config")
+    );
+    Ok(())
+}
+
+#[test]
+fn experimental_app_server_remote_control_url_loads_from_config_toml() -> std::io::Result<()> {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+experimental_app_server_remote_control_url = "https://example.com/remote-control"
+"#,
+    )
+    .expect("TOML deserialization should succeed");
+
+    assert_eq!(
+        cfg.experimental_app_server_remote_control_url.as_deref(),
+        Some("https://example.com/remote-control")
+    );
+
+    let codex_home = TempDir::new()?;
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.experimental_app_server_remote_control_url.as_deref(),
+        Some("https://example.com/remote-control")
     );
     Ok(())
 }
