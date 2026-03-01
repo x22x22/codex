@@ -7,7 +7,6 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
@@ -6011,7 +6010,6 @@ async fn personality_selection_popup_snapshot() {
     assert_snapshot!("personality_selection_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[tokio::test]
 async fn realtime_audio_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -6021,7 +6019,6 @@ async fn realtime_audio_selection_popup_snapshot() {
     assert_snapshot!("realtime_audio_selection_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[tokio::test]
 async fn realtime_audio_selection_popup_narrow_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -6031,7 +6028,6 @@ async fn realtime_audio_selection_popup_narrow_snapshot() {
     assert_snapshot!("realtime_audio_selection_popup_narrow", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[tokio::test]
 async fn realtime_microphone_picker_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -6045,7 +6041,6 @@ async fn realtime_microphone_picker_popup_snapshot() {
     assert_snapshot!("realtime_microphone_picker_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 #[tokio::test]
 async fn realtime_audio_picker_emits_persist_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
