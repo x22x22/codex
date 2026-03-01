@@ -1522,6 +1522,7 @@ version = "0.0.0"
 dependencies = [
  "om-fork-miniaudio",
  "pretty_assertions",
+ "serial_test",
  "tracing",
 ]
 

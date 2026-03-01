@@ -6091,6 +6091,32 @@ async fn realtime_audio_picker_emits_persist_event() {
     );
 }
 
+#[cfg(feature = "voice-input")]
+#[tokio::test]
+async fn realtime_audio_picker_can_reset_to_system_default() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    chat.config.realtime_audio.output_device_id = Some("desk-speakers".to_string());
+    chat.open_realtime_audio_device_selection_with_names(
+        RealtimeAudioDeviceKind::Speaker,
+        vec![AudioDeviceInfo {
+            id: "desk-speakers".to_string(),
+            name: "Desk Speakers".to_string(),
+            backend: "WASAPI".to_string(),
+        }],
+    );
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::PersistRealtimeAudioDeviceSelection {
+            kind: RealtimeAudioDeviceKind::Speaker,
+            device_id: None,
+        })
+    );
+}
+
 #[tokio::test]
 async fn model_picker_hides_show_in_picker_false_models_from_cache() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("test-visible-model")).await;

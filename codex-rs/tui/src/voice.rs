@@ -224,24 +224,7 @@ fn send_realtime_audio_chunk(tx: &AppEventSender, samples: Vec<i16>) {
         return;
     }
 
-    let mut bytes = Vec::with_capacity(samples.len() * 2);
-    for sample in &samples {
-        bytes.extend_from_slice(&sample.to_le_bytes());
-    }
-
-    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
-    let samples_per_channel = (samples.len() / usize::from(MODEL_AUDIO_CHANNELS)) as u32;
-
-    tx.send(AppEvent::CodexOp(Op::RealtimeConversationAudio(
-        ConversationAudioParams {
-            frame: RealtimeAudioFrame {
-                data: encoded,
-                sample_rate: MODEL_AUDIO_SAMPLE_RATE,
-                num_channels: MODEL_AUDIO_CHANNELS,
-                samples_per_channel: Some(samples_per_channel),
-            },
-        },
-    )));
+    tx.send(AppEvent::CodexOp(build_realtime_audio_op(&samples)));
 }
 
 pub(crate) struct RealtimeAudioPlayer {
@@ -264,33 +247,7 @@ impl RealtimeAudioPlayer {
     }
 
     pub(crate) fn enqueue_frame(&self, frame: &RealtimeAudioFrame) -> Result<(), String> {
-        if frame.num_channels != MODEL_AUDIO_CHANNELS
-            || frame.sample_rate != MODEL_AUDIO_SAMPLE_RATE
-        {
-            warn!(
-                sample_rate = frame.sample_rate,
-                num_channels = frame.num_channels,
-                expected_sample_rate = MODEL_AUDIO_SAMPLE_RATE,
-                expected_channels = MODEL_AUDIO_CHANNELS,
-                "received unexpected realtime audio format"
-            );
-            return Err(format!(
-                "unexpected realtime audio format: {} Hz / {} channels",
-                frame.sample_rate, frame.num_channels
-            ));
-        }
-
-        let raw_bytes = base64::engine::general_purpose::STANDARD
-            .decode(&frame.data)
-            .map_err(|e| format!("failed to decode realtime audio: {e}"))?;
-        if raw_bytes.len() % 2 != 0 {
-            return Err("realtime audio frame had odd byte length".to_string());
-        }
-
-        let mut pcm = Vec::with_capacity(raw_bytes.len() / 2);
-        for pair in raw_bytes.chunks_exact(2) {
-            pcm.push(i16::from_le_bytes([pair[0], pair[1]]));
-        }
+        let pcm = decode_realtime_audio_frame(frame)?;
         self.playback.enqueue_samples(&pcm)
     }
 
@@ -307,6 +264,54 @@ fn clip_duration_seconds(audio: &RecordedAudio) -> f32 {
     } else {
         0.0
     }
+}
+
+fn build_realtime_audio_op(samples: &[i16]) -> Op {
+    let mut bytes = Vec::with_capacity(samples.len() * 2);
+    for sample in samples {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    let samples_per_channel = (samples.len() / usize::from(MODEL_AUDIO_CHANNELS)) as u32;
+
+    Op::RealtimeConversationAudio(ConversationAudioParams {
+        frame: RealtimeAudioFrame {
+            data: encoded,
+            sample_rate: MODEL_AUDIO_SAMPLE_RATE,
+            num_channels: MODEL_AUDIO_CHANNELS,
+            samples_per_channel: Some(samples_per_channel),
+        },
+    })
+}
+
+fn decode_realtime_audio_frame(frame: &RealtimeAudioFrame) -> Result<Vec<i16>, String> {
+    if frame.num_channels != MODEL_AUDIO_CHANNELS || frame.sample_rate != MODEL_AUDIO_SAMPLE_RATE {
+        warn!(
+            sample_rate = frame.sample_rate,
+            num_channels = frame.num_channels,
+            expected_sample_rate = MODEL_AUDIO_SAMPLE_RATE,
+            expected_channels = MODEL_AUDIO_CHANNELS,
+            "received unexpected realtime audio format"
+        );
+        return Err(format!(
+            "unexpected realtime audio format: {} Hz / {} channels",
+            frame.sample_rate, frame.num_channels
+        ));
+    }
+
+    let raw_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&frame.data)
+        .map_err(|e| format!("failed to decode realtime audio: {e}"))?;
+    if raw_bytes.len() % 2 != 0 {
+        return Err("realtime audio frame had odd byte length".to_string());
+    }
+
+    let mut pcm = Vec::with_capacity(raw_bytes.len() / 2);
+    for pair in raw_bytes.chunks_exact(2) {
+        pcm.push(i16::from_le_bytes([pair[0], pair[1]]));
+    }
+    Ok(pcm)
 }
 
 fn encode_wav_normalized(audio: &RecordedAudio) -> Result<Vec<u8>, String> {
@@ -495,9 +500,20 @@ async fn transcribe_bytes(
 #[cfg(test)]
 mod tests {
     use super::RecordedAudio;
+    use super::build_realtime_audio_op;
+    use super::decode_realtime_audio_frame;
     use super::encode_wav_normalized;
+    use super::transcribe_async;
+    use crate::app_event::AppEvent;
+    use crate::app_event_sender::AppEventSender;
+    use assert_matches::assert_matches;
+    use base64::Engine;
+    use codex_protocol::protocol::ConversationAudioParams;
+    use codex_protocol::protocol::Op;
+    use codex_protocol::protocol::RealtimeAudioFrame;
     use pretty_assertions::assert_eq;
     use std::io::Cursor;
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn encode_wav_normalized_outputs_24khz_mono_audio() {
@@ -518,5 +534,120 @@ mod tests {
         assert_eq!(spec.channels, 1);
         assert_eq!(spec.sample_rate, 24_000);
         assert_eq!(samples, vec![7_373, 22_118, 14_745, 29_490]);
+    }
+
+    #[test]
+    fn encode_wav_normalized_rejects_wrong_format() {
+        let audio = RecordedAudio {
+            data: vec![1, 2, 3, 4],
+            sample_rate: 44_100,
+            channels: 2,
+        };
+
+        let err = encode_wav_normalized(&audio).expect_err("wrong format should fail");
+        assert_eq!(
+            err,
+            "unexpected recorded audio format: 44100 Hz / 2 channels"
+        );
+    }
+
+    #[test]
+    fn build_realtime_audio_op_encodes_pcm16_frame() {
+        let op = build_realtime_audio_op(&[1, -2, 3, -4]);
+
+        let Op::RealtimeConversationAudio(ConversationAudioParams { frame }) = op else {
+            panic!("expected realtime audio op");
+        };
+
+        assert_eq!(frame.sample_rate, 24_000);
+        assert_eq!(frame.num_channels, 1);
+        assert_eq!(frame.samples_per_channel, Some(4));
+        assert_eq!(frame.data, "AQD+/wMA/P8=");
+    }
+
+    #[test]
+    fn decode_realtime_audio_frame_decodes_pcm16() {
+        let frame = RealtimeAudioFrame {
+            data: base64::engine::general_purpose::STANDARD.encode([1, 0, 254, 255]),
+            sample_rate: 24_000,
+            num_channels: 1,
+            samples_per_channel: Some(2),
+        };
+
+        let pcm = decode_realtime_audio_frame(&frame).expect("frame should decode");
+        assert_eq!(pcm, vec![1, -2]);
+    }
+
+    #[test]
+    fn decode_realtime_audio_frame_rejects_invalid_shape() {
+        let wrong_rate = RealtimeAudioFrame {
+            data: String::new(),
+            sample_rate: 16_000,
+            num_channels: 1,
+            samples_per_channel: Some(0),
+        };
+        let wrong_channels = RealtimeAudioFrame {
+            data: String::new(),
+            sample_rate: 24_000,
+            num_channels: 2,
+            samples_per_channel: Some(0),
+        };
+
+        assert_eq!(
+            decode_realtime_audio_frame(&wrong_rate).expect_err("wrong rate should fail"),
+            "unexpected realtime audio format: 16000 Hz / 1 channels"
+        );
+        assert_eq!(
+            decode_realtime_audio_frame(&wrong_channels)
+                .expect_err("wrong channel count should fail"),
+            "unexpected realtime audio format: 24000 Hz / 2 channels"
+        );
+    }
+
+    #[test]
+    fn decode_realtime_audio_frame_rejects_invalid_payloads() {
+        let invalid_base64 = RealtimeAudioFrame {
+            data: "not-base64!".to_string(),
+            sample_rate: 24_000,
+            num_channels: 1,
+            samples_per_channel: Some(0),
+        };
+        let odd_bytes = RealtimeAudioFrame {
+            data: base64::engine::general_purpose::STANDARD.encode([1, 2, 3]),
+            sample_rate: 24_000,
+            num_channels: 1,
+            samples_per_channel: Some(0),
+        };
+
+        assert!(
+            decode_realtime_audio_frame(&invalid_base64)
+                .expect_err("invalid base64 should fail")
+                .starts_with("failed to decode realtime audio:")
+        );
+        assert_eq!(
+            decode_realtime_audio_frame(&odd_bytes).expect_err("odd byte length should fail"),
+            "realtime audio frame had odd byte length"
+        );
+    }
+
+    #[test]
+    fn transcribe_async_rejects_short_clip() {
+        let (tx, mut rx) = unbounded_channel();
+        let sender = AppEventSender::new(tx);
+        let audio = RecordedAudio {
+            data: vec![0; 100],
+            sample_rate: 24_000,
+            channels: 1,
+        };
+
+        transcribe_async("test-id".to_string(), audio, None, sender);
+
+        let event = rx.blocking_recv().expect("transcription result");
+        assert_matches!(
+            event,
+            AppEvent::TranscriptionFailed { id, error }
+                if id == "test-id"
+                    && error == "recording too short (0.00s); minimum is 0.30s"
+        );
     }
 }
