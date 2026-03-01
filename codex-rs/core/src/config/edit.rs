@@ -872,24 +872,24 @@ impl ConfigEditsBuilder {
         self
     }
 
-    pub fn set_realtime_microphone(mut self, microphone: Option<&str>) -> Self {
-        let segments = vec!["audio".to_string(), "microphone".to_string()];
-        match microphone {
-            Some(microphone) => self.edits.push(ConfigEdit::SetPath {
+    pub fn set_realtime_input_device_id(mut self, input_device_id: Option<&str>) -> Self {
+        let segments = vec!["audio".to_string(), "input_device_id".to_string()];
+        match input_device_id {
+            Some(input_device_id) => self.edits.push(ConfigEdit::SetPath {
                 segments,
-                value: value(microphone),
+                value: value(input_device_id),
             }),
             None => self.edits.push(ConfigEdit::ClearPath { segments }),
         }
         self
     }
 
-    pub fn set_realtime_speaker(mut self, speaker: Option<&str>) -> Self {
-        let segments = vec!["audio".to_string(), "speaker".to_string()];
-        match speaker {
-            Some(speaker) => self.edits.push(ConfigEdit::SetPath {
+    pub fn set_realtime_output_device_id(mut self, output_device_id: Option<&str>) -> Self {
+        let segments = vec!["audio".to_string(), "output_device_id".to_string()];
+        match output_device_id {
+            Some(output_device_id) => self.edits.push(ConfigEdit::SetPath {
                 segments,
-                value: value(speaker),
+                value: value(output_device_id),
             }),
             None => self.edits.push(ConfigEdit::ClearPath { segments }),
         }
@@ -1893,8 +1893,8 @@ model_reasoning_effort = "high"
         let codex_home = tmp.path();
 
         ConfigEditsBuilder::new(codex_home)
-            .set_realtime_microphone(Some("USB Mic"))
-            .set_realtime_speaker(Some("Desk Speakers"))
+            .set_realtime_input_device_id(Some("usb-mic"))
+            .set_realtime_output_device_id(Some("desk-speakers"))
             .apply_blocking()
             .expect("persist realtime audio");
 
@@ -1905,18 +1905,22 @@ model_reasoning_effort = "high"
             .and_then(TomlValue::as_table)
             .expect("audio table should exist");
         assert_eq!(
-            realtime_audio.get("microphone").and_then(TomlValue::as_str),
-            Some("USB Mic")
+            realtime_audio
+                .get("input_device_id")
+                .and_then(TomlValue::as_str),
+            Some("usb-mic")
         );
         assert_eq!(
-            realtime_audio.get("speaker").and_then(TomlValue::as_str),
-            Some("Desk Speakers")
+            realtime_audio
+                .get("output_device_id")
+                .and_then(TomlValue::as_str),
+            Some("desk-speakers")
         );
 
         ConfigEditsBuilder::new(codex_home)
-            .set_realtime_microphone(None)
+            .set_realtime_input_device_id(None)
             .apply_blocking()
-            .expect("clear realtime microphone");
+            .expect("clear realtime input device id");
 
         let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         let config: TomlValue = toml::from_str(&raw).expect("parse config");
@@ -1924,10 +1928,12 @@ model_reasoning_effort = "high"
             .get("audio")
             .and_then(TomlValue::as_table)
             .expect("audio table should exist");
-        assert_eq!(realtime_audio.get("microphone"), None);
+        assert_eq!(realtime_audio.get("input_device_id"), None);
         assert_eq!(
-            realtime_audio.get("speaker").and_then(TomlValue::as_str),
-            Some("Desk Speakers")
+            realtime_audio
+                .get("output_device_id")
+                .and_then(TomlValue::as_str),
+            Some("desk-speakers")
         );
     }
 

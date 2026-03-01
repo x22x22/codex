@@ -63,7 +63,7 @@ mod app_backtrack;
 mod app_event;
 mod app_event_sender;
 mod ascii_animation;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(feature = "voice-input")]
 mod audio_device;
 mod bottom_pane;
 mod chatwidget;
@@ -119,9 +119,9 @@ pub mod update_action;
 mod update_prompt;
 mod updates;
 mod version;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(feature = "voice-input")]
 mod voice;
-#[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
+#[cfg(not(feature = "voice-input"))]
 mod voice {
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;

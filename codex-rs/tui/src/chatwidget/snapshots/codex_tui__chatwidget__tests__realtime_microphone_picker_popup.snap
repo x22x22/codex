@@ -5,14 +5,14 @@ expression: popup
   Select Microphone
   Saved devices apply to realtime voice only.
 
-  1. System default                                Use your operating system
-                                                   default device.
-› 2. Unavailable: Studio Mic (current) (disabled)  Configured device is not
-                                                   currently available.
-                                                   (disabled: Reconnect the
-                                                   device or choose another
-                                                   one.)
-  3. Built-in Mic
-  4. USB Mic
+  1. System default                                   Use your operating
+                                                      system default device.
+› 2. Unavailable: Unavailable device (studio-mic) (c… (disabled)Configured
+                                                      device is not currently
+                                                      available. (disabled:
+                                                      Reconnect the device or
+                                                      choose another one.)
+  3. Built-in Mic                                     CoreAudio
+  4. USB Mic                                          CoreAudio
 
   Press enter to confirm or esc to go back

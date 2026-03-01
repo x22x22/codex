@@ -2656,15 +2656,15 @@ impl App {
                     }
                 }
             }
-            AppEvent::PersistRealtimeAudioDeviceSelection { kind, name } => {
+            AppEvent::PersistRealtimeAudioDeviceSelection { kind, device_id } => {
                 let builder = match kind {
                     RealtimeAudioDeviceKind::Microphone => {
                         ConfigEditsBuilder::new(&self.config.codex_home)
-                            .set_realtime_microphone(name.as_deref())
+                            .set_realtime_input_device_id(device_id.as_deref())
                     }
                     RealtimeAudioDeviceKind::Speaker => {
                         ConfigEditsBuilder::new(&self.config.codex_home)
-                            .set_realtime_speaker(name.as_deref())
+                            .set_realtime_output_device_id(device_id.as_deref())
                     }
                 };
 
@@ -2672,19 +2672,31 @@ impl App {
                     Ok(()) => {
                         match kind {
                             RealtimeAudioDeviceKind::Microphone => {
-                                self.config.realtime_audio.microphone = name.clone();
+                                self.config.realtime_audio.input_device_id = device_id.clone();
                             }
                             RealtimeAudioDeviceKind::Speaker => {
-                                self.config.realtime_audio.speaker = name.clone();
+                                self.config.realtime_audio.output_device_id = device_id.clone();
                             }
                         }
                         self.chat_widget
-                            .set_realtime_audio_device(kind, name.clone());
+                            .set_realtime_audio_device(kind, device_id.clone());
+                        tracing::info!(
+                            kind = kind.noun(),
+                            device_id = device_id.as_deref().unwrap_or("system_default"),
+                            selection = self
+                                .chat_widget
+                                .current_realtime_audio_selection_label(kind)
+                                .unwrap_or_else(|| "System default".to_string()),
+                            "persisted realtime audio device selection"
+                        );
 
                         if self.chat_widget.realtime_conversation_is_live() {
                             self.chat_widget.open_realtime_audio_restart_prompt(kind);
                         } else {
-                            let selection = name.unwrap_or_else(|| "System default".to_string());
+                            let selection = self
+                                .chat_widget
+                                .current_realtime_audio_selection_label(kind)
+                                .unwrap_or_else(|| "System default".to_string());
                             self.chat_widget.add_info_message(
                                 format!("Realtime {} set to {selection}", kind.noun()),
                                 None,
@@ -3099,15 +3111,12 @@ impl App {
                     ));
                 }
             },
-            #[cfg(not(target_os = "linux"))]
             AppEvent::TranscriptionComplete { id, text } => {
                 self.chat_widget.replace_transcription(&id, &text);
             }
-            #[cfg(not(target_os = "linux"))]
             AppEvent::TranscriptionFailed { id, error: _ } => {
                 self.chat_widget.remove_transcription_placeholder(&id);
             }
-            #[cfg(not(target_os = "linux"))]
             AppEvent::UpdateRecordingMeter { id, text } => {
                 // Update in place to preserve the element id for subsequent frames.
                 let updated = self.chat_widget.update_transcription_in_place(&id, &text);

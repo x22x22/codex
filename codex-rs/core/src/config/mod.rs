@@ -1319,15 +1319,15 @@ impl ProjectConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RealtimeAudioConfig {
-    pub microphone: Option<String>,
-    pub speaker: Option<String>,
+    pub input_device_id: Option<String>,
+    pub output_device_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct RealtimeAudioToml {
-    pub microphone: Option<String>,
-    pub speaker: Option<String>,
+    pub input_device_id: Option<String>,
+    pub output_device_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
@@ -2173,8 +2173,8 @@ impl Config {
             realtime_audio: cfg
                 .audio
                 .map_or_else(RealtimeAudioConfig::default, |audio| RealtimeAudioConfig {
-                    microphone: audio.microphone,
-                    speaker: audio.speaker,
+                    input_device_id: audio.input_device_id,
+                    output_device_id: audio.output_device_id,
                 }),
             experimental_realtime_ws_base_url: cfg.experimental_realtime_ws_base_url,
             experimental_realtime_ws_backend_prompt: cfg.experimental_realtime_ws_backend_prompt,
@@ -6132,8 +6132,8 @@ experimental_realtime_ws_backend_prompt = "prompt from config"
         let cfg: ConfigToml = toml::from_str(
             r#"
 [audio]
-microphone = "USB Mic"
-speaker = "Desk Speakers"
+input_device_id = "usb-mic"
+output_device_id = "desk-speakers"
 "#,
         )
         .expect("TOML deserialization should succeed");
@@ -6142,8 +6142,11 @@ speaker = "Desk Speakers"
             .audio
             .as_ref()
             .expect("realtime audio config should be present");
-        assert_eq!(realtime_audio.microphone.as_deref(), Some("USB Mic"));
-        assert_eq!(realtime_audio.speaker.as_deref(), Some("Desk Speakers"));
+        assert_eq!(realtime_audio.input_device_id.as_deref(), Some("usb-mic"));
+        assert_eq!(
+            realtime_audio.output_device_id.as_deref(),
+            Some("desk-speakers")
+        );
 
         let codex_home = TempDir::new()?;
         let config = Config::load_from_base_config_with_overrides(
@@ -6152,10 +6155,13 @@ speaker = "Desk Speakers"
             codex_home.path().to_path_buf(),
         )?;
 
-        assert_eq!(config.realtime_audio.microphone.as_deref(), Some("USB Mic"));
         assert_eq!(
-            config.realtime_audio.speaker.as_deref(),
-            Some("Desk Speakers")
+            config.realtime_audio.input_device_id.as_deref(),
+            Some("usb-mic")
+        );
+        assert_eq!(
+            config.realtime_audio.output_device_id.as_deref(),
+            Some("desk-speakers")
         );
         Ok(())
     }

@@ -7,7 +7,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(feature = "voice-input")]
 use crate::app_event::RealtimeAudioDeviceKind;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::FeedbackAudience;
@@ -17,6 +17,8 @@ use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+#[cfg(feature = "voice-input")]
+use codex_audio::AudioDeviceInfo;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -6011,7 +6013,7 @@ async fn personality_selection_popup_snapshot() {
     assert_snapshot!("personality_selection_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(feature = "voice-input")]
 #[tokio::test]
 async fn realtime_audio_selection_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -6021,7 +6023,7 @@ async fn realtime_audio_selection_popup_snapshot() {
     assert_snapshot!("realtime_audio_selection_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(feature = "voice-input")]
 #[tokio::test]
 async fn realtime_audio_selection_popup_narrow_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
@@ -6031,27 +6033,49 @@ async fn realtime_audio_selection_popup_narrow_snapshot() {
     assert_snapshot!("realtime_audio_selection_popup_narrow", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(feature = "voice-input")]
 #[tokio::test]
 async fn realtime_microphone_picker_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
-    chat.config.realtime_audio.microphone = Some("Studio Mic".to_string());
+    chat.config.realtime_audio.input_device_id = Some("studio-mic".to_string());
     chat.open_realtime_audio_device_selection_with_names(
         RealtimeAudioDeviceKind::Microphone,
-        vec!["Built-in Mic".to_string(), "USB Mic".to_string()],
+        vec![
+            AudioDeviceInfo {
+                id: "built-in-mic".to_string(),
+                name: "Built-in Mic".to_string(),
+                backend: "CoreAudio".to_string(),
+            },
+            AudioDeviceInfo {
+                id: "usb-mic".to_string(),
+                name: "USB Mic".to_string(),
+                backend: "CoreAudio".to_string(),
+            },
+        ],
     );
 
     let popup = render_bottom_popup(&chat, 80);
     assert_snapshot!("realtime_microphone_picker_popup", popup);
 }
 
-#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+#[cfg(feature = "voice-input")]
 #[tokio::test]
 async fn realtime_audio_picker_emits_persist_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
     chat.open_realtime_audio_device_selection_with_names(
         RealtimeAudioDeviceKind::Speaker,
-        vec!["Desk Speakers".to_string(), "Headphones".to_string()],
+        vec![
+            AudioDeviceInfo {
+                id: "desk-speakers".to_string(),
+                name: "Desk Speakers".to_string(),
+                backend: "WASAPI".to_string(),
+            },
+            AudioDeviceInfo {
+                id: "headphones".to_string(),
+                name: "Headphones".to_string(),
+                backend: "WASAPI".to_string(),
+            },
+        ],
     );
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
@@ -6062,8 +6086,8 @@ async fn realtime_audio_picker_emits_persist_event() {
         rx.try_recv(),
         Ok(AppEvent::PersistRealtimeAudioDeviceSelection {
             kind: RealtimeAudioDeviceKind::Speaker,
-            name: Some(name),
-        }) if name == "Headphones"
+            device_id: Some(device_id),
+        }) if device_id == "headphones"
     );
 }
 

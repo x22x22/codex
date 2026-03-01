@@ -1202,10 +1202,10 @@
     "RealtimeAudioToml": {
       "additionalProperties": false,
       "properties": {
-        "microphone": {
+        "input_device_id": {
           "type": "string"
         },
-        "speaker": {
+        "output_device_id": {
           "type": "string"
         }
       },
