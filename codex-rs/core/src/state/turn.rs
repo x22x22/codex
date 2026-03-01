@@ -20,6 +20,7 @@ use crate::tasks::SessionTask;
 
 /// Metadata about the currently running turn.
 pub(crate) struct ActiveTurn {
+    pub(crate) current_turn_context: Option<Arc<TurnContext>>,
     pub(crate) tasks: IndexMap<String, RunningTask>,
     pub(crate) turn_state: Arc<Mutex<TurnState>>,
 }
@@ -27,6 +28,7 @@ pub(crate) struct ActiveTurn {
 impl Default for ActiveTurn {
     fn default() -> Self {
         Self {
+            current_turn_context: None,
             tasks: IndexMap::new(),
             turn_state: Arc::new(Mutex::new(TurnState::default())),
         }
@@ -53,6 +55,7 @@ pub(crate) struct RunningTask {
 
 impl ActiveTurn {
     pub(crate) fn add_task(&mut self, task: RunningTask) {
+        self.current_turn_context = Some(Arc::clone(&task.turn_context));
         let sub_id = task.turn_context.sub_id.clone();
         self.tasks.insert(sub_id, task);
     }
