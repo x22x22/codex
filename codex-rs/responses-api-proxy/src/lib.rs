@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::fs::{self};
+use std::io::BufRead;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::net::TcpListener;
@@ -27,6 +28,7 @@ use tiny_http::Response;
 use tiny_http::Server;
 use tiny_http::StatusCode;
 
+mod bridge;
 mod read_api_key;
 use read_api_key::read_auth_header_from_stdin;
 
@@ -49,6 +51,12 @@ pub struct Args {
     /// Absolute URL the proxy should forward requests to (defaults to OpenAI).
     #[arg(long, default_value = "https://api.openai.com/v1/responses")]
     pub upstream_url: String,
+
+    /// Enable bridge mode to convert Responses API requests to Chat Completions API.
+    /// When enabled, the proxy will accept Responses API requests and forward them
+    /// as Chat Completions requests to the upstream URL (which should be a /chat/completions endpoint).
+    #[arg(long)]
+    pub bridge_to_chat: bool,
 }
 
 #[derive(Serialize)]
@@ -60,6 +68,7 @@ struct ServerInfo {
 struct ForwardConfig {
     upstream_url: Url,
     host_header: HeaderValue,
+    bridge_to_chat: bool,
 }
 
 /// Entry point for the library main, for parity with other crates.
@@ -78,6 +87,7 @@ pub fn run_main(args: Args) -> Result<()> {
     let forward_config = Arc::new(ForwardConfig {
         upstream_url,
         host_header,
+        bridge_to_chat: args.bridge_to_chat,
     });
 
     let (listener, bound_addr) = bind_listener(args.port)?;
@@ -162,6 +172,17 @@ fn forward_request(
     let mut reader = req.as_reader();
     std::io::Read::read_to_end(&mut reader, &mut body)?;
 
+    // Transform request body if in bridge mode
+    let body = if config.bridge_to_chat {
+        let responses_body: serde_json::Value =
+            serde_json::from_slice(&body).context("parsing Responses API request body")?;
+        let chat_body = bridge::transform_request_to_chat(responses_body)
+            .context("transforming request to Chat Completions format")?;
+        serde_json::to_vec(&chat_body).context("serializing Chat Completions request")?
+    } else {
+        body
+    };
+
     // Build headers for upstream, forwarding everything from the incoming
     // request except Authorization (we replace it below).
     let mut headers = HeaderMap::new();
@@ -196,6 +217,17 @@ fn forward_request(
         .send()
         .context("forwarding request to upstream")?;
 
+    // Handle the response
+    if config.bridge_to_chat {
+        // In bridge mode, we need to transform the SSE stream
+        forward_bridge_response(req, upstream_resp)
+    } else {
+        // In normal mode, just forward the response as-is
+        forward_direct_response(req, upstream_resp)
+    }
+}
+
+fn forward_direct_response(req: Request, upstream_resp: reqwest::blocking::Response) -> Result<()> {
     // We have to create an adapter between a `reqwest::blocking::Response`
     // and a `tiny_http::Response`. Fortunately, `reqwest::blocking::Response`
     // implements `Read`, so we can use it directly as the body of the
@@ -233,5 +265,65 @@ fn forward_request(
     );
 
     let _ = req.respond(response);
+    Ok(())
+}
+
+fn forward_bridge_response(req: Request, upstream_resp: reqwest::blocking::Response) -> Result<()> {
+    let status = upstream_resp.status();
+
+    // Build response headers
+    let mut response_headers = Vec::new();
+    for (name, value) in upstream_resp.headers().iter() {
+        // Skip headers that tiny_http manages itself.
+        if matches!(
+            name.as_str(),
+            "content-length" | "transfer-encoding" | "connection" | "trailer" | "upgrade"
+        ) {
+            continue;
+        }
+
+        if let Ok(header) = Header::from_bytes(name.as_str().as_bytes(), value.as_bytes()) {
+            response_headers.push(header);
+        }
+    }
+
+    // Create a pipe to transform the SSE stream
+    let (pipe_reader, mut pipe_writer) = os_pipe::pipe().context("creating pipe")?;
+
+    // Spawn a thread to read from upstream and write transformed data to the pipe
+    let upstream_handle = std::thread::spawn(move || -> Result<()> {
+        use std::io::BufReader;
+        let reader = BufReader::new(upstream_resp);
+
+        for line in reader.lines() {
+            let line = line.context("reading line from upstream")?;
+
+            // Transform each line from Chat Completions SSE to Responses API SSE
+            if let Some(transformed) = bridge::transform_chat_sse_to_responses(&line) {
+                pipe_writer
+                    .write_all(transformed.as_bytes())
+                    .context("writing transformed data to pipe")?;
+            }
+        }
+
+        Ok(())
+    });
+
+    // Respond with the transformed stream
+    let response = Response::new(
+        StatusCode(status.as_u16()),
+        response_headers,
+        pipe_reader,
+        None, // Unknown content length for transformed stream
+        None,
+    );
+
+    let _ = req.respond(response);
+
+    // Wait for the transformation thread to complete
+    if let Err(e) = upstream_handle.join() {
+        eprintln!("Bridge transformation thread panicked: {e:?}");
+    }
+
     Ok(())
 }

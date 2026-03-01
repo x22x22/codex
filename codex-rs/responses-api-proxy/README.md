@@ -2,6 +2,8 @@
 
 A strict HTTP proxy that only forwards `POST` requests to `/v1/responses` to the OpenAI API (`https://api.openai.com`), injecting the `Authorization: Bearer $OPENAI_API_KEY` header. Everything else is rejected with `403 Forbidden`.
 
+**NEW:** The proxy now supports bridge mode with `--bridge-to-chat`, which allows you to use remote model providers that only support the Chat Completions API (`/v1/chat/completions`) with clients that expect the Responses API (`/v1/responses`).
+
 ## Expected Usage
 
 **IMPORTANT:** `codex-responses-api-proxy` is designed to be run by a privileged user with access to `OPENAI_API_KEY` so that an unprivileged user cannot inspect or tamper with the process. Though if `--http-shutdown` is specified, an unprivileged user _can_ make a `GET` request to `/shutdown` to shutdown the server, as an unprivileged user could not send `SIGTERM` to kill the process.
@@ -28,6 +30,41 @@ When the unprivileged user was finished, they could shutdown the server using `c
 curl --fail --silent --show-error "${PROXY_BASE_URL}/shutdown"
 ```
 
+## Bridge Mode: Using Chat Completions API with Responses API Clients
+
+Bridge mode allows you to use remote model providers that only support the OpenAI Chat Completions API (e.g., Alibaba Dashscope, Claude via Amazon Bedrock) with clients that only know how to use the Responses API.
+
+### Example: Using Alibaba Dashscope
+
+```shell
+# Start the proxy in bridge mode
+echo "sk-98e55d42763e4e2fa9253e35783aba08" | codex-responses-api-proxy \
+  --bridge-to-chat \
+  --http-shutdown \
+  --server-info /tmp/server-info.json \
+  --upstream-url "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+
+# In another terminal, use Codex with the proxy
+PROXY_PORT=$(jq .port /tmp/server-info.json)
+PROXY_BASE_URL="http://127.0.0.1:${PROXY_PORT}"
+codex exec -c "model_providers.dashscope-proxy={ name = 'Dashscope via Proxy', base_url = '${PROXY_BASE_URL}/v1', wire_api='responses' }" \
+    -c model_provider="dashscope-proxy" \
+    -c model="qwen-max" \
+    'Your prompt here'
+```
+
+### How Bridge Mode Works
+
+When `--bridge-to-chat` is enabled:
+
+1. The proxy accepts Responses API requests at `POST /v1/responses`
+2. Transforms the request body from Responses API format to Chat Completions format
+3. Forwards the transformed request to the upstream Chat Completions endpoint
+4. Transforms the streaming SSE response from Chat Completions format back to Responses API format
+5. Streams the transformed response back to the client
+
+This allows you to use any OpenAI-compatible Chat Completions endpoint with Codex or other clients that expect the Responses API.
+
 ## Behavior
 
 - Reads the API key from `stdin`. All callers should pipe the key in (for example, `printenv OPENAI_API_KEY | codex-responses-api-proxy`).
@@ -40,13 +77,14 @@ curl --fail --silent --show-error "${PROXY_BASE_URL}/shutdown"
 ## CLI
 
 ```
-codex-responses-api-proxy [--port <PORT>] [--server-info <FILE>] [--http-shutdown] [--upstream-url <URL>]
+codex-responses-api-proxy [--port <PORT>] [--server-info <FILE>] [--http-shutdown] [--upstream-url <URL>] [--bridge-to-chat]
 ```
 
 - `--port <PORT>`: Port to bind on `127.0.0.1`. If omitted, an ephemeral port is chosen.
 - `--server-info <FILE>`: If set, the proxy writes a single line of JSON with `{ "port": <PORT>, "pid": <PID> }` once listening.
 - `--http-shutdown`: If set, enables `GET /shutdown` to exit the process with code `0`.
 - `--upstream-url <URL>`: Absolute URL to forward requests to. Defaults to `https://api.openai.com/v1/responses`.
+- `--bridge-to-chat`: Enable bridge mode to convert Responses API requests to Chat Completions API. When enabled, the upstream URL should be a `/chat/completions` endpoint.
 - Authentication is fixed to `Authorization: Bearer <key>` to match the Codex CLI expectations.
 
 For Azure, for example (ensure your deployment accepts `Authorization: Bearer <key>`):
@@ -62,6 +100,7 @@ printenv AZURE_OPENAI_API_KEY | env -u AZURE_OPENAI_API_KEY codex-responses-api-
 
 - Only `POST /v1/responses` is permitted. No query strings are allowed.
 - All request headers are forwarded to the upstream call (aside from overriding `Authorization` and `Host`). Response status and content-type are mirrored from upstream.
+- In bridge mode, the SSE stream is transformed line-by-line from Chat Completions format to Responses API format.
 
 ## Hardening Details
 
