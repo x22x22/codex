@@ -334,9 +334,6 @@ fn apply_deny_read_overlays(
         {
             continue;
         }
-        if !denied_path.exists() {
-            continue;
-        }
 
         if !full_read_access {
             let overlaps_visible_mounts = readable_roots
@@ -350,6 +347,8 @@ fn apply_deny_read_overlays(
             }
         }
 
+        // Default missing paths to a file-style mask so the deny rule still
+        // blocks the exact path if it appears later during the sandbox run.
         let is_dir = std::fs::metadata(&denied_path)
             .map(|metadata| metadata.is_dir())
             .unwrap_or(false);
@@ -745,6 +744,27 @@ mod tests {
         assert!(
             !args
                 .windows(3)
+                .any(|window| window == ["--ro-bind", "/dev/null", denied_file_str.as_str()])
+        );
+    }
+
+    #[test]
+    fn deny_read_overlays_mask_missing_paths() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let denied_file = temp_dir.path().join("secret.txt");
+
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            deny_read_paths: vec![
+                AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute file"),
+            ],
+        };
+
+        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let denied_file_str = path_to_string(&denied_file);
+
+        assert!(
+            args.windows(3)
                 .any(|window| window == ["--ro-bind", "/dev/null", denied_file_str.as_str()])
         );
     }
