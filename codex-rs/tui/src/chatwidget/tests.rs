@@ -3974,30 +3974,6 @@ queued draft"
 }
 
 #[tokio::test]
-async fn task_complete_renders_unacknowledged_pending_steer() {
-    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
-    chat.thread_id = Some(ThreadId::new());
-    chat.on_task_started();
-
-    chat.bottom_pane
-        .set_composer_text("late steer".to_string(), Vec::new(), Vec::new());
-    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-
-    match next_submit_op(&mut op_rx) {
-        Op::UserTurn { .. } => {}
-        other => panic!("expected Op::UserTurn, got {other:?}"),
-    }
-    assert!(drain_insert_history(&mut rx).is_empty());
-
-    chat.on_task_complete(None, false);
-
-    assert!(chat.pending_steers.is_empty());
-    let inserted = drain_insert_history(&mut rx);
-    assert_eq!(inserted.len(), 1);
-    assert!(lines_to_single_string(&inserted[0]).contains("late steer"));
-}
-
-#[tokio::test]
 async fn enter_submits_when_plan_stream_is_not_active() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());

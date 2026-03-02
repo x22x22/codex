@@ -1510,21 +1510,6 @@ impl ChatWidget {
         self.request_redraw();
 
         let had_pending_steers = !self.pending_steers.is_empty();
-        while let Some(pending_steer) = self.pending_steers.pop_front() {
-            self.last_rendered_user_message_event = Some(pending_steer.clone());
-            if !pending_steer.message.trim().is_empty()
-                || !pending_steer.text_elements.is_empty()
-                || !pending_steer.remote_image_urls.is_empty()
-            {
-                self.add_to_history(history_cell::new_user_prompt(
-                    pending_steer.message,
-                    pending_steer.text_elements,
-                    pending_steer.local_images,
-                    pending_steer.remote_image_urls,
-                ));
-            }
-            self.needs_final_message_separator = false;
-        }
         self.refresh_pending_input_preview();
 
         if !from_replay && self.queued_user_messages.is_empty() && !had_pending_steers {
