@@ -624,7 +624,6 @@ pub(crate) struct ChatWidget {
     // corresponding user message item.
     pending_steers: VecDeque<RenderedUserMessageEvent>,
     // Whether a steer was submitted during the current turn.
-    steer_submitted_this_turn: bool,
     /// Terminal-appropriate keybinding for popping the most-recently queued
     /// message back into the composer.  Determined once at construction time via
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
@@ -1443,7 +1442,6 @@ impl ChatWidget {
         self.turn_sleep_inhibitor.set_turn_running(true);
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
-        self.steer_submitted_this_turn = false;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.adaptive_chunking.reset();
@@ -1530,11 +1528,7 @@ impl ChatWidget {
         }
         self.refresh_pending_input_preview();
 
-        if !from_replay
-            && self.queued_user_messages.is_empty()
-            && !self.steer_submitted_this_turn
-            && !had_pending_steers
-        {
+        if !from_replay && self.queued_user_messages.is_empty() && !had_pending_steers {
             self.maybe_prompt_plan_implementation();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
@@ -3005,7 +2999,6 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
-            steer_submitted_this_turn: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3190,7 +3183,6 @@ impl ChatWidget {
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
-            steer_submitted_this_turn: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3356,7 +3348,6 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
-            steer_submitted_this_turn: false,
             queued_message_edit_binding,
             show_welcome_banner: false,
             startup_tooltip_override: None,
@@ -4363,7 +4354,7 @@ impl ChatWidget {
 
         if let Some(pending_steer) = pending_steer {
             self.pending_steers.push_back(pending_steer);
-            self.steer_submitted_this_turn = true;
+            self.saw_plan_item_this_turn = false;
             self.refresh_pending_input_preview();
         }
 
