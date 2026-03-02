@@ -3168,6 +3168,16 @@ impl App {
                     }
                 }
             }
+            AppEvent::UpdateRecordingMeter { id, text } => {
+                self.chat_widget.update_transcription_in_place(&id, &text);
+            }
+            AppEvent::TranscriptionComplete { id, text } => {
+                self.chat_widget.replace_transcription(&id, &text);
+            }
+            AppEvent::TranscriptionFailed { id, error } => {
+                tracing::error!("voice transcription failed: {error}");
+                self.chat_widget.remove_transcription_placeholder(&id);
+            }
         }
         Ok(AppRunControl::Continue)
     }
