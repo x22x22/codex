@@ -623,7 +623,6 @@ pub(crate) struct ChatWidget {
     // The bottom pane shows these above queued drafts until core records the
     // corresponding user message item.
     pending_steers: VecDeque<RenderedUserMessageEvent>,
-    // Whether a steer was submitted during the current turn.
     /// Terminal-appropriate keybinding for popping the most-recently queued
     /// message back into the composer.  Determined once at construction time via
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
