@@ -14,6 +14,7 @@ use crate::config_loader::ConfigRequirementsToml;
 use crate::config_loader::ConfigRequirementsWithSources;
 use crate::config_loader::RequirementSource;
 use crate::config_loader::load_requirements_toml;
+use crate::config_loader::load_session_requirements_toml;
 use crate::config_loader::version_for_toml;
 use codex_config::CONFIG_TOML_FILE;
 use codex_protocol::config_types::TrustLevel;
@@ -597,6 +598,53 @@ allowed_approval_policies = ["never"]
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn session_requirements_toml_from_loader_overrides_overwrites_existing_requirements()
+-> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("session-requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+allowed_approval_policies = ["on-request"]
+"#,
+    )
+    .await?;
+
+    let layers = load_config_layers_state(
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            requirements_toml_file: Some(requirements_file.clone()),
+            ..LoaderOverrides::default()
+        },
+        CloudRequirementsLoader::new(async {
+            Ok(Some(ConfigRequirementsToml {
+                allowed_approval_policies: Some(vec![AskForApproval::Never]),
+                allowed_sandbox_modes: None,
+                allowed_web_search_modes: None,
+                mcp_servers: None,
+                rules: None,
+                enforce_residency: None,
+                network: None,
+            }))
+        }),
+    )
+    .await?;
+
+    assert_eq!(
+        layers.requirements_toml().allowed_approval_policies,
+        Some(vec![AskForApproval::OnRequest])
+    );
+    assert_eq!(
+        layers.requirements().approval_policy.value(),
+        AskForApproval::OnRequest
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn missing_session_requirements_toml_from_loader_overrides_errors() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let requirements_file = tmp.path().join("missing-requirements.toml");
@@ -719,6 +767,53 @@ allowed_approval_policies = ["on-request"]
             .as_ref()
             .map(|sourced| sourced.source.clone()),
         Some(RequirementSource::CloudRequirements)
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn load_session_requirements_toml_overwrites_existing_values() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+allowed_approval_policies = ["on-request"]
+"#,
+    )
+    .await?;
+
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    config_requirements_toml.merge_unset_fields(
+        RequirementSource::CloudRequirements,
+        ConfigRequirementsToml {
+            allowed_approval_policies: Some(vec![AskForApproval::Never]),
+            allowed_sandbox_modes: None,
+            allowed_web_search_modes: None,
+            mcp_servers: None,
+            rules: None,
+            enforce_residency: None,
+            network: None,
+        },
+    );
+    load_session_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+
+    assert_eq!(
+        config_requirements_toml
+            .allowed_approval_policies
+            .as_ref()
+            .map(|sourced| sourced.value.clone()),
+        Some(vec![AskForApproval::OnRequest])
+    );
+    assert_eq!(
+        config_requirements_toml
+            .allowed_approval_policies
+            .as_ref()
+            .map(|sourced| sourced.source.clone()),
+        Some(RequirementSource::SystemRequirementsToml {
+            file: AbsolutePathBuf::from_absolute_path(requirements_file.as_path())?,
+        })
     );
 
     Ok(())

@@ -77,14 +77,18 @@ pub(crate) async fn first_layer_config_error_from_entries(
         .await
 }
 
-/// To build up the set of admin-enforced constraints, we build up from multiple
-/// configuration layers in the following order, but a constraint defined in an
-/// earlier layer cannot be overridden by a later layer:
+/// To build up the set of baseline constraints, we merge the managed and
+/// system-provided requirement layers in the following order, but a constraint
+/// defined in an earlier layer cannot be overridden by a later one within this
+/// baseline stack:
 ///
 /// - cloud:    managed cloud requirements
 /// - admin:    managed preferences (*)
 /// - system    `/etc/codex/requirements.toml` (Unix) or
 ///   `%ProgramData%\OpenAI\Codex\requirements.toml` (Windows)
+///
+/// If a session-scoped `requirements.toml` file is provided via
+/// `LoaderOverrides`, we apply it afterward as a per-thread override layer.
 ///
 /// For backwards compatibility, we also load from
 /// `managed_config.toml` and map it to `requirements.toml`.
@@ -355,6 +359,7 @@ async fn load_requirements_toml(
         config_requirements_toml,
         requirements_toml_file,
         MissingRequirementsTomlBehavior::Ignore,
+        RequirementsMergeBehavior::FillUnset,
     )
     .await
 }
@@ -367,6 +372,7 @@ async fn load_session_requirements_toml(
         config_requirements_toml,
         requirements_toml_file,
         MissingRequirementsTomlBehavior::Error,
+        RequirementsMergeBehavior::OverwriteExisting,
     )
     .await
 }
@@ -377,10 +383,17 @@ enum MissingRequirementsTomlBehavior {
     Error,
 }
 
+#[derive(Clone, Copy)]
+enum RequirementsMergeBehavior {
+    FillUnset,
+    OverwriteExisting,
+}
+
 async fn load_requirements_toml_with_source(
     config_requirements_toml: &mut ConfigRequirementsWithSources,
     requirements_toml_file: impl AsRef<Path>,
     missing_behavior: MissingRequirementsTomlBehavior,
+    merge_behavior: RequirementsMergeBehavior,
 ) -> io::Result<()> {
     let requirements_toml_file =
         AbsolutePathBuf::from_absolute_path(requirements_toml_file.as_ref())?;
@@ -396,12 +409,17 @@ async fn load_requirements_toml_with_source(
                         ),
                     )
                 })?;
-            config_requirements_toml.merge_unset_fields(
-                RequirementSource::SystemRequirementsToml {
-                    file: requirements_toml_file.clone(),
-                },
-                requirements_config,
-            );
+            let source = RequirementSource::SystemRequirementsToml {
+                file: requirements_toml_file.clone(),
+            };
+            match merge_behavior {
+                RequirementsMergeBehavior::FillUnset => {
+                    config_requirements_toml.merge_unset_fields(source, requirements_config);
+                }
+                RequirementsMergeBehavior::OverwriteExisting => {
+                    config_requirements_toml.merge_overwrite_fields(source, requirements_config);
+                }
+            }
         }
         Err(e) => {
             if e.kind() == io::ErrorKind::NotFound

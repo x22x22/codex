@@ -118,7 +118,7 @@ const thread = codex.startThread({
 
 ### Session-scoped requirements
 
-Use `requirementsToml` to apply an additional `requirements.toml` file to a single SDK thread without modifying saved Codex config.
+Use `requirementsToml` to apply a `requirements.toml` file to a single SDK thread without modifying saved Codex config. When the same requirement field is present in both this file and an earlier requirement layer, the session file wins for that thread.
 
 ```typescript
 const thread = codex.startThread({
