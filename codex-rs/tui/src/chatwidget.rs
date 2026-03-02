@@ -1917,9 +1917,7 @@ impl ChatWidget {
             self.clear_unified_exec_processes();
         }
         // Core clears pending_input before emitting TurnAborted, so any unacknowledged steers
-        // still tracked here can no longer be committed for this turn.
-        self.pending_steers.clear();
-        self.refresh_pending_input_preview();
+        // still tracked here must be restored locally instead of waiting for a later commit.
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -1927,22 +1925,23 @@ impl ChatWidget {
             ));
         }
 
-        if let Some(combined) = self.drain_queued_messages_for_restore() {
+        if let Some(combined) = self.drain_pending_messages_for_restore() {
             self.restore_user_message_to_composer(combined);
         }
+        self.refresh_pending_input_preview();
 
         self.request_redraw();
     }
 
-    /// Merge queued drafts (plus the current composer state) into a single message for restore.
+    /// Merge pending steers, queued drafts, and the current composer state into a single message.
     ///
-    /// Each queued draft numbers attachments from `[Image #1]`. When we concatenate drafts, we
-    /// must renumber placeholders in a stable order so the merged attachment list stays aligned
-    /// with the labels embedded in text. This helper drains the queue, remaps placeholders, and
-    /// fixes text element byte ranges as content is appended. Returns `None` when there is nothing
-    /// to restore.
-    fn drain_queued_messages_for_restore(&mut self) -> Option<UserMessage> {
-        if self.queued_user_messages.is_empty() {
+    /// Each pending message numbers attachments from `[Image #1]` relative to its own remote
+    /// images. When we concatenate multiple messages after interrupt, we must renumber local-image
+    /// placeholders in a stable order and rebase text element byte ranges so the restored composer
+    /// state stays aligned with the merged attachment list. Returns `None` when there is nothing to
+    /// restore.
+    fn drain_pending_messages_for_restore(&mut self) -> Option<UserMessage> {
+        if self.pending_steers.is_empty() && self.queued_user_messages.is_empty() {
             return None;
         }
 
@@ -1954,7 +1953,34 @@ impl ChatWidget {
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
         };
 
-        let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
+        let mut to_merge: Vec<UserMessage> = self
+            .pending_steers
+            .drain(..)
+            .map(|steer| {
+                let RenderedUserMessageEvent {
+                    message,
+                    remote_image_urls,
+                    local_images,
+                    text_elements,
+                } = steer;
+                let remote_image_count = remote_image_urls.len();
+                UserMessage {
+                    text: message,
+                    text_elements,
+                    local_images: local_images
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, path)| LocalImageAttachment {
+                            placeholder: local_image_label_text(remote_image_count + idx + 1),
+                            path,
+                        })
+                        .collect(),
+                    remote_image_urls,
+                    mention_bindings: Vec::new(),
+                }
+            })
+            .collect();
+        to_merge.extend(self.queued_user_messages.drain(..));
         if !existing_message.text.is_empty()
             || !existing_message.local_images.is_empty()
             || !existing_message.remote_image_urls.is_empty()
