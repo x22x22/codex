@@ -65,7 +65,6 @@ use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
 use codex_core::mcp::McpManager;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::parse_turn_item;
 use codex_core::plugins::PluginsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::skills::model::SkillMetadata;
@@ -623,8 +622,10 @@ pub(crate) struct ChatWidget {
     // Steers already submitted to core but not yet committed into history.
     //
     // The bottom pane shows these above queued drafts until core records the
-    // corresponding user message and emits the matching raw response item.
+    // corresponding user message item.
     pending_steers: VecDeque<RenderedUserMessageEvent>,
+    // Whether a steer was submitted during the current turn.
+    steer_submitted_this_turn: bool,
     /// Terminal-appropriate keybinding for popping the most-recently queued
     /// message back into the composer.  Determined once at construction time via
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
@@ -1428,6 +1429,7 @@ impl ChatWidget {
         self.turn_sleep_inhibitor.set_turn_running(true);
         self.saw_plan_update_this_turn = false;
         self.saw_plan_item_this_turn = false;
+        self.steer_submitted_this_turn = false;
         self.plan_delta_buffer.clear();
         self.plan_item_active = false;
         self.adaptive_chunking.reset();
@@ -1496,7 +1498,29 @@ impl ChatWidget {
         self.unified_exec_wait_streak = None;
         self.request_redraw();
 
-        if !from_replay && self.queued_user_messages.is_empty() {
+        let had_pending_steers = !self.pending_steers.is_empty();
+        while let Some(pending_steer) = self.pending_steers.pop_front() {
+            self.last_rendered_user_message_event = Some(pending_steer.clone());
+            if !pending_steer.message.trim().is_empty()
+                || !pending_steer.text_elements.is_empty()
+                || !pending_steer.remote_image_urls.is_empty()
+            {
+                self.add_to_history(history_cell::new_user_prompt(
+                    pending_steer.message,
+                    pending_steer.text_elements,
+                    pending_steer.local_images,
+                    pending_steer.remote_image_urls,
+                ));
+            }
+            self.needs_final_message_separator = false;
+        }
+        self.refresh_pending_input_preview();
+
+        if !from_replay
+            && self.queued_user_messages.is_empty()
+            && !self.steer_submitted_this_turn
+            && !had_pending_steers
+        {
             self.maybe_prompt_plan_implementation();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
@@ -2938,6 +2962,7 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
+            steer_submitted_this_turn: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3122,6 +3147,7 @@ impl ChatWidget {
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
+            steer_submitted_this_turn: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3287,6 +3313,7 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             pending_steers: VecDeque::new(),
+            steer_submitted_this_turn: false,
             queued_message_edit_binding,
             show_welcome_banner: false,
             startup_tooltip_override: None,
@@ -3462,13 +3489,10 @@ impl ChatWidget {
                     else {
                         return;
                     };
-                    let should_preview_as_pending_steer = self.is_session_configured()
-                        && self.bottom_pane.is_task_running()
-                        && !self.is_review_mode;
-                    if should_preview_as_pending_steer {
-                        self.submit_user_message_internal(user_message, false);
-                    } else if self.is_session_configured() {
-                        // Submitted is only emitted when steer is enabled.
+                    let should_submit_now =
+                        self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                    if should_submit_now {
+                        // Submitted is emitted when user submits.
                         // Reset any reasoning header only when we are actually submitting a turn.
                         self.reasoning_buffer.clear();
                         self.full_reasoning_buffer.clear();
@@ -4124,6 +4148,7 @@ impl ChatWidget {
             return;
         }
 
+        let render_in_history = render_in_history && !self.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -4295,6 +4320,7 @@ impl ChatWidget {
 
         if let Some(pending_steer) = pending_steer {
             self.pending_steers.push_back(pending_steer);
+            self.steer_submitted_this_turn = true;
             self.refresh_pending_input_preview();
         }
 
@@ -4552,24 +4578,7 @@ impl ChatWidget {
                     self.on_user_message_event(ev);
                 }
             }
-            EventMsg::RawResponseItem(event) => {
-                if !from_replay
-                    && let Some(TurnItem::UserMessage(item)) = parse_turn_item(&event.item)
-                    && let EventMsg::UserMessage(user_message) = item.as_legacy_event()
-                {
-                    let rendered = Self::rendered_user_message_event_from_event(&user_message);
-                    let should_render = if self.pending_steers.front() == Some(&rendered) {
-                        self.pending_steers.pop_front();
-                        self.refresh_pending_input_preview();
-                        true
-                    } else {
-                        self.last_rendered_user_message_event.as_ref() != Some(&rendered)
-                    };
-                    if should_render {
-                        self.on_user_message_event(user_message);
-                    }
-                }
-            }
+            EventMsg::RawResponseItem(_) => {}
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request, from_replay)
             }
@@ -4623,6 +4632,16 @@ impl ChatWidget {
             }
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
+                if !from_replay && let codex_protocol::items::TurnItem::UserMessage(item) = &item {
+                    let EventMsg::UserMessage(event) = item.as_legacy_event() else {
+                        unreachable!("user message item should convert to a legacy user message");
+                    };
+                    let rendered = Self::rendered_user_message_event_from_event(&event);
+                    if self.pending_steers.front() == Some(&rendered) {
+                        self.pending_steers.pop_front();
+                        self.refresh_pending_input_preview();
+                    }
+                }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
                     self.on_plan_item_completed(plan_item.text.clone());
                 }

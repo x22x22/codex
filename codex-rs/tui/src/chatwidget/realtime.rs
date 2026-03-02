@@ -51,10 +51,10 @@ impl RealtimeConversationUiState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct RenderedUserMessageEvent {
-    message: String,
-    remote_image_urls: Vec<String>,
-    local_images: Vec<PathBuf>,
-    text_elements: Vec<TextElement>,
+    pub(super) message: String,
+    pub(super) remote_image_urls: Vec<String>,
+    pub(super) local_images: Vec<PathBuf>,
+    pub(super) text_elements: Vec<TextElement>,
 }
 
 impl RenderedUserMessageEvent {
