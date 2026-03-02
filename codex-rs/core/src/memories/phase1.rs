@@ -20,7 +20,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TokenUsage;
-use codex_utils_sanitizer::redact_secrets;
+use codex_secrets::redact_secrets;
 use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::Value;
@@ -193,7 +193,7 @@ async fn claim_startup_jobs(
 async fn build_request_context(session: &Arc<Session>, config: &Config) -> RequestContext {
     let model_name = config
         .memories
-        .phase_1_model
+        .extract_model
         .clone()
         .unwrap_or(phase_one::MODEL.to_string());
     let model = session

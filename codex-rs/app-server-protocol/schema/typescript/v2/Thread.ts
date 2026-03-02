@@ -12,6 +12,10 @@ export type Thread = { id: string,
  */
 preview: string, 
 /**
+ * Whether the thread is ephemeral and should not be materialized on disk.
+ */
+ephemeral: boolean, 
+/**
  * Model provider used for this thread (for example, 'openai').
  */
 modelProvider: string, 
@@ -55,6 +59,10 @@ agentRole: string | null,
  * Optional Git metadata captured when the thread was created.
  */
 gitInfo: GitInfo | null, 
+/**
+ * Optional user-facing thread title.
+ */
+name: string | null, 
 /**
  * Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read`
  * (when `includeTurns` is true) responses.

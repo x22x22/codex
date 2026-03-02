@@ -13,8 +13,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 use toml::Value as TomlValue;
 
-const BUILT_IN_EXPLORER_CONFIG: &str = include_str!("builtins/explorer.toml");
-const DEFAULT_ROLE_NAME: &str = "default";
+pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
 /// Applies a role config layer to a mutable config and preserves unspecified keys.
@@ -88,6 +87,7 @@ pub(crate) async fn apply_role_to_config(
         ConfigOverrides {
             cwd: Some(config.cwd.clone()),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
             js_repl_node_path: config.js_repl_node_path.clone(),
             ..Default::default()
         },
@@ -186,7 +186,25 @@ Rules:
 - Always tell workers they are **not alone in the codebase**, and they should ignore edits made by others without touching them."#.to_string()),
                         config_file: None,
                     }
-                )
+                ),
+                // Awaiter is temp removed
+//                 (
+//                     "awaiter".to_string(),
+//                     AgentRoleConfig {
+//                         description: Some(r#"Use an `awaiter` agent EVERY TIME you must run a command that will take some very long time.
+// This includes, but not only:
+// * testing
+// * monitoring of a long running process
+// * explicit ask to wait for something
+//
+// Rules:
+// - When an awaiter is running, you can work on something else. If you need to wait for its completion, use the largest possible timeout.
+// - Be patient with the `awaiter`.
+// - Do not use an awaiter for every compilation/test if it won't take time. Only use if for long running commands.
+// - Close the awaiter when you're done with it."#.to_string()),
+//                         config_file: Some("awaiter.toml".to_string().parse().unwrap_or_default()),
+//                     }
+//                 )
             ])
         });
         &CONFIG
@@ -194,8 +212,11 @@ Rules:
 
     /// Resolves a built-in role `config_file` path to embedded content.
     pub(super) fn config_file_contents(path: &Path) -> Option<&'static str> {
+        const EXPLORER: &str = include_str!("builtins/explorer.toml");
+        const AWAITER: &str = include_str!("builtins/awaiter.toml");
         match path.to_str()? {
-            "explorer.toml" => Some(BUILT_IN_EXPLORER_CONFIG),
+            "explorer.toml" => Some(EXPLORER),
+            "awaiter.toml" => Some(AWAITER),
             _ => None,
         }
     }
@@ -206,9 +227,13 @@ mod tests {
     use super::*;
     use crate::config::ConfigBuilder;
     use crate::config_loader::ConfigLayerStackOrdering;
+    use crate::plugins::PluginsManager;
+    use crate::skills::SkillsManager;
     use codex_protocol::openai_models::ReasoningEffort;
     use pretty_assertions::assert_eq;
+    use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     async fn test_config_with_cli_overrides(
@@ -325,6 +350,8 @@ mod tests {
             TomlValue::String("base-model".to_string()),
         )])
         .await;
+        config.codex_linux_sandbox_exe = Some(PathBuf::from("/tmp/codex-linux-sandbox"));
+        config.main_execve_wrapper_exe = Some(PathBuf::from("/tmp/codex-execve-wrapper"));
         let role_path = write_role_config(
             &home,
             "effort-only.toml",
@@ -345,6 +372,14 @@ mod tests {
 
         assert_eq!(config.model.as_deref(), Some("base-model"));
         assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            config.codex_linux_sandbox_exe,
+            Some(PathBuf::from("/tmp/codex-linux-sandbox"))
+        );
+        assert_eq!(
+            config.main_execve_wrapper_exe,
+            Some(PathBuf::from("/tmp/codex-execve-wrapper"))
+        );
     }
 
     #[tokio::test]
@@ -439,6 +474,54 @@ writable_roots = ["./sandbox-root"]
         assert_eq!(session_flags_layer_count(&config), before_layers + 1);
     }
 
+    #[cfg_attr(windows, ignore)]
+    #[tokio::test]
+    async fn apply_role_skills_config_disables_skill_for_spawned_agent() {
+        let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+        let skill_dir = home.path().join("skills").join("demo");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        let skill_path = skill_dir.join("SKILL.md");
+        fs::write(
+            &skill_path,
+            "---\nname: demo-skill\ndescription: demo description\n---\n\n# Body\n",
+        )
+        .expect("write skill");
+        let role_path = write_role_config(
+            &home,
+            "skills-role.toml",
+            &format!(
+                r#"[[skills.config]]
+path = "{}"
+enabled = false
+"#,
+                skill_path.display()
+            ),
+        )
+        .await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+            },
+        );
+
+        apply_role_to_config(&mut config, Some("custom"))
+            .await
+            .expect("custom role should apply");
+
+        let plugins_manager = Arc::new(PluginsManager::new(home.path().to_path_buf()));
+        let skills_manager = SkillsManager::new(home.path().to_path_buf(), plugins_manager);
+        let outcome = skills_manager.skills_for_config(&config);
+        let skill = outcome
+            .skills
+            .iter()
+            .find(|skill| skill.name == "demo-skill")
+            .expect("demo skill should be discovered");
+
+        assert_eq!(outcome.is_skill_enabled(skill), false);
+    }
+
     #[test]
     fn spawn_tool_spec_build_deduplicates_user_defined_built_in_roles() {
         let user_defined_roles = BTreeMap::from([
@@ -481,10 +564,6 @@ writable_roots = ["./sandbox-root"]
 
     #[test]
     fn built_in_config_file_contents_resolves_explorer_only() {
-        assert_eq!(
-            built_in::config_file_contents(Path::new("explorer.toml")),
-            Some(BUILT_IN_EXPLORER_CONFIG)
-        );
         assert_eq!(
             built_in::config_file_contents(Path::new("missing.toml")),
             None

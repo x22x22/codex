@@ -15,8 +15,24 @@ use std::path::PathBuf;
 
 use codex_core::error::CodexErr;
 use codex_core::error::Result;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::WritableRoot;
+use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::WritableRoot;
+
+/// Linux "platform defaults" that keep common system binaries and dynamic
+/// libraries readable when `ReadOnlyAccess::Restricted` requests them.
+///
+/// These are intentionally system-level paths only (plus Nix store roots) so
+/// `include_platform_defaults` does not silently widen access to user data.
+const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
+    "/bin",
+    "/sbin",
+    "/usr",
+    "/etc",
+    "/lib",
+    "/lib64",
+    "/nix/store",
+    "/run/current-system/sw",
+];
 
 /// Linux "platform defaults" that keep common system binaries and dynamic
 /// libraries readable when `ReadOnlyAccess::Restricted` requests them.
@@ -65,8 +81,8 @@ pub(crate) enum BwrapNetworkMode {
     Isolated,
     /// Intended proxy-only mode.
     ///
-    /// Bubblewrap does not currently enforce proxy-only egress, so this is
-    /// treated as isolated for fail-closed behavior.
+    /// Bubblewrap enforces this by unsharing the network namespace. The
+    /// proxy-routing bridge is established by the helper process after startup.
     ProxyOnly,
 }
 
@@ -468,8 +484,9 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::protocol::ReadOnlyAccess;
-    use codex_core::protocol::SandboxPolicy;
+    use codex_protocol::protocol::NetworkAccess;
+    use codex_protocol::protocol::ReadOnlyAccess;
+    use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
@@ -500,7 +517,7 @@ mod tests {
         let args = create_bwrap_command_args(
             command.clone(),
             &SandboxPolicy::ExternalSandbox {
-                network_access: codex_core::protocol::NetworkAccess::Enabled,
+                network_access: NetworkAccess::Enabled,
                 deny_read_paths: vec![
                     AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute path"),
                 ],
@@ -552,6 +569,36 @@ mod tests {
                 "/proc".to_string(),
                 "--".to_string(),
                 "/bin/true".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn mounts_dev_before_writable_dev_binds() {
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
+            read_only_access: Default::default(),
+            deny_read_paths: vec![],
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+
+        let args = create_filesystem_args(&sandbox_policy, Path::new("/")).expect("bwrap fs args");
+        assert_eq!(
+            args,
+            vec![
+                "--ro-bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
+                "--dev".to_string(),
+                "/dev".to_string(),
+                "--bind".to_string(),
+                "/dev".to_string(),
+                "/dev".to_string(),
+                "--bind".to_string(),
+                "/".to_string(),
+                "/".to_string(),
             ]
         );
     }
