@@ -4490,6 +4490,8 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
+            EventMsg::AgentMessage(AgentMessageEvent { .. })
+                if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) => {}
             EventMsg::AgentMessage(AgentMessageEvent { message, .. }) if from_replay => {
                 self.on_agent_message(message)
             }
