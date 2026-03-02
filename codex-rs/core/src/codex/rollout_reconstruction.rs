@@ -202,6 +202,7 @@ impl Session {
                     }
                 }
                 RolloutItem::ResponseItem(_)
+                | RolloutItem::ResponseItemPrimitiveMetadataUpdate(_)
                 | RolloutItem::EventMsg(_)
                 | RolloutItem::SessionMeta(_) => {}
             }
@@ -241,6 +242,12 @@ impl Session {
                     history.record_items(
                         std::iter::once(response_item),
                         turn_context.truncation_policy,
+                    );
+                }
+                RolloutItem::ResponseItemPrimitiveMetadataUpdate(update) => {
+                    history.update_primitive_metadata(
+                        &update.call_id,
+                        update.primitive_metadata.clone(),
                     );
                 }
                 RolloutItem::Compacted(compacted) => {

@@ -34,6 +34,7 @@ use crate::message_history::HistoryEntry;
 use crate::models::BaseInstructions;
 use crate::models::ContentItem;
 use crate::models::MessagePhase;
+use crate::models::PrimitiveMetadata;
 use crate::models::ResponseItem;
 use crate::models::WebSearchAction;
 use crate::num_format::format_with_separators;
@@ -2097,9 +2098,16 @@ pub struct SessionMetaLine {
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
+    ResponseItemPrimitiveMetadataUpdate(ResponseItemPrimitiveMetadataUpdate),
     Compacted(CompactedItem),
     TurnContext(TurnContextItem),
     EventMsg(EventMsg),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+pub struct ResponseItemPrimitiveMetadataUpdate {
+    pub call_id: String,
+    pub primitive_metadata: PrimitiveMetadata,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema, TS)]

@@ -14,8 +14,10 @@ use crate::protocol::AskForApproval;
 use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
 use crate::protocol::NetworkAccess;
+use crate::protocol::NetworkPolicyRuleAction;
 use crate::protocol::REALTIME_CONVERSATION_CLOSE_TAG;
 use crate::protocol::REALTIME_CONVERSATION_OPEN_TAG;
+use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::WritableRoot;
 use crate::user_input::UserInput;
@@ -191,6 +193,81 @@ pub enum MessagePhase {
     FinalAnswer,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ApprovalSummary {
+    pub request_count: u16,
+    pub approved_count: u16,
+    pub approved_with_amendment_count: u16,
+    pub approved_for_session_count: u16,
+    pub approved_with_network_policy_allow_count: u16,
+    pub denied_with_network_policy_deny_count: u16,
+    pub denied_count: u16,
+    pub abort_count: u16,
+}
+
+impl ApprovalSummary {
+    pub fn increment_request(&mut self) {
+        self.request_count = self.request_count.saturating_add(1);
+    }
+
+    pub fn increment_decision(&mut self, decision: &ReviewDecision) {
+        match decision {
+            ReviewDecision::Approved => {
+                self.approved_count = self.approved_count.saturating_add(1);
+            }
+            ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                self.approved_with_amendment_count =
+                    self.approved_with_amendment_count.saturating_add(1);
+            }
+            ReviewDecision::ApprovedForSession => {
+                self.approved_for_session_count = self.approved_for_session_count.saturating_add(1);
+            }
+            ReviewDecision::NetworkPolicyAmendment {
+                network_policy_amendment,
+            } => match network_policy_amendment.action {
+                NetworkPolicyRuleAction::Allow => {
+                    self.approved_with_network_policy_allow_count = self
+                        .approved_with_network_policy_allow_count
+                        .saturating_add(1);
+                }
+                NetworkPolicyRuleAction::Deny => {
+                    self.denied_with_network_policy_deny_count =
+                        self.denied_with_network_policy_deny_count.saturating_add(1);
+                }
+            },
+            ReviewDecision::Denied => {
+                self.denied_count = self.denied_count.saturating_add(1);
+            }
+            ReviewDecision::Abort => {
+                self.abort_count = self.abort_count.saturating_add(1);
+            }
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct PrimitiveMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub approval_summary: Option<ApprovalSummary>,
+}
+
+impl PrimitiveMetadata {
+    pub fn with_approval_summary(approval_summary: ApprovalSummary) -> Self {
+        Self {
+            approval_summary: Some(approval_summary),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.approval_summary.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
@@ -230,6 +307,9 @@ pub enum ResponseItem {
         call_id: Option<String>,
         status: LocalShellStatus,
         action: LocalShellAction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        primitive_metadata: Option<PrimitiveMetadata>,
     },
     FunctionCall {
         #[serde(default, skip_serializing)]
@@ -241,6 +321,9 @@ pub enum ResponseItem {
         // Session::handle_function_call parse it into a Value.
         arguments: String,
         call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        primitive_metadata: Option<PrimitiveMetadata>,
     },
     // NOTE: The `output` field for `function_call_output` uses a dedicated payload type with
     // custom serialization. On the wire it is either:
@@ -262,6 +345,9 @@ pub enum ResponseItem {
         call_id: String,
         name: String,
         input: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        primitive_metadata: Option<PrimitiveMetadata>,
     },
     // `custom_tool_call_output.output` uses the same wire encoding as
     // `function_call_output.output` so freeform tools can return either plain
@@ -299,6 +385,73 @@ pub enum ResponseItem {
     },
     #[serde(other)]
     Other,
+}
+
+impl ResponseItem {
+    pub fn work_item_call_id(&self) -> Option<&str> {
+        match self {
+            ResponseItem::LocalShellCall { call_id, id, .. } => {
+                call_id.as_deref().or(id.as_deref())
+            }
+            ResponseItem::FunctionCall { call_id, .. }
+            | ResponseItem::CustomToolCall { call_id, .. } => Some(call_id.as_str()),
+            ResponseItem::Message { .. }
+            | ResponseItem::Reasoning { .. }
+            | ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::GhostSnapshot { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::Other => None,
+        }
+    }
+
+    pub fn primitive_metadata(&self) -> Option<&PrimitiveMetadata> {
+        match self {
+            ResponseItem::LocalShellCall {
+                primitive_metadata, ..
+            }
+            | ResponseItem::FunctionCall {
+                primitive_metadata, ..
+            }
+            | ResponseItem::CustomToolCall {
+                primitive_metadata, ..
+            } => primitive_metadata.as_ref(),
+            ResponseItem::Message { .. }
+            | ResponseItem::Reasoning { .. }
+            | ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::GhostSnapshot { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::Other => None,
+        }
+    }
+
+    pub fn set_primitive_metadata(&mut self, primitive_metadata: Option<PrimitiveMetadata>) {
+        match self {
+            ResponseItem::LocalShellCall {
+                primitive_metadata: item_primitive_metadata,
+                ..
+            }
+            | ResponseItem::FunctionCall {
+                primitive_metadata: item_primitive_metadata,
+                ..
+            }
+            | ResponseItem::CustomToolCall {
+                primitive_metadata: item_primitive_metadata,
+                ..
+            } => *item_primitive_metadata = primitive_metadata.filter(|item| !item.is_empty()),
+            ResponseItem::Message { .. }
+            | ResponseItem::Reasoning { .. }
+            | ResponseItem::FunctionCallOutput { .. }
+            | ResponseItem::CustomToolCallOutput { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::GhostSnapshot { .. }
+            | ResponseItem::Compaction { .. }
+            | ResponseItem::Other => {}
+        }
+    }
 }
 
 pub const BASE_INSTRUCTIONS_DEFAULT: &str = include_str!("prompts/base_instructions/default.md");
@@ -1220,6 +1373,8 @@ mod tests {
     use super::*;
     use crate::config_types::SandboxMode;
     use crate::protocol::AskForApproval;
+    use crate::protocol::ExecPolicyAmendment;
+    use crate::protocol::NetworkPolicyAmendment;
     use anyhow::Result;
     use codex_execpolicy::Policy;
     use pretty_assertions::assert_eq;
@@ -1948,5 +2103,49 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn approval_summary_tracks_review_decisions() {
+        let mut summary = ApprovalSummary::default();
+
+        summary.increment_request();
+        summary.increment_request();
+        summary.increment_decision(&ReviewDecision::Approved);
+        summary.increment_decision(&ReviewDecision::ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment: ExecPolicyAmendment::from(vec![
+                "git".to_string(),
+                "status".to_string(),
+            ]),
+        });
+        summary.increment_decision(&ReviewDecision::ApprovedForSession);
+        summary.increment_decision(&ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: NetworkPolicyAmendment {
+                host: "example.com".to_string(),
+                action: NetworkPolicyRuleAction::Allow,
+            },
+        });
+        summary.increment_decision(&ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: NetworkPolicyAmendment {
+                host: "example.com".to_string(),
+                action: NetworkPolicyRuleAction::Deny,
+            },
+        });
+        summary.increment_decision(&ReviewDecision::Denied);
+        summary.increment_decision(&ReviewDecision::Abort);
+
+        assert_eq!(
+            summary,
+            ApprovalSummary {
+                request_count: 2,
+                approved_count: 1,
+                approved_with_amendment_count: 1,
+                approved_for_session_count: 1,
+                approved_with_network_policy_allow_count: 1,
+                denied_with_network_policy_deny_count: 1,
+                denied_count: 1,
+                abort_count: 1,
+            }
+        );
     }
 }

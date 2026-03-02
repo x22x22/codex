@@ -2,6 +2,7 @@ use super::*;
 use crate::truncate;
 use crate::truncate::TruncationPolicy;
 use codex_git::GhostCommit;
+use codex_protocol::models::ApprovalSummary;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -10,6 +11,7 @@ use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
 use codex_protocol::models::LocalShellExecAction;
 use codex_protocol::models::LocalShellStatus;
+use codex_protocol::models::PrimitiveMetadata;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::openai_models::InputModality;
@@ -62,6 +64,14 @@ fn user_input_text_msg(text: &str) -> ResponseItem {
         end_turn: None,
         phase: None,
     }
+}
+
+fn approval_metadata(request_count: u16, approved_count: u16) -> PrimitiveMetadata {
+    PrimitiveMetadata::with_approval_summary(ApprovalSummary {
+        request_count,
+        approved_count,
+        ..Default::default()
+    })
 }
 
 fn custom_tool_call_output(call_id: &str, output: &str) -> ResponseItem {
@@ -157,6 +167,78 @@ fn filters_non_api_messages() {
                 end_turn: None,
                 phase: None,
             }
+        ]
+    );
+}
+
+#[test]
+fn update_primitive_metadata_updates_work_items_by_call_id() {
+    let mut history = create_history_with_items(vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "tool_a".to_string(),
+            arguments: "{}".to_string(),
+            call_id: "function-1".to_string(),
+            primitive_metadata: None,
+        },
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "custom-1".to_string(),
+            name: "tool_b".to_string(),
+            input: "{}".to_string(),
+            primitive_metadata: None,
+        },
+        ResponseItem::LocalShellCall {
+            id: None,
+            call_id: Some("shell-1".to_string()),
+            status: LocalShellStatus::Completed,
+            action: LocalShellAction::Exec(LocalShellExecAction {
+                command: vec!["pwd".to_string()],
+                timeout_ms: None,
+                working_directory: None,
+                env: None,
+                user: None,
+            }),
+            primitive_metadata: None,
+        },
+    ]);
+
+    assert!(history.update_primitive_metadata("function-1", approval_metadata(1, 1)));
+    assert!(history.update_primitive_metadata("custom-1", approval_metadata(2, 1)));
+    assert!(history.update_primitive_metadata("shell-1", approval_metadata(3, 2)));
+
+    assert_eq!(
+        history.raw_items(),
+        [
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "tool_a".to_string(),
+                arguments: "{}".to_string(),
+                call_id: "function-1".to_string(),
+                primitive_metadata: Some(approval_metadata(1, 1)),
+            },
+            ResponseItem::CustomToolCall {
+                id: None,
+                status: None,
+                call_id: "custom-1".to_string(),
+                name: "tool_b".to_string(),
+                input: "{}".to_string(),
+                primitive_metadata: Some(approval_metadata(2, 1)),
+            },
+            ResponseItem::LocalShellCall {
+                id: None,
+                call_id: Some("shell-1".to_string()),
+                status: LocalShellStatus::Completed,
+                action: LocalShellAction::Exec(LocalShellExecAction {
+                    command: vec!["pwd".to_string()],
+                    timeout_ms: None,
+                    working_directory: None,
+                    env: None,
+                    user: None,
+                }),
+                primitive_metadata: Some(approval_metadata(3, 2)),
+            },
         ]
     );
 }
@@ -267,6 +349,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             name: "view_image".to_string(),
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            primitive_metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
@@ -285,6 +368,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             call_id: "tool-1".to_string(),
             name: "js_repl".to_string(),
             input: "view_image".to_string(),
+            primitive_metadata: None,
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "tool-1".to_string(),
@@ -326,6 +410,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             name: "view_image".to_string(),
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            primitive_metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
@@ -345,6 +430,7 @@ fn for_prompt_strips_images_when_model_does_not_support_images() {
             call_id: "tool-1".to_string(),
             name: "js_repl".to_string(),
             input: "view_image".to_string(),
+            primitive_metadata: None,
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "tool-1".to_string(),
@@ -428,6 +514,7 @@ fn remove_first_item_removes_matching_output_for_function_call() {
             name: "do_it".to_string(),
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            primitive_metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
@@ -451,6 +538,7 @@ fn remove_first_item_removes_matching_call_for_output() {
             name: "do_it".to_string(),
             arguments: "{}".to_string(),
             call_id: "call-2".to_string(),
+            primitive_metadata: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -467,6 +555,7 @@ fn remove_last_item_removes_matching_call_for_output() {
             name: "do_it".to_string(),
             arguments: "{}".to_string(),
             call_id: "call-delete-last".to_string(),
+            primitive_metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-delete-last".to_string(),
@@ -549,6 +638,7 @@ fn remove_first_item_handles_local_shell_pair() {
                 env: None,
                 user: None,
             }),
+            primitive_metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-3".to_string(),
@@ -705,6 +795,7 @@ fn remove_first_item_handles_custom_tool_pair() {
             call_id: "tool-1".to_string(),
             name: "my_tool".to_string(),
             input: "{}".to_string(),
+            primitive_metadata: None,
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "tool-1".to_string(),
@@ -730,6 +821,7 @@ fn normalization_retains_local_shell_outputs() {
                 env: None,
                 user: None,
             }),
+            primitive_metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "shell-1".to_string(),
@@ -939,6 +1031,7 @@ fn normalize_adds_missing_output_for_function_call() {
         name: "do_it".to_string(),
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
+        primitive_metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -952,6 +1045,7 @@ fn normalize_adds_missing_output_for_function_call() {
                 name: "do_it".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
+                primitive_metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "call-x".to_string(),
@@ -970,6 +1064,7 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
         call_id: "tool-x".to_string(),
         name: "custom".to_string(),
         input: "{}".to_string(),
+        primitive_metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -984,6 +1079,7 @@ fn normalize_adds_missing_output_for_custom_tool_call() {
                 call_id: "tool-x".to_string(),
                 name: "custom".to_string(),
                 input: "{}".to_string(),
+                primitive_metadata: None,
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "tool-x".to_string(),
@@ -1007,6 +1103,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
             env: None,
             user: None,
         }),
+        primitive_metadata: None,
     }];
     let mut h = create_history_with_items(items);
 
@@ -1026,6 +1123,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id() {
                     env: None,
                     user: None,
                 }),
+                primitive_metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "shell-1".to_string(),
@@ -1073,6 +1171,7 @@ fn normalize_mixed_inserts_and_removals() {
             name: "f1".to_string(),
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
+            primitive_metadata: None,
         },
         // Orphan output that should be removed
         ResponseItem::FunctionCallOutput {
@@ -1086,6 +1185,7 @@ fn normalize_mixed_inserts_and_removals() {
             call_id: "t1".to_string(),
             name: "tool".to_string(),
             input: "{}".to_string(),
+            primitive_metadata: None,
         },
         // Local shell call also gets an inserted function call output
         ResponseItem::LocalShellCall {
@@ -1099,6 +1199,7 @@ fn normalize_mixed_inserts_and_removals() {
                 env: None,
                 user: None,
             }),
+            primitive_metadata: None,
         },
     ];
     let mut h = create_history_with_items(items);
@@ -1113,6 +1214,7 @@ fn normalize_mixed_inserts_and_removals() {
                 name: "f1".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "c1".to_string(),
+                primitive_metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "c1".to_string(),
@@ -1124,6 +1226,7 @@ fn normalize_mixed_inserts_and_removals() {
                 call_id: "t1".to_string(),
                 name: "tool".to_string(),
                 input: "{}".to_string(),
+                primitive_metadata: None,
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "t1".to_string(),
@@ -1140,6 +1243,7 @@ fn normalize_mixed_inserts_and_removals() {
                     env: None,
                     user: None,
                 }),
+                primitive_metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "s1".to_string(),
@@ -1156,6 +1260,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
         name: "do_it".to_string(),
         arguments: "{}".to_string(),
         call_id: "call-x".to_string(),
+        primitive_metadata: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1167,6 +1272,7 @@ fn normalize_adds_missing_output_for_function_call_inserts_output() {
                 name: "do_it".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "call-x".to_string(),
+                primitive_metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "call-x".to_string(),
@@ -1186,6 +1292,7 @@ fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
         call_id: "tool-x".to_string(),
         name: "custom".to_string(),
         input: "{}".to_string(),
+        primitive_metadata: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1206,6 +1313,7 @@ fn normalize_adds_missing_output_for_local_shell_call_with_id_panics_in_debug() 
             env: None,
             user: None,
         }),
+        primitive_metadata: None,
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
@@ -1245,6 +1353,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
             name: "f1".to_string(),
             arguments: "{}".to_string(),
             call_id: "c1".to_string(),
+            primitive_metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "c2".to_string(),
@@ -1256,6 +1365,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
             call_id: "t1".to_string(),
             name: "tool".to_string(),
             input: "{}".to_string(),
+            primitive_metadata: None,
         },
         ResponseItem::LocalShellCall {
             id: None,
@@ -1268,6 +1378,7 @@ fn normalize_mixed_inserts_and_removals_panics_in_debug() {
                 env: None,
                 user: None,
             }),
+            primitive_metadata: None,
         },
     ];
     let mut h = create_history_with_items(items);

@@ -1055,6 +1055,7 @@ async fn read_head_summary(path: &Path, head_limit: usize) -> io::Result<HeadTai
                     .clone()
                     .or_else(|| Some(rollout_line.timestamp.clone()));
             }
+            RolloutItem::ResponseItemPrimitiveMetadataUpdate(_) => {}
             RolloutItem::TurnContext(_) => {
                 // Not included in `head`; skip.
             }
@@ -1112,7 +1113,8 @@ pub async fn read_head_for_summary(path: &Path) -> io::Result<Vec<serde_json::Va
                         head.push(value);
                     }
                 }
-                RolloutItem::Compacted(_)
+                RolloutItem::ResponseItemPrimitiveMetadataUpdate(_)
+                | RolloutItem::Compacted(_)
                 | RolloutItem::TurnContext(_)
                 | RolloutItem::EventMsg(_) => {}
             }

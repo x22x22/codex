@@ -79,6 +79,7 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
             call_id,
             name,
             input: _,
+            ..
         } => {
             if name == "apply_patch" {
                 shell_call_ids.insert(call_id.clone());
@@ -349,6 +350,7 @@ mod tests {
                 name: "shell".to_string(),
                 arguments: "{}".to_string(),
                 call_id: "call-1".to_string(),
+                primitive_metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "call-1".to_string(),
@@ -360,6 +362,7 @@ mod tests {
                 call_id: "call-2".to_string(),
                 name: "apply_patch".to_string(),
                 input: "*** Begin Patch".to_string(),
+                primitive_metadata: None,
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "call-2".to_string(),
@@ -377,6 +380,7 @@ mod tests {
                     name: "shell".to_string(),
                     arguments: "{}".to_string(),
                     call_id: "call-1".to_string(),
+                    primitive_metadata: None,
                 },
                 ResponseItem::FunctionCallOutput {
                     call_id: "call-1".to_string(),
@@ -388,6 +392,7 @@ mod tests {
                     call_id: "call-2".to_string(),
                     name: "apply_patch".to_string(),
                     input: "*** Begin Patch".to_string(),
+                    primitive_metadata: None,
                 },
                 ResponseItem::CustomToolCallOutput {
                     call_id: "call-2".to_string(),

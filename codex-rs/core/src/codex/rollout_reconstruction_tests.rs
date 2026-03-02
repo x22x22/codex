@@ -4,7 +4,9 @@ use crate::protocol::CompactedItem;
 use crate::protocol::InitialHistory;
 use crate::protocol::ResumedHistory;
 use codex_protocol::ThreadId;
+use codex_protocol::models::ApprovalSummary;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::PrimitiveMetadata;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 use std::path::PathBuf;
@@ -30,6 +32,24 @@ fn assistant_message(text: &str) -> ResponseItem {
         }],
         end_turn: None,
         phase: None,
+    }
+}
+
+fn approval_metadata(request_count: u16, denied_count: u16) -> PrimitiveMetadata {
+    PrimitiveMetadata::with_approval_summary(ApprovalSummary {
+        request_count,
+        denied_count,
+        ..Default::default()
+    })
+}
+
+fn function_call(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: "local_shell".to_string(),
+        arguments: "{\"cmd\":\"pwd\"}".to_string(),
+        call_id: call_id.to_string(),
+        primitive_metadata: None,
     }
 }
 
@@ -69,6 +89,40 @@ async fn record_initial_history_resumed_bare_turn_context_does_not_hydrate_previ
 
     assert_eq!(session.previous_turn_settings().await, None);
     assert!(session.reference_context_item().await.is_none());
+}
+
+#[tokio::test]
+async fn record_initial_history_resumed_applies_response_item_metadata_updates() {
+    let (session, _turn_context) = make_session_and_context().await;
+    let rollout_items = vec![
+        RolloutItem::ResponseItem(function_call("call-1")),
+        RolloutItem::ResponseItemPrimitiveMetadataUpdate(
+            codex_protocol::protocol::ResponseItemPrimitiveMetadataUpdate {
+                call_id: "call-1".to_string(),
+                primitive_metadata: approval_metadata(2, 1),
+            },
+        ),
+    ];
+
+    session
+        .record_initial_history(InitialHistory::Resumed(ResumedHistory {
+            conversation_id: ThreadId::default(),
+            history: rollout_items,
+            rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+        }))
+        .await;
+
+    let history = session.clone_history().await;
+    assert_eq!(
+        history.raw_items(),
+        &[ResponseItem::FunctionCall {
+            id: None,
+            name: "local_shell".to_string(),
+            arguments: "{\"cmd\":\"pwd\"}".to_string(),
+            call_id: "call-1".to_string(),
+            primitive_metadata: Some(approval_metadata(2, 1)),
+        }]
+    );
 }
 
 #[tokio::test]

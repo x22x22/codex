@@ -11,6 +11,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::PrimitiveMetadata;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::TokenUsage;
@@ -161,6 +162,20 @@ impl ContextManager {
 
     pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
         self.items = items;
+    }
+
+    pub(crate) fn update_primitive_metadata(
+        &mut self,
+        call_id: &str,
+        primitive_metadata: PrimitiveMetadata,
+    ) -> bool {
+        for item in self.items.iter_mut().rev() {
+            if item.work_item_call_id() == Some(call_id) {
+                item.set_primitive_metadata(Some(primitive_metadata));
+                return true;
+            }
+        }
+        false
     }
 
     /// Replace image content in the last turn if it originated from a tool output.

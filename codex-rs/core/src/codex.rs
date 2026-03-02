@@ -77,8 +77,10 @@ use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::ApprovalSummary;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::PrimitiveMetadata;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::protocol::FileChange;
@@ -86,6 +88,7 @@ use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::RawResponseItemEvent;
+use codex_protocol::protocol::ResponseItemPrimitiveMetadataUpdate;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -2645,18 +2648,28 @@ impl Session {
         let effective_approval_id = approval_id.clone().unwrap_or_else(|| call_id.clone());
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
-        let prev_entry = {
+        let (prev_entry, approval_summary) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
+                    let approval_summary = ts.record_approval_request(&call_id);
+                    let prev_entry = ts.insert_pending_approval(
+                        effective_approval_id.clone(),
+                        call_id.clone(),
+                        tx_approve,
+                    );
+                    (prev_entry, Some(approval_summary))
                 }
-                None => None,
+                None => (None, None),
             }
         };
         if prev_entry.is_some() {
             warn!("Overwriting existing pending approval for call_id: {effective_approval_id}");
+        }
+        if let Some(approval_summary) = approval_summary {
+            self.sync_work_item_approval_summary(&call_id, approval_summary)
+                .await;
         }
 
         let parsed_cmd = parse_command(&command);
@@ -2709,18 +2722,28 @@ impl Session {
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let approval_id = call_id.clone();
-        let prev_entry = {
+        let (prev_entry, approval_summary) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
+                    let approval_summary = ts.record_approval_request(&call_id);
+                    let prev_entry = ts.insert_pending_approval(
+                        approval_id.clone(),
+                        call_id.clone(),
+                        tx_approve,
+                    );
+                    (prev_entry, Some(approval_summary))
                 }
-                None => None,
+                None => (None, None),
             }
         };
         if prev_entry.is_some() {
             warn!("Overwriting existing pending approval for call_id: {approval_id}");
+        }
+        if let Some(approval_summary) = approval_summary {
+            self.sync_work_item_approval_summary(&call_id, approval_summary)
+                .await;
         }
 
         let event = EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
@@ -2813,19 +2836,33 @@ impl Session {
     }
 
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {
-        let entry = {
+        let (entry, approval_update) = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.remove_pending_approval(approval_id)
+                    match ts.remove_pending_approval(approval_id) {
+                        Some(entry) => {
+                            let approval_summary =
+                                ts.record_approval_decision(&entry.work_item_call_id, &decision);
+                            (
+                                Some(entry.tx),
+                                Some((entry.work_item_call_id, approval_summary)),
+                            )
+                        }
+                        None => (None, None),
+                    }
                 }
-                None => None,
+                None => (None, None),
             }
         };
         match entry {
             Some(tx_approve) => {
                 tx_approve.send(decision).ok();
+                if let Some((work_item_call_id, approval_summary)) = approval_update {
+                    self.sync_work_item_approval_summary(&work_item_call_id, approval_summary)
+                        .await;
+                }
             }
             None => {
                 warn!("No pending approval found for call_id: {approval_id}");
@@ -2854,9 +2891,12 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        self.record_into_history(items, turn_context).await;
-        self.persist_rollout_response_items(items).await;
-        self.send_raw_response_items(turn_context, items).await;
+        let items = self
+            .enrich_response_items_with_primitive_metadata(items)
+            .await;
+        self.record_into_history(&items, turn_context).await;
+        self.persist_rollout_response_items(&items).await;
+        self.send_raw_response_items(turn_context, &items).await;
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -2960,6 +3000,58 @@ impl Session {
             .map(RolloutItem::ResponseItem)
             .collect();
         self.persist_rollout_items(&rollout_items).await;
+    }
+
+    async fn enrich_response_items_with_primitive_metadata(
+        &self,
+        items: &[ResponseItem],
+    ) -> Vec<ResponseItem> {
+        let mut enriched = Vec::with_capacity(items.len());
+        for item in items.iter().cloned() {
+            let mut item = item;
+            if let Some(call_id) = item.work_item_call_id().map(str::to_string)
+                && let Some(approval_summary) = self
+                    .approval_summary_for_active_turn_call_id(&call_id)
+                    .await
+            {
+                item.set_primitive_metadata(Some(PrimitiveMetadata::with_approval_summary(
+                    approval_summary,
+                )));
+            }
+            enriched.push(item);
+        }
+        enriched
+    }
+
+    async fn approval_summary_for_active_turn_call_id(
+        &self,
+        call_id: &str,
+    ) -> Option<ApprovalSummary> {
+        let active = self.active_turn.lock().await;
+        let turn_state = active.as_ref()?.turn_state.lock().await;
+        turn_state.approval_summary(call_id)
+    }
+
+    async fn sync_work_item_approval_summary(
+        &self,
+        call_id: &str,
+        approval_summary: ApprovalSummary,
+    ) {
+        let primitive_metadata = PrimitiveMetadata::with_approval_summary(approval_summary);
+        let history_updated = {
+            let mut state = self.state.lock().await;
+            state.update_primitive_metadata(call_id, primitive_metadata.clone())
+        };
+        if !history_updated {
+            return;
+        }
+        self.persist_rollout_items(&[RolloutItem::ResponseItemPrimitiveMetadataUpdate(
+            ResponseItemPrimitiveMetadataUpdate {
+                call_id: call_id.to_string(),
+                primitive_metadata,
+            },
+        )])
+        .await;
     }
 
     pub fn enabled(&self, feature: Feature) -> bool {
@@ -6736,6 +6828,7 @@ mod tests {
             name: name.to_string(),
             arguments: "{}".to_string(),
             call_id: call_id.to_string(),
+            primitive_metadata: None,
         })
     }
 
@@ -9485,6 +9578,7 @@ mod tests {
             call_id: "call-1".to_string(),
             name: "shell".to_string(),
             input: "{}".to_string(),
+            primitive_metadata: None,
         };
 
         let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())

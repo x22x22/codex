@@ -1,6 +1,61 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
+    "ApprovalSummary": {
+      "properties": {
+        "abort_count": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "approved_count": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "approved_for_session_count": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "approved_with_amendment_count": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "approved_with_network_policy_allow_count": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "denied_count": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "denied_with_network_policy_deny_count": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "request_count": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "abort_count",
+        "approved_count",
+        "approved_for_session_count",
+        "approved_with_amendment_count",
+        "approved_with_network_policy_allow_count",
+        "denied_count",
+        "denied_with_network_policy_deny_count",
+        "request_count"
+      ],
+      "type": "object"
+    },
     "ContentItem": {
       "oneOf": [
         {
@@ -256,6 +311,21 @@
         }
       ]
     },
+    "PrimitiveMetadata": {
+      "properties": {
+        "approval_summary": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ApprovalSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ReasoningItemContent": {
       "oneOf": [
         {
@@ -440,6 +510,16 @@
               ],
               "writeOnly": true
             },
+            "primitive_metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PrimitiveMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "status": {
               "$ref": "#/definitions/LocalShellStatus"
             },
@@ -476,6 +556,16 @@
             },
             "name": {
               "type": "string"
+            },
+            "primitive_metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PrimitiveMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "type": {
               "enum": [
@@ -535,6 +625,16 @@
             },
             "name": {
               "type": "string"
+            },
+            "primitive_metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/PrimitiveMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "status": {
               "type": [

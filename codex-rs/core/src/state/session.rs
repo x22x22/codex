@@ -1,5 +1,6 @@
 //! Session-wide mutable state.
 
+use codex_protocol::models::PrimitiveMetadata;
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -83,6 +84,15 @@ impl SessionState {
         self.history.replace(items);
         self.history
             .set_reference_context_item(reference_context_item);
+    }
+
+    pub(crate) fn update_primitive_metadata(
+        &mut self,
+        call_id: &str,
+        primitive_metadata: PrimitiveMetadata,
+    ) -> bool {
+        self.history
+            .update_primitive_metadata(call_id, primitive_metadata)
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {

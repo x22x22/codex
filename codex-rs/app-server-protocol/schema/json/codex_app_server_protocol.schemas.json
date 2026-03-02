@@ -7717,6 +7717,61 @@
       "AppToolsConfig": {
         "type": "object"
       },
+      "ApprovalSummary": {
+        "properties": {
+          "abort_count": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "approved_count": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "approved_for_session_count": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "approved_with_amendment_count": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "approved_with_network_policy_allow_count": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "denied_count": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "denied_with_network_policy_deny_count": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "request_count": {
+            "format": "uint16",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "abort_count",
+          "approved_count",
+          "approved_for_session_count",
+          "approved_with_amendment_count",
+          "approved_with_network_policy_allow_count",
+          "denied_count",
+          "denied_with_network_policy_deny_count",
+          "request_count"
+        ],
+        "type": "object"
+      },
       "AppsConfig": {
         "properties": {
           "_default": {
@@ -10687,6 +10742,21 @@
         ],
         "type": "string"
       },
+      "PrimitiveMetadata": {
+        "properties": {
+          "approval_summary": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/ApprovalSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
       "ProductSurface": {
         "enum": [
           "chatgpt",
@@ -11359,6 +11429,16 @@
                 ],
                 "writeOnly": true
               },
+              "primitive_metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/PrimitiveMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "status": {
                 "$ref": "#/definitions/v2/LocalShellStatus"
               },
@@ -11395,6 +11475,16 @@
               },
               "name": {
                 "type": "string"
+              },
+              "primitive_metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/PrimitiveMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "type": {
                 "enum": [
@@ -11454,6 +11544,16 @@
               },
               "name": {
                 "type": "string"
+              },
+              "primitive_metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/PrimitiveMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "status": {
                 "type": [

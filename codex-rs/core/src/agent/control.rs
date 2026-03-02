@@ -851,6 +851,7 @@ mod tests {
             name: "spawn_agent".to_string(),
             arguments: "{}".to_string(),
             call_id: parent_spawn_call_id.clone(),
+            primitive_metadata: None,
         };
         parent_thread
             .codex
@@ -933,6 +934,7 @@ mod tests {
             name: "spawn_agent".to_string(),
             arguments: "{}".to_string(),
             call_id: parent_spawn_call_id.clone(),
+            primitive_metadata: None,
         };
         parent_thread
             .codex
@@ -1008,6 +1010,7 @@ mod tests {
             name: "spawn_agent".to_string(),
             arguments: "{}".to_string(),
             call_id: parent_spawn_call_id.clone(),
+            primitive_metadata: None,
         };
         parent_thread
             .codex

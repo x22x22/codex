@@ -522,6 +522,7 @@ mod tests {
                         call_id: "call-1".to_string(),
                         name: "tool".to_string(),
                         input: "{}".to_string(),
+                        primitive_metadata: None,
                     },
                 }),
             })

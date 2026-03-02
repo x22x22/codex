@@ -9,6 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::models::ApprovalSummary;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use tokio::sync::oneshot;
@@ -69,26 +70,62 @@ impl ActiveTurn {
 /// Mutable state for a single turn.
 #[derive(Default)]
 pub(crate) struct TurnState {
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_approvals: HashMap<String, PendingApproval>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
+    approval_summaries: HashMap<String, ApprovalSummary>,
+}
+
+pub(crate) struct PendingApproval {
+    pub(crate) tx: oneshot::Sender<ReviewDecision>,
+    pub(crate) work_item_call_id: String,
 }
 
 impl TurnState {
     pub(crate) fn insert_pending_approval(
         &mut self,
         key: String,
+        work_item_call_id: String,
         tx: oneshot::Sender<ReviewDecision>,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
-        self.pending_approvals.insert(key, tx)
+    ) -> Option<PendingApproval> {
+        self.pending_approvals.insert(
+            key,
+            PendingApproval {
+                tx,
+                work_item_call_id,
+            },
+        )
     }
 
-    pub(crate) fn remove_pending_approval(
-        &mut self,
-        key: &str,
-    ) -> Option<oneshot::Sender<ReviewDecision>> {
+    pub(crate) fn remove_pending_approval(&mut self, key: &str) -> Option<PendingApproval> {
         self.pending_approvals.remove(key)
+    }
+
+    pub(crate) fn record_approval_request(&mut self, call_id: &str) -> ApprovalSummary {
+        let summary = self
+            .approval_summaries
+            .entry(call_id.to_string())
+            .or_default();
+        summary.increment_request();
+        *summary
+    }
+
+    pub(crate) fn record_approval_decision(
+        &mut self,
+        call_id: &str,
+        decision: &ReviewDecision,
+    ) -> ApprovalSummary {
+        let summary = self
+            .approval_summaries
+            .entry(call_id.to_string())
+            .or_default();
+        summary.increment_decision(decision);
+        *summary
+    }
+
+    pub(crate) fn approval_summary(&self, call_id: &str) -> Option<ApprovalSummary> {
+        self.approval_summaries.get(call_id).copied()
     }
 
     pub(crate) fn clear_pending(&mut self) {
