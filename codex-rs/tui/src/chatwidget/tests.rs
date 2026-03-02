@@ -3612,6 +3612,48 @@ async fn live_legacy_agent_message_after_item_completed_does_not_duplicate_assis
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 
+#[test]
+fn rendered_user_message_event_from_inputs_matches_flattened_user_message_shape() {
+    let local_image = PathBuf::from("/tmp/local.png");
+    let rendered = ChatWidget::rendered_user_message_event_from_inputs(&[
+        UserInput::Text {
+            text: "hello ".to_string(),
+            text_elements: vec![TextElement::new((0..5).into(), None)],
+        },
+        UserInput::Image {
+            image_url: "https://example.com/remote.png".to_string(),
+        },
+        UserInput::LocalImage {
+            path: local_image.clone(),
+        },
+        UserInput::Skill {
+            name: "demo".to_string(),
+            path: PathBuf::from("/tmp/skill/SKILL.md"),
+        },
+        UserInput::Mention {
+            name: "repo".to_string(),
+            path: "app://repo".to_string(),
+        },
+        UserInput::Text {
+            text: "world".to_string(),
+            text_elements: vec![TextElement::new((0..5).into(), Some("planet".to_string()))],
+        },
+    ]);
+
+    assert_eq!(
+        rendered,
+        ChatWidget::rendered_user_message_event_from_parts(
+            "hello world".to_string(),
+            vec![
+                TextElement::new((0..5).into(), Some("hello".to_string())),
+                TextElement::new((6..11).into(), Some("planet".to_string())),
+            ],
+            vec![local_image],
+            vec!["https://example.com/remote.png".to_string()],
+        )
+    );
+}
+
 #[tokio::test]
 async fn item_completed_only_pops_front_pending_steer() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;

@@ -1,6 +1,4 @@
 use super::*;
-use codex_core::parse_turn_item;
-use codex_protocol::models::ResponseInputItem;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
@@ -92,14 +90,40 @@ impl ChatWidget {
     pub(super) fn rendered_user_message_event_from_inputs(
         items: &[UserInput],
     ) -> RenderedUserMessageEvent {
-        let response_item = ResponseInputItem::from(items.to_vec()).into();
-        let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) else {
-            unreachable!("user inputs must round-trip into a user-message turn item");
-        };
-        let EventMsg::UserMessage(event) = user_message.as_legacy_event() else {
-            unreachable!("UserMessageItem::as_legacy_event must return UserMessage");
-        };
-        Self::rendered_user_message_event_from_event(&event)
+        let mut message = String::new();
+        let mut remote_image_urls = Vec::new();
+        let mut local_images = Vec::new();
+        let mut text_elements = Vec::new();
+
+        for item in items {
+            match item {
+                UserInput::Text {
+                    text,
+                    text_elements: current_text_elements,
+                } => {
+                    let offset = message.len();
+                    for element in current_text_elements {
+                        text_elements.push(TextElement::new(
+                            (offset + element.byte_range.start..offset + element.byte_range.end)
+                                .into(),
+                            element.placeholder(text).map(str::to_string),
+                        ));
+                    }
+                    message.push_str(text);
+                }
+                UserInput::Image { image_url } => remote_image_urls.push(image_url.clone()),
+                UserInput::LocalImage { path } => local_images.push(path.clone()),
+                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                _ => {}
+            }
+        }
+
+        Self::rendered_user_message_event_from_parts(
+            message,
+            text_elements,
+            local_images,
+            remote_image_urls,
+        )
     }
 
     pub(super) fn should_render_realtime_user_message_event(
