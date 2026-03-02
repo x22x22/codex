@@ -1709,7 +1709,7 @@ async fn make_chatwidget_manual(
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),
-        pending_nudges: VecDeque::new(),
+        pending_steers: VecDeque::new(),
         queued_message_edit_binding: crate::key_hint::alt(KeyCode::Up),
         suppress_session_configured_redraw: false,
         pending_notification: None,
@@ -3470,7 +3470,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
 }
 
 #[tokio::test]
-async fn steer_enter_uses_pending_nudges_while_plan_stream_is_active() {
+async fn steer_enter_uses_pending_steers_while_plan_stream_is_active() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.set_feature_enabled(Feature::CollaborationModes, true);
@@ -3488,9 +3488,9 @@ async fn steer_enter_uses_pending_nudges_while_plan_stream_is_active() {
 
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Plan);
     assert!(chat.queued_user_messages.is_empty());
-    assert_eq!(chat.pending_nudges.len(), 1);
+    assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(
-        chat.pending_nudges.front().unwrap().message(),
+        chat.pending_steers.front().unwrap().message(),
         "queued submission"
     );
     match next_submit_op(&mut op_rx) {
@@ -3507,14 +3507,14 @@ async fn steer_enter_uses_pending_nudges_while_plan_stream_is_active() {
 
     chat.handle_codex_event(raw_user_message_event("queued submission"));
 
-    assert!(chat.pending_nudges.is_empty());
+    assert!(chat.pending_steers.is_empty());
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("queued submission"));
 }
 
 #[tokio::test]
-async fn steer_enter_uses_pending_nudges_while_turn_is_running_without_streaming() {
+async fn steer_enter_uses_pending_steers_while_turn_is_running_without_streaming() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
@@ -3524,9 +3524,9 @@ async fn steer_enter_uses_pending_nudges_while_turn_is_running_without_streaming
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert!(chat.queued_user_messages.is_empty());
-    assert_eq!(chat.pending_nudges.len(), 1);
+    assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(
-        chat.pending_nudges.front().unwrap().message(),
+        chat.pending_steers.front().unwrap().message(),
         "queued while running"
     );
     match next_submit_op(&mut op_rx) {
@@ -3537,14 +3537,14 @@ async fn steer_enter_uses_pending_nudges_while_turn_is_running_without_streaming
 
     chat.handle_codex_event(raw_user_message_event("queued while running"));
 
-    assert!(chat.pending_nudges.is_empty());
+    assert!(chat.pending_steers.is_empty());
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("queued while running"));
 }
 
 #[tokio::test]
-async fn steer_enter_uses_pending_nudges_while_final_answer_stream_is_active() {
+async fn steer_enter_uses_pending_steers_while_final_answer_stream_is_active() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
@@ -3560,9 +3560,9 @@ async fn steer_enter_uses_pending_nudges_while_final_answer_stream_is_active() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert!(chat.queued_user_messages.is_empty());
-    assert_eq!(chat.pending_nudges.len(), 1);
+    assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(
-        chat.pending_nudges.front().unwrap().message(),
+        chat.pending_steers.front().unwrap().message(),
         "queued while streaming"
     );
     match next_submit_op(&mut op_rx) {
@@ -3573,14 +3573,14 @@ async fn steer_enter_uses_pending_nudges_while_final_answer_stream_is_active() {
 
     chat.handle_codex_event(raw_user_message_event("queued while streaming"));
 
-    assert!(chat.pending_nudges.is_empty());
+    assert!(chat.pending_steers.is_empty());
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("queued while streaming"));
 }
 
 #[tokio::test]
-async fn failed_pending_nudge_submit_does_not_add_pending_preview() {
+async fn failed_pending_steer_submit_does_not_add_pending_preview() {
     let (mut chat, mut rx, op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
@@ -3593,13 +3593,13 @@ async fn failed_pending_nudge_submit_does_not_add_pending_preview() {
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert!(chat.pending_nudges.is_empty());
+    assert!(chat.pending_steers.is_empty());
     assert!(chat.queued_user_messages.is_empty());
     assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[tokio::test]
-async fn raw_response_item_with_canonicalized_user_payload_clears_pending_nudge() {
+async fn raw_response_item_with_canonicalized_user_payload_clears_pending_steer() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let items = vec![
         UserInput::Text {
@@ -3611,7 +3611,7 @@ async fn raw_response_item_with_canonicalized_user_payload_clears_pending_nudge(
             text_elements: vec![TextElement::new((1..6).into(), Some("world".to_string()))],
         },
     ];
-    chat.pending_nudges
+    chat.pending_steers
         .push_back(ChatWidget::rendered_user_message_event_from_inputs(&items));
     chat.refresh_pending_input_preview();
 
@@ -3620,7 +3620,7 @@ async fn raw_response_item_with_canonicalized_user_payload_clears_pending_nudge(
         items,
     ));
 
-    assert!(chat.pending_nudges.is_empty());
+    assert!(chat.pending_steers.is_empty());
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("hello world"));
@@ -3670,16 +3670,16 @@ async fn live_legacy_agent_message_after_item_completed_does_not_duplicate_assis
 }
 
 #[tokio::test]
-async fn raw_response_item_only_pops_front_pending_nudge() {
+async fn raw_response_item_only_pops_front_pending_steer() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.pending_nudges
+    chat.pending_steers
         .push_back(ChatWidget::rendered_user_message_event_from_inputs(&[
             UserInput::Text {
                 text: "first".to_string(),
                 text_elements: Vec::new(),
             },
         ]));
-    chat.pending_nudges
+    chat.pending_steers
         .push_back(ChatWidget::rendered_user_message_event_from_inputs(&[
             UserInput::Text {
                 text: "second".to_string(),
@@ -3690,16 +3690,16 @@ async fn raw_response_item_only_pops_front_pending_nudge() {
 
     chat.handle_codex_event(raw_user_message_event("other"));
 
-    assert_eq!(chat.pending_nudges.len(), 2);
-    assert_eq!(chat.pending_nudges.front().unwrap().message(), "first");
+    assert_eq!(chat.pending_steers.len(), 2);
+    assert_eq!(chat.pending_steers.front().unwrap().message(), "first");
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("other"));
 
     chat.handle_codex_event(raw_user_message_event("first"));
 
-    assert_eq!(chat.pending_nudges.len(), 1);
-    assert_eq!(chat.pending_nudges.front().unwrap().message(), "second");
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(chat.pending_steers.front().unwrap().message(), "second");
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("first"));
@@ -3722,13 +3722,13 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert!(chat.queued_user_messages.is_empty());
-    assert_eq!(chat.pending_nudges.len(), 2);
+    assert_eq!(chat.pending_steers.len(), 2);
     assert_eq!(
-        chat.pending_nudges.front().unwrap().message(),
+        chat.pending_steers.front().unwrap().message(),
         "first follow-up"
     );
     assert_eq!(
-        chat.pending_nudges.back().unwrap().message(),
+        chat.pending_steers.back().unwrap().message(),
         "second follow-up"
     );
 
@@ -3758,9 +3758,9 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
 
     chat.handle_codex_event(raw_user_message_event("first follow-up"));
 
-    assert_eq!(chat.pending_nudges.len(), 1);
+    assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(
-        chat.pending_nudges.front().unwrap().message(),
+        chat.pending_steers.front().unwrap().message(),
         "second follow-up"
     );
     let first_insert = drain_insert_history(&mut rx);
@@ -3769,14 +3769,14 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
 
     chat.handle_codex_event(raw_user_message_event("second follow-up"));
 
-    assert!(chat.pending_nudges.is_empty());
+    assert!(chat.pending_steers.is_empty());
     let second_insert = drain_insert_history(&mut rx);
     assert_eq!(second_insert.len(), 1);
     assert!(lines_to_single_string(&second_insert[0]).contains("second follow-up"));
 }
 
 #[tokio::test]
-async fn manual_interrupt_keeps_pending_nudges_pending_until_core_commits_them() {
+async fn manual_interrupt_keeps_pending_steers_pending_until_core_commits_them() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
@@ -3789,7 +3789,7 @@ async fn manual_interrupt_keeps_pending_nudges_pending_until_core_commits_them()
     );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    assert_eq!(chat.pending_nudges.len(), 1);
+    assert_eq!(chat.pending_steers.len(), 1);
     match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => assert_eq!(
             items,
@@ -3804,16 +3804,16 @@ async fn manual_interrupt_keeps_pending_nudges_pending_until_core_commits_them()
 
     chat.on_interrupted_turn(TurnAbortReason::Interrupted);
 
-    assert_eq!(chat.pending_nudges.len(), 1);
+    assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(
-        chat.pending_nudges.front().unwrap().message(),
+        chat.pending_steers.front().unwrap().message(),
         "queued while streaming"
     );
     assert_no_submit_op(&mut op_rx);
 
     chat.handle_codex_event(raw_user_message_event("queued while streaming"));
 
-    assert!(chat.pending_nudges.is_empty());
+    assert!(chat.pending_steers.is_empty());
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 2);
     assert!(lines_to_single_string(&inserted[1]).contains("queued while streaming"));

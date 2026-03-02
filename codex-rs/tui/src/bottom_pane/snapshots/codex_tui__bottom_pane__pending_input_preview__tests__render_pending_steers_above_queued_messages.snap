@@ -1,12 +1,12 @@
 ---
-source: tui/src/bottom_pane/queued_user_messages.rs
+source: tui/src/bottom_pane/pending_input_preview.rs
 expression: "format!(\"{buf:?}\")"
 ---
 Buffer {
     area: Rect { x: 0, y: 0, width: 52, height: 5 },
     content: [
-        "  ! pending nudge: Implement the plan.              ",
-        "  ! pending nudge: Summarize the diff after the tool",
+        "  ! pending steer: Implement the plan.              ",
+        "  ! pending steer: Summarize the diff after the tool",
         "    call.                                           ",
         "  ↳ Queued follow-up question                       ",
         "    ⌥ + ↑ edit                                      ",

@@ -620,11 +620,11 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
-    // Nudges already submitted to core but not yet committed into history.
+    // Steers already submitted to core but not yet committed into history.
     //
     // The bottom pane shows these above queued drafts until core records the
     // corresponding user message and emits the matching raw response item.
-    pending_nudges: VecDeque<RenderedUserMessageEvent>,
+    pending_steers: VecDeque<RenderedUserMessageEvent>,
     /// Terminal-appropriate keybinding for popping the most-recently queued
     /// message back into the composer.  Determined once at construction time via
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
@@ -2937,7 +2937,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
-            pending_nudges: VecDeque::new(),
+            pending_steers: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3121,7 +3121,7 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
-            pending_nudges: VecDeque::new(),
+            pending_steers: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3286,7 +3286,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
-            pending_nudges: VecDeque::new(),
+            pending_steers: VecDeque::new(),
             queued_message_edit_binding,
             show_welcome_banner: false,
             startup_tooltip_override: None,
@@ -3462,10 +3462,10 @@ impl ChatWidget {
                     else {
                         return;
                     };
-                    let should_preview_as_pending_nudge = self.is_session_configured()
+                    let should_preview_as_pending_steer = self.is_session_configured()
                         && self.bottom_pane.is_task_running()
                         && !self.is_review_mode;
-                    if should_preview_as_pending_nudge {
+                    if should_preview_as_pending_steer {
                         self.submit_user_message_internal(user_message, false);
                     } else if self.is_session_configured() {
                         // Submitted is only emitted when steer is enabled.
@@ -4252,7 +4252,7 @@ impl ChatWidget {
         } else {
             None
         };
-        let pending_nudge =
+        let pending_steer =
             (!render_in_history).then(|| Self::rendered_user_message_event_from_inputs(&items));
         let personality = self
             .config
@@ -4293,8 +4293,8 @@ impl ChatWidget {
                 });
         }
 
-        if let Some(pending_nudge) = pending_nudge {
-            self.pending_nudges.push_back(pending_nudge);
+        if let Some(pending_steer) = pending_steer {
+            self.pending_steers.push_back(pending_steer);
             self.refresh_pending_input_preview();
         }
 
@@ -4558,8 +4558,8 @@ impl ChatWidget {
                     && let EventMsg::UserMessage(user_message) = item.as_legacy_event()
                 {
                     let rendered = Self::rendered_user_message_event_from_event(&user_message);
-                    let should_render = if self.pending_nudges.front() == Some(&rendered) {
-                        self.pending_nudges.pop_front();
+                    let should_render = if self.pending_steers.front() == Some(&rendered) {
+                        self.pending_steers.pop_front();
                         self.refresh_pending_input_preview();
                         true
                     } else {
@@ -4783,13 +4783,13 @@ impl ChatWidget {
             .iter()
             .map(|m| m.text.clone())
             .collect();
-        let pending_nudges: Vec<String> = self
-            .pending_nudges
+        let pending_steers: Vec<String> = self
+            .pending_steers
             .iter()
-            .map(|nudge| nudge.message().to_string())
+            .map(|steer| steer.message().to_string())
             .collect();
         self.bottom_pane
-            .set_pending_input_preview(messages, pending_nudges);
+            .set_pending_input_preview(messages, pending_steers);
     }
 
     pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {

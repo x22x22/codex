@@ -172,7 +172,7 @@ pub(crate) struct BottomPane {
     /// When a status row exists, this summary is mirrored inline in that row;
     /// when no status row exists, it renders as its own footer row.
     unified_exec_footer: UnifiedExecFooter,
-    /// Preview of pending nudges and queued drafts shown above the composer.
+    /// Preview of pending steers and queued drafts shown above the composer.
     pending_input_preview: PendingInputPreview,
     /// Inactive threads with pending approval requests.
     pending_thread_approvals: PendingThreadApprovals,
@@ -773,9 +773,9 @@ impl BottomPane {
     pub(crate) fn set_pending_input_preview(
         &mut self,
         queued: Vec<String>,
-        pending_nudges: Vec<String>,
+        pending_steers: Vec<String>,
     ) {
-        self.pending_input_preview.pending_nudges = pending_nudges;
+        self.pending_input_preview.pending_steers = pending_steers;
         self.pending_input_preview.messages = queued;
         self.request_redraw();
     }
@@ -1020,7 +1020,7 @@ impl BottomPane {
             }
             let has_pending_thread_approvals = !self.pending_thread_approvals.is_empty();
             let has_pending_input = !self.pending_input_preview.messages.is_empty()
-                || !self.pending_input_preview.pending_nudges.is_empty();
+                || !self.pending_input_preview.pending_steers.is_empty();
             let has_status_or_footer =
                 self.status.is_some() || !self.unified_exec_footer.is_empty();
             let has_inline_previews = has_pending_thread_approvals || has_pending_input;

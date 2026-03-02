@@ -10,15 +10,15 @@ use crate::render::renderable::Renderable;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
 
-/// Widget that displays pending nudges plus user messages queued while a turn is in progress.
+/// Widget that displays pending steers plus user messages queued while a turn is in progress.
 ///
-/// The widget shows pending nudges first, then queued user messages. It only
+/// The widget shows pending steers first, then queued user messages. It only
 /// shows the edit hint at the bottom (e.g. "⌥ + ↑ edit") when there are actual
 /// queued user messages to pop back into the composer. Because some terminals
 /// intercept certain modifier-key combinations, the displayed binding is
 /// configurable via [`set_edit_binding`](Self::set_edit_binding).
 pub(crate) struct PendingInputPreview {
-    pub pending_nudges: Vec<String>,
+    pub pending_steers: Vec<String>,
     pub messages: Vec<String>,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
@@ -28,7 +28,7 @@ pub(crate) struct PendingInputPreview {
 impl PendingInputPreview {
     pub(crate) fn new() -> Self {
         Self {
-            pending_nudges: Vec::new(),
+            pending_steers: Vec::new(),
             messages: Vec::new(),
             edit_binding: key_hint::alt(KeyCode::Up),
         }
@@ -42,17 +42,17 @@ impl PendingInputPreview {
     }
 
     fn as_renderable(&self, width: u16) -> Box<dyn Renderable> {
-        if (self.pending_nudges.is_empty() && self.messages.is_empty()) || width < 4 {
+        if (self.pending_steers.is_empty() && self.messages.is_empty()) || width < 4 {
             return Box::new(());
         }
 
         let mut lines = vec![];
 
-        for nudge in &self.pending_nudges {
+        for steer in &self.pending_steers {
             let wrapped = adaptive_wrap_lines(
-                nudge
+                steer
                     .lines()
-                    .map(|line| format!("pending nudge: {line}").dim()),
+                    .map(|line| format!("pending steer: {line}").dim()),
                 RtOptions::new(width as usize)
                     .initial_indent(Line::from("  ! ".dim()))
                     .subsequent_indent(Line::from("    ")),
@@ -227,22 +227,22 @@ mod tests {
     }
 
     #[test]
-    fn render_one_pending_nudge() {
+    fn render_one_pending_steer() {
         let mut queue = PendingInputPreview::new();
-        queue.pending_nudges.push("Implement the plan.".to_string());
+        queue.pending_steers.push("Implement the plan.".to_string());
         let width = 48;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         queue.render(Rect::new(0, 0, width, height), &mut buf);
-        assert_snapshot!("render_one_pending_nudge", format!("{buf:?}"));
+        assert_snapshot!("render_one_pending_steer", format!("{buf:?}"));
     }
 
     #[test]
-    fn render_pending_nudges_above_queued_messages() {
+    fn render_pending_steers_above_queued_messages() {
         let mut queue = PendingInputPreview::new();
-        queue.pending_nudges.push("Implement the plan.".to_string());
+        queue.pending_steers.push("Implement the plan.".to_string());
         queue
-            .pending_nudges
+            .pending_steers
             .push("Summarize the diff after the tool call.".to_string());
         queue.messages.push("Queued follow-up question".to_string());
         let width = 52;
@@ -250,7 +250,7 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
         queue.render(Rect::new(0, 0, width, height), &mut buf);
         assert_snapshot!(
-            "render_pending_nudges_above_queued_messages",
+            "render_pending_steers_above_queued_messages",
             format!("{buf:?}")
         );
     }
