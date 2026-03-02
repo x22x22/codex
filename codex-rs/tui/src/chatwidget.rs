@@ -4637,9 +4637,15 @@ impl ChatWidget {
                         unreachable!("user message item should convert to a legacy user message");
                     };
                     let rendered = Self::rendered_user_message_event_from_event(&event);
-                    if self.pending_steers.front() == Some(&rendered) {
+                    let should_render = if self.pending_steers.front() == Some(&rendered) {
                         self.pending_steers.pop_front();
                         self.refresh_pending_input_preview();
+                        true
+                    } else {
+                        self.last_rendered_user_message_event.as_ref() != Some(&rendered)
+                    };
+                    if should_render {
+                        self.on_user_message_event(event);
                     }
                 }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {

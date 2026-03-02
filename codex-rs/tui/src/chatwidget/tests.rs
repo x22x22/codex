@@ -3527,6 +3527,9 @@ async fn steer_enter_uses_pending_steers_while_turn_is_running_without_streaming
     complete_user_message(&mut chat, "user-1", "queued while running");
 
     assert!(chat.pending_steers.is_empty());
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("queued while running"));
 }
 
 #[tokio::test]
@@ -3560,6 +3563,9 @@ async fn steer_enter_uses_pending_steers_while_final_answer_stream_is_active() {
     complete_user_message(&mut chat, "user-1", "queued while streaming");
 
     assert!(chat.pending_steers.is_empty());
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("queued while streaming"));
 }
 
 #[tokio::test]
@@ -3608,7 +3614,7 @@ async fn live_legacy_agent_message_after_item_completed_does_not_duplicate_assis
 
 #[tokio::test]
 async fn item_completed_only_pops_front_pending_steer() {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     chat.pending_steers
         .push_back(ChatWidget::rendered_user_message_event_from_inputs(&[
             UserInput::Text {
@@ -3629,11 +3635,17 @@ async fn item_completed_only_pops_front_pending_steer() {
 
     assert_eq!(chat.pending_steers.len(), 2);
     assert_eq!(chat.pending_steers.front().unwrap().message(), "first");
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("other"));
 
     complete_user_message(&mut chat, "user-first", "first");
 
     assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(chat.pending_steers.front().unwrap().message(), "second");
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("first"));
 }
 
 #[tokio::test]
@@ -3694,10 +3706,16 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
         chat.pending_steers.front().unwrap().message(),
         "second follow-up"
     );
+    let first_insert = drain_insert_history(&mut rx);
+    assert_eq!(first_insert.len(), 1);
+    assert!(lines_to_single_string(&first_insert[0]).contains("first follow-up"));
 
     complete_user_message(&mut chat, "user-2", "second follow-up");
 
     assert!(chat.pending_steers.is_empty());
+    let second_insert = drain_insert_history(&mut rx);
+    assert_eq!(second_insert.len(), 1);
+    assert!(lines_to_single_string(&second_insert[0]).contains("second follow-up"));
 }
 
 #[tokio::test]
@@ -3739,6 +3757,9 @@ async fn manual_interrupt_keeps_pending_steers_pending_until_core_commits_them()
     complete_user_message(&mut chat, "user-1", "queued while streaming");
 
     assert!(chat.pending_steers.is_empty());
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 2);
+    assert!(lines_to_single_string(&inserted[1]).contains("queued while streaming"));
 }
 
 #[tokio::test]
