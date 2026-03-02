@@ -785,6 +785,21 @@ pub(crate) fn create_initial_user_message(
     }
 }
 
+fn append_text_with_rebased_elements(
+    target_text: &mut String,
+    target_text_elements: &mut Vec<TextElement>,
+    text: &str,
+    text_elements: impl IntoIterator<Item = TextElement>,
+) {
+    let offset = target_text.len();
+    target_text.push_str(text);
+    target_text_elements.extend(text_elements.into_iter().map(|mut element| {
+        element.byte_range.start += offset;
+        element.byte_range.end += offset;
+        element
+    }));
+}
+
 // When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
 // its attachments at [Image #1]. Reassign placeholder labels based on the attachment list so
 // the combined local_image_paths order matches the labels, even if placeholders were moved
@@ -1954,7 +1969,6 @@ impl ChatWidget {
             remote_image_urls: Vec::new(),
             mention_bindings: Vec::new(),
         };
-        let mut combined_offset = 0usize;
         let total_remote_images = to_merge
             .iter()
             .map(|message| message.remote_image_urls.len())
@@ -1964,22 +1978,23 @@ impl ChatWidget {
         for (idx, message) in to_merge.into_iter().enumerate() {
             if idx > 0 {
                 combined.text.push('\n');
-                combined_offset += 1;
             }
-            let message = remap_placeholders_for_message(message, &mut next_image_label);
-            let base = combined_offset;
-            combined.text.push_str(&message.text);
-            combined_offset += message.text.len();
-            combined
-                .text_elements
-                .extend(message.text_elements.into_iter().map(|mut elem| {
-                    elem.byte_range.start += base;
-                    elem.byte_range.end += base;
-                    elem
-                }));
-            combined.local_images.extend(message.local_images);
-            combined.remote_image_urls.extend(message.remote_image_urls);
-            combined.mention_bindings.extend(message.mention_bindings);
+            let UserMessage {
+                text,
+                text_elements,
+                local_images,
+                remote_image_urls,
+                mention_bindings,
+            } = remap_placeholders_for_message(message, &mut next_image_label);
+            append_text_with_rebased_elements(
+                &mut combined.text,
+                &mut combined.text_elements,
+                &text,
+                text_elements,
+            );
+            combined.local_images.extend(local_images);
+            combined.remote_image_urls.extend(remote_image_urls);
+            combined.mention_bindings.extend(mention_bindings);
         }
 
         Some(combined)

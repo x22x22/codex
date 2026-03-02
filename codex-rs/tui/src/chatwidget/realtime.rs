@@ -100,17 +100,17 @@ impl ChatWidget {
                 UserInput::Text {
                     text,
                     text_elements: current_text_elements,
-                } => {
-                    let offset = message.len();
-                    for element in current_text_elements {
-                        text_elements.push(TextElement::new(
-                            (offset + element.byte_range.start..offset + element.byte_range.end)
-                                .into(),
+                } => append_text_with_rebased_elements(
+                    &mut message,
+                    &mut text_elements,
+                    text,
+                    current_text_elements.iter().map(|element| {
+                        TextElement::new(
+                            element.byte_range,
                             element.placeholder(text).map(str::to_string),
-                        ));
-                    }
-                    message.push_str(text);
-                }
+                        )
+                    }),
+                ),
                 UserInput::Image { image_url } => remote_image_urls.push(image_url.clone()),
                 UserInput::LocalImage { path } => local_images.push(path.clone()),
                 UserInput::Skill { .. } | UserInput::Mention { .. } => {}
