@@ -604,6 +604,7 @@ mod tests {
                 models: vec![remote],
             }),
             CollaborationModesConfig::default(),
+            None,
         );
         let namespaced_model = "custom/gpt-image".to_string();
 
@@ -629,6 +630,7 @@ mod tests {
             auth_manager,
             None,
             CollaborationModesConfig::default(),
+            None,
         );
         let known_slug = manager
             .get_remote_models()
