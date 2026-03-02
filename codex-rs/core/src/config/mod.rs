@@ -1897,12 +1897,6 @@ impl Config {
             &mut constrained_approval_policy,
             &mut startup_warnings,
         )?;
-        apply_requirement_constrained_value(
-            "sandbox_mode",
-            sandbox_policy,
-            &mut constrained_sandbox_policy,
-            &mut startup_warnings,
-        )?;
         if let Some(Sourced {
             value: filesystem_requirements,
             source: filesystem_requirements_source,
@@ -1910,6 +1904,21 @@ impl Config {
             && !filesystem_requirements.deny_read.is_empty()
         {
             let deny_read_paths = expand_deny_read_patterns(&filesystem_requirements.deny_read);
+            let requirement_source = filesystem_requirements_source.clone();
+            constrained_sandbox_policy
+                .value
+                .add_validator(move |policy| match policy {
+                    SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => Ok(()),
+                    SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+                        Err(ConstraintError::InvalidValue {
+                            field_name: "sandbox_mode",
+                            candidate: policy.to_string(),
+                            allowed: "[read-only, workspace-write]".to_string(),
+                            requirement_source: requirement_source.clone(),
+                        })
+                    }
+                })
+                .map_err(std::io::Error::from)?;
             constrained_sandbox_policy
                 .value
                 .add_normalizer(move |mut policy| {
@@ -1924,6 +1933,12 @@ impl Config {
                 ));
             }
         }
+        apply_requirement_constrained_value(
+            "sandbox_mode",
+            sandbox_policy,
+            &mut constrained_sandbox_policy,
+            &mut startup_warnings,
+        )?;
         apply_requirement_constrained_value(
             "web_search_mode",
             web_search_mode,
@@ -5667,7 +5682,6 @@ mcp_oauth_callback_url = "https://example.com/callback"
             config.permissions.sandbox_policy.get().denied_read_paths(),
             vec![top_match, nested_match]
         );
-
         Ok(())
     }
 
@@ -5715,12 +5729,10 @@ mcp_oauth_callback_url = "https://example.com/callback"
     }
 
     #[tokio::test]
-    async fn requirements_filesystem_deny_read_normalizes_danger_full_access() -> std::io::Result<()>
-    {
+    async fn requirements_filesystem_deny_read_rejects_unsupported_sandbox_mode_changes()
+    -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let denied_path = codex_home.path().join("sensitive").join("secret.txt");
-        let denied_path =
-            AbsolutePathBuf::try_from(denied_path).expect("deny_read test path should be absolute");
 
         let mut config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
@@ -5743,18 +5755,75 @@ mcp_oauth_callback_url = "https://example.com/callback"
             .build()
             .await?;
 
-        config
+        let err = config
             .permissions
             .sandbox_policy
             .set(SandboxPolicy::DangerFullAccess)
-            .map_err(std::io::Error::from)?;
+            .expect_err("danger-full-access should be rejected");
 
-        assert_eq!(
-            *config.permissions.sandbox_policy.get(),
-            SandboxPolicy::ExternalSandbox {
+        assert!(err.to_string().contains("sandbox_mode"));
+        assert!(err.to_string().contains("read-only, workspace-write"));
+
+        let err = config
+            .permissions
+            .sandbox_policy
+            .set(SandboxPolicy::ExternalSandbox {
                 network_access: crate::protocol::NetworkAccess::Enabled,
-                deny_read_paths: vec![denied_path],
-            }
+                deny_read_paths: vec![],
+            })
+            .expect_err("external-sandbox should be rejected");
+
+        assert!(err.to_string().contains("sandbox_mode"));
+        assert!(err.to_string().contains("read-only, workspace-write"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_sandbox_mode_falls_back_when_deny_read_rejects_full_access()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"sandbox_mode = "danger-full-access"
+"#,
+        )?;
+
+        let denied_path =
+            AbsolutePathBuf::try_from(codex_home.path().join("sensitive").join("secret.txt"))
+                .expect("deny_read test path should be absolute");
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new({
+                let denied_path = denied_path.clone();
+                async move {
+                    Some(
+                        toml::from_str::<crate::config_loader::ConfigRequirementsToml>(&format!(
+                            r#"
+                                [permissions.filesystem]
+                                deny_read = [{:?}]
+                            "#,
+                            denied_path.as_path().display().to_string()
+                        ))
+                        .expect("parse requirements toml"),
+                    )
+                }
+            }))
+            .build()
+            .await?;
+
+        let policy = config.permissions.sandbox_policy.get();
+
+        assert!(matches!(
+            policy,
+            SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
+        ));
+        assert_eq!(policy.denied_read_paths(), vec![denied_path]);
+        assert!(
+            config.startup_warnings.iter().any(
+                |warning| warning.contains("Configured value for `sandbox_mode` is disallowed")
+            )
         );
 
         Ok(())

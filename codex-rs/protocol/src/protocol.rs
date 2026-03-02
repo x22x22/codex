@@ -738,19 +738,7 @@ impl SandboxPolicy {
             | SandboxPolicy::WorkspaceWrite {
                 deny_read_paths, ..
             } => deny_read_paths,
-            SandboxPolicy::DangerFullAccess => {
-                *self = SandboxPolicy::ExternalSandbox {
-                    network_access: NetworkAccess::Enabled,
-                    deny_read_paths: Vec::new(),
-                };
-                let SandboxPolicy::ExternalSandbox {
-                    deny_read_paths, ..
-                } = self
-                else {
-                    unreachable!("danger-full-access should normalize to external-sandbox");
-                };
-                deny_read_paths
-            }
+            SandboxPolicy::DangerFullAccess => return,
         };
 
         target_paths.extend(new_paths.iter().cloned());
@@ -3037,7 +3025,7 @@ mod tests {
     }
 
     #[test]
-    fn append_deny_read_paths_normalizes_danger_full_access() {
+    fn append_deny_read_paths_ignores_danger_full_access() {
         let denied_path = if cfg!(windows) {
             AbsolutePathBuf::try_from(r"C:\sensitive\secret.txt").expect("absolute path")
         } else {
@@ -3047,13 +3035,7 @@ mod tests {
 
         policy.append_deny_read_paths(std::slice::from_ref(&denied_path));
 
-        assert_eq!(
-            policy,
-            SandboxPolicy::ExternalSandbox {
-                network_access: NetworkAccess::Enabled,
-                deny_read_paths: vec![denied_path],
-            }
-        );
+        assert_eq!(policy, SandboxPolicy::DangerFullAccess);
     }
 
     #[test]
