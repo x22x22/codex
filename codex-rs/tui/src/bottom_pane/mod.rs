@@ -776,7 +776,7 @@ impl BottomPane {
         pending_steers: Vec<String>,
     ) {
         self.pending_input_preview.pending_steers = pending_steers;
-        self.pending_input_preview.messages = queued;
+        self.pending_input_preview.queued_messages = queued;
         self.request_redraw();
     }
 
@@ -1019,7 +1019,7 @@ impl BottomPane {
                 flex.push(0, RenderableItem::Borrowed(&self.unified_exec_footer));
             }
             let has_pending_thread_approvals = !self.pending_thread_approvals.is_empty();
-            let has_pending_input = !self.pending_input_preview.messages.is_empty()
+            let has_pending_input = !self.pending_input_preview.queued_messages.is_empty()
                 || !self.pending_input_preview.pending_steers.is_empty();
             let has_status_or_footer =
                 self.status.is_some() || !self.unified_exec_footer.is_empty();

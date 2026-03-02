@@ -19,7 +19,7 @@ use crate::wrapping::adaptive_wrap_lines;
 /// configurable via [`set_edit_binding`](Self::set_edit_binding).
 pub(crate) struct PendingInputPreview {
     pub pending_steers: Vec<String>,
-    pub messages: Vec<String>,
+    pub queued_messages: Vec<String>,
     /// Key combination rendered in the hint line.  Defaults to Alt+Up but may
     /// be overridden for terminals where that chord is unavailable.
     edit_binding: key_hint::KeyBinding,
@@ -29,7 +29,7 @@ impl PendingInputPreview {
     pub(crate) fn new() -> Self {
         Self {
             pending_steers: Vec::new(),
-            messages: Vec::new(),
+            queued_messages: Vec::new(),
             edit_binding: key_hint::alt(KeyCode::Up),
         }
     }
@@ -42,7 +42,7 @@ impl PendingInputPreview {
     }
 
     fn as_renderable(&self, width: u16) -> Box<dyn Renderable> {
-        if (self.pending_steers.is_empty() && self.messages.is_empty()) || width < 4 {
+        if (self.pending_steers.is_empty() && self.queued_messages.is_empty()) || width < 4 {
             return Box::new(());
         }
 
@@ -66,7 +66,7 @@ impl PendingInputPreview {
             }
         }
 
-        for message in &self.messages {
+        for message in &self.queued_messages {
             let wrapped = adaptive_wrap_lines(
                 message.lines().map(|line| line.dim().italic()),
                 RtOptions::new(width as usize)
@@ -82,7 +82,7 @@ impl PendingInputPreview {
             }
         }
 
-        if !self.messages.is_empty() {
+        if !self.queued_messages.is_empty() {
             lines.push(
                 Line::from(vec![
                     "    ".into(),
@@ -126,14 +126,14 @@ mod tests {
     #[test]
     fn desired_height_one_message() {
         let mut queue = PendingInputPreview::new();
-        queue.messages.push("Hello, world!".to_string());
+        queue.queued_messages.push("Hello, world!".to_string());
         assert_eq!(queue.desired_height(40), 2);
     }
 
     #[test]
     fn render_one_message() {
         let mut queue = PendingInputPreview::new();
-        queue.messages.push("Hello, world!".to_string());
+        queue.queued_messages.push("Hello, world!".to_string());
         let width = 40;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -144,8 +144,10 @@ mod tests {
     #[test]
     fn render_two_messages() {
         let mut queue = PendingInputPreview::new();
-        queue.messages.push("Hello, world!".to_string());
-        queue.messages.push("This is another message".to_string());
+        queue.queued_messages.push("Hello, world!".to_string());
+        queue
+            .queued_messages
+            .push("This is another message".to_string());
         let width = 40;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -156,10 +158,16 @@ mod tests {
     #[test]
     fn render_more_than_three_messages() {
         let mut queue = PendingInputPreview::new();
-        queue.messages.push("Hello, world!".to_string());
-        queue.messages.push("This is another message".to_string());
-        queue.messages.push("This is a third message".to_string());
-        queue.messages.push("This is a fourth message".to_string());
+        queue.queued_messages.push("Hello, world!".to_string());
+        queue
+            .queued_messages
+            .push("This is another message".to_string());
+        queue
+            .queued_messages
+            .push("This is a third message".to_string());
+        queue
+            .queued_messages
+            .push("This is a fourth message".to_string());
         let width = 40;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -171,9 +179,11 @@ mod tests {
     fn render_wrapped_message() {
         let mut queue = PendingInputPreview::new();
         queue
-            .messages
+            .queued_messages
             .push("This is a longer message that should be wrapped".to_string());
-        queue.messages.push("This is another message".to_string());
+        queue
+            .queued_messages
+            .push("This is another message".to_string());
         let width = 40;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -185,7 +195,7 @@ mod tests {
     fn render_many_line_message() {
         let mut queue = PendingInputPreview::new();
         queue
-            .messages
+            .queued_messages
             .push("This is\na message\nwith many\nlines".to_string());
         let width = 40;
         let height = queue.desired_height(width);
@@ -197,7 +207,7 @@ mod tests {
     #[test]
     fn long_url_like_message_does_not_expand_into_wrapped_ellipsis_rows() {
         let mut queue = PendingInputPreview::new();
-        queue.messages.push(
+        queue.queued_messages.push(
             "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/session_id=abc123def456ghi789"
                 .to_string(),
         );
@@ -244,7 +254,9 @@ mod tests {
         queue
             .pending_steers
             .push("Check the last command output.".to_string());
-        queue.messages.push("Queued follow-up question".to_string());
+        queue
+            .queued_messages
+            .push("Queued follow-up question".to_string());
         let width = 52;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));

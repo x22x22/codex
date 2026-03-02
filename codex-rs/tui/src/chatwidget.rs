@@ -4803,7 +4803,7 @@ impl ChatWidget {
 
     /// Rebuild and update the bottom-pane pending-input preview.
     fn refresh_pending_input_preview(&mut self) {
-        let messages: Vec<String> = self
+        let queued_messages: Vec<String> = self
             .queued_user_messages
             .iter()
             .map(|m| m.text.clone())
@@ -4814,7 +4814,7 @@ impl ChatWidget {
             .map(|steer| steer.message().to_string())
             .collect();
         self.bottom_pane
-            .set_pending_input_preview(messages, pending_steers);
+            .set_pending_input_preview(queued_messages, pending_steers);
     }
 
     pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {
