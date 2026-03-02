@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn render_one_pending_steer() {
         let mut queue = PendingInputPreview::new();
-        queue.pending_steers.push("Implement the plan.".to_string());
+        queue.pending_steers.push("Please continue.".to_string());
         let width = 48;
         let height = queue.desired_height(width);
         let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
@@ -240,10 +240,10 @@ mod tests {
     #[test]
     fn render_pending_steers_above_queued_messages() {
         let mut queue = PendingInputPreview::new();
-        queue.pending_steers.push("Implement the plan.".to_string());
+        queue.pending_steers.push("Please continue.".to_string());
         queue
             .pending_steers
-            .push("Summarize the diff after the tool call.".to_string());
+            .push("Check the last command output.".to_string());
         queue.messages.push("Queued follow-up question".to_string());
         let width = 52;
         let height = queue.desired_height(width);
