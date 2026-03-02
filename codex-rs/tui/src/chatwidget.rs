@@ -1901,6 +1901,10 @@ impl ChatWidget {
         if reason == TurnAbortReason::Interrupted {
             self.clear_unified_exec_processes();
         }
+        // Core clears pending_input before emitting TurnAborted, so any unacknowledged steers
+        // still tracked here can no longer be committed for this turn.
+        self.pending_steers.clear();
+        self.refresh_pending_input_preview();
 
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
@@ -1910,7 +1914,6 @@ impl ChatWidget {
 
         if let Some(combined) = self.drain_queued_messages_for_restore() {
             self.restore_user_message_to_composer(combined);
-            self.refresh_pending_input_preview();
         }
 
         self.request_redraw();

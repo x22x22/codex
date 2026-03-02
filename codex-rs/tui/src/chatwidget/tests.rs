@@ -3761,7 +3761,7 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
 }
 
 #[tokio::test]
-async fn manual_interrupt_keeps_pending_steers_pending_until_core_commits_them() {
+async fn manual_interrupt_clears_pending_steers() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
@@ -3789,19 +3789,16 @@ async fn manual_interrupt_keeps_pending_steers_pending_until_core_commits_them()
 
     chat.on_interrupted_turn(TurnAbortReason::Interrupted);
 
-    assert_eq!(chat.pending_steers.len(), 1);
-    assert_eq!(
-        chat.pending_steers.front().unwrap().message(),
-        "queued while streaming"
-    );
+    assert!(chat.pending_steers.is_empty());
+    assert_eq!(chat.bottom_pane.composer_text(), "");
     assert_no_submit_op(&mut op_rx);
 
-    complete_user_message(&mut chat, "user-1", "queued while streaming");
-
-    assert!(chat.pending_steers.is_empty());
     let inserted = drain_insert_history(&mut rx);
-    assert_eq!(inserted.len(), 2);
-    assert!(lines_to_single_string(&inserted[1]).contains("queued while streaming"));
+    assert!(
+        inserted
+            .iter()
+            .all(|cell| !lines_to_single_string(cell).contains("queued while streaming"))
+    );
 }
 
 #[tokio::test]
