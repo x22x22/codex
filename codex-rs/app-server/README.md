@@ -736,6 +736,8 @@ When the client responds to `item/tool/requestUserInput`, the server emits `serv
 
 `dynamicTools` on `thread/start` and the corresponding `item/tool/call` request/response flow are experimental APIs. To enable them, set `initialize.params.capabilities.experimentalApi = true`.
 
+Each `dynamicTools` entry may include `modelVisible`. When omitted, it defaults to `true`. Set `modelVisible: false` to keep the tool callable at runtime without advertising it in the model's `tools` list.
+
 When a dynamic tool is invoked during a turn, the server sends an `item/tool/call` JSON-RPC request to the client:
 
 ```json

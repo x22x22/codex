@@ -49,6 +49,10 @@
           "type": "string"
         },
         "inputSchema": true,
+        "modelVisible": {
+          "default": true,
+          "type": "boolean"
+        },
         "name": {
           "type": "string"
         }

@@ -2159,6 +2159,7 @@ impl CodexMessageProcessor {
                     name: tool.name,
                     description: tool.description,
                     input_schema: tool.input_schema,
+                    model_visible: tool.model_visible,
                 })
                 .collect()
         };
@@ -7958,6 +7959,7 @@ mod tests {
             name: "my_tool".to_string(),
             description: "test".to_string(),
             input_schema: json!({"type": "null"}),
+            model_visible: true,
         }];
         let err = validate_dynamic_tools(&tools).expect_err("invalid schema");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
@@ -7970,6 +7972,7 @@ mod tests {
             description: "test".to_string(),
             // Missing `type` is common; core sanitizes these to a supported schema.
             input_schema: json!({"properties": {}}),
+            model_visible: true,
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
     }

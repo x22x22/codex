@@ -94,6 +94,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                 "required": ["city"],
                 "properties": { "city": { "type": "string" } }
             }),
+            model_visible: true,
         },
         DynamicToolSpec {
             name: "weather_lookup".to_string(),
@@ -103,6 +104,7 @@ async fn backfill_scans_existing_rollouts() -> Result<()> {
                 "required": ["zip"],
                 "properties": { "zip": { "type": "string" } }
             }),
+            model_visible: false,
         },
     ];
     let dynamic_tools_for_hook = dynamic_tools.clone();

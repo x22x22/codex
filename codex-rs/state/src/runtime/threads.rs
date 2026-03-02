@@ -42,7 +42,7 @@ WHERE id = ?
     ) -> anyhow::Result<Option<Vec<DynamicToolSpec>>> {
         let rows = sqlx::query(
             r#"
-SELECT name, description, input_schema
+SELECT name, description, input_schema, model_visible
 FROM thread_dynamic_tools
 WHERE thread_id = ?
 ORDER BY position ASC
@@ -62,6 +62,7 @@ ORDER BY position ASC
                 name: row.try_get("name")?,
                 description: row.try_get("description")?,
                 input_schema,
+                model_visible: row.try_get("model_visible")?,
             });
         }
         Ok(Some(tools))
@@ -304,8 +305,9 @@ INSERT INTO thread_dynamic_tools (
     position,
     name,
     description,
-    input_schema
-) VALUES (?, ?, ?, ?, ?)
+    input_schema,
+    model_visible
+) VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT(thread_id, position) DO NOTHING
                 "#,
             )
@@ -314,6 +316,7 @@ ON CONFLICT(thread_id, position) DO NOTHING
             .bind(tool.name.as_str())
             .bind(tool.description.as_str())
             .bind(input_schema)
+            .bind(tool.model_visible)
             .execute(&mut *tx)
             .await?;
         }

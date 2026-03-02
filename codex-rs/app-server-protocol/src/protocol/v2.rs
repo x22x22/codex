@@ -383,6 +383,12 @@ pub struct DynamicToolSpec {
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
+    #[serde(default = "default_model_visible")]
+    pub model_visible: bool,
+}
+
+fn default_model_visible() -> bool {
+    true
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4254,6 +4260,26 @@ mod tests {
 
         let back_to_v2 = SandboxPolicy::from(core_policy);
         assert_eq!(back_to_v2, v2_policy);
+    }
+
+    #[test]
+    fn dynamic_tool_spec_defaults_model_visible_when_omitted() {
+        let spec: DynamicToolSpec = serde_json::from_value(json!({
+            "name": "demo_tool",
+            "description": "Demo dynamic tool",
+            "inputSchema": { "type": "object" }
+        }))
+        .expect("dynamic tool spec should deserialize");
+
+        assert_eq!(
+            spec,
+            DynamicToolSpec {
+                name: "demo_tool".to_string(),
+                description: "Demo dynamic tool".to_string(),
+                input_schema: json!({ "type": "object" }),
+                model_visible: true,
+            }
+        );
     }
 
     #[test]

@@ -2446,6 +2446,7 @@ console.log(out.output?.body?.text ?? "");
                     "properties": {},
                     "additionalProperties": false
                 }),
+                model_visible: true,
             }])
             .await;
         if !turn

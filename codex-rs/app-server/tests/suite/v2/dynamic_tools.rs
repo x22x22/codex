@@ -36,9 +36,9 @@ use wiremock::MockServer;
 
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Ensures dynamic tool specs are serialized into the model request payload.
+/// Ensures only model-visible dynamic tools are serialized into the model request payload.
 #[tokio::test]
-async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> {
+async fn thread_start_only_injects_model_visible_dynamic_tools_into_model_requests() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
 
@@ -57,16 +57,26 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
         "required": ["city"],
         "additionalProperties": false,
     });
-    let dynamic_tool = DynamicToolSpec {
-        name: "demo_tool".to_string(),
-        description: "Demo dynamic tool".to_string(),
+    let visible_dynamic_tool = DynamicToolSpec {
+        name: "visible_demo_tool".to_string(),
+        description: "Visible dynamic tool".to_string(),
         input_schema: input_schema.clone(),
+        model_visible: true,
+    };
+    let hidden_dynamic_tool = DynamicToolSpec {
+        name: "hidden_demo_tool".to_string(),
+        description: "Hidden dynamic tool".to_string(),
+        input_schema: input_schema.clone(),
+        model_visible: false,
     };
 
     // Thread start injects dynamic tools into the thread's tool registry.
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
-            dynamic_tools: Some(vec![dynamic_tool.clone()]),
+            dynamic_tools: Some(vec![
+                visible_dynamic_tool.clone(),
+                hidden_dynamic_tool.clone(),
+            ]),
             ..Default::default()
         })
         .await?;
@@ -106,19 +116,20 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
     let body = bodies
         .first()
         .context("expected at least one responses request")?;
-    let tool = find_tool(body, &dynamic_tool.name)
-        .context("expected dynamic tool to be injected into request")?;
+    let tool = find_tool(body, &visible_dynamic_tool.name)
+        .context("expected visible dynamic tool to be injected into request")?;
 
     assert_eq!(
         tool.get("description"),
-        Some(&Value::String(dynamic_tool.description.clone()))
+        Some(&Value::String(visible_dynamic_tool.description.clone()))
     );
     assert_eq!(tool.get("parameters"), Some(&input_schema));
+    assert!(find_tool(body, &hidden_dynamic_tool.name).is_none());
 
     Ok(())
 }
 
-/// Exercises the full dynamic tool call path (server request, client response, model output).
+/// Exercises the full dynamic tool call path for a hidden dynamic tool.
 #[tokio::test]
 async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Result<()> {
     let call_id = "dyn-call-1";
@@ -154,6 +165,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
             "required": ["city"],
             "additionalProperties": false,
         }),
+        model_visible: false,
     };
 
     let thread_req = mcp
@@ -281,6 +293,10 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         .iter()
         .find_map(|body| function_call_output_payload(body, call_id))
         .context("expected function_call_output in follow-up request")?;
+    let initial_request_body = bodies
+        .first()
+        .context("expected initial responses request body")?;
+    assert!(find_tool(initial_request_body, tool_name).is_none());
     let expected_payload = FunctionCallOutputPayload::from_content_items(vec![
         FunctionCallOutputContentItem::InputText {
             text: "dynamic-ok".to_string(),
@@ -326,6 +342,7 @@ async fn dynamic_tool_call_round_trip_sends_content_items_to_model() -> Result<(
             "required": ["city"],
             "additionalProperties": false,
         }),
+        model_visible: true,
     };
 
     let thread_req = mcp

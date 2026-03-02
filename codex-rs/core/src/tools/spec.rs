@@ -1865,16 +1865,19 @@ pub(crate) fn build_specs(
 
     if !dynamic_tools.is_empty() {
         for tool in dynamic_tools {
-            match dynamic_tool_to_openai_tool(tool) {
-                Ok(converted_tool) => {
-                    builder.push_spec(ToolSpec::Function(converted_tool));
-                    builder.register_handler(tool.name.clone(), dynamic_tool_handler.clone());
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to convert dynamic tool {:?} to OpenAI tool: {e:?}",
-                        tool.name
-                    );
+            builder.register_handler(tool.name.clone(), dynamic_tool_handler.clone());
+
+            if tool.model_visible {
+                match dynamic_tool_to_openai_tool(tool) {
+                    Ok(converted_tool) => {
+                        builder.push_spec(ToolSpec::Function(converted_tool));
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to convert dynamic tool {:?} to OpenAI tool: {e:?}",
+                            tool.name
+                        );
+                    }
                 }
             }
         }
@@ -2796,6 +2799,58 @@ mod tests {
             "test_server/something".to_string(),
         ];
         assert_eq!(mcp_names, expected);
+    }
+
+    #[test]
+    fn hidden_dynamic_tools_register_handlers_without_prompt_specs() {
+        let config = test_config();
+        let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::UnifiedExec);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let dynamic_tools = vec![
+            DynamicToolSpec {
+                name: "visible_tool".to_string(),
+                description: "Visible dynamic tool".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                model_visible: true,
+            },
+            DynamicToolSpec {
+                name: "hidden_tool".to_string(),
+                description: "Hidden dynamic tool".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
+                model_visible: false,
+            },
+        ];
+
+        let (tools, registry) = build_specs(&tools_config, None, None, &dynamic_tools).build();
+
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "visible_tool")
+        );
+        assert!(
+            !tools
+                .iter()
+                .any(|tool| tool_name(&tool.spec) == "hidden_tool")
+        );
+        assert!(registry.handler("visible_tool").is_some());
+        assert!(registry.handler("hidden_tool").is_some());
     }
 
     #[test]
