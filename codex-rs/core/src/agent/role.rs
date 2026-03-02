@@ -235,6 +235,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
+    use toml::value::Table;
 
     async fn test_config_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
@@ -486,18 +487,22 @@ writable_roots = ["./sandbox-root"]
             "---\nname: demo-skill\ndescription: demo description\n---\n\n# Body\n",
         )
         .expect("write skill");
-        let role_path = write_role_config(
-            &home,
-            "skills-role.toml",
-            &format!(
-                r#"[[skills.config]]
-path = "{}"
-enabled = false
-"#,
-                skill_path.display()
-            ),
-        )
-        .await;
+        let mut skill_entry = Table::new();
+        skill_entry.insert(
+            "path".to_string(),
+            TomlValue::String(skill_path.display().to_string()),
+        );
+        skill_entry.insert("enabled".to_string(), TomlValue::Boolean(false));
+        let mut skills_table = Table::new();
+        skills_table.insert(
+            "config".to_string(),
+            TomlValue::Array(vec![TomlValue::Table(skill_entry)]),
+        );
+        let mut role_table = Table::new();
+        role_table.insert("skills".to_string(), TomlValue::Table(skills_table));
+        let role_config_contents =
+            toml::to_string(&TomlValue::Table(role_table)).expect("serialize role config");
+        let role_path = write_role_config(&home, "skills-role.toml", &role_config_contents).await;
         config.agent_roles.insert(
             "custom".to_string(),
             AgentRoleConfig {

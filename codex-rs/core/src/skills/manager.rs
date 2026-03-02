@@ -259,12 +259,30 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
+    use toml::value::Table;
 
     fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) {
         let skill_dir = codex_home.path().join("skills").join(dir);
         fs::create_dir_all(&skill_dir).unwrap();
         let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+    }
+
+    fn skills_config_layer_toml(skill_path: &Path, enabled: bool) -> TomlValue {
+        let mut skill_entry = Table::new();
+        skill_entry.insert(
+            "path".to_string(),
+            TomlValue::String(skill_path.display().to_string()),
+        );
+        skill_entry.insert("enabled".to_string(), TomlValue::Boolean(enabled));
+        let mut skills_table = Table::new();
+        skills_table.insert(
+            "config".to_string(),
+            TomlValue::Array(vec![TomlValue::Table(skill_entry)]),
+        );
+        let mut root_table = Table::new();
+        root_table.insert("skills".to_string(), TomlValue::Table(skills_table));
+        TomlValue::Table(root_table)
     }
 
     #[tokio::test]
@@ -450,25 +468,11 @@ mod tests {
             .expect("user config path should be absolute");
         let user_layer = ConfigLayerEntry::new(
             ConfigLayerSource::User { file: user_file },
-            toml::from_str(&format!(
-                r#"[[skills.config]]
-path = "{}"
-enabled = false
-"#,
-                skill_path.display()
-            ))
-            .expect("user layer toml"),
+            skills_config_layer_toml(&skill_path, false),
         );
         let session_layer = ConfigLayerEntry::new(
             ConfigLayerSource::SessionFlags,
-            toml::from_str(&format!(
-                r#"[[skills.config]]
-path = "{}"
-enabled = true
-"#,
-                skill_path.display()
-            ))
-            .expect("session layer toml"),
+            skills_config_layer_toml(&skill_path, true),
         );
         let stack = ConfigLayerStack::new(
             vec![user_layer, session_layer],
@@ -489,25 +493,11 @@ enabled = true
             .expect("user config path should be absolute");
         let user_layer = ConfigLayerEntry::new(
             ConfigLayerSource::User { file: user_file },
-            toml::from_str(&format!(
-                r#"[[skills.config]]
-path = "{}"
-enabled = true
-"#,
-                skill_path.display()
-            ))
-            .expect("user layer toml"),
+            skills_config_layer_toml(&skill_path, true),
         );
         let session_layer = ConfigLayerEntry::new(
             ConfigLayerSource::SessionFlags,
-            toml::from_str(&format!(
-                r#"[[skills.config]]
-path = "{}"
-enabled = false
-"#,
-                skill_path.display()
-            ))
-            .expect("session layer toml"),
+            skills_config_layer_toml(&skill_path, false),
         );
         let stack = ConfigLayerStack::new(
             vec![user_layer, session_layer],
