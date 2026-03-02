@@ -771,6 +771,7 @@ impl TurnContext {
             .unwrap_or(compact::SUMMARIZATION_PROMPT)
     }
 
+    #[cfg(test)]
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         self.to_turn_context_item_with_approved_prefix_rules(None)
     }
@@ -3187,9 +3188,8 @@ impl Session {
             self.build_settings_update_items(reference_context_item.as_ref(), turn_context)
                 .await
         };
-        let turn_context_item = turn_context.to_turn_context_item_with_exec_policy(
-            self.services.exec_policy.current().as_ref(),
-        );
+        let turn_context_item = turn_context
+            .to_turn_context_item_with_exec_policy(self.services.exec_policy.current().as_ref());
         if !context_items.is_empty() {
             self.record_conversation_items(turn_context, &context_items)
                 .await;
