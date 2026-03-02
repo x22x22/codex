@@ -207,12 +207,13 @@ tmp_path.replace(payload_path)
     let notify_script = notify_script
         .to_str()
         .expect("notify script path should be valid UTF-8");
+    let notify_command = if cfg!(windows) { "python" } else { "python3" };
     create_config_toml_with_extra(
         codex_home.path(),
         &server.uri(),
         "never",
         &format!(
-            "notify = [\"python3\", {}]",
+            "notify = [\"{notify_command}\", {}]",
             toml_basic_string(notify_script)
         ),
     )?;
@@ -261,7 +262,12 @@ tmp_path.replace(payload_path)
     )
     .await??;
 
-    fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
+    let notify_timeout = if cfg!(windows) {
+        Duration::from_secs(15)
+    } else {
+        Duration::from_secs(5)
+    };
+    fs_wait::wait_for_path_exists(&notify_file, notify_timeout).await?;
     let payload_raw = tokio::fs::read_to_string(&notify_file).await?;
     let payload: Value = serde_json::from_str(&payload_raw)?;
     assert_eq!(payload["client"], "xcode");
