@@ -448,8 +448,21 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
                 header.push(Line::from(""));
             }
             if let Some(reason) = reason {
-                header.push(Line::from(vec!["Reason: ".into(), reason.clone().italic()]));
-                header.push(Line::from(""));
+                let mut reason_lines = reason.lines();
+                if let Some(first) = reason_lines.next() {
+                    header.push(Line::from(vec![
+                        "Reason: ".into(),
+                        first.to_string().italic(),
+                    ]));
+                    for line in reason_lines {
+                        if line.is_empty() {
+                            header.push(Line::from(""));
+                        } else {
+                            header.push(Line::from(line.to_string()));
+                        }
+                    }
+                    header.push(Line::from(""));
+                }
             }
             if let Some(additional_permissions) = additional_permissions
                 && let Some(rule_line) = format_additional_permissions_rule(additional_permissions)
@@ -850,6 +863,34 @@ mod tests {
         assert_snapshot!(
             "approval_overlay_cross_thread_prompt",
             render_overlay_lines(&view, 80)
+        );
+    }
+
+    #[test]
+    fn multiline_reason_renders_as_separate_lines() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let view = ApprovalOverlay::new(
+            ApprovalRequest::Exec {
+                thread_id: ThreadId::new(),
+                thread_label: None,
+                id: "test".to_string(),
+                command: vec!["exec_command".to_string()],
+                reason: Some(
+                    "Monitor requested approval for tool call \"exec_command\": requires approval\nDetails:\narguments:\n  {\n    \"cmd\": \"ls\"\n  }"
+                        .to_string(),
+                ),
+                available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
+                network_approval_context: None,
+                additional_permissions: None,
+            },
+            tx,
+            Features::with_defaults(),
+        );
+
+        assert_snapshot!(
+            "approval_overlay_multiline_reason",
+            render_overlay_lines(&view, 100)
         );
     }
 
