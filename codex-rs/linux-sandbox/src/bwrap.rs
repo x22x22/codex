@@ -34,22 +34,6 @@ const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     "/run/current-system/sw",
 ];
 
-/// Linux "platform defaults" that keep common system binaries and dynamic
-/// libraries readable when `ReadOnlyAccess::Restricted` requests them.
-///
-/// These are intentionally system-level paths only (plus Nix store roots) so
-/// `include_platform_defaults` does not silently widen access to user data.
-const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
-    "/bin",
-    "/sbin",
-    "/usr",
-    "/etc",
-    "/lib",
-    "/lib64",
-    "/nix/store",
-    "/run/current-system/sw",
-];
-
 /// Options that control how bubblewrap is invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BwrapOptions {
