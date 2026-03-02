@@ -3098,15 +3098,13 @@ impl App {
                     ));
                 }
             },
-            #[cfg(not(target_os = "linux"))]
             AppEvent::TranscriptionComplete { id, text } => {
                 self.chat_widget.replace_transcription(&id, &text);
             }
-            #[cfg(not(target_os = "linux"))]
-            AppEvent::TranscriptionFailed { id, error: _ } => {
+            AppEvent::TranscriptionFailed { id, error } => {
+                tracing::error!("voice transcription failed: {error}");
                 self.chat_widget.remove_transcription_placeholder(&id);
             }
-            #[cfg(not(target_os = "linux"))]
             AppEvent::UpdateRecordingMeter { id, text } => {
                 // Update in place to preserve the element id for subsequent frames.
                 let updated = self.chat_widget.update_transcription_in_place(&id, &text);
@@ -3167,16 +3165,6 @@ impl App {
                             .add_error_message(format!("Failed to save theme: {err}"));
                     }
                 }
-            }
-            AppEvent::UpdateRecordingMeter { id, text } => {
-                self.chat_widget.update_transcription_in_place(&id, &text);
-            }
-            AppEvent::TranscriptionComplete { id, text } => {
-                self.chat_widget.replace_transcription(&id, &text);
-            }
-            AppEvent::TranscriptionFailed { id, error } => {
-                tracing::error!("voice transcription failed: {error}");
-                self.chat_widget.remove_transcription_placeholder(&id);
             }
         }
         Ok(AppRunControl::Continue)
