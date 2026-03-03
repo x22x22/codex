@@ -1,10 +1,12 @@
 mod registry;
+mod schema;
 mod types;
 mod user_notification;
 
 pub use registry::Hooks;
 pub use registry::HooksConfig;
 pub use registry::command_from_argv;
+pub use schema::write_schema_fixtures;
 pub use types::Hook;
 pub use types::HookEvent;
 pub use types::HookEventAfterAgent;
