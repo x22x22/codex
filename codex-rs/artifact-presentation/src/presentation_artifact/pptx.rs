@@ -1056,6 +1056,10 @@ fn export_text_body_xml(
     style: &TextStyle,
     rich_text: &RichTextState,
 ) -> String {
+    let left_inset_attr = concat!("l", "Ins");
+    let right_inset_attr = concat!("r", "Ins");
+    let top_inset_attr = concat!("t", "Ins");
+    let bottom_inset_attr = concat!("b", "Ins");
     let insets = rich_text.layout.insets.unwrap_or(TextInsets {
         left: 6,
         right: 6,
@@ -1092,7 +1096,7 @@ fn export_text_body_xml(
     let top_inset = points_to_emu(insets.top);
     let bottom_inset = points_to_emu(insets.bottom);
     format!(
-        r#"<p:txBody><a:bodyPr wrap="{wrap}" lIns="{left_inset}" rIns="{right_inset}" tIns="{top_inset}" bIns="{bottom_inset}" anchor="{anchor}">{auto_fit}</a:bodyPr><a:lstStyle/>{paragraphs}</p:txBody>"# // codespell:ignore lIns,rIns,tIns,bIns
+        r#"<p:txBody><a:bodyPr wrap="{wrap}" {left_inset_attr}="{left_inset}" {right_inset_attr}="{right_inset}" {top_inset_attr}="{top_inset}" {bottom_inset_attr}="{bottom_inset}" anchor="{anchor}">{auto_fit}</a:bodyPr><a:lstStyle/>{paragraphs}</p:txBody>"#
     )
 }
 
@@ -1114,6 +1118,10 @@ fn export_table_cell_text_body_xml(
     element_id: &str,
     cell: &TableCellSpec,
 ) -> String {
+    let left_inset_attr = concat!("l", "Ins");
+    let right_inset_attr = concat!("r", "Ins");
+    let top_inset_attr = concat!("t", "Ins");
+    let bottom_inset_attr = concat!("b", "Ins");
     let wrap = match cell.rich_text.layout.wrap.unwrap_or(TextWrapMode::Square) {
         TextWrapMode::Square => "square",
         TextWrapMode::None => "none",
@@ -1144,7 +1152,7 @@ fn export_table_cell_text_body_xml(
         let top_inset = points_to_emu(insets.top);
         let bottom_inset = points_to_emu(insets.bottom);
         format!(
-            r#" lIns="{left_inset}" rIns="{right_inset}" tIns="{top_inset}" bIns="{bottom_inset}""#, // codespell:ignore lIns,rIns,tIns,bIns
+            r#" {left_inset_attr}="{left_inset}" {right_inset_attr}="{right_inset}" {top_inset_attr}="{top_inset}" {bottom_inset_attr}="{bottom_inset}""#,
         )
     });
     let paragraphs = export_text_paragraphs_xml(

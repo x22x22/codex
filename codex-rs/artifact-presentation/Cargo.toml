@@ -17,7 +17,6 @@ font8x8 = { workspace = true }
 fontdue = { workspace = true }
 image = { workspace = true, features = ["jpeg", "png"] }
 ppt-rs = { workspace = true }
-reqwest = { workspace = true, features = ["blocking"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tiny-skia = { workspace = true }
@@ -28,4 +27,3 @@ zip = { workspace = true }
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
-tiny_http = { workspace = true }
