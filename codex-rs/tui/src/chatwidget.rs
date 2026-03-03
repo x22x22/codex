@@ -1894,15 +1894,14 @@ impl ChatWidget {
         if reason == TurnAbortReason::Interrupted {
             self.clear_unified_exec_processes();
         }
-        // Core clears pending_input before emitting TurnAborted, so any unacknowledged steers
-        // still tracked here must be restored locally instead of waiting for a later commit.
-
         if reason != TurnAbortReason::ReviewEnded {
             self.add_to_history(history_cell::new_error_event(
                 "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
             ));
         }
 
+        // Core clears pending_input before emitting TurnAborted, so any unacknowledged steers
+        // still tracked here must be restored locally instead of waiting for a later commit.
         if let Some(combined) = self.drain_pending_messages_for_restore() {
             self.restore_user_message_to_composer(combined);
         }
