@@ -153,7 +153,7 @@ fn render_slide_image(
     }
 
     let mut ordered = slide.elements.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|element| (preview_render_layer(element), element.z_order()));
+    ordered.sort_by_key(|element| element.z_order());
     for element in ordered {
         render_element(&mut canvas, document, slide, element, render_scale)?;
     }
@@ -682,38 +682,41 @@ fn render_bar_chart(
     height: u32,
     scale: f32,
 ) {
-    let baseline = top + height;
-    draw_chart_axes(image, left, top, width, height);
+    let (min_value, max_value) = chart_value_domain(chart);
+    let baseline = chart_axis_y(top, height, min_value, max_value, 0.0);
+    draw_chart_axes(image, left, top, width, height, baseline);
     let series_count = chart.series.len().max(1) as u32;
     let category_count = chart.categories.len().max(1) as u32;
-    let max_value = chart
-        .series
-        .iter()
-        .flat_map(|series| series.values.iter().copied())
-        .fold(0.0f64, f64::max)
-        .max(1.0);
     let group_width = width as f32 / category_count as f32;
     let bar_width = (group_width / series_count as f32 * 0.72).max(2.0);
     for (series_index, series) in chart.series.iter().enumerate() {
         let color = chart_series_color(series, series_index);
         for (value_index, value) in series.values.iter().enumerate() {
-            let bar_height = ((*value / max_value) as f32 * height as f32).round().max(0.0) as u32;
             let x = left as f32
                 + group_width * value_index as f32
                 + (group_width - bar_width * series_count as f32) / 2.0
                 + bar_width * series_index as f32;
-            let y = baseline.saturating_sub(bar_height);
+            let value_y = chart_axis_y(top, height, min_value, max_value, *value);
+            let y = value_y.min(baseline);
+            let bar_height = value_y.abs_diff(baseline).max(1);
             fill_rect(
                 image,
                 x.round() as u32,
                 y,
                 bar_width.round().max(1.0) as u32,
-                bar_height.max(1),
+                bar_height,
                 color,
             );
         }
     }
-    render_category_labels(image, &chart.categories, left, baseline + 4, width, scale);
+    render_category_labels(
+        image,
+        &chart.categories,
+        left,
+        top + height + 4,
+        width,
+        scale,
+    );
 }
 
 fn render_line_chart(
@@ -725,21 +728,16 @@ fn render_line_chart(
     height: u32,
     scale: f32,
 ) {
-    draw_chart_axes(image, left, top, width, height);
-    let baseline = top + height;
+    let (min_value, max_value) = chart_value_domain(chart);
+    let baseline = chart_axis_y(top, height, min_value, max_value, 0.0);
+    draw_chart_axes(image, left, top, width, height, baseline);
     let point_count = chart.categories.len().max(2);
-    let max_value = chart
-        .series
-        .iter()
-        .flat_map(|series| series.values.iter().copied())
-        .fold(0.0f64, f64::max)
-        .max(1.0);
     for (series_index, series) in chart.series.iter().enumerate() {
         let color = chart_series_color(series, series_index);
         let mut points = Vec::new();
         for (value_index, value) in series.values.iter().enumerate() {
             let x = left as f32 + width as f32 * value_index as f32 / (point_count - 1) as f32;
-            let y = baseline as f32 - ((*value / max_value) as f32 * height as f32);
+            let y = chart_axis_y(top, height, min_value, max_value, *value) as f32;
             points.push((x, y));
         }
         if points.len() >= 2
@@ -770,7 +768,38 @@ fn render_line_chart(
             );
         }
     }
-    render_category_labels(image, &chart.categories, left, baseline + 4, width, scale);
+    render_category_labels(
+        image,
+        &chart.categories,
+        left,
+        top + height + 4,
+        width,
+        scale,
+    );
+}
+
+fn chart_value_domain(chart: &ChartElement) -> (f64, f64) {
+    let mut min_value = 0.0f64;
+    let mut max_value = 0.0f64;
+    for value in chart
+        .series
+        .iter()
+        .flat_map(|series| series.values.iter().copied())
+    {
+        min_value = min_value.min(value);
+        max_value = max_value.max(value);
+    }
+    if (max_value - min_value).abs() < f64::EPSILON {
+        max_value += 1.0;
+    }
+    (min_value, max_value)
+}
+
+fn chart_axis_y(top: u32, height: u32, min_value: f64, max_value: f64, value: f64) -> u32 {
+    let span = (max_value - min_value).max(f64::EPSILON);
+    let normalized = ((value - min_value) / span).clamp(0.0, 1.0);
+    let bottom = top + height;
+    bottom.saturating_sub((normalized * height as f64).round() as u32)
 }
 
 fn render_pie_chart(
@@ -1675,17 +1704,6 @@ fn parse_rgba(hex: &str, alpha: u8) -> Rgba<u8> {
     Rgba([0, 0, 0, alpha])
 }
 
-fn preview_render_layer(element: &PresentationElement) -> usize {
-    match element {
-        PresentationElement::Text(_)
-        | PresentationElement::Shape(_)
-        | PresentationElement::Connector(_)
-        | PresentationElement::Image(ImageElement { payload: None, .. }) => 0,
-        PresentationElement::Image(_) | PresentationElement::Chart(_) => 1,
-        PresentationElement::Table(_) => 2,
-    }
-}
-
 fn shape_path(
     geometry: ShapeGeometry,
     width: u32,
@@ -2161,10 +2179,17 @@ fn draw_vertical_line(image: &mut RgbaImage, x: u32, color: Rgba<u8>, thickness:
     fill_rect(image, x.saturating_sub(thickness / 2), 0, thickness.max(1), image.height(), color);
 }
 
-fn draw_chart_axes(image: &mut RgbaImage, left: u32, top: u32, width: u32, height: u32) {
+fn draw_chart_axes(
+    image: &mut RgbaImage,
+    left: u32,
+    top: u32,
+    width: u32,
+    plot_height: u32,
+    baseline: u32,
+) {
     let axis_color = parse_rgba(DEFAULT_TABLE_GRID_HEX, 255);
-    fill_rect(image, left, top, 1, height, axis_color);
-    fill_rect(image, left, top + height, width, 1, axis_color);
+    fill_rect(image, left, top, 1, plot_height, axis_color);
+    fill_rect(image, left, baseline, width, 1, axis_color);
 }
 
 fn render_category_labels(

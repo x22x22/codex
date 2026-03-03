@@ -132,6 +132,44 @@ impl HyperlinkTarget {
     fn is_external(&self) -> bool {
         matches!(self, Self::Url(_) | Self::Email { .. } | Self::File(_))
     }
+
+    fn adjust_for_insert(&mut self, inserted_index: usize) {
+        if let Self::Slide(slide_index) = self
+            && *slide_index as usize >= inserted_index
+        {
+            *slide_index += 1;
+        }
+    }
+
+    fn adjust_for_move(&mut self, from_index: usize, to_index: usize) {
+        let Self::Slide(slide_index_ref) = self else {
+            return;
+        };
+        let slide_index = *slide_index_ref as usize;
+        *slide_index_ref = if slide_index == from_index {
+            to_index as u32
+        } else if from_index < to_index && (from_index + 1..=to_index).contains(&slide_index) {
+            (slide_index - 1) as u32
+        } else if to_index < from_index && (to_index..from_index).contains(&slide_index) {
+            (slide_index + 1) as u32
+        } else {
+            *slide_index_ref
+        };
+    }
+
+    fn adjust_for_delete(&mut self, deleted_index: usize) -> bool {
+        let Self::Slide(slide_index_ref) = self else {
+            return false;
+        };
+        let slide_index = *slide_index_ref as usize;
+        if slide_index == deleted_index {
+            return true;
+        }
+        if slide_index > deleted_index {
+            *slide_index_ref -= 1;
+        }
+        false
+    }
 }
 
 impl HyperlinkState {
@@ -216,6 +254,18 @@ impl HyperlinkState {
             r#"<Relationship Id="{relationship_id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="{}"{target_mode}/>"#,
             ppt_rs::escape_xml(&self.target.relationship_target()),
         )
+    }
+
+    fn adjust_for_insert(&mut self, inserted_index: usize) {
+        self.target.adjust_for_insert(inserted_index);
+    }
+
+    fn adjust_for_move(&mut self, from_index: usize, to_index: usize) {
+        self.target.adjust_for_move(from_index, to_index);
+    }
+
+    fn adjust_for_delete(&mut self, deleted_index: usize) -> bool {
+        self.target.adjust_for_delete(deleted_index)
     }
 }
 
@@ -714,6 +764,7 @@ impl PresentationDocument {
             }
             Some(_) => {}
         }
+        self.adjust_hyperlinks_for_insert(inserted_index);
     }
 
     fn adjust_active_slide_for_move(&mut self, from_index: usize, to_index: usize) {
@@ -728,6 +779,7 @@ impl PresentationDocument {
                 active_index
             });
         }
+        self.adjust_hyperlinks_for_move(from_index, to_index);
     }
 
     fn adjust_active_slide_for_delete(&mut self, deleted_index: usize) {
@@ -740,6 +792,36 @@ impl PresentationDocument {
             Some(active_index) if deleted_index < active_index => Some(active_index - 1),
             Some(active_index) => Some(active_index),
         };
+        self.adjust_hyperlinks_for_delete(deleted_index);
+    }
+
+    fn adjust_hyperlinks_for_insert(&mut self, inserted_index: usize) {
+        self.visit_hyperlinks_mut(|hyperlink| {
+            hyperlink.adjust_for_insert(inserted_index);
+            true
+        });
+    }
+
+    fn adjust_hyperlinks_for_move(&mut self, from_index: usize, to_index: usize) {
+        self.visit_hyperlinks_mut(|hyperlink| {
+            hyperlink.adjust_for_move(from_index, to_index);
+            true
+        });
+    }
+
+    fn adjust_hyperlinks_for_delete(&mut self, deleted_index: usize) {
+        self.visit_hyperlinks_mut(|hyperlink| !hyperlink.adjust_for_delete(deleted_index));
+    }
+
+    fn visit_hyperlinks_mut<F>(&mut self, mut visit: F)
+    where
+        F: FnMut(&mut HyperlinkState) -> bool,
+    {
+        for slide in &mut self.slides {
+            for element in &mut slide.elements {
+                element.visit_hyperlinks_mut(&mut visit);
+            }
+        }
     }
 
     fn next_layout_id(&mut self) -> String {
@@ -1051,6 +1133,38 @@ fn import_pptx_images(
         }
     }
     Ok(())
+}
+
+fn import_pptx_slide_size(path: &Path) -> Result<Option<Rect>, PresentationArtifactError> {
+    let file = std::fs::File::open(path).map_err(|error| PresentationArtifactError::ImportFailed {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|error| PresentationArtifactError::ImportFailed {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    let Some(xml) = zip_entry_string_if_exists(&mut archive, "ppt/presentation.xml").map_err(
+        |message| PresentationArtifactError::ImportFailed {
+            path: path.to_path_buf(),
+            message,
+        },
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(width) =
+        xml_tag_attribute(&xml, "<p:sldSz", "cx").and_then(|value| value.parse::<u32>().ok())
+    else {
+        return Ok(None);
+    };
+    let Some(height) =
+        xml_tag_attribute(&xml, "<p:sldSz", "cy").and_then(|value| value.parse::<u32>().ok())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(Rect::from_emu(0, 0, width, height)))
 }
 
 fn zip_entry_string_if_exists<R: Read + Seek>(
@@ -1477,6 +1591,45 @@ impl PresentationElement {
             Self::Image(element) => element.z_order = z_order,
             Self::Table(element) => element.z_order = z_order,
             Self::Chart(element) => element.z_order = z_order,
+        }
+    }
+
+    fn visit_hyperlinks_mut<F>(&mut self, visit: &mut F)
+    where
+        F: FnMut(&mut HyperlinkState) -> bool,
+    {
+        match self {
+            Self::Text(element) => {
+                if let Some(hyperlink) = element.hyperlink.as_mut()
+                    && !visit(hyperlink)
+                {
+                    element.hyperlink = None;
+                }
+                for range in &mut element.rich_text.ranges {
+                    if let Some(hyperlink) = range.hyperlink.as_mut()
+                        && !visit(hyperlink)
+                    {
+                        range.hyperlink = None;
+                    }
+                }
+            }
+            Self::Shape(element) => {
+                if let Some(hyperlink) = element.hyperlink.as_mut()
+                    && !visit(hyperlink)
+                {
+                    element.hyperlink = None;
+                }
+                if let Some(rich_text) = element.rich_text.as_mut() {
+                    for range in &mut rich_text.ranges {
+                        if let Some(hyperlink) = range.hyperlink.as_mut()
+                            && !visit(hyperlink)
+                        {
+                            range.hyperlink = None;
+                        }
+                    }
+                }
+            }
+            Self::Connector(_) | Self::Image(_) | Self::Table(_) | Self::Chart(_) => {}
         }
     }
 }

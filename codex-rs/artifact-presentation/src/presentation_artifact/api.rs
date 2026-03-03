@@ -161,8 +161,16 @@ impl PresentationArtifactRequest {
                     }],
                     ImageInputSource::DataUrl(_)
                     | ImageInputSource::Blob(_)
-                    | ImageInputSource::Uri(_)
                     | ImageInputSource::Placeholder => Vec::new(),
+                    ImageInputSource::Uri(uri) => {
+                        return Err(PresentationArtifactError::UnsupportedFeature {
+                            action: self.action.clone(),
+                            message: format!(
+                                "remote image URIs are not supported for `{}`; download the image locally or provide `data_url`/`blob` instead (`{uri}`)",
+                                self.action
+                            ),
+                        });
+                    }
                 }
             }
             "replace_image" => {
@@ -181,8 +189,16 @@ impl PresentationArtifactRequest {
                     }],
                     (None, Some(_), None, None, None)
                     | (None, None, Some(_), None, None)
-                    | (None, None, None, Some(_), None)
                     | (None, None, None, None, Some(_)) => Vec::new(),
+                    (None, None, None, Some(uri), None) => {
+                        return Err(PresentationArtifactError::UnsupportedFeature {
+                            action: self.action.clone(),
+                            message: format!(
+                                "remote image URIs are not supported for `{}`; download the image locally or provide `data_url`/`blob` instead (`{uri}`)",
+                                self.action
+                            ),
+                        });
+                    }
                     _ => {
                         return Err(PresentationArtifactError::InvalidArgs {
                             action: self.action.clone(),

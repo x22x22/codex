@@ -3,6 +3,7 @@ use base64::Engine;
 use image::GenericImageView;
 use pretty_assertions::assert_eq;
 use std::io::Read;
+use std::io::Write;
 
 fn zip_entry_text(
     path: &std::path::Path,
@@ -20,6 +21,63 @@ fn zip_entry_names(path: &std::path::Path) -> Result<Vec<String>, Box<dyn std::e
     let file = std::fs::File::open(path)?;
     let archive = zip::ZipArchive::new(file)?;
     Ok(archive.file_names().map(str::to_owned).collect())
+}
+
+fn rewrite_pptx_without_codex_metadata(
+    source: &std::path::Path,
+    target: &std::path::Path,
+    slide_width_emu: u32,
+    slide_height_emu: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let input = std::fs::File::open(source)?;
+    let mut archive = zip::ZipArchive::new(input)?;
+    let output = std::fs::File::create(target)?;
+    let mut writer = zip::ZipWriter::new(output);
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)?;
+        let name = entry.name().to_string();
+        if name == "ppt/codex-document.json" {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        if name == "ppt/presentation.xml" {
+            let xml = String::from_utf8(bytes)?;
+            bytes = replace_slide_size_in_presentation_xml(&xml, slide_width_emu, slide_height_emu)
+                .into_bytes();
+        }
+        writer.start_file(name, zip::write::SimpleFileOptions::default())?;
+        writer.write_all(&bytes)?;
+    }
+    writer.finish()?;
+    Ok(())
+}
+
+fn replace_slide_size_in_presentation_xml(xml: &str, width_emu: u32, height_emu: u32) -> String {
+    let Some(tag_start) = xml.find("<p:sldSz") else {
+        return xml.to_string();
+    };
+    let Some(tag_end_offset) = xml[tag_start..].find("/>") else {
+        return xml.to_string();
+    };
+    let tag_end = tag_start + tag_end_offset;
+    let tag = &xml[tag_start..tag_end];
+    let tag = replace_xml_attribute(tag, "cx", &width_emu.to_string());
+    let tag = replace_xml_attribute(&tag, "cy", &height_emu.to_string());
+    format!("{}{tag}/>{}", &xml[..tag_start], &xml[tag_end + 2..])
+}
+
+fn replace_xml_attribute(tag: &str, attribute: &str, value: &str) -> String {
+    let needle = format!(r#"{attribute}=""#);
+    let Some(start) = tag.find(&needle) else {
+        return tag.to_string();
+    };
+    let value_start = start + needle.len();
+    let Some(value_end_offset) = tag[value_start..].find('"') else {
+        return tag.to_string();
+    };
+    let value_end = value_start + value_end_offset;
+    format!("{}{}{}", &tag[..value_start], value, &tag[value_end..])
 }
 
 fn parse_ndjson_lines(ndjson: &str) -> Result<Vec<serde_json::Value>, serde_json::Error> {
@@ -45,6 +103,27 @@ fn rect_contains_pixel(
     for y in top..top.saturating_add(height) {
         for x in left..left.saturating_add(width) {
             if image.get_pixel(x, y).0 == expected {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn rect_contains_pixel_where<F>(
+    image: &image::DynamicImage,
+    left: u32,
+    top: u32,
+    width: u32,
+    height: u32,
+    predicate: F,
+) -> bool
+where
+    F: Fn([u8; 4]) -> bool,
+{
+    for y in top..top.saturating_add(height) {
+        for x in left..left.saturating_add(width) {
+            if predicate(image.get_pixel(x, y).0) {
                 return true;
             }
         }
@@ -1022,29 +1101,10 @@ fn preview_image_writer_supports_jpeg_scale_and_svg() -> Result<(), Box<dyn std:
 }
 
 #[test]
-fn image_uris_can_add_and_replace_images() -> Result<(), Box<dyn std::error::Error>> {
-    let mut image_bytes = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-        16,
-        8,
-        image::Rgba([0x11, 0x88, 0xCC, 0xFF]),
-    ))
-    .write_to(&mut image_bytes, image::ImageFormat::Png)?;
-    let png = image_bytes.into_inner();
-
-    let server = tiny_http::Server::http("127.0.0.1:0").expect("server");
-    let port = server.server_addr().to_ip().expect("ip addr").port();
-    let server_thread = std::thread::spawn(move || {
-        for request in server.incoming_requests().take(2) {
-            let response = tiny_http::Response::from_data(png.clone()).with_header(
-                tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"image/png"[..])
-                    .expect("header"),
-            );
-            request.respond(response).expect("respond");
-        }
-    });
-
+fn image_uris_are_rejected_for_add_and_replace_images() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::tempdir()?;
+    let image_path = temp_dir.path().join("local.png");
+    image::RgbaImage::from_pixel(16, 8, image::Rgba([0x11, 0x88, 0xCC, 0xFF])).save(&image_path)?;
     let mut manager = PresentationArtifactManager::default();
     let created = manager.execute(
         PresentationArtifactRequest {
@@ -1063,14 +1123,32 @@ fn image_uris_can_add_and_replace_images() -> Result<(), Box<dyn std::error::Err
         },
         temp_dir.path(),
     )?;
-    let remote_uri = format!("http://127.0.0.1:{port}/image.png");
+    let add_error = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "add_image".to_string(),
+                args: serde_json::json!({
+                    "slide_index": 0,
+                    "uri": "http://127.0.0.1:9/image.png",
+                    "position": { "left": 32, "top": 48, "width": 120, "height": 60 }
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("remote add_image uri should be rejected");
+    assert!(matches!(
+        add_error,
+        PresentationArtifactError::UnsupportedFeature { .. }
+    ));
+
     let added = manager.execute(
         PresentationArtifactRequest {
             artifact_id: Some(artifact_id.clone()),
             action: "add_image".to_string(),
             args: serde_json::json!({
                 "slide_index": 0,
-                "uri": remote_uri,
+                "path": image_path,
                 "position": { "left": 32, "top": 48, "width": 120, "height": 60 }
             }),
         },
@@ -1091,33 +1169,122 @@ fn image_uris_can_add_and_replace_images() -> Result<(), Box<dyn std::error::Err
             .map(|slide| slide.element_types.clone()),
         Some(vec!["image".to_string()])
     );
+    let replace_error = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id),
+                action: "replace_image".to_string(),
+                args: serde_json::json!({
+                    "element_id": format!("im/{element_id}"),
+                    "uri": "http://127.0.0.1:9/updated.png"
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("remote replace_image uri should be rejected");
+    assert!(matches!(
+        replace_error,
+        PresentationArtifactError::UnsupportedFeature { .. }
+    ));
+    Ok(())
+}
+
+#[test]
+fn replace_image_preserves_existing_image_state() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let original_path = temp_dir.path().join("original.png");
+    let replacement_path = temp_dir.path().join("replacement.png");
+    image::RgbaImage::from_pixel(24, 12, image::Rgba([0x11, 0x88, 0xCC, 0xFF]))
+        .save(&original_path)?;
+    image::RgbaImage::from_pixel(32, 16, image::Rgba([0xD0, 0x44, 0x55, 0xFF]))
+        .save(&replacement_path)?;
+    let replacement_blob =
+        base64::engine::general_purpose::STANDARD.encode(std::fs::read(&replacement_path)?);
+
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Replace image state" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let added = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_image".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "path": original_path,
+                "position": { "left": 24, "top": 24, "width": 200, "height": 120 },
+                "fit": "contain",
+                "alt": "Existing alt text"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let image_id = added
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .cloned()
+        .expect("image id");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "update_shape_style".to_string(),
+            args: serde_json::json!({
+                "element_id": format!("im/{image_id}"),
+                "fit": "cover",
+                "crop": { "left": 0.15, "top": 0.05, "right": 0.10, "bottom": 0.0 },
+                "lock_aspect_ratio": true
+            }),
+        },
+        temp_dir.path(),
+    )?;
     manager.execute(
         PresentationArtifactRequest {
             artifact_id: Some(artifact_id.clone()),
             action: "replace_image".to_string(),
             args: serde_json::json!({
-                "element_id": format!("im/{element_id}"),
-                "uri": format!("http://127.0.0.1:{port}/updated.png"),
-                "fit": "contain"
+                "element_id": format!("im/{image_id}"),
+                "blob": replacement_blob
             }),
         },
         temp_dir.path(),
     )?;
-    let inspect = manager.execute(
+    let resolved = manager.execute(
         PresentationArtifactRequest {
             artifact_id: Some(artifact_id),
-            action: "inspect".to_string(),
-            args: serde_json::json!({ "kind": "image" }),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": format!("im/{image_id}") }),
         },
         temp_dir.path(),
     )?;
-    assert!(
-        inspect
-            .inspect_ndjson
-            .expect("image inspect")
-            .contains("\"fit\":\"Contain\"")
+    let record = resolved.resolved_record.expect("resolved image");
+    assert_eq!(record["fit"], "Cover");
+    assert_eq!(record["alt"], "Existing alt text");
+    assert_eq!(record["lockAspectRatio"], true);
+    assert_eq!(record["isPlaceholder"], false);
+    assert_eq!(
+        record
+            .get("crop")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|crop| crop.get("left"))
+            .and_then(serde_json::Value::as_f64),
+        Some(0.15)
     );
-    server_thread.join().expect("server thread");
     Ok(())
 }
 
@@ -1583,6 +1750,141 @@ fn hyperlinks_are_inspectable_and_exported() -> Result<(), Box<dyn std::error::E
     )?;
     assert_eq!(
         cleared
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("hyperlink")),
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn slide_hyperlinks_track_slide_edits() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Slide hyperlinks" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    for slide_index in 0..3 {
+        manager.execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "add_slide".to_string(),
+                args: serde_json::json!({ "notes": format!("slide {slide_index}") }),
+            },
+            temp_dir.path(),
+        )?;
+    }
+
+    let shape = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "geometry": "rectangle",
+                "position": { "left": 24, "top": 24, "width": 180, "height": 60 },
+                "text": "Go"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let shape_id = shape
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .cloned()
+        .expect("shape id");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "set_hyperlink".to_string(),
+            args: serde_json::json!({
+                "element_id": format!("sh/{shape_id}"),
+                "link_type": "slide",
+                "slide_index": 2
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "insert_slide".to_string(),
+            args: serde_json::json!({ "index": 0 }),
+        },
+        temp_dir.path(),
+    )?;
+    let after_insert = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": format!("sh/{shape_id}") }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        after_insert
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("hyperlink"))
+            .and_then(|hyperlink| hyperlink.get("slideIndex"))
+            .and_then(serde_json::Value::as_u64),
+        Some(3)
+    );
+
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "move_slide".to_string(),
+            args: serde_json::json!({ "from_index": 3, "to_index": 1 }),
+        },
+        temp_dir.path(),
+    )?;
+    let after_move = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": format!("sh/{shape_id}") }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        after_move
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("hyperlink"))
+            .and_then(|hyperlink| hyperlink.get("slideIndex"))
+            .and_then(serde_json::Value::as_u64),
+        Some(1)
+    );
+
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "delete_slide".to_string(),
+            args: serde_json::json!({ "slide_index": 1 }),
+        },
+        temp_dir.path(),
+    )?;
+    let after_delete = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": format!("sh/{shape_id}") }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        after_delete
             .resolved_record
             .as_ref()
             .and_then(|record| record.get("hyperlink")),
@@ -2667,6 +2969,74 @@ fn notes_visibility_controls_exported_notes() -> Result<(), Box<dyn std::error::
 }
 
 #[test]
+fn importing_non_codex_pptx_preserves_slide_size() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({
+                "name": "Custom size",
+                "slide_size": { "width": 960, "height": 540 }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+
+    let codex_path = temp_dir.path().join("codex-sized.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": codex_path }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let imported_source = temp_dir.path().join("non-codex-sized.pptx");
+    rewrite_pptx_without_codex_metadata(
+        &temp_dir.path().join("codex-sized.pptx"),
+        &imported_source,
+        12_192_000,
+        6_858_000,
+    )?;
+
+    let imported = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "import_pptx".to_string(),
+            args: serde_json::json!({ "path": imported_source }),
+        },
+        temp_dir.path(),
+    )?;
+    let roundtrip_path = temp_dir.path().join("roundtrip-sized.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(imported.artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": roundtrip_path }),
+        },
+        temp_dir.path(),
+    )?;
+    let presentation_xml = zip_entry_text(
+        &temp_dir.path().join("roundtrip-sized.pptx"),
+        "ppt/presentation.xml",
+    )?;
+    assert!(presentation_xml.contains(r#"<p:sldSz cx="12192000" cy="6858000""#));
+    Ok(())
+}
+
+#[test]
 fn exported_notes_preserve_rich_text_styling() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::tempdir()?;
     let mut manager = PresentationArtifactManager::default();
@@ -3005,6 +3375,378 @@ fn connectors_support_arrows_and_inspect() -> Result<(), Box<dyn std::error::Err
             .expect("connector inspect")
             .contains("\"kind\":\"connector\"")
     );
+    Ok(())
+}
+
+#[test]
+fn update_shape_style_for_text_is_atomic_on_unsupported_fields()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Atomic text style" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let added = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_text_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "text": "Atomic",
+                "position": { "left": 40, "top": 40, "width": 180, "height": 60 }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let text_id = added
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .cloned()
+        .expect("text id");
+    let error = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "update_shape_style".to_string(),
+                args: serde_json::json!({
+                    "element_id": format!("sh/{text_id}"),
+                    "fill": "#00AA00",
+                    "stroke": { "color": "#222222", "width": 2 }
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("unsupported stroke should reject the request");
+    assert!(matches!(
+        error,
+        PresentationArtifactError::UnsupportedFeature { .. }
+    ));
+    let resolved = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "resolve".to_string(),
+            args: serde_json::json!({ "id": format!("sh/{text_id}") }),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(
+        resolved
+            .resolved_record
+            .as_ref()
+            .and_then(|record| record.get("fill"))
+            .cloned(),
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn update_shape_style_rejects_silently_ignored_text_shape_and_image_fields()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Unsupported style args" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let text = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_text_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "text": "Unsupported",
+                "position": { "left": 24, "top": 24, "width": 160, "height": 60 }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let text_id = text
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .cloned()
+        .expect("text id");
+    let added_shape = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "geometry": "rectangle",
+                "position": { "left": 24, "top": 120, "width": 160, "height": 80 },
+                "fill": "#cccccc"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let shape_id = added_shape
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.get(1))
+        .cloned()
+        .expect("shape id");
+    let added_image = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_image".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "position": { "left": 220, "top": 24, "width": 120, "height": 80 },
+                "prompt": "Placeholder image"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let image_id = added_image
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.last())
+        .cloned()
+        .expect("image id");
+
+    let text_error = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "update_shape_style".to_string(),
+                args: serde_json::json!({
+                    "element_id": format!("sh/{text_id}"),
+                    "position": { "flip_horizontal": true }
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("text nested transforms should be rejected");
+    assert!(matches!(
+        text_error,
+        PresentationArtifactError::UnsupportedFeature { .. }
+    ));
+
+    let shape_fit_error = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "update_shape_style".to_string(),
+                args: serde_json::json!({
+                    "element_id": format!("sh/{shape_id}"),
+                    "fit": "contain"
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("shape fit should be rejected");
+    assert!(matches!(
+        shape_fit_error,
+        PresentationArtifactError::UnsupportedFeature { .. }
+    ));
+
+    let shape_layout_error = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "update_shape_style".to_string(),
+                args: serde_json::json!({
+                    "element_id": format!("sh/{shape_id}"),
+                    "text_layout": { "wrap": "none" }
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("shape text_layout without text should be rejected");
+    assert!(matches!(
+        shape_layout_error,
+        PresentationArtifactError::UnsupportedFeature { .. }
+    ));
+
+    let image_layout_error = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id),
+                action: "update_shape_style".to_string(),
+                args: serde_json::json!({
+                    "element_id": format!("im/{image_id}"),
+                    "text_layout": { "wrap": "none" }
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("image text_layout should be rejected");
+    assert!(matches!(
+        image_layout_error,
+        PresentationArtifactError::UnsupportedFeature { .. }
+    ));
+    Ok(())
+}
+
+#[test]
+fn update_shape_style_rejects_silently_ignored_connector_table_and_chart_fields()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Unsupported style args 2" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let connector = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_connector".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "connector_type": "straight",
+                "start": { "left": 20, "top": 20 },
+                "end": { "left": 180, "top": 160 }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let connector_id = connector
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .cloned()
+        .expect("connector id");
+    let table = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_table".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "position": { "left": 220, "top": 20, "width": 180, "height": 100 },
+                "rows": [["A", "B"], ["C", "D"]]
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let table_id = table
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.get(1))
+        .cloned()
+        .expect("table id");
+    let chart = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_chart".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "chart_type": "bar",
+                "position": { "left": 24, "top": 220, "width": 220, "height": 140 },
+                "categories": ["A", "B"],
+                "series": [{ "name": "Actual", "values": [1, 2] }]
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let chart_id = chart
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.last())
+        .cloned()
+        .expect("chart id");
+
+    let connector_error = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "update_shape_style".to_string(),
+                args: serde_json::json!({
+                    "element_id": format!("cn/{connector_id}"),
+                    "position": { "rotation": 10 }
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("connector nested transforms should be rejected");
+    assert!(matches!(
+        connector_error,
+        PresentationArtifactError::UnsupportedFeature { .. }
+    ));
+
+    let table_error = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "update_shape_style".to_string(),
+                args: serde_json::json!({
+                    "element_id": format!("tb/{table_id}"),
+                    "position": { "flip_vertical": true }
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("table nested transforms should be rejected");
+    assert!(matches!(
+        table_error,
+        PresentationArtifactError::UnsupportedFeature { .. }
+    ));
+
+    let chart_error = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id),
+                action: "update_shape_style".to_string(),
+                args: serde_json::json!({
+                    "element_id": format!("ch/{chart_id}"),
+                    "text_layout": { "wrap": "none" }
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("chart text_layout should be rejected");
+    assert!(matches!(
+        chart_error,
+        PresentationArtifactError::UnsupportedFeature { .. }
+    ));
     Ok(())
 }
 
@@ -3401,6 +4143,109 @@ fn manager_supports_table_cell_updates_and_merges() -> Result<(), Box<dyn std::e
     assert!(slide_xml.contains(r#"<a:gridCol w="1905000"/>"#));
     assert!(slide_xml.contains(r#"<a:tr h="508000">"#));
     assert!(slide_xml.contains(r#"<a:tr h="1016000">"#));
+    Ok(())
+}
+
+#[test]
+fn merge_table_cells_validates_region_bounds() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Merge validation" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let added = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_table".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "position": { "left": 32, "top": 48, "width": 240, "height": 120 },
+                "rows": [
+                    ["A1", "B1"],
+                    ["A2", "B2"]
+                ]
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let table_id = added
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .map(|id| format!("tb/{id}"))
+        .expect("table id");
+
+    let reversed = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "merge_table_cells".to_string(),
+                args: serde_json::json!({
+                    "element_id": table_id,
+                    "start_row": 1,
+                    "end_row": 0,
+                    "start_column": 0,
+                    "end_column": 1
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("reversed merge should be rejected");
+    assert!(matches!(
+        reversed,
+        PresentationArtifactError::InvalidArgs { .. }
+    ));
+
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "merge_table_cells".to_string(),
+            args: serde_json::json!({
+                "element_id": table_id,
+                "start_row": 0,
+                "end_row": 0,
+                "start_column": 0,
+                "end_column": 1
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let overlapping = manager
+        .execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id),
+                action: "merge_table_cells".to_string(),
+                args: serde_json::json!({
+                    "element_id": table_id,
+                    "start_row": 0,
+                    "end_row": 1,
+                    "start_column": 1,
+                    "end_column": 1
+                }),
+            },
+            temp_dir.path(),
+        )
+        .expect_err("overlapping merge should be rejected");
+    assert!(matches!(
+        overlapping,
+        PresentationArtifactError::InvalidArgs { .. }
+    ));
     Ok(())
 }
 
@@ -4343,6 +5188,111 @@ fn render_preview_renders_chart_primitives() -> Result<(), Box<dyn std::error::E
 }
 
 #[test]
+fn render_preview_keeps_negative_chart_values_within_plot() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Negative charts" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    for _ in 0..2 {
+        manager.execute(
+            PresentationArtifactRequest {
+                artifact_id: Some(artifact_id.clone()),
+                action: "add_slide".to_string(),
+                args: serde_json::json!({}),
+            },
+            temp_dir.path(),
+        )?;
+    }
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_chart".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "chart_type": "bar",
+                "position": { "left": 120, "top": 80, "width": 360, "height": 220 },
+                "categories": ["Loss", "Gain"],
+                "series": [
+                    { "name": "Actual", "values": [-4, 6], "fill": "#4E79A7" }
+                ]
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_chart".to_string(),
+            args: serde_json::json!({
+                "slide_index": 1,
+                "chart_type": "line",
+                "position": { "left": 120, "top": 80, "width": 360, "height": 220 },
+                "categories": ["Loss", "Gain"],
+                "series": [
+                    { "name": "Actual", "values": [-4, 6], "fill": "#4E79A7" }
+                ]
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let bar_preview = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "render_preview".to_string(),
+            args: serde_json::json!({ "slide_index": 0 }),
+        },
+        temp_dir.path(),
+    )?;
+    let bar_image = load_preview(&bar_preview.rendered_preview.expect("bar preview").png_bytes)?;
+    assert!(
+        rect_contains_pixel(&bar_image, 150, 210, 90, 80, [0x4E, 0x79, 0xA7, 0xFF]),
+        "expected negative bar fill in the lower plot half"
+    );
+    assert!(
+        rect_contains_pixel(&bar_image, 280, 110, 90, 80, [0x4E, 0x79, 0xA7, 0xFF]),
+        "expected positive bar fill in the upper plot half"
+    );
+
+    let line_preview = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "render_preview".to_string(),
+            args: serde_json::json!({ "slide_index": 1 }),
+        },
+        temp_dir.path(),
+    )?;
+    let line_image = load_preview(
+        &line_preview
+            .rendered_preview
+            .expect("line preview")
+            .png_bytes,
+    )?;
+    let is_series_pixel = |pixel: [u8; 4]| {
+        pixel[3] == 0xFF
+            && u16::from(pixel[2]) > u16::from(pixel[0]) + 20
+            && u16::from(pixel[2]) > u16::from(pixel[1]) + 20
+    };
+    assert!(
+        rect_contains_pixel_where(&line_image, 0, 220, 360, 140, is_series_pixel),
+        "expected negative line point inside the plot area"
+    );
+    assert!(
+        rect_contains_pixel_where(&line_image, 240, 0, 480, 220, is_series_pixel),
+        "expected positive line point inside the plot area"
+    );
+    Ok(())
+}
+
+#[test]
 fn export_preview_uses_native_renderer_for_single_slide() -> Result<(), Box<dyn std::error::Error>>
 {
     let temp_dir = tempfile::tempdir()?;
@@ -4479,9 +5429,106 @@ fn export_preview_matches_pptx_stacking_and_rounded_shapes()
             .expect("exported preview path present"),
     )?;
 
-    assert_eq!(preview.get_pixel(200, 220).0, [0x2A, 0x80, 0xD7, 0xFF]);
+    assert_eq!(preview.get_pixel(200, 220).0, [0xFF, 0xFF, 0xFF, 0xFF]);
     assert_eq!(preview.get_pixel(200, 290).0, [0xFF, 0xFF, 0xFF, 0xFF]);
     assert_eq!(preview.get_pixel(122, 202).0, [0xD9, 0xEA, 0xF7, 0xFF]);
+    Ok(())
+}
+
+#[test]
+fn render_preview_respects_cross_element_z_order() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let image_path = temp_dir.path().join("z-order-source.png");
+    image::RgbaImage::from_pixel(40, 40, image::Rgba([0x2A, 0x80, 0xD7, 0xFF]))
+        .save(&image_path)?;
+
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Cross element z-order" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let added_image = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_image".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "path": image_path,
+                "position": { "left": 120, "top": 120, "width": 180, "height": 180 }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let image_id = added_image
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .cloned()
+        .expect("image id");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "geometry": "rectangle",
+                "position": { "left": 140, "top": 140, "width": 180, "height": 180 },
+                "fill": "#FFFFFF"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let preview = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "render_preview".to_string(),
+            args: serde_json::json!({ "slide_index": 0 }),
+        },
+        temp_dir.path(),
+    )?;
+    let rendered = load_preview(&preview.rendered_preview.expect("preview").png_bytes)?;
+    assert_eq!(rendered.get_pixel(180, 180).0, [0xFF, 0xFF, 0xFF, 0xFF]);
+
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "update_shape_style".to_string(),
+            args: serde_json::json!({
+                "element_id": format!("im/{image_id}"),
+                "z_order": 1
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let updated_preview = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "render_preview".to_string(),
+            args: serde_json::json!({ "slide_index": 0 }),
+        },
+        temp_dir.path(),
+    )?;
+    let updated = load_preview(
+        &updated_preview
+            .rendered_preview
+            .expect("updated preview")
+            .png_bytes,
+    )?;
+    assert_eq!(updated.get_pixel(180, 180).0, [0x2A, 0x80, 0xD7, 0xFF]);
     Ok(())
 }
 

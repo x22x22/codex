@@ -219,6 +219,9 @@ impl PresentationArtifactManager {
                 }
             })?;
             let mut document = PresentationDocument::from_ppt_rs(imported);
+            if let Some(slide_size) = import_pptx_slide_size(&path)? {
+                document.slide_size = slide_size;
+            }
             import_pptx_images(&path, &mut document, &request.action)?;
             document
         };
@@ -1589,10 +1592,6 @@ impl PresentationArtifactManager {
             ImageInputSource::Uri(uri) => Some(load_image_payload_from_uri(&uri, "replace_image")?),
             ImageInputSource::Placeholder => None,
         };
-        let fit_mode = args.fit.unwrap_or(ImageFitMode::Stretch);
-        let lock_aspect_ratio = args
-            .lock_aspect_ratio
-            .unwrap_or(fit_mode != ImageFitMode::Stretch);
         let crop = args
             .crop
             .map(|crop| normalize_image_crop(crop, &request.action))
@@ -1606,8 +1605,10 @@ impl PresentationArtifactManager {
             });
         };
         image.payload = image_payload;
-        image.fit_mode = fit_mode;
-        image.crop = crop;
+        image.fit_mode = args.fit.unwrap_or(image.fit_mode);
+        if let Some(crop) = crop {
+            image.crop = Some(crop);
+        }
         if let Some(rotation) = args.rotation {
             image.rotation_degrees = Some(rotation);
         }
@@ -1617,9 +1618,15 @@ impl PresentationArtifactManager {
         if let Some(flip_vertical) = args.flip_vertical {
             image.flip_vertical = flip_vertical;
         }
-        image.lock_aspect_ratio = lock_aspect_ratio;
-        image.alt_text = args.alt;
-        image.prompt = args.prompt;
+        if let Some(lock_aspect_ratio) = args.lock_aspect_ratio {
+            image.lock_aspect_ratio = lock_aspect_ratio;
+        }
+        if let Some(alt) = args.alt {
+            image.alt_text = Some(alt);
+        }
+        if let Some(prompt) = args.prompt {
+            image.prompt = Some(prompt);
+        }
         image.is_placeholder = is_placeholder;
         Ok(PresentationArtifactResponse::new(
             artifact_id,
@@ -1871,12 +1878,43 @@ impl PresentationArtifactManager {
                 message: format!("element `{}` is not a table", args.element_id),
             });
         };
+        let row_count = table.rows.len();
+        let column_count = table.rows.first().map(Vec::len).unwrap_or(0);
+        let start_row = args.start_row as usize;
+        let end_row = args.end_row as usize;
+        let start_column = args.start_column as usize;
+        let end_column = args.end_column as usize;
+        if start_row > end_row || start_column > end_column {
+            return Err(PresentationArtifactError::InvalidArgs {
+                action: request.action,
+                message: "merge bounds must be ordered from top-left to bottom-right".to_string(),
+            });
+        }
+        if end_row >= row_count || end_column >= column_count {
+            return Err(PresentationArtifactError::InvalidArgs {
+                action: request.action,
+                message: format!(
+                    "merge bounds [{start_row},{start_column}]..=[{end_row},{end_column}] exceed table size {row_count}x{column_count}"
+                ),
+            });
+        }
         let region = TableMergeRegion {
-            start_row: args.start_row as usize,
-            end_row: args.end_row as usize,
-            start_column: args.start_column as usize,
-            end_column: args.end_column as usize,
+            start_row,
+            end_row,
+            start_column,
+            end_column,
         };
+        if table.merges.iter().any(|merge| {
+            merge.start_row <= region.end_row
+                && region.start_row <= merge.end_row
+                && merge.start_column <= region.end_column
+                && region.start_column <= merge.end_column
+        }) {
+            return Err(PresentationArtifactError::InvalidArgs {
+                action: request.action,
+                message: format!("merge region overlaps an existing merge in `{}`", args.element_id),
+            });
+        }
         table.merges.push(region);
         Ok(PresentationArtifactResponse::new(
             artifact_id,
@@ -2811,9 +2849,40 @@ impl PresentationArtifactManager {
             || text_layout.wrap.is_some()
             || text_layout.auto_fit.is_some()
             || text_layout.vertical_alignment.is_some();
+        let position_rotation = args
+            .position
+            .as_ref()
+            .and_then(|position| position.rotation);
+        let position_flip_horizontal = args
+            .position
+            .as_ref()
+            .and_then(|position| position.flip_horizontal);
+        let position_flip_vertical = args
+            .position
+            .as_ref()
+            .and_then(|position| position.flip_vertical);
+        let has_position_transform = position_rotation.is_some()
+            || position_flip_horizontal.is_some()
+            || position_flip_vertical.is_some();
+        let has_image_fields =
+            args.fit.is_some() || args.crop.is_some() || args.lock_aspect_ratio.is_some();
         let element = document.find_element_mut(&args.element_id, &request.action)?;
         match element {
             PresentationElement::Text(text) => {
+                if args.stroke.is_some()
+                    || args.rotation.is_some()
+                    || args.flip_horizontal.is_some()
+                    || args.flip_vertical.is_some()
+                    || has_position_transform
+                    || has_image_fields
+                {
+                    return Err(PresentationArtifactError::UnsupportedFeature {
+                        action: request.action,
+                        message:
+                            "text elements support only `position`, `z_order`, `fill`, and `text_layout` updates"
+                                .to_string(),
+                    });
+                }
                 if let Some(position) = args.position {
                     text.frame = apply_partial_position(text.frame, position);
                 }
@@ -2823,32 +2892,23 @@ impl PresentationArtifactManager {
                 if has_text_layout {
                     text.rich_text.layout = text_layout;
                 }
-                if args.stroke.is_some()
-                    || args.rotation.is_some()
-                    || args.flip_horizontal.is_some()
-                    || args.flip_vertical.is_some()
-                {
+            }
+            PresentationElement::Shape(shape) => {
+                if has_image_fields {
                     return Err(PresentationArtifactError::UnsupportedFeature {
                         action: request.action,
                         message:
-                            "text elements support only `position`, `z_order`, and `fill` updates"
+                            "shape elements support only `position`, `fill`, `stroke`, `rotation`, `flip_horizontal`, `flip_vertical`, `z_order`, and `text_layout` updates"
                                 .to_string(),
                     });
                 }
-            }
-            PresentationElement::Shape(shape) => {
-                let position_rotation = args
-                    .position
-                    .as_ref()
-                    .and_then(|position| position.rotation);
-                let position_flip_horizontal = args
-                    .position
-                    .as_ref()
-                    .and_then(|position| position.flip_horizontal);
-                let position_flip_vertical = args
-                    .position
-                    .as_ref()
-                    .and_then(|position| position.flip_vertical);
+                if has_text_layout && shape.text.is_none() {
+                    return Err(PresentationArtifactError::UnsupportedFeature {
+                        action: request.action,
+                        message: "shape elements without text do not support `text_layout` updates"
+                            .to_string(),
+                    });
+                }
                 if let Some(position) = args.position {
                     shape.frame = apply_partial_position(shape.frame, position);
                 }
@@ -2879,9 +2939,9 @@ impl PresentationArtifactManager {
                     || args.rotation.is_some()
                     || args.flip_horizontal.is_some()
                     || args.flip_vertical.is_some()
-                    || args.fit.is_some()
-                    || args.crop.is_some()
-                    || args.lock_aspect_ratio.is_some()
+                    || has_position_transform
+                    || has_image_fields
+                    || has_text_layout
                 {
                     return Err(PresentationArtifactError::UnsupportedFeature {
                         action: request.action,
@@ -2914,19 +2974,7 @@ impl PresentationArtifactManager {
                 }
             }
             PresentationElement::Image(image) => {
-                let position_rotation = args
-                    .position
-                    .as_ref()
-                    .and_then(|position| position.rotation);
-                let position_flip_horizontal = args
-                    .position
-                    .as_ref()
-                    .and_then(|position| position.flip_horizontal);
-                let position_flip_vertical = args
-                    .position
-                    .as_ref()
-                    .and_then(|position| position.flip_vertical);
-                if args.fill.is_some() || args.stroke.is_some() {
+                if args.fill.is_some() || args.stroke.is_some() || has_text_layout {
                     return Err(PresentationArtifactError::UnsupportedFeature {
                         action: request.action,
                         message:
@@ -2965,6 +3013,9 @@ impl PresentationArtifactManager {
                     || args.rotation.is_some()
                     || args.flip_horizontal.is_some()
                     || args.flip_vertical.is_some()
+                    || has_position_transform
+                    || has_image_fields
+                    || has_text_layout
                 {
                     return Err(PresentationArtifactError::UnsupportedFeature {
                         action: request.action,
@@ -2982,6 +3033,9 @@ impl PresentationArtifactManager {
                     || args.rotation.is_some()
                     || args.flip_horizontal.is_some()
                     || args.flip_vertical.is_some()
+                    || has_position_transform
+                    || has_image_fields
+                    || has_text_layout
                 {
                     return Err(PresentationArtifactError::UnsupportedFeature {
                         action: request.action,
