@@ -40,7 +40,6 @@ pub(super) enum PatchFocus {
 
 pub(super) struct PatchOverlayState {
     pub(super) focus: PatchFocus,
-    pub(super) options_state: ScrollState,
     pub(super) composer: ChatComposer,
     pub(super) notes_visible: bool,
     pub(super) note_submit_attempted: bool,
@@ -59,18 +58,10 @@ impl PatchOverlayState {
         composer.set_footer_hint_override(Some(Vec::new()));
         Self {
             focus: PatchFocus::Options,
-            options_state: ScrollState {
-                selected_idx: Some(0),
-                ..Default::default()
-            },
             composer,
             notes_visible: false,
             note_submit_attempted: false,
         }
-    }
-
-    pub(super) fn selected_index(&self) -> Option<usize> {
-        self.options_state.selected_idx
     }
 
     pub(super) fn focus_is_notes(&self) -> bool {
@@ -81,13 +72,15 @@ impl PatchOverlayState {
         self.composer.current_text_with_pending()
     }
 
-    pub(super) fn notes_visible(&self) -> bool {
-        self.options_state.selected_idx == Some(PATCH_REJECT_OPTION_INDEX)
+    pub(super) fn notes_visible(&self, selected_idx: Option<usize>) -> bool {
+        selected_idx == Some(PATCH_REJECT_OPTION_INDEX)
             && (self.notes_visible || !self.note_text().trim().is_empty())
     }
 
-    pub(super) fn note_error_visible(&self) -> bool {
-        self.notes_visible() && self.note_submit_attempted && self.note_text().trim().is_empty()
+    pub(super) fn note_error_visible(&self, selected_idx: Option<usize>) -> bool {
+        self.notes_visible(selected_idx)
+            && self.note_submit_attempted
+            && self.note_text().trim().is_empty()
     }
 
     fn notes_input_height(&self, width: u16) -> u16 {
@@ -114,6 +107,7 @@ impl PatchLayout {
     pub(super) fn new(
         request: &ApprovalRequest,
         options: &[ApprovalOption],
+        options_state: ScrollState,
         state: Option<&PatchOverlayState>,
         width: u16,
     ) -> Option<Self> {
@@ -127,16 +121,16 @@ impl PatchLayout {
         let title_lines = wrap_patch_title(width);
         let header = build_header(request);
         let header_height = header.desired_height(width);
-        let mut options_state = state.map(|state| state.options_state).unwrap_or_default();
+        let mut options_state = options_state;
         if options_state.selected_idx.is_none() {
             options_state.selected_idx = Some(0);
         }
         let rows = patch_option_rows(options, options_state.selected_idx);
         let options_height =
             measure_rows_height(&rows, &options_state, rows.len().max(1), width.max(1));
-        let hint_lines = patch_hint_lines(request, state, width);
-        let validation_lines = patch_validation_lines(state, width);
-        let show_notes = state.is_some_and(PatchOverlayState::notes_visible);
+        let hint_lines = patch_hint_lines(request, options_state.selected_idx, state, width);
+        let validation_lines = patch_validation_lines(options_state.selected_idx, state, width);
+        let show_notes = state.is_some_and(|state| state.notes_visible(options_state.selected_idx));
         let notes_height = if show_notes {
             state
                 .map(|state| state.notes_input_height(width))
@@ -329,16 +323,17 @@ fn patch_option_rows(
 
 fn patch_hint_lines(
     request: &ApprovalRequest,
+    selected_idx: Option<usize>,
     state: Option<&PatchOverlayState>,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let mut hint = if state.is_some_and(PatchOverlayState::notes_visible) {
+    let mut hint = if state.is_some_and(|state| state.notes_visible(selected_idx)) {
         if state.is_some_and(PatchOverlayState::focus_is_notes) {
             "enter to send | tab to go back | esc to interrupt".to_string()
         } else {
             "enter or tab to edit follow up | esc to interrupt".to_string()
         }
-    } else if state.and_then(PatchOverlayState::selected_index) == Some(PATCH_REJECT_OPTION_INDEX) {
+    } else if selected_idx == Some(PATCH_REJECT_OPTION_INDEX) {
         "tab to follow up | esc to interrupt".to_string()
     } else {
         "esc to interrupt".to_string()
@@ -353,8 +348,12 @@ fn patch_hint_lines(
         .collect()
 }
 
-fn patch_validation_lines(state: Option<&PatchOverlayState>, width: u16) -> Vec<Line<'static>> {
-    if !state.is_some_and(PatchOverlayState::note_error_visible) {
+fn patch_validation_lines(
+    selected_idx: Option<usize>,
+    state: Option<&PatchOverlayState>,
+    width: u16,
+) -> Vec<Line<'static>> {
+    if !state.is_some_and(|state| state.note_error_visible(selected_idx)) {
         return Vec::new();
     }
 
