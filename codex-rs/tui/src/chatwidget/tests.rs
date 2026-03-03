@@ -7002,51 +7002,6 @@ async fn approval_modal_patch_snapshot() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn approval_modal_patch_notes_snapshot() -> anyhow::Result<()> {
-    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.config
-        .permissions
-        .approval_policy
-        .set(AskForApproval::OnRequest)?;
-
-    let mut changes = HashMap::new();
-    changes.insert(
-        PathBuf::from("README.md"),
-        FileChange::Add {
-            content: "hello\nworld\n".into(),
-        },
-    );
-    chat.handle_codex_event(Event {
-        id: "sub-approve-patch-notes".into(),
-        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-            call_id: "call-approve-patch-notes".into(),
-            turn_id: "turn-approve-patch-notes".into(),
-            changes,
-            reason: Some("The model wants to apply changes".into()),
-            grant_root: Some(PathBuf::from("/tmp")),
-        }),
-    });
-
-    chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
-    chat.bottom_pane
-        .handle_paste("split the edits into smaller commits".to_string());
-
-    let height = chat.desired_height(80);
-    let mut terminal =
-        ratatui::Terminal::new(VT100Backend::new(80, height)).expect("create terminal");
-    terminal.set_viewport_area(Rect::new(0, 0, 80, height));
-    terminal
-        .draw(|f| chat.render(f.area(), f.buffer_mut()))
-        .expect("draw patch approval notes modal");
-    assert_snapshot!(
-        "approval_modal_patch_notes",
-        terminal.backend().vt100().screen().contents()
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
 async fn interrupt_restores_queued_messages_into_composer() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
 
@@ -7559,32 +7514,6 @@ async fn apply_patch_events_emit_history_cells() {
 }
 
 #[tokio::test]
-async fn apply_patch_declined_shows_accepting_revision_without_detail() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-
-    chat.handle_codex_event(Event {
-        id: "declined".into(),
-        msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
-            call_id: "call-declined".into(),
-            turn_id: "turn-declined".into(),
-            stdout: String::new(),
-            stderr: "patch rejected by user".into(),
-            success: false,
-            changes: HashMap::new(),
-            status: CorePatchApplyStatus::Declined,
-        }),
-    });
-
-    let cells = drain_insert_history(&mut rx);
-    let rendered = lines_to_single_string(cells.last().expect("declined patch cell"));
-    assert_snapshot!("apply_patch_declined_accepting_revision", rendered);
-    assert!(
-        !rendered.contains("patch rejected by user"),
-        "declined patch row should not show the low-level rejection detail"
-    );
-}
-
-#[tokio::test]
 async fn apply_patch_manual_approval_adjusts_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 
@@ -7727,118 +7656,6 @@ async fn apply_patch_approval_sends_op_with_call_id() {
         }
     }
     assert!(found, "expected PatchApproval op to be sent");
-}
-
-#[tokio::test]
-async fn apply_patch_notes_choose_between_soft_reject_and_abort() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let mut changes = HashMap::new();
-    changes.insert(
-        PathBuf::from("file.rs"),
-        FileChange::Add {
-            content: "fn main(){}\n".into(),
-        },
-    );
-    chat.handle_codex_event(Event {
-        id: "sub-124".into(),
-        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-            call_id: "call-1000".into(),
-            turn_id: "turn-1000".into(),
-            changes,
-            reason: None,
-            grant_root: None,
-        }),
-    });
-
-    chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
-    chat.bottom_pane
-        .handle_paste("apply only the formatter changes".to_string());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-    let mut saw_reject = false;
-    let mut saw_abort = false;
-    let mut saw_interruption_banner = false;
-    while let Ok(event) = rx.try_recv() {
-        match event {
-            AppEvent::RejectPatchApprovalWithNotes { text, .. } => {
-                assert_eq!(text, "apply only the formatter changes");
-                saw_reject = true;
-            }
-            AppEvent::SubmitThreadOp {
-                op:
-                    Op::PatchApproval {
-                        decision: codex_protocol::protocol::ReviewDecision::Abort,
-                        ..
-                    },
-                ..
-            } => {
-                saw_abort = true;
-            }
-            AppEvent::InsertHistoryCell(cell) => {
-                let rendered = cell
-                    .display_lines(120)
-                    .into_iter()
-                    .map(|line| {
-                        line.spans
-                            .into_iter()
-                            .map(|span| span.content.into_owned())
-                            .collect::<String>()
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if rendered.contains("Conversation interrupted") {
-                    saw_interruption_banner = true;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    assert!(saw_reject, "expected reject-with-notes app event");
-    assert!(!saw_abort, "soft reject should not abort the turn");
-    assert!(
-        !saw_interruption_banner,
-        "soft reject should not show the interruption banner"
-    );
-
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    let mut changes = HashMap::new();
-    changes.insert(
-        PathBuf::from("file.rs"),
-        FileChange::Add {
-            content: "fn main(){}\n".into(),
-        },
-    );
-    chat.handle_codex_event(Event {
-        id: "sub-125".into(),
-        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-            call_id: "call-1001".into(),
-            turn_id: "turn-1001".into(),
-            changes,
-            reason: None,
-            grant_root: None,
-        }),
-    });
-
-    chat.handle_key_event(KeyEvent::from(KeyCode::Tab));
-    chat.bottom_pane
-        .handle_paste("this note should be discarded".to_string());
-    chat.handle_key_event(KeyEvent::from(KeyCode::Esc));
-
-    let mut saw_abort = false;
-    while let Ok(event) = rx.try_recv() {
-        if let AppEvent::SubmitThreadOp {
-            op: Op::PatchApproval { decision, .. },
-            ..
-        } = event
-            && decision == codex_protocol::protocol::ReviewDecision::Abort
-        {
-            saw_abort = true;
-            break;
-        }
-    }
-
-    assert!(saw_abort, "esc should still abort the patch approval flow");
 }
 
 #[tokio::test]

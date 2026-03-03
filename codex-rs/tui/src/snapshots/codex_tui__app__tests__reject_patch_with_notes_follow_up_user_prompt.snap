@@ -1,7 +1,0 @@
----
-source: tui/src/app.rs
-assertion_line: 3932
-expression: "render_transcript_cells_for_snapshot(&app, 80)"
----
-
-› i want the content to say bye instead.
