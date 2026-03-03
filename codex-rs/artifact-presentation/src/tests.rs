@@ -132,7 +132,7 @@ fn manager_can_import_exported_presentation() -> Result<(), Box<dyn std::error::
     )?;
     manager.execute(
         PresentationArtifactRequest {
-            artifact_id: Some(artifact_id),
+            artifact_id: Some(artifact_id.clone()),
             action: "add_shape".to_string(),
             args: serde_json::json!({
                 "slide_index": 0,
@@ -489,7 +489,7 @@ fn exported_text_shapes_preserve_text_styling() -> Result<(), Box<dyn std::error
     )?;
     manager.execute(
         PresentationArtifactRequest {
-            artifact_id: Some(artifact_id),
+            artifact_id: Some(artifact_id.clone()),
             action: "add_shape".to_string(),
             args: serde_json::json!({
                 "slide_index": 0,
@@ -4308,6 +4308,86 @@ fn export_preview_uses_native_renderer_for_single_slide() -> Result<(), Box<dyn 
     assert_eq!(preview.dimensions(), (720, 540));
     assert_eq!(preview.get_pixel(20, 20).0, [0xF2, 0xE8, 0xDC, 0xFF]);
     assert_eq!(preview.get_pixel(120, 150).0, [0x2F, 0x6B, 0x5F, 0xFF]);
+    Ok(())
+}
+
+#[test]
+fn export_preview_matches_pptx_stacking_and_rounded_shapes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let image_path = temp_dir.path().join("stacking-source.png");
+    image::RgbaImage::from_pixel(40, 40, image::Rgba([0x2A, 0x80, 0xD7, 0xFF]))
+        .save(&image_path)?;
+
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Preview stacking parity" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({
+                "background_fill": "#D9EAF7"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_image".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "path": image_path,
+                "position": { "left": 160, "top": 80, "width": 180, "height": 180 },
+                "fit": "stretch"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "geometry": "rounded_rectangle",
+                "position": { "left": 120, "top": 200, "width": 220, "height": 120 },
+                "fill": "#FFFFFF"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let target_path = temp_dir.path().join("stacking-preview.png");
+    let response = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "export_preview".to_string(),
+            args: serde_json::json!({
+                "path": target_path,
+                "slide_index": 0
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let preview = image::open(
+        response
+            .exported_paths
+            .first()
+            .expect("exported preview path present"),
+    )?;
+
+    assert_eq!(preview.get_pixel(200, 220).0, [0x2A, 0x80, 0xD7, 0xFF]);
+    assert_eq!(preview.get_pixel(200, 290).0, [0xFF, 0xFF, 0xFF, 0xFF]);
+    assert_eq!(preview.get_pixel(122, 202).0, [0xD9, 0xEA, 0xF7, 0xFF]);
     Ok(())
 }
 

@@ -1058,12 +1058,12 @@ fn export_text_body_xml(
         style.alignment.unwrap_or(TextAlignment::Left),
         rich_text,
     );
+    let left_inset = points_to_emu(insets.left);
+    let right_inset = points_to_emu(insets.right);
+    let top_inset = points_to_emu(insets.top);
+    let bottom_inset = points_to_emu(insets.bottom);
     format!(
-        r#"<p:txBody><a:bodyPr wrap="{wrap}" lIns="{}" rIns="{}" tIns="{}" bIns="{}" anchor="{anchor}">{auto_fit}</a:bodyPr><a:lstStyle/>{paragraphs}</p:txBody>"#,
-        points_to_emu(insets.left),
-        points_to_emu(insets.right),
-        points_to_emu(insets.top),
-        points_to_emu(insets.bottom),
+        r#"<p:txBody><a:bodyPr wrap="{wrap}" lIns="{left_inset}" rIns="{right_inset}" tIns="{top_inset}" bIns="{bottom_inset}" anchor="{anchor}">{auto_fit}</a:bodyPr><a:lstStyle/>{paragraphs}</p:txBody>"#
     )
 }
 
@@ -1110,12 +1110,12 @@ fn export_table_cell_text_body_xml(
         TextAutoFitMode::ResizeShapeToFitText => "<a:spAutoFit/>".to_string(),
     };
     let insets = cell.rich_text.layout.insets.map(|insets| {
+        let left_inset = points_to_emu(insets.left);
+        let right_inset = points_to_emu(insets.right);
+        let top_inset = points_to_emu(insets.top);
+        let bottom_inset = points_to_emu(insets.bottom);
         format!(
-            r#" lIns="{}" rIns="{}" tIns="{}" bIns="{}""#,
-            points_to_emu(insets.left),
-            points_to_emu(insets.right),
-            points_to_emu(insets.top),
-            points_to_emu(insets.bottom),
+            r#" lIns="{left_inset}" rIns="{right_inset}" tIns="{top_inset}" bIns="{bottom_inset}""#,
         )
     });
     let paragraphs = export_text_paragraphs_xml(

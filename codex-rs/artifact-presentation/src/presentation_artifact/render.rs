@@ -153,7 +153,7 @@ fn render_slide_image(
     }
 
     let mut ordered = slide.elements.iter().collect::<Vec<_>>();
-    ordered.sort_by_key(|element| element.z_order());
+    ordered.sort_by_key(|element| (preview_render_layer(element), element.z_order()));
     for element in ordered {
         render_element(&mut canvas, document, slide, element, render_scale)?;
     }
@@ -1123,11 +1123,13 @@ fn layout_text_lines(glyphs: &[StyledGlyph], config: TextRenderConfig) -> Vec<Te
     let mut current_spaces = 0;
     for glyph in glyphs {
         if glyph.ch == '\n' {
-            lines.push(TextLine {
-                glyphs: std::mem::take(&mut current),
-                width: current_width,
-                spaces: current_spaces,
-            });
+            push_text_line(
+                &mut lines,
+                &mut current,
+                &mut current_width,
+                &mut current_spaces,
+                config.font_px,
+            );
             current_width = 0;
             current_spaces = 0;
             continue;
@@ -1137,13 +1139,21 @@ fn layout_text_lines(glyphs: &[StyledGlyph], config: TextRenderConfig) -> Vec<Te
             && !current.is_empty()
             && current_width.saturating_add(glyph_width) > config.width
         {
-            lines.push(TextLine {
-                glyphs: std::mem::take(&mut current),
-                width: current_width,
-                spaces: current_spaces,
-            });
+            push_text_line(
+                &mut lines,
+                &mut current,
+                &mut current_width,
+                &mut current_spaces,
+                config.font_px,
+            );
             current_width = 0;
             current_spaces = 0;
+            if matches!(glyph.ch, ' ' | '\t') {
+                continue;
+            }
+        }
+        if current.is_empty() && matches!(glyph.ch, ' ' | '\t') {
+            continue;
         }
         if glyph.ch == ' ' {
             current_spaces += 1;
@@ -1152,13 +1162,39 @@ fn layout_text_lines(glyphs: &[StyledGlyph], config: TextRenderConfig) -> Vec<Te
         current.push(glyph.clone());
     }
     if !current.is_empty() || lines.is_empty() {
-        lines.push(TextLine {
-            glyphs: current,
-            width: current_width,
-            spaces: current_spaces,
-        });
+        push_text_line(
+            &mut lines,
+            &mut current,
+            &mut current_width,
+            &mut current_spaces,
+            config.font_px,
+        );
     }
     lines
+}
+
+fn push_text_line(
+    lines: &mut Vec<TextLine>,
+    current: &mut Vec<StyledGlyph>,
+    current_width: &mut u32,
+    current_spaces: &mut usize,
+    font_px: u32,
+) {
+    while let Some(glyph) = current.last() {
+        if !matches!(glyph.ch, ' ' | '\t') {
+            break;
+        }
+        let trimmed = current.pop().expect("last glyph must exist");
+        *current_width = current_width.saturating_sub(measure_glyph_width(&trimmed, font_px));
+        if trimmed.ch == ' ' {
+            *current_spaces = current_spaces.saturating_sub(1);
+        }
+    }
+    lines.push(TextLine {
+        glyphs: std::mem::take(current),
+        width: *current_width,
+        spaces: *current_spaces,
+    });
 }
 
 fn draw_bitmap_glyph(
@@ -1637,6 +1673,17 @@ fn parse_rgba(hex: &str, alpha: u8) -> Rgba<u8> {
     Rgba([0, 0, 0, alpha])
 }
 
+fn preview_render_layer(element: &PresentationElement) -> usize {
+    match element {
+        PresentationElement::Text(_)
+        | PresentationElement::Shape(_)
+        | PresentationElement::Connector(_)
+        | PresentationElement::Image(ImageElement { payload: None, .. }) => 0,
+        PresentationElement::Image(_) | PresentationElement::Chart(_) => 1,
+        PresentationElement::Table(_) => 2,
+    }
+}
+
 fn shape_path(
     geometry: ShapeGeometry,
     width: u32,
@@ -1645,9 +1692,10 @@ fn shape_path(
     let width = width.max(1) as f32;
     let height = height.max(1) as f32;
     match geometry {
-        ShapeGeometry::Rectangle | ShapeGeometry::RoundedRectangle => {
+        ShapeGeometry::Rectangle => {
             polygon_path(&[(0.0, 0.0), (width, 0.0), (width, height), (0.0, height)])
         }
+        ShapeGeometry::RoundedRectangle => rounded_rectangle_path(width, height),
         ShapeGeometry::Ellipse => ellipse_path(width as u32, height as u32),
         ShapeGeometry::Triangle => polygon_path(&[(width / 2.0, 0.0), (width, height), (0.0, height)]),
         ShapeGeometry::RightTriangle => polygon_path(&[(0.0, 0.0), (width, height), (0.0, height)]),
@@ -1797,6 +1845,55 @@ fn ellipse_path(width: u32, height: u32) -> Result<TinyPath, PresentationArtifac
         })
         .collect::<Vec<_>>();
     polygon_path(&points)
+}
+
+fn rounded_rectangle_path(width: f32, height: f32) -> Result<TinyPath, PresentationArtifactError> {
+    let radius = (width.min(height) * 0.18).max(2.0);
+    let radius = radius.min(width / 2.0).min(height / 2.0);
+    let control = radius * (4.0 * (2.0_f32.sqrt() - 1.0) / 3.0);
+    let mut builder = PathBuilder::new();
+    builder.move_to(radius, 0.0);
+    builder.line_to(width - radius, 0.0);
+    builder.cubic_to(
+        width - radius + control,
+        0.0,
+        width,
+        radius - control,
+        width,
+        radius,
+    );
+    builder.line_to(width, height - radius);
+    builder.cubic_to(
+        width,
+        height - radius + control,
+        width - radius + control,
+        height,
+        width - radius,
+        height,
+    );
+    builder.line_to(radius, height);
+    builder.cubic_to(
+        radius - control,
+        height,
+        0.0,
+        height - radius + control,
+        0.0,
+        height - radius,
+    );
+    builder.line_to(0.0, radius);
+    builder.cubic_to(
+        0.0,
+        radius - control,
+        radius - control,
+        0.0,
+        radius,
+        0.0,
+    );
+    builder.close();
+    builder.finish().ok_or_else(|| PresentationArtifactError::RenderFailed {
+        action: "render_preview".to_string(),
+        message: "failed to build rounded rectangle path".to_string(),
+    })
 }
 
 fn regular_polygon_path(
@@ -2170,4 +2267,80 @@ fn resolve_render_slide_index(
         });
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn wrapped_lines_skip_leading_spaces() {
+        let text = "One strong visual lands the story.";
+        let style = TextStyle::default();
+        let glyphs = styled_glyphs(text, &style, &RichTextState::default(), None);
+        let prefix = "One strong visual lands the";
+        let width = glyphs
+            .iter()
+            .take(prefix.chars().count())
+            .map(|glyph| measure_glyph_width(glyph, 14))
+            .sum();
+        let lines = layout_text_lines(
+            &glyphs,
+            TextRenderConfig {
+                width,
+                font_px: 14,
+                line_height: 18,
+                baseline_offset: 12,
+                wrap: TextWrapMode::Square,
+                vertical_alignment: TextVerticalAlignment::Top,
+                alignment: TextAlignment::Left,
+            },
+        );
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0].glyphs.iter().map(|glyph| glyph.ch).collect::<String>(),
+            prefix
+        );
+        assert_eq!(
+            lines[1].glyphs.iter().map(|glyph| glyph.ch).collect::<String>(),
+            "story."
+        );
+    }
+
+    #[test]
+    fn wrapped_lines_trim_trailing_spaces() {
+        let text = "One strong visual lands the story.";
+        let style = TextStyle::default();
+        let glyphs = styled_glyphs(text, &style, &RichTextState::default(), None);
+        let prefix = "One strong visual lands the ";
+        let width = glyphs
+            .iter()
+            .take(prefix.chars().count())
+            .map(|glyph| measure_glyph_width(glyph, 14))
+            .sum();
+        let lines = layout_text_lines(
+            &glyphs,
+            TextRenderConfig {
+                width,
+                font_px: 14,
+                line_height: 18,
+                baseline_offset: 12,
+                wrap: TextWrapMode::Square,
+                vertical_alignment: TextVerticalAlignment::Top,
+                alignment: TextAlignment::Left,
+            },
+        );
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0].glyphs.iter().map(|glyph| glyph.ch).collect::<String>(),
+            "One strong visual lands the"
+        );
+        assert_eq!(
+            lines[1].glyphs.iter().map(|glyph| glyph.ch).collect::<String>(),
+            "story."
+        );
+    }
 }
