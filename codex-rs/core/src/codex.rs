@@ -245,6 +245,7 @@ use crate::rollout::RolloutRecorderParams;
 use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::rollout::policy::EventPersistenceMode;
+use crate::security::SecurityMonitor;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
@@ -1460,6 +1461,12 @@ impl Session {
             } else {
                 (None, None)
             };
+        let security_monitor = config.security.enabled.then(|| {
+            Arc::new(SecurityMonitor::new(
+                conversation_id,
+                config.security.clone(),
+            ))
+        });
 
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
@@ -1486,6 +1493,7 @@ impl Session {
                 legacy_notify_argv: config.notify.clone(),
             }),
             rollout: Mutex::new(rollout_recorder),
+            security_monitor,
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -2359,6 +2367,11 @@ impl Session {
 
     /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, turn_context: &TurnContext, msg: EventMsg) {
+        let security_event = self
+            .services
+            .security_monitor
+            .as_ref()
+            .and_then(|monitor| monitor.capture(&msg));
         let legacy_source = msg.clone();
         let event = Event {
             id: turn_context.sub_id.clone(),
@@ -2375,6 +2388,14 @@ impl Session {
                 msg: legacy,
             };
             self.send_event_raw(legacy_event).await;
+        }
+
+        if let Some(security_event) = security_event {
+            let security_event = Event {
+                id: turn_context.sub_id.clone(),
+                msg: EventMsg::Security(security_event),
+            };
+            self.send_event_raw(security_event).await;
         }
     }
 
@@ -5844,6 +5865,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::ApplyPatchApprovalRequest(_)
         | EventMsg::DeprecationNotice(_)
         | EventMsg::BackgroundEvent(_)
+        | EventMsg::Security(_)
         | EventMsg::UndoStarted(_)
         | EventMsg::UndoCompleted(_)
         | EventMsg::StreamError(_)
@@ -8301,6 +8323,7 @@ mod tests {
                 legacy_notify_argv: config.notify.clone(),
             }),
             rollout: Mutex::new(None),
+            security_monitor: None,
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
@@ -8469,6 +8492,7 @@ mod tests {
                 legacy_notify_argv: config.notify.clone(),
             }),
             rollout: Mutex::new(None),
+            security_monitor: None,
             user_shell: Arc::new(default_user_shell()),
             shell_snapshot_tx: watch::channel(None).0,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,

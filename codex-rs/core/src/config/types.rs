@@ -28,6 +28,7 @@ pub const DEFAULT_MEMORIES_MAX_ROLLOUT_AGE_DAYS: i64 = 30;
 pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
 pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
+pub const DEFAULT_SECURITY_SESSION_BUFFER_LIMIT: usize = 128;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
@@ -348,6 +349,79 @@ pub enum HistoryPersistence {
     SaveAll,
     /// Do not write history to disk.
     None,
+}
+
+/// Security audit settings loaded from config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SecurityToml {
+    /// When `true`, enable the runtime security monitor.
+    pub enabled: Option<bool>,
+    /// When `true`, emit `EventMsg::Security` in addition to writing to the local audit trail.
+    pub emit_core_events: Option<bool>,
+    /// Maximum number of audit records retained in memory for the current session.
+    pub session_buffer_limit: Option<usize>,
+    /// Optional audit log persistence settings.
+    pub auditlog: Option<SecurityAuditLogToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct SecurityAuditLogToml {
+    /// When `true`, append sanitized audit records to a local JSONL file.
+    pub enabled: Option<bool>,
+    /// Directory used for JSONL audit files. Defaults to `$CODEX_HOME/auditlog`.
+    pub dir: Option<AbsolutePathBuf>,
+}
+
+/// Effective runtime security audit settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityConfig {
+    pub enabled: bool,
+    pub emit_core_events: bool,
+    pub session_buffer_limit: usize,
+    pub auditlog: SecurityAuditLogConfig,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            emit_core_events: false,
+            session_buffer_limit: DEFAULT_SECURITY_SESSION_BUFFER_LIMIT,
+            auditlog: SecurityAuditLogConfig::default(),
+        }
+    }
+}
+
+impl From<SecurityToml> for SecurityConfig {
+    fn from(toml: SecurityToml) -> Self {
+        let defaults = Self::default();
+        Self {
+            enabled: toml.enabled.unwrap_or(defaults.enabled),
+            emit_core_events: toml.emit_core_events.unwrap_or(defaults.emit_core_events),
+            session_buffer_limit: toml
+                .session_buffer_limit
+                .unwrap_or(defaults.session_buffer_limit)
+                .clamp(1, 1_024),
+            auditlog: toml.auditlog.unwrap_or_default().into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SecurityAuditLogConfig {
+    pub enabled: bool,
+    pub dir: Option<PathBuf>,
+}
+
+impl From<SecurityAuditLogToml> for SecurityAuditLogConfig {
+    fn from(toml: SecurityAuditLogToml) -> Self {
+        Self {
+            enabled: toml.enabled.unwrap_or(false),
+            dir: toml.dir.map(AbsolutePathBuf::into_path_buf),
+        }
+    }
 }
 
 // ===== Analytics configuration =====

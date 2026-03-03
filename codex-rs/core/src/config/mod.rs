@@ -18,6 +18,8 @@ use crate::config::types::OtelConfigToml;
 use crate::config::types::OtelExporterKind;
 use crate::config::types::PluginConfig;
 use crate::config::types::SandboxWorkspaceWrite;
+use crate::config::types::SecurityConfig;
+use crate::config::types::SecurityToml;
 use crate::config::types::ShellEnvironmentPolicy;
 use crate::config::types::ShellEnvironmentPolicyToml;
 use crate::config::types::SkillsConfig;
@@ -373,6 +375,9 @@ pub struct Config {
 
     /// Settings that govern if and what will be written to `~/.codex/history.jsonl`.
     pub history: History,
+
+    /// Runtime security audit settings.
+    pub security: SecurityConfig,
 
     /// When true, session is not persisted on disk. Default to `false`
     pub ephemeral: bool,
@@ -1208,6 +1213,9 @@ pub struct ConfigToml {
 
     /// Memories subsystem settings.
     pub memories: Option<MemoriesToml>,
+
+    /// Runtime security audit settings.
+    pub security: Option<SecurityToml>,
 
     /// User-level skill config entries keyed by SKILL.md path.
     pub skills: Option<SkillsConfig>,
@@ -2083,6 +2091,10 @@ impl Config {
         } else {
             network.enabled().then_some(network)
         };
+        let mut security: SecurityConfig = cfg.security.unwrap_or_default().into();
+        if security.auditlog.enabled && security.auditlog.dir.is_none() {
+            security.auditlog.dir = Some(codex_home.join("auditlog"));
+        }
 
         let config = Self {
             model,
@@ -2146,6 +2158,7 @@ impl Config {
             log_dir,
             config_layer_stack,
             history,
+            security,
             ephemeral: ephemeral.unwrap_or_default(),
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
@@ -2553,6 +2566,41 @@ consolidation_model = "gpt-5"
                 min_rollout_idle_hours: 24,
                 extract_model: Some("gpt-5-mini".to_string()),
                 consolidation_model: Some("gpt-5".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn security_auditlog_defaults_to_codex_home_subdir() {
+        let codex_home = tempdir().expect("tempdir");
+        let cfg = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                security: Some(SecurityToml {
+                    enabled: Some(true),
+                    emit_core_events: Some(true),
+                    session_buffer_limit: Some(64),
+                    auditlog: Some(crate::config::types::SecurityAuditLogToml {
+                        enabled: Some(true),
+                        dir: None,
+                    }),
+                }),
+                ..Default::default()
+            },
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load config");
+
+        assert_eq!(
+            cfg.security,
+            SecurityConfig {
+                enabled: true,
+                emit_core_events: true,
+                session_buffer_limit: 64,
+                auditlog: crate::config::types::SecurityAuditLogConfig {
+                    enabled: true,
+                    dir: Some(codex_home.path().join("auditlog")),
+                },
             }
         );
     }
@@ -4905,6 +4953,7 @@ model_verbosity = "high"
                 config_layer_stack: Default::default(),
                 startup_warnings: Vec::new(),
                 history: History::default(),
+                security: SecurityConfig::default(),
                 ephemeral: false,
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
@@ -5033,6 +5082,7 @@ model_verbosity = "high"
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
             history: History::default(),
+            security: SecurityConfig::default(),
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
@@ -5159,6 +5209,7 @@ model_verbosity = "high"
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
             history: History::default(),
+            security: SecurityConfig::default(),
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
@@ -5271,6 +5322,7 @@ model_verbosity = "high"
             config_layer_stack: Default::default(),
             startup_warnings: Vec::new(),
             history: History::default(),
+            security: SecurityConfig::default(),
             ephemeral: false,
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,

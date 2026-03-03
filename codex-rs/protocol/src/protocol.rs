@@ -1077,6 +1077,9 @@ pub enum EventMsg {
     /// Notification that a patch application has finished.
     PatchApplyEnd(PatchApplyEndEvent),
 
+    /// Sanitized security-relevant activity emitted by the runtime monitor.
+    Security(SecurityEvent),
+
     TurnDiff(TurnDiffEvent),
 
     /// Response to GetHistoryEntryRequest.
@@ -2498,6 +2501,46 @@ pub enum PatchApplyStatus {
     Declined,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SecurityEventKind {
+    Network,
+    File,
+    Command,
+    Permission,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct SecurityEvent {
+    /// Broad category for the security-relevant activity.
+    pub kind: SecurityEventKind,
+    /// Stable action name for the concrete event that was observed.
+    pub action: String,
+    /// Turn ID associated with the event when available.
+    pub turn_id: String,
+    /// Related call identifier when the event can be tied to a tool/command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub call_id: Option<String>,
+    /// Whether the action was allowed or denied when that distinction exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub allowed: Option<bool>,
+    /// Short sanitized preview of the primary target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub target: Option<String>,
+    /// Small sanitized details blob for human-readable audit timelines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub details: Option<String>,
+    /// Duration in milliseconds for events that span time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub duration_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct TurnDiffEvent {
     pub unified_diff: String,
@@ -3509,6 +3552,39 @@ mod tests {
         assert_eq!(value["msg"]["failed"][0]["server"], "b");
         assert_eq!(value["msg"]["failed"][0]["error"], "bad");
         assert_eq!(value["msg"]["cancelled"][0], "c");
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_security_event() -> Result<()> {
+        let event = Event {
+            id: "1234".to_string(),
+            msg: EventMsg::Security(SecurityEvent {
+                kind: SecurityEventKind::Command,
+                action: "exec_command_end".to_string(),
+                turn_id: "turn-1".to_string(),
+                call_id: Some("call-1".to_string()),
+                allowed: None,
+                target: Some("git status".to_string()),
+                details: Some("status=completed exit_code=0".to_string()),
+                duration_ms: Some(12),
+            }),
+        };
+
+        let expected = json!({
+            "id": "1234",
+            "msg": {
+                "type": "security",
+                "kind": "command",
+                "action": "exec_command_end",
+                "turn_id": "turn-1",
+                "call_id": "call-1",
+                "target": "git status",
+                "details": "status=completed exit_code=0",
+                "duration_ms": 12,
+            }
+        });
+        assert_eq!(expected, serde_json::to_value(&event)?);
         Ok(())
     }
 

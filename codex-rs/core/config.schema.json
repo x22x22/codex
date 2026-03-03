@@ -1321,6 +1321,53 @@
       },
       "type": "object"
     },
+    "SecurityAuditLogToml": {
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/AbsolutePathBuf"
+            }
+          ],
+          "description": "Directory used for JSONL audit files. Defaults to `$CODEX_HOME/auditlog`."
+        },
+        "enabled": {
+          "description": "When `true`, append sanitized audit records to a local JSONL file.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "SecurityToml": {
+      "additionalProperties": false,
+      "description": "Security audit settings loaded from config.toml.",
+      "properties": {
+        "auditlog": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/SecurityAuditLogToml"
+            }
+          ],
+          "description": "Optional audit log persistence settings."
+        },
+        "emit_core_events": {
+          "description": "When `true`, emit `EventMsg::Security` in addition to writing to the local audit trail.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "When `true`, enable the runtime security monitor.",
+          "type": "boolean"
+        },
+        "session_buffer_limit": {
+          "description": "Maximum number of audit records retained in memory for the current session.",
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "ShellEnvironmentPolicyInherit": {
       "oneOf": [
         {
@@ -2107,6 +2154,14 @@
         }
       ],
       "description": "Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`."
+    },
+    "security": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/SecurityToml"
+        }
+      ],
+      "description": "Runtime security audit settings."
     },
     "shell_environment_policy": {
       "allOf": [
