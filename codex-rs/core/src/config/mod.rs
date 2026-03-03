@@ -814,6 +814,12 @@ where
     Ok(())
 }
 
+/// Applies disable-only managed feature requirements after local config,
+/// profile settings, and CLI/legacy feature overrides have been merged.
+///
+/// This lives in `codex-core` instead of `codex-config` so validation can rely
+/// on the single canonical feature registry in `features.rs` without mirroring
+/// that registry across crates.
 fn apply_requirement_feature_constraints(
     features: &mut Features,
     requirement_features: Option<&Sourced<RequirementsFeaturesToml>>,

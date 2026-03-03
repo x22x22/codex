@@ -360,6 +360,9 @@ impl Features {
         self.enabled.iter().copied().collect()
     }
 
+    /// Clears feature flags whose prerequisites were disabled later in config
+    /// resolution, such as when managed requirements turn off a base feature
+    /// after local feature maps have already been applied.
     pub(crate) fn normalize_dependencies(&mut self) {
         if self.enabled(Feature::JsReplToolsOnly) && !self.enabled(Feature::JsRepl) {
             tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");

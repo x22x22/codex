@@ -144,6 +144,11 @@ pub struct NetworkRequirementsToml {
     pub allow_local_binding: Option<bool>,
 }
 
+/// Raw `[features]` entries from managed requirements.
+///
+/// The keys stay as strings here so `codex-config` does not need its own copy
+/// of the feature registry; `codex-core` validates them against the canonical
+/// runtime feature list when building the effective config.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct RequirementsFeaturesToml {
     #[serde(flatten)]
