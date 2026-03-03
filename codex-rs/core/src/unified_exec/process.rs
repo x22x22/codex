@@ -24,6 +24,12 @@ use super::UNIFIED_EXEC_OUTPUT_MAX_TOKENS;
 use super::UnifiedExecError;
 use super::head_tail_buffer::HeadTailBuffer;
 
+#[cfg(unix)]
+pub(crate) use codex_shell_escalation::EscalationSession;
+#[cfg(not(unix))]
+#[derive(Debug)]
+pub(crate) struct EscalationSession;
+
 pub(crate) type OutputBuffer = Arc<Mutex<HeadTailBuffer>>;
 pub(crate) struct OutputHandles {
     pub(crate) output_buffer: OutputBuffer,
@@ -44,6 +50,7 @@ pub(crate) struct UnifiedExecProcess {
     output_drained: Arc<Notify>,
     output_task: JoinHandle<()>,
     sandbox_type: SandboxType,
+    _escalation_session: Option<EscalationSession>,
 }
 
 impl UnifiedExecProcess {
@@ -51,6 +58,7 @@ impl UnifiedExecProcess {
         process_handle: ExecCommandSession,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
         sandbox_type: SandboxType,
+        escalation_session: Option<EscalationSession>,
     ) -> Self {
         let output_buffer = Arc::new(Mutex::new(HeadTailBuffer::default()));
         let output_notify = Arc::new(Notify::new());
@@ -92,6 +100,7 @@ impl UnifiedExecProcess {
             output_drained,
             output_task,
             sandbox_type,
+            _escalation_session: escalation_session,
         }
     }
 
@@ -196,13 +205,14 @@ impl UnifiedExecProcess {
     pub(super) async fn from_spawned(
         spawned: SpawnedPty,
         sandbox_type: SandboxType,
+        escalation_session: Option<EscalationSession>,
     ) -> Result<Self, UnifiedExecError> {
         let SpawnedPty {
             session: process_handle,
             output_rx,
             mut exit_rx,
         } = spawned;
-        let managed = Self::new(process_handle, output_rx, sandbox_type);
+        let managed = Self::new(process_handle, output_rx, sandbox_type, escalation_session);
 
         let exit_ready = matches!(exit_rx.try_recv(), Ok(_) | Err(TryRecvError::Closed));
 
