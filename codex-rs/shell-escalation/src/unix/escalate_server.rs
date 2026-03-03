@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use anyhow::Context as _;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use socket2::Socket;
 use tokio::process::Command;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::unix::escalate_protocol::ESCALATE_SOCKET_ENV_VAR;
@@ -82,6 +84,29 @@ pub struct PreparedExec {
     pub arg0: Option<String>,
 }
 
+#[derive(Debug)]
+pub struct EscalationSession {
+    env: HashMap<String, String>,
+    task: JoinHandle<anyhow::Result<()>>,
+    client_socket: Option<Socket>,
+}
+
+impl EscalationSession {
+    pub fn env(&self) -> &HashMap<String, String> {
+        &self.env
+    }
+
+    pub fn close_client_socket(&mut self) {
+        self.client_socket.take();
+    }
+}
+
+impl Drop for EscalationSession {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
 pub struct EscalateServer {
     bash_path: PathBuf,
     execve_wrapper: PathBuf,
@@ -106,16 +131,42 @@ impl EscalateServer {
         cancel_rx: CancellationToken,
         command_executor: Arc<dyn ShellCommandExecutor>,
     ) -> anyhow::Result<ExecResult> {
+        let session = self.start_session(Arc::clone(&command_executor))?;
+        let command = vec![
+            self.bash_path.to_string_lossy().to_string(),
+            if params.login == Some(false) {
+                "-c".to_string()
+            } else {
+                "-lc".to_string()
+            },
+            params.command,
+        ];
+        let workdir = AbsolutePathBuf::try_from(params.workdir)?;
+        let result = command_executor
+            .run(
+                command,
+                workdir.to_path_buf(),
+                session.env().clone(),
+                cancel_rx,
+            )
+            .await?;
+        Ok(result)
+    }
+
+    pub fn start_session(
+        &self,
+        command_executor: Arc<dyn ShellCommandExecutor>,
+    ) -> anyhow::Result<EscalationSession> {
         let (escalate_server, escalate_client) = AsyncDatagramSocket::pair()?;
         let client_socket = escalate_client.into_inner();
         // Only the client endpoint should cross exec into the wrapper process.
         client_socket.set_cloexec(false)?;
-        let escalate_task = tokio::spawn(escalate_task(
+        let task = tokio::spawn(escalate_task(
             escalate_server,
             Arc::clone(&self.policy),
             Arc::clone(&command_executor),
         ));
-        let mut env = std::env::vars().collect::<HashMap<String, String>>();
+        let mut env = HashMap::new();
         env.insert(
             ESCALATE_SOCKET_ENV_VAR.to_string(),
             client_socket.as_raw_fd().to_string(),
@@ -128,22 +179,11 @@ impl EscalateServer {
             LEGACY_BASH_EXEC_WRAPPER_ENV_VAR.to_string(),
             self.execve_wrapper.to_string_lossy().to_string(),
         );
-
-        let command = vec![
-            self.bash_path.to_string_lossy().to_string(),
-            if params.login == Some(false) {
-                "-c".to_string()
-            } else {
-                "-lc".to_string()
-            },
-            params.command,
-        ];
-        let workdir = AbsolutePathBuf::try_from(params.workdir)?;
-        let result = command_executor
-            .run(command, workdir.to_path_buf(), env, cancel_rx)
-            .await?;
-        escalate_task.abort();
-        Ok(result)
+        Ok(EscalationSession {
+            env,
+            task,
+            client_socket: Some(client_socket),
+        })
     }
 }
 
@@ -388,6 +428,37 @@ mod tests {
                 arg0: argv.first().cloned(),
             })
         }
+    }
+
+    #[tokio::test]
+    async fn start_session_exposes_wrapper_env_overlay() -> anyhow::Result<()> {
+        let execve_wrapper = PathBuf::from("/tmp/codex-execve-wrapper");
+        let execve_wrapper_str = execve_wrapper.to_string_lossy().to_string();
+        let server = EscalateServer::new(
+            PathBuf::from("/bin/bash"),
+            execve_wrapper.clone(),
+            DeterministicEscalationPolicy {
+                decision: EscalationDecision::run(),
+            },
+        );
+
+        let mut session = server.start_session(Arc::new(ForwardingShellCommandExecutor))?;
+        let env = session.env();
+        assert_eq!(env.get(EXEC_WRAPPER_ENV_VAR), Some(&execve_wrapper_str));
+        assert_eq!(
+            env.get(LEGACY_BASH_EXEC_WRAPPER_ENV_VAR),
+            Some(&execve_wrapper_str)
+        );
+        let socket_fd = env
+            .get(ESCALATE_SOCKET_ENV_VAR)
+            .expect("session should export shell escalation socket");
+        let socket_fd = socket_fd.parse::<i32>()?;
+        assert!(socket_fd >= 0);
+        assert_ne!(unsafe { libc::fcntl(socket_fd, libc::F_GETFD) }, -1);
+        session.close_client_socket();
+        assert_eq!(unsafe { libc::fcntl(socket_fd, libc::F_GETFD) }, -1);
+
+        Ok(())
     }
 
     #[tokio::test]
