@@ -532,10 +532,19 @@ pub async fn run_main_with_transport(
     let shutdown_when_no_connections = single_client_mode;
     let graceful_signal_restart_enabled = !single_client_mode;
 
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
+
     let remote_control_url = config.experimental_app_server_remote_control_url.clone();
     if let Some(remote_control_url) = remote_control_url {
         let accept_handle = start_remote_control(
             remote_control_url,
+            config.codex_home.clone(),
+            auth_manager.clone(),
             transport_event_tx.clone(),
             transport_shutdown_token.clone(),
         )
