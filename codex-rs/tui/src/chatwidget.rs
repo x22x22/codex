@@ -4122,6 +4122,11 @@ impl ChatWidget {
             self.refresh_pending_input_preview();
             return;
         }
+        if self.is_review_mode {
+            self.queued_user_messages.push_back(user_message);
+            self.refresh_pending_input_preview();
+            return;
+        }
 
         let UserMessage {
             text,
@@ -4464,7 +4469,11 @@ impl ChatWidget {
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
             EventMsg::AgentMessage(AgentMessageEvent { .. })
                 if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) => {}
-            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) if from_replay => {
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. })
+                if from_replay || self.is_review_mode =>
+            {
+                // TODO(ccunningham): stop relying on legacy AgentMessage in review mode and
+                // forward ItemCompleted(TurnItem::AgentMessage(_)) instead.
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
