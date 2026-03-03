@@ -1,4 +1,10 @@
 use super::*;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::is_image_close_tag_text;
+use codex_protocol::models::is_image_open_tag_text;
+use codex_protocol::models::is_local_image_close_tag_text;
+use codex_protocol::models::is_local_image_open_tag_text;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
@@ -78,6 +84,45 @@ impl ChatWidget {
             event.text_elements.clone(),
             event.local_images.clone(),
             event.images.clone().unwrap_or_default(),
+        )
+    }
+
+    pub(super) fn rendered_user_message_event_from_normalized_items(
+        items: &[UserInput],
+    ) -> RenderedUserMessageEvent {
+        let ResponseInputItem::Message { role, content } = ResponseInputItem::from(items.to_vec())
+        else {
+            unreachable!("user inputs must convert to a message response item");
+        };
+        debug_assert_eq!(role, "user");
+
+        let mut message = String::new();
+        let mut remote_image_urls = Vec::new();
+
+        for (idx, content_item) in content.iter().enumerate() {
+            match content_item {
+                ContentItem::InputText { text } => {
+                    if (is_local_image_open_tag_text(text) || is_image_open_tag_text(text))
+                        && matches!(content.get(idx + 1), Some(ContentItem::InputImage { .. }))
+                        || (idx > 0
+                            && (is_local_image_close_tag_text(text)
+                                || is_image_close_tag_text(text))
+                            && matches!(content.get(idx - 1), Some(ContentItem::InputImage { .. })))
+                    {
+                        continue;
+                    }
+                    message.push_str(text);
+                }
+                ContentItem::InputImage { image_url } => remote_image_urls.push(image_url.clone()),
+                ContentItem::OutputText { .. } => {}
+            }
+        }
+
+        Self::rendered_user_message_event_from_parts(
+            message,
+            Vec::new(),
+            Vec::new(),
+            remote_image_urls,
         )
     }
 

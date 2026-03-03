@@ -3181,6 +3181,18 @@ fn complete_assistant_message(
     });
 }
 
+fn pending_steer(text: &str) -> PendingSteer {
+    PendingSteer {
+        user_message: UserMessage::from(text),
+        compare_key: ChatWidget::rendered_user_message_event_from_parts(
+            text.to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    }
+}
+
 fn complete_user_message(chat: &mut ChatWidget, item_id: &str, text: &str) {
     complete_user_message_for_inputs(
         chat,
@@ -3641,7 +3653,7 @@ async fn steer_enter_uses_pending_steers_while_turn_is_running_without_streaming
     assert!(chat.queued_user_messages.is_empty());
     assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(
-        chat.pending_steers.front().unwrap().text,
+        chat.pending_steers.front().unwrap().user_message.text,
         "queued while running"
     );
     match next_submit_op(&mut op_rx) {
@@ -3677,7 +3689,7 @@ async fn steer_enter_uses_pending_steers_while_final_answer_stream_is_active() {
     assert!(chat.queued_user_messages.is_empty());
     assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(
-        chat.pending_steers.front().unwrap().text,
+        chat.pending_steers.front().unwrap().user_message.text,
         "queued while streaming"
     );
     match next_submit_op(&mut op_rx) {
@@ -3783,16 +3795,17 @@ fn rendered_user_message_event_from_inputs_matches_flattened_user_message_shape(
 #[tokio::test]
 async fn item_completed_only_pops_front_pending_steer() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.pending_steers
-        .push_back(UserMessage::from("first".to_string()));
-    chat.pending_steers
-        .push_back(UserMessage::from("second".to_string()));
+    chat.pending_steers.push_back(pending_steer("first"));
+    chat.pending_steers.push_back(pending_steer("second"));
     chat.refresh_pending_input_preview();
 
     complete_user_message(&mut chat, "user-other", "other");
 
     assert_eq!(chat.pending_steers.len(), 2);
-    assert_eq!(chat.pending_steers.front().unwrap().text, "first");
+    assert_eq!(
+        chat.pending_steers.front().unwrap().user_message.text,
+        "first"
+    );
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("other"));
@@ -3800,10 +3813,76 @@ async fn item_completed_only_pops_front_pending_steer() {
     complete_user_message(&mut chat, "user-first", "first");
 
     assert_eq!(chat.pending_steers.len(), 1);
-    assert_eq!(chat.pending_steers.front().unwrap().text, "second");
+    assert_eq!(
+        chat.pending_steers.front().unwrap().user_message.text,
+        "second"
+    );
     let inserted = drain_insert_history(&mut rx);
     assert_eq!(inserted.len(), 1);
     assert!(lines_to_single_string(&inserted[0]).contains("first"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn normalized_item_completed_pops_pending_steer_with_local_image_and_text_elements() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+
+    let temp = tempdir().expect("tempdir");
+    let image_path = temp.path().join("pending-steer.png");
+    const TINY_PNG_BYTES: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 11, 73, 68, 65, 84, 120, 156, 99, 96, 0, 2, 0, 0, 5, 0,
+        1, 122, 94, 171, 63, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+    std::fs::write(&image_path, TINY_PNG_BYTES).expect("write image");
+
+    let text = "note".to_string();
+    let text_elements = vec![TextElement::new((0..4).into(), Some("note".to_string()))];
+    chat.submit_user_message(UserMessage {
+        text: text.clone(),
+        local_images: vec![LocalImageAttachment {
+            placeholder: "[Image #1]".to_string(),
+            path: image_path,
+        }],
+        remote_image_urls: Vec::new(),
+        text_elements: text_elements.clone(),
+        mention_bindings: Vec::new(),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { .. } => {}
+        other => panic!("expected Op::UserTurn, got {other:?}"),
+    }
+
+    assert_eq!(chat.pending_steers.len(), 1);
+    let pending = chat.pending_steers.front().unwrap();
+    assert_eq!(pending.user_message.local_images.len(), 1);
+    assert_eq!(pending.user_message.text_elements.len(), 1);
+    assert!(pending.compare_key.local_images.is_empty());
+    assert!(pending.compare_key.text_elements.is_empty());
+    assert_eq!(pending.compare_key.message, text);
+    assert_eq!(pending.compare_key.remote_image_urls.len(), 1);
+    let compare_key = pending.compare_key.clone();
+
+    complete_user_message_for_inputs(
+        &mut chat,
+        "user-1",
+        vec![
+            UserInput::Image {
+                image_url: compare_key.remote_image_urls[0].clone(),
+            },
+            UserInput::Text {
+                text: compare_key.message,
+                text_elements: Vec::new(),
+            },
+        ],
+    );
+
+    assert!(chat.pending_steers.is_empty());
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("note"));
 }
 
 #[tokio::test]
@@ -3824,8 +3903,14 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
 
     assert!(chat.queued_user_messages.is_empty());
     assert_eq!(chat.pending_steers.len(), 2);
-    assert_eq!(chat.pending_steers.front().unwrap().text, "first follow-up");
-    assert_eq!(chat.pending_steers.back().unwrap().text, "second follow-up");
+    assert_eq!(
+        chat.pending_steers.front().unwrap().user_message.text,
+        "first follow-up"
+    );
+    assert_eq!(
+        chat.pending_steers.back().unwrap().user_message.text,
+        "second follow-up"
+    );
 
     let first_items = match next_submit_op(&mut op_rx) {
         Op::UserTurn { items, .. } => items,
@@ -3855,7 +3940,7 @@ async fn steer_enter_during_final_stream_preserves_follow_up_prompts_in_order() 
 
     assert_eq!(chat.pending_steers.len(), 1);
     assert_eq!(
-        chat.pending_steers.front().unwrap().text,
+        chat.pending_steers.front().unwrap().user_message.text,
         "second follow-up"
     );
     let first_insert = drain_insert_history(&mut rx);

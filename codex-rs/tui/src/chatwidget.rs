@@ -622,7 +622,7 @@ pub(crate) struct ChatWidget {
     //
     // The bottom pane shows these above queued drafts until core records the
     // corresponding user message item.
-    pending_steers: VecDeque<UserMessage>,
+    pending_steers: VecDeque<PendingSteer>,
     /// Terminal-appropriate keybinding for popping the most-recently queued
     /// message back into the composer.  Determined once at construction time via
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
@@ -756,6 +756,11 @@ impl From<&str> for UserMessage {
             mention_bindings: Vec::new(),
         }
     }
+}
+
+struct PendingSteer {
+    user_message: UserMessage,
+    compare_key: RenderedUserMessageEvent,
 }
 
 pub(crate) fn create_initial_user_message(
@@ -1932,7 +1937,11 @@ impl ChatWidget {
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
         };
 
-        let mut to_merge: Vec<UserMessage> = self.pending_steers.drain(..).collect();
+        let mut to_merge: Vec<UserMessage> = self
+            .pending_steers
+            .drain(..)
+            .map(|steer| steer.user_message)
+            .collect();
         to_merge.extend(self.queued_user_messages.drain(..));
         if !existing_message.text.is_empty()
             || !existing_message.local_images.is_empty()
@@ -4266,12 +4275,15 @@ impl ChatWidget {
         } else {
             None
         };
-        let pending_steer = (!render_in_history).then(|| UserMessage {
-            text: text.clone(),
-            local_images: local_images.clone(),
-            remote_image_urls: remote_image_urls.clone(),
-            text_elements: text_elements.clone(),
-            mention_bindings: mention_bindings.clone(),
+        let pending_steer = (!render_in_history).then(|| PendingSteer {
+            user_message: UserMessage {
+                text: text.clone(),
+                local_images: local_images.clone(),
+                remote_image_urls: remote_image_urls.clone(),
+                text_elements: text_elements.clone(),
+                mention_bindings: mention_bindings.clone(),
+            },
+            compare_key: Self::rendered_user_message_event_from_normalized_items(&items),
         });
         let personality = self
             .config
@@ -4633,18 +4645,11 @@ impl ChatWidget {
                         unreachable!("user message item should convert to a legacy user message");
                     };
                     let rendered = Self::rendered_user_message_event_from_event(&event);
-                    let should_render = if self.pending_steers.front().is_some_and(|pending| {
-                        Self::rendered_user_message_event_from_parts(
-                            pending.text.clone(),
-                            pending.text_elements.clone(),
-                            pending
-                                .local_images
-                                .iter()
-                                .map(|image| image.path.clone())
-                                .collect(),
-                            pending.remote_image_urls.clone(),
-                        ) == rendered
-                    }) {
+                    let should_render = if self
+                        .pending_steers
+                        .front()
+                        .is_some_and(|pending| pending.compare_key == rendered)
+                    {
                         self.pending_steers.pop_front();
                         self.refresh_pending_input_preview();
                         true
@@ -4818,7 +4823,7 @@ impl ChatWidget {
         let pending_steers: Vec<String> = self
             .pending_steers
             .iter()
-            .map(|steer| steer.text.clone())
+            .map(|steer| steer.user_message.text.clone())
             .collect();
         self.bottom_pane
             .set_pending_input_preview(queued_messages, pending_steers);
