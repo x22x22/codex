@@ -4665,23 +4665,27 @@ impl ChatWidget {
                         .front()
                         .is_some_and(|pending| pending.compare_key == compare_key)
                     {
-                        let pending = self
-                            .pending_steers
-                            .pop_front()
-                            .expect("checked front pending steer");
-                        self.refresh_pending_input_preview();
-                        let pending_event = UserMessageEvent {
-                            message: pending.user_message.text,
-                            images: Some(pending.user_message.remote_image_urls),
-                            local_images: pending
-                                .user_message
-                                .local_images
-                                .into_iter()
-                                .map(|image| image.path)
-                                .collect(),
-                            text_elements: pending.user_message.text_elements,
-                        };
-                        self.on_user_message_event(pending_event);
+                        if let Some(pending) = self.pending_steers.pop_front() {
+                            self.refresh_pending_input_preview();
+                            let pending_event = UserMessageEvent {
+                                message: pending.user_message.text,
+                                images: Some(pending.user_message.remote_image_urls),
+                                local_images: pending
+                                    .user_message
+                                    .local_images
+                                    .into_iter()
+                                    .map(|image| image.path)
+                                    .collect(),
+                                text_elements: pending.user_message.text_elements,
+                            };
+                            self.on_user_message_event(pending_event);
+                        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
+                        {
+                            tracing::warn!(
+                                "pending steer matched compare key but queue was empty when rendering committed user message"
+                            );
+                            self.on_user_message_event(event);
+                        }
                     } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
                         self.on_user_message_event(event);
                     }
