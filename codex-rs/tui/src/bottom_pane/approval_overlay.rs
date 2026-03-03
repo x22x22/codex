@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -5,9 +6,19 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::ChatComposer;
+use crate::bottom_pane::ChatComposerConfig;
 use crate::bottom_pane::list_selection_view::ListSelectionView;
 use crate::bottom_pane::list_selection_view::SelectionItem;
 use crate::bottom_pane::list_selection_view::SelectionViewParams;
+use crate::bottom_pane::scroll_state::ScrollState;
+use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
+use crate::bottom_pane::selection_popup_common::measure_rows_height;
+use crate::bottom_pane::selection_popup_common::menu_surface_inset;
+use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
+use crate::bottom_pane::selection_popup_common::render_menu_surface;
+use crate::bottom_pane::selection_popup_common::render_rows;
+use crate::bottom_pane::selection_popup_common::wrap_styled_line;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
@@ -36,7 +47,45 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
+use unicode_width::UnicodeWidthStr;
+
+const PATCH_REJECT_OPTION_INDEX: usize = 2;
+const PATCH_NOTES_PLACEHOLDER: &str = "Tell Codex what to do differently";
+const PATCH_EMPTY_NOTES_MESSAGE: &str = "Add guidance before sending.";
+const PATCH_MIN_OVERLAY_HEIGHT: u16 = 8;
+const PATCH_MIN_COMPOSER_HEIGHT: u16 = 3;
+const PATCH_MAX_COMPOSER_HEIGHT: u16 = 8;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PatchFocus {
+    Options,
+    Notes,
+}
+
+struct PatchOverlayState {
+    focus: PatchFocus,
+    options_state: ScrollState,
+    composer: ChatComposer,
+    notes_visible: bool,
+    note_submit_attempted: bool,
+}
+
+fn line_to_owned(line: Line<'_>) -> Line<'static> {
+    Line {
+        style: line.style,
+        alignment: line.alignment,
+        spans: line
+            .spans
+            .into_iter()
+            .map(|span| Span {
+                style: span.style,
+                content: Cow::Owned(span.content.into_owned()),
+            })
+            .collect(),
+    }
+}
 
 /// Request coming from the agent that needs user approval.
 #[derive(Clone, Debug)]
@@ -93,6 +142,7 @@ pub(crate) struct ApprovalOverlay {
     app_event_tx: AppEventSender,
     list: ListSelectionView,
     options: Vec<ApprovalOption>,
+    patch_state: Option<PatchOverlayState>,
     current_complete: bool,
     done: bool,
     features: Features,
@@ -106,6 +156,7 @@ impl ApprovalOverlay {
             app_event_tx: app_event_tx.clone(),
             list: ListSelectionView::new(Default::default(), app_event_tx),
             options: Vec::new(),
+            patch_state: None,
             current_complete: false,
             done: false,
             features,
@@ -122,9 +173,33 @@ impl ApprovalOverlay {
         self.current_complete = false;
         let header = build_header(&request);
         let (options, params) = Self::build_options(&request, header, &self.features);
+        self.patch_state =
+            matches!(request, ApprovalRequest::ApplyPatch { .. }).then(|| self.new_patch_state());
         self.current_request = Some(request);
         self.options = options;
         self.list = ListSelectionView::new(params, self.app_event_tx.clone());
+    }
+
+    fn new_patch_state(&self) -> PatchOverlayState {
+        let mut composer = ChatComposer::new_with_config(
+            true,
+            self.app_event_tx.clone(),
+            false,
+            PATCH_NOTES_PLACEHOLDER.to_string(),
+            false,
+            ChatComposerConfig::plain_text(),
+        );
+        composer.set_footer_hint_override(Some(Vec::new()));
+        PatchOverlayState {
+            focus: PatchFocus::Options,
+            options_state: ScrollState {
+                selected_idx: Some(0),
+                ..Default::default()
+            },
+            composer,
+            notes_visible: false,
+            note_submit_attempted: false,
+        }
     }
 
     fn build_options(
@@ -196,9 +271,13 @@ impl ApprovalOverlay {
         if self.current_complete {
             return;
         }
-        let Some(option) = self.options.get(actual_idx) else {
+        let Some(option) = self.options.get(actual_idx).cloned() else {
             return;
         };
+        if matches!(option.decision, ApprovalDecision::PatchRejectWithNotes) {
+            self.open_patch_notes();
+            return;
+        }
         if let Some(request) = self.current_request.as_ref() {
             match (request, &option.decision) {
                 (ApprovalRequest::Exec { id, command, .. }, ApprovalDecision::Review(decision)) => {
@@ -223,6 +302,165 @@ impl ApprovalOverlay {
 
         self.current_complete = true;
         self.advance_queue();
+    }
+
+    fn patch_state(&self) -> Option<&PatchOverlayState> {
+        self.patch_state.as_ref()
+    }
+
+    fn patch_state_mut(&mut self) -> Option<&mut PatchOverlayState> {
+        self.patch_state.as_mut()
+    }
+
+    fn patch_selected_index(&self) -> Option<usize> {
+        self.patch_state()
+            .and_then(|state| state.options_state.selected_idx)
+    }
+
+    fn patch_focus_is_notes(&self) -> bool {
+        self.patch_state()
+            .is_some_and(|state| matches!(state.focus, PatchFocus::Notes))
+    }
+
+    fn patch_note_text(&self) -> String {
+        self.patch_state()
+            .map(|state| state.composer.current_text_with_pending())
+            .unwrap_or_default()
+    }
+
+    fn patch_notes_visible(&self) -> bool {
+        let Some(state) = self.patch_state() else {
+            return false;
+        };
+        state.options_state.selected_idx == Some(PATCH_REJECT_OPTION_INDEX)
+            && (state.notes_visible
+                || !state.composer.current_text_with_pending().trim().is_empty())
+    }
+
+    fn patch_note_error_visible(&self) -> bool {
+        self.patch_notes_visible()
+            && self
+                .patch_state()
+                .is_some_and(|state| state.note_submit_attempted)
+            && self.patch_note_text().trim().is_empty()
+    }
+
+    fn patch_title_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let line = Line::from("Would you like to make the following edits?".bold());
+        wrap_styled_line(&line, width.max(1))
+            .into_iter()
+            .map(line_to_owned)
+            .collect()
+    }
+
+    fn patch_option_rows(&self) -> Vec<GenericDisplayRow> {
+        let selected_idx = self.patch_selected_index();
+        self.options
+            .iter()
+            .enumerate()
+            .map(|(idx, option)| {
+                let prefix = if selected_idx == Some(idx) {
+                    '›'
+                } else {
+                    ' '
+                };
+                let prefix_label = format!("{prefix} {}. ", idx + 1);
+                GenericDisplayRow {
+                    name: format!("{prefix_label}{}", option.label),
+                    wrap_indent: Some(UnicodeWidthStr::width(prefix_label.as_str())),
+                    ..Default::default()
+                }
+            })
+            .collect()
+    }
+
+    fn patch_hint_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut hint = if self.patch_notes_visible() {
+            if self.patch_focus_is_notes() {
+                "enter to send | tab to go back | esc to interrupt".to_string()
+            } else {
+                "enter or tab to edit rejection | esc to interrupt".to_string()
+            }
+        } else if self.patch_selected_index() == Some(PATCH_REJECT_OPTION_INDEX) {
+            "tab to explain rejection | esc to interrupt".to_string()
+        } else {
+            "esc to interrupt".to_string()
+        };
+        if self
+            .current_request
+            .as_ref()
+            .and_then(ApprovalRequest::thread_label)
+            .is_some()
+        {
+            hint.push_str(" | o to open thread");
+        }
+        let line = Line::from(hint).dim();
+        wrap_styled_line(&line, width.max(1))
+            .into_iter()
+            .map(line_to_owned)
+            .collect()
+    }
+
+    fn patch_validation_lines(&self, width: u16) -> Vec<Line<'static>> {
+        if !self.patch_note_error_visible() {
+            return Vec::new();
+        }
+        let line = Line::from(PATCH_EMPTY_NOTES_MESSAGE).red();
+        wrap_styled_line(&line, width.max(1))
+            .into_iter()
+            .map(line_to_owned)
+            .collect()
+    }
+
+    fn patch_notes_input_height(&self, width: u16) -> u16 {
+        self.patch_state()
+            .map(|state| {
+                state
+                    .composer
+                    .desired_height(width.max(1))
+                    .clamp(PATCH_MIN_COMPOSER_HEIGHT, PATCH_MAX_COMPOSER_HEIGHT)
+            })
+            .unwrap_or(PATCH_MIN_COMPOSER_HEIGHT)
+    }
+
+    fn patch_select_index(&mut self, idx: usize) {
+        let len = self.options.len();
+        let idx = idx.min(len.saturating_sub(1));
+        if let Some(state) = self.patch_state_mut() {
+            state.options_state.selected_idx = Some(idx);
+            if idx != PATCH_REJECT_OPTION_INDEX {
+                state.notes_visible = false;
+            }
+            state.note_submit_attempted = false;
+        }
+    }
+
+    fn open_patch_notes(&mut self) {
+        if self.options.len() <= PATCH_REJECT_OPTION_INDEX {
+            return;
+        }
+        self.patch_select_index(PATCH_REJECT_OPTION_INDEX);
+        if let Some(state) = self.patch_state_mut() {
+            state.notes_visible = true;
+            state.focus = PatchFocus::Notes;
+            state.note_submit_attempted = false;
+            state.composer.move_cursor_to_end();
+        }
+    }
+
+    fn move_patch_selection(&mut self, move_down: bool) {
+        let options_len = self.options.len();
+        if let Some(state) = self.patch_state_mut() {
+            if move_down {
+                state.options_state.move_down_wrap(options_len);
+            } else {
+                state.options_state.move_up_wrap(options_len);
+            }
+            if state.options_state.selected_idx != Some(PATCH_REJECT_OPTION_INDEX) {
+                state.notes_visible = false;
+            }
+            state.note_submit_attempted = false;
+        }
     }
 
     fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
@@ -292,7 +530,7 @@ impl ApprovalOverlay {
         }
     }
 
-    fn try_handle_shortcut(&mut self, key_event: &KeyEvent) -> bool {
+    fn try_handle_global_shortcut(&mut self, key_event: &KeyEvent) -> bool {
         match key_event {
             KeyEvent {
                 kind: KeyEventKind::Press,
@@ -325,25 +563,161 @@ impl ApprovalOverlay {
                     false
                 }
             }
-            e => {
-                if let Some(idx) = self
-                    .options
-                    .iter()
-                    .position(|opt| opt.shortcuts().any(|s| s.is_press(*e)))
-                {
-                    self.apply_selection(idx);
-                    true
-                } else {
-                    false
+            _ => false,
+        }
+    }
+
+    fn try_handle_option_shortcut(&mut self, key_event: &KeyEvent) -> bool {
+        self.options
+            .iter()
+            .position(|opt| {
+                opt.shortcuts()
+                    .any(|shortcut| shortcut.is_press(*key_event))
+            })
+            .map(|idx| {
+                self.apply_selection(idx);
+            })
+            .is_some()
+    }
+
+    fn handle_patch_key_event(&mut self, key_event: KeyEvent) {
+        if key_event.kind == KeyEventKind::Release {
+            return;
+        }
+        if self.done || self.current_complete {
+            return;
+        }
+
+        if self.try_handle_global_shortcut(&key_event) {
+            return;
+        }
+
+        match self.patch_state().map(|state| state.focus) {
+            Some(PatchFocus::Options) => match key_event {
+                KeyEvent {
+                    code: KeyCode::Char('y'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => self.apply_selection(0),
+                KeyEvent {
+                    code: KeyCode::Char('a'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => self.apply_selection(1),
+                KeyEvent {
+                    code: KeyCode::Char('n'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                }
+                | KeyEvent {
+                    code: KeyCode::Tab,
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => self.open_patch_notes(),
+                KeyEvent {
+                    code: KeyCode::Char('1'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => self.apply_selection(0),
+                KeyEvent {
+                    code: KeyCode::Char('2'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => self.apply_selection(1),
+                KeyEvent {
+                    code: KeyCode::Char('3'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => self.open_patch_notes(),
+                KeyEvent {
+                    code: KeyCode::Up | KeyCode::Char('k'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => self.move_patch_selection(false),
+                KeyEvent {
+                    code: KeyCode::Down | KeyCode::Char('j'),
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => self.move_patch_selection(true),
+                KeyEvent {
+                    code: KeyCode::Enter,
+                    modifiers: KeyModifiers::NONE,
+                    ..
+                } => match self.patch_selected_index() {
+                    Some(PATCH_REJECT_OPTION_INDEX) => self.open_patch_notes(),
+                    Some(idx) => self.apply_selection(idx),
+                    None => {}
+                },
+                _ => {}
+            },
+            Some(PatchFocus::Notes) => {
+                if matches!(
+                    key_event,
+                    KeyEvent {
+                        code: KeyCode::Tab,
+                        modifiers: KeyModifiers::NONE,
+                        ..
+                    }
+                ) {
+                    if let Some(state) = self.patch_state_mut() {
+                        state.focus = PatchFocus::Options;
+                        state.note_submit_attempted = false;
+                    }
+                    return;
+                }
+                if matches!(
+                    key_event,
+                    KeyEvent {
+                        code: KeyCode::Enter,
+                        modifiers: KeyModifiers::NONE,
+                        ..
+                    }
+                ) {
+                    let text = self.patch_note_text();
+                    if text.trim().is_empty() {
+                        if let Some(state) = self.patch_state_mut() {
+                            state.note_submit_attempted = true;
+                        }
+                        return;
+                    }
+                    if let Some(ApprovalRequest::ApplyPatch { thread_id, id, .. }) =
+                        self.current_request.as_ref()
+                    {
+                        self.app_event_tx
+                            .send(AppEvent::RejectPatchApprovalWithNotes {
+                                thread_id: *thread_id,
+                                approval_id: id.clone(),
+                                text,
+                            });
+                        self.current_complete = true;
+                        self.advance_queue();
+                    }
+                    return;
+                }
+                if let Some(state) = self.patch_state_mut() {
+                    let _ = state.composer.handle_key_event(key_event);
+                    if !state.composer.current_text_with_pending().trim().is_empty() {
+                        state.note_submit_attempted = false;
+                    }
                 }
             }
+            None => {}
         }
     }
 }
 
 impl BottomPaneView for ApprovalOverlay {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if self.try_handle_shortcut(&key_event) {
+        if matches!(
+            self.current_request,
+            Some(ApprovalRequest::ApplyPatch { .. })
+        ) {
+            self.handle_patch_key_event(key_event);
+            return;
+        }
+        if self.try_handle_global_shortcut(&key_event)
+            || self.try_handle_option_shortcut(&key_event)
+        {
             return;
         }
         self.list.handle_key_event(key_event);
@@ -395,19 +769,235 @@ impl BottomPaneView for ApprovalOverlay {
         self.enqueue_request(request);
         None
     }
+
+    fn handle_paste(&mut self, pasted: String) -> bool {
+        if pasted.is_empty()
+            || !matches!(
+                self.current_request,
+                Some(ApprovalRequest::ApplyPatch { .. })
+            )
+        {
+            return false;
+        }
+        self.open_patch_notes();
+        self.patch_state_mut()
+            .map(|state| {
+                state.note_submit_attempted = false;
+                state.composer.handle_paste(pasted)
+            })
+            .unwrap_or(false)
+    }
+
+    fn flush_paste_burst_if_due(&mut self) -> bool {
+        self.patch_state_mut()
+            .map(|state| state.composer.flush_paste_burst_if_due())
+            .unwrap_or(false)
+    }
+
+    fn is_in_paste_burst(&self) -> bool {
+        self.patch_state()
+            .is_some_and(|state| state.composer.is_in_paste_burst())
+    }
 }
 
 impl Renderable for ApprovalOverlay {
     fn desired_height(&self, width: u16) -> u16 {
-        self.list.desired_height(width)
+        let Some(request @ ApprovalRequest::ApplyPatch { .. }) = self.current_request.as_ref()
+        else {
+            return self.list.desired_height(width);
+        };
+
+        let outer = Rect::new(0, 0, width, u16::MAX);
+        let inner = menu_surface_inset(outer);
+        let inner_width = inner.width.max(1);
+        let title_height = self.patch_title_lines(inner_width).len() as u16;
+        let header = build_header(request);
+        let header_height = header.desired_height(inner_width);
+        let rows = self.patch_option_rows();
+        let mut state = self
+            .patch_state()
+            .map(|patch_state| patch_state.options_state)
+            .unwrap_or_default();
+        if state.selected_idx.is_none() {
+            state.selected_idx = Some(0);
+        }
+        let options_height =
+            measure_rows_height(&rows, &state, rows.len().max(1), inner_width.max(1));
+        let hint_height = self.patch_hint_lines(inner_width).len() as u16;
+        let notes_height = if self.patch_notes_visible() {
+            self.patch_notes_input_height(inner_width)
+        } else {
+            0
+        };
+        let validation_height = self.patch_validation_lines(inner_width).len() as u16;
+        let height = title_height
+            + 1
+            + header_height
+            + 1
+            + options_height
+            + hint_height
+            + notes_height
+            + validation_height
+            + menu_surface_padding_height();
+        height.max(PATCH_MIN_OVERLAY_HEIGHT)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        self.list.render(area, buf);
+        let Some(request @ ApprovalRequest::ApplyPatch { .. }) = self.current_request.as_ref()
+        else {
+            self.list.render(area, buf);
+            return;
+        };
+        let content_area = render_menu_surface(area, buf);
+        if content_area.width == 0 || content_area.height == 0 {
+            return;
+        }
+
+        let width = content_area.width.max(1);
+        let title_lines = self.patch_title_lines(width);
+        let header = build_header(request);
+        let header_height = header.desired_height(width);
+        let rows = self.patch_option_rows();
+        let mut state = self
+            .patch_state()
+            .map(|patch_state| patch_state.options_state)
+            .unwrap_or_default();
+        if state.selected_idx.is_none() {
+            state.selected_idx = Some(0);
+        }
+        let options_height = measure_rows_height(&rows, &state, rows.len().max(1), width.max(1));
+        let hint_lines = self.patch_hint_lines(width);
+        let validation_lines = self.patch_validation_lines(width);
+        let validation_height = validation_lines.len() as u16;
+        let notes_height = if self.patch_notes_visible() {
+            self.patch_notes_input_height(width)
+        } else {
+            0
+        };
+
+        let mut cursor_y = content_area.y;
+        for line in title_lines {
+            Paragraph::new(line).render(
+                Rect {
+                    x: content_area.x,
+                    y: cursor_y,
+                    width: content_area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            cursor_y = cursor_y.saturating_add(1);
+        }
+        cursor_y = cursor_y.saturating_add(1);
+
+        header.render(
+            Rect {
+                x: content_area.x,
+                y: cursor_y,
+                width: content_area.width,
+                height: header_height.min(
+                    content_area
+                        .height
+                        .saturating_sub(cursor_y - content_area.y),
+                ),
+            },
+            buf,
+        );
+        cursor_y = cursor_y.saturating_add(header_height).saturating_add(1);
+
+        let options_area = Rect {
+            x: content_area.x,
+            y: cursor_y,
+            width: content_area.width,
+            height: options_height,
+        };
+        render_rows(
+            options_area,
+            buf,
+            &rows,
+            &state,
+            rows.len().max(1),
+            "No options",
+        );
+        cursor_y = cursor_y.saturating_add(options_height);
+
+        for line in hint_lines {
+            Paragraph::new(line).render(
+                Rect {
+                    x: content_area.x,
+                    y: cursor_y,
+                    width: content_area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            cursor_y = cursor_y.saturating_add(1);
+        }
+
+        if self.patch_notes_visible() {
+            let notes_area =
+                Rect {
+                    x: content_area.x,
+                    y: cursor_y,
+                    width: content_area.width,
+                    height: notes_height.min(content_area.height.saturating_sub(
+                        cursor_y.saturating_sub(content_area.y) + validation_height,
+                    )),
+                };
+            if let Some(state) = self.patch_state() {
+                state.composer.render(notes_area, buf);
+            }
+            cursor_y = cursor_y.saturating_add(notes_area.height);
+        }
+
+        for line in validation_lines {
+            Paragraph::new(line).render(
+                Rect {
+                    x: content_area.x,
+                    y: cursor_y,
+                    width: content_area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            cursor_y = cursor_y.saturating_add(1);
+        }
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        self.list.cursor_pos(area)
+        if !self.patch_focus_is_notes() || !self.patch_notes_visible() {
+            return self.list.cursor_pos(area);
+        }
+        let content_area = menu_surface_inset(area);
+        if content_area.width == 0 || content_area.height == 0 {
+            return None;
+        }
+        let width = content_area.width.max(1);
+        let title_height = self.patch_title_lines(width).len() as u16;
+        let header_height = self
+            .current_request
+            .as_ref()
+            .map(build_header)
+            .map(|header| header.desired_height(width))
+            .unwrap_or(0);
+        let rows = self.patch_option_rows();
+        let mut state = self
+            .patch_state()
+            .map(|patch_state| patch_state.options_state)
+            .unwrap_or_default();
+        if state.selected_idx.is_none() {
+            state.selected_idx = Some(0);
+        }
+        let options_height = measure_rows_height(&rows, &state, rows.len().max(1), width.max(1));
+        let hint_height = self.patch_hint_lines(width).len() as u16;
+        let notes_area = Rect {
+            x: content_area.x,
+            y: content_area.y + title_height + 1 + header_height + 1 + options_height + hint_height,
+            width: content_area.width,
+            height: self.patch_notes_input_height(width),
+        };
+        self.patch_state()
+            .and_then(|state| state.composer.cursor_pos(notes_area))
     }
 }
 
@@ -529,6 +1119,7 @@ fn build_header(request: &ApprovalRequest) -> Box<dyn Renderable> {
 enum ApprovalDecision {
     Review(ReviewDecision),
     McpElicitation(ElicitationAction),
+    PatchRejectWithNotes,
 }
 
 #[derive(Clone)]
@@ -683,8 +1274,8 @@ fn patch_options() -> Vec<ApprovalOption> {
         },
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),
-            decision: ApprovalDecision::Review(ReviewDecision::Abort),
-            display_shortcut: Some(key_hint::plain(KeyCode::Esc)),
+            decision: ApprovalDecision::PatchRejectWithNotes,
+            display_shortcut: None,
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
     ]
@@ -767,6 +1358,24 @@ mod tests {
             available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
             additional_permissions: None,
+        }
+    }
+
+    fn make_patch_request() -> ApprovalRequest {
+        let mut changes = HashMap::new();
+        changes.insert(
+            PathBuf::from("README.md"),
+            FileChange::Add {
+                content: "hello\nworld\n".to_string(),
+            },
+        );
+        ApprovalRequest::ApplyPatch {
+            thread_id: ThreadId::new(),
+            thread_label: None,
+            id: "patch-test".to_string(),
+            reason: Some("review these edits".to_string()),
+            cwd: PathBuf::from("/tmp"),
+            changes,
         }
     }
 
@@ -1238,5 +1847,204 @@ mod tests {
             }
         }
         assert_eq!(decision, Some(ReviewDecision::Approved));
+    }
+
+    #[test]
+    fn patch_option_three_no_longer_shows_esc_shortcut() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+        let rendered = render_overlay_lines(&view, 80);
+
+        assert!(
+            !rendered.contains("(esc)"),
+            "patch option should not show esc shortcut: {rendered}"
+        );
+        assert!(
+            rendered.contains("esc to interrupt"),
+            "patch modal should show interrupt hint under options: {rendered}"
+        );
+    }
+
+    #[test]
+    fn tab_opens_patch_notes() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Tab));
+
+        let state = view.patch_state().expect("patch state");
+        assert_eq!(
+            state.options_state.selected_idx,
+            Some(PATCH_REJECT_OPTION_INDEX)
+        );
+        assert_eq!(state.focus, PatchFocus::Notes);
+        assert!(view.patch_notes_visible());
+    }
+
+    #[test]
+    fn enter_on_patch_option_three_opens_notes() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Down));
+        view.handle_key_event(KeyEvent::from(KeyCode::Down));
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        let state = view.patch_state().expect("patch state");
+        assert_eq!(
+            state.options_state.selected_idx,
+            Some(PATCH_REJECT_OPTION_INDEX)
+        );
+        assert_eq!(state.focus, PatchFocus::Notes);
+        assert!(!view.is_complete());
+    }
+
+    #[test]
+    fn n_opens_patch_notes() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+
+        assert!(view.patch_focus_is_notes());
+        assert_eq!(view.patch_selected_index(), Some(PATCH_REJECT_OPTION_INDEX));
+    }
+
+    #[test]
+    fn digit_three_opens_patch_notes() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+
+        assert!(view.patch_focus_is_notes());
+        assert_eq!(view.patch_selected_index(), Some(PATCH_REJECT_OPTION_INDEX));
+    }
+
+    #[test]
+    fn ctrl_c_aborts_patch_even_when_notes_are_visible() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+        view.handle_key_event(KeyEvent::from(KeyCode::Tab));
+
+        assert_eq!(view.on_ctrl_c(), CancellationEvent::Handled);
+
+        let mut decision = None;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::PatchApproval { decision: d, .. },
+                ..
+            } = event
+            {
+                decision = Some(d);
+                break;
+            }
+        }
+        assert_eq!(decision, Some(ReviewDecision::Abort));
+    }
+
+    #[test]
+    fn submitting_patch_notes_emits_reject_with_notes_event() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+        view.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        view.patch_state_mut()
+            .expect("patch state")
+            .composer
+            .set_text_content("use smaller diffs".to_string(), Vec::new(), Vec::new());
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        let event = rx.try_recv().expect("reject event");
+        assert_eq!(
+            matches!(
+                event,
+                AppEvent::RejectPatchApprovalWithNotes { text, .. }
+                    if text == "use smaller diffs"
+            ),
+            true
+        );
+        assert!(view.is_complete());
+    }
+
+    #[test]
+    fn empty_patch_note_submit_does_not_emit_event() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+        view.handle_key_event(KeyEvent::from(KeyCode::Tab));
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        assert!(
+            rx.try_recv().is_err(),
+            "unexpected event for empty note submit"
+        );
+        assert!(!view.is_complete());
+        assert!(view.patch_note_error_visible());
+    }
+
+    #[test]
+    fn patch_yes_shortcuts_remain_unchanged() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+
+        let mut decision = None;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::PatchApproval { decision: d, .. },
+                ..
+            } = event
+            {
+                decision = Some(d);
+                break;
+            }
+        }
+        assert_eq!(decision, Some(ReviewDecision::ApprovedForSession));
+    }
+
+    #[test]
+    fn patch_notes_snapshot() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+        view.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        view.patch_state_mut()
+            .expect("patch state")
+            .composer
+            .set_text_content(
+                "split the changes by file".to_string(),
+                Vec::new(),
+                Vec::new(),
+            );
+
+        assert_snapshot!(
+            "approval_overlay_patch_notes_visible",
+            render_overlay_lines(&view, 80)
+        );
+    }
+
+    #[test]
+    fn patch_reject_selected_snapshot() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
+        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+        view.handle_key_event(KeyEvent::from(KeyCode::Down));
+        view.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+        assert_snapshot!(
+            "approval_overlay_patch_reject_selected",
+            render_overlay_lines(&view, 80)
+        );
     }
 }

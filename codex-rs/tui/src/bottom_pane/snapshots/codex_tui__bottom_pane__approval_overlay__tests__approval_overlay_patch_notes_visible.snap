@@ -1,0 +1,21 @@
+---
+source: tui/src/bottom_pane/approval_overlay.rs
+assertion_line: 1995
+expression: "render_overlay_lines(&view, 80)"
+---
+
+  Would you like to make the following edits?
+
+  Reason: review these edits
+
+  README.md (+2 -0)
+
+    1 +hello
+    2 +world
+
+    1. Yes, proceed
+    2. Yes, and don't ask again for these files
+  › 3. No, and tell Codex what to do differently
+  enter to send | tab to go back | esc to interrupt
+
+  › split the changes by file

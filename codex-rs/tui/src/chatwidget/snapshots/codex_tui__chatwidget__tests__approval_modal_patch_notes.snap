@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 6996
+assertion_line: 7041
 expression: terminal.backend().vt100().screen().contents()
 ---
 
@@ -14,7 +14,9 @@ expression: terminal.backend().vt100().screen().contents()
     1 +hello
     2 +world
 
-  › 1. Yes, proceed
+    1. Yes, proceed
     2. Yes, and don't ask again for these files
-    3. No, and tell Codex what to do differently
-  esc to interrupt
+  › 3. No, and tell Codex what to do differently
+  enter to send | tab to go back | esc to interrupt
+
+  › split the edits into smaller commits

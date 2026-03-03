@@ -72,11 +72,13 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -1040,7 +1042,7 @@ impl App {
         }
     }
 
-    async fn submit_op_to_thread(&mut self, thread_id: ThreadId, op: Op) {
+    async fn submit_op_to_thread(&mut self, thread_id: ThreadId, op: Op) -> bool {
         let replay_state_op =
             ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
         let submitted = if self.active_thread_id == Some(thread_id) {
@@ -1069,6 +1071,7 @@ impl App {
             self.note_thread_outbound_op(thread_id, op).await;
             self.refresh_pending_thread_approvals().await;
         }
+        submitted
     }
 
     async fn refresh_pending_thread_approvals(&mut self) {
@@ -2157,7 +2160,36 @@ impl App {
                 }
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
-                self.submit_op_to_thread(thread_id, op).await;
+                let _ = self.submit_op_to_thread(thread_id, op).await;
+            }
+            AppEvent::RejectPatchApprovalWithNotes {
+                thread_id,
+                approval_id,
+                text,
+            } => {
+                let denied = self
+                    .submit_op_to_thread(
+                        thread_id,
+                        Op::PatchApproval {
+                            id: approval_id,
+                            decision: ReviewDecision::Denied,
+                        },
+                    )
+                    .await;
+                if denied {
+                    let _ = self
+                        .submit_op_to_thread(
+                            thread_id,
+                            Op::UserInput {
+                                items: vec![UserInput::Text {
+                                    text,
+                                    text_elements: Vec::new(),
+                                }],
+                                final_output_json_schema: None,
+                            },
+                        )
+                        .await;
+                }
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
@@ -3608,9 +3640,12 @@ mod tests {
     use codex_otel::OtelManager;
     use codex_protocol::ThreadId;
     use codex_protocol::openai_models::ModelAvailabilityNux;
+    use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
+    use codex_protocol::protocol::FileChange;
+    use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
@@ -3810,6 +3845,161 @@ mod tests {
         }
 
         panic!("expected approval action to submit a thread-scoped op");
+    }
+
+    #[tokio::test]
+    async fn reject_patch_with_notes_submits_denied_then_user_input() -> Result<()> {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+
+        reject_patch_with_notes_for_test(
+            &mut app,
+            thread_id,
+            "call-1",
+            "please split this into smaller patches",
+        )
+        .await;
+
+        assert_eq!(
+            op_rx.try_recv(),
+            Ok(Op::PatchApproval {
+                id: "call-1".to_string(),
+                decision: ReviewDecision::Denied,
+            })
+        );
+        assert_eq!(
+            op_rx.try_recv(),
+            Ok(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: "please split this into smaller patches".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reject_patch_with_notes_skips_steering_when_deny_fails() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+
+        reject_patch_with_notes_for_test(
+            &mut app,
+            ThreadId::new(),
+            "call-missing",
+            "try again with fewer files",
+        )
+        .await;
+
+        let mut errors = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                let text = cell
+                    .display_lines(120)
+                    .into_iter()
+                    .map(|line| {
+                        line.spans
+                            .into_iter()
+                            .map(|span| span.content.into_owned())
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                errors.push(text);
+            }
+        }
+
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("Failed to find thread"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reject_patch_with_notes_routes_denial_to_originating_thread() -> Result<()> {
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let active = app.server.start_thread(app.config.clone()).await?;
+        let target = app.server.start_thread(app.config.clone()).await?;
+        app.active_thread_id = Some(active.thread_id);
+
+        let active_channel = ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY);
+        {
+            let mut store = active_channel.store.lock().await;
+            store.push_event(Event {
+                id: "active-approval".to_string(),
+                msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                    call_id: "active-call".to_string(),
+                    turn_id: "active-turn".to_string(),
+                    changes: HashMap::from([(
+                        PathBuf::from("active.rs"),
+                        FileChange::Add {
+                            content: "fn active() {}\n".to_string(),
+                        },
+                    )]),
+                    reason: None,
+                    grant_root: None,
+                }),
+            });
+        }
+        app.thread_event_channels
+            .insert(active.thread_id, active_channel);
+
+        let target_channel = ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY);
+        {
+            let mut store = target_channel.store.lock().await;
+            store.push_event(Event {
+                id: "target-approval".to_string(),
+                msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                    call_id: "target-call".to_string(),
+                    turn_id: "target-turn".to_string(),
+                    changes: HashMap::from([(
+                        PathBuf::from("target.rs"),
+                        FileChange::Add {
+                            content: "fn target() {}\n".to_string(),
+                        },
+                    )]),
+                    reason: None,
+                    grant_root: None,
+                }),
+            });
+        }
+        app.thread_event_channels
+            .insert(target.thread_id, target_channel);
+
+        reject_patch_with_notes_for_test(
+            &mut app,
+            target.thread_id,
+            "target-call",
+            "apply only the target file",
+        )
+        .await;
+
+        assert!(
+            op_rx.try_recv().is_err(),
+            "cross-thread steering should not route through the active thread sender"
+        );
+
+        let active_pending = app
+            .thread_event_channels
+            .get(&active.thread_id)
+            .expect("active channel")
+            .store
+            .lock()
+            .await
+            .has_pending_thread_approvals();
+        let target_pending = app
+            .thread_event_channels
+            .get(&target.thread_id)
+            .expect("target channel")
+            .store
+            .lock()
+            .await
+            .has_pending_thread_approvals();
+
+        assert!(active_pending);
+        assert!(!target_pending);
+        Ok(())
     }
 
     #[tokio::test]
@@ -4454,6 +4644,37 @@ mod tests {
             rx,
             op_rx,
         )
+    }
+
+    async fn reject_patch_with_notes_for_test(
+        app: &mut App,
+        thread_id: ThreadId,
+        approval_id: &str,
+        text: &str,
+    ) {
+        let denied = app
+            .submit_op_to_thread(
+                thread_id,
+                Op::PatchApproval {
+                    id: approval_id.to_string(),
+                    decision: ReviewDecision::Denied,
+                },
+            )
+            .await;
+        if denied {
+            let _ = app
+                .submit_op_to_thread(
+                    thread_id,
+                    Op::UserInput {
+                        items: vec![UserInput::Text {
+                            text: text.to_string(),
+                            text_elements: Vec::new(),
+                        }],
+                        final_output_json_schema: None,
+                    },
+                )
+                .await;
+        }
     }
 
     fn test_otel_manager(config: &Config, model: &str) -> OtelManager {
