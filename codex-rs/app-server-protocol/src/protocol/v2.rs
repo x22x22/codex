@@ -673,6 +673,12 @@ pub struct ExternalAgentConfigMigrationItem {
     pub description: String,
     /// Null or empty means home-scoped migration; non-empty means repo-scoped migration.
     pub cwd: Option<PathBuf>,
+    /// Optional link target for "from" (file or directory path).
+    pub source_path: Option<PathBuf>,
+    /// Optional link target for "to" (file or directory path).
+    pub target_path: Option<PathBuf>,
+    /// Optional copyable count (e.g., number of skills folders).
+    pub copy_count: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

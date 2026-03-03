@@ -10,6 +10,7 @@ use codex_core::external_agent_config::ExternalAgentConfigDetectOptions;
 use codex_core::external_agent_config::ExternalAgentConfigMigrationItem as CoreMigrationItem;
 use codex_core::external_agent_config::ExternalAgentConfigMigrationItemType as CoreMigrationItemType;
 use codex_core::external_agent_config::ExternalAgentConfigService;
+use std::convert::TryFrom;
 use std::io;
 use std::path::PathBuf;
 
@@ -57,6 +58,11 @@ impl ExternalAgentConfigApi {
                     },
                     description: migration_item.description,
                     cwd: migration_item.cwd,
+                    source_path: migration_item.source_path,
+                    target_path: migration_item.target_path,
+                    copy_count: migration_item
+                        .copy_count
+                        .and_then(|count| u32::try_from(count).ok()),
                 })
                 .collect(),
         })
@@ -88,6 +94,11 @@ impl ExternalAgentConfigApi {
                         },
                         description: migration_item.description,
                         cwd: migration_item.cwd,
+                        source_path: migration_item.source_path,
+                        target_path: migration_item.target_path,
+                        copy_count: migration_item
+                            .copy_count
+                            .and_then(|count| usize::try_from(count).ok()),
                     })
                     .collect(),
             )

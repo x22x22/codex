@@ -26,6 +26,9 @@ pub struct ExternalAgentConfigMigrationItem {
     pub item_type: ExternalAgentConfigMigrationItemType,
     pub description: String,
     pub cwd: Option<PathBuf>,
+    pub source_path: Option<PathBuf>,
+    pub target_path: Option<PathBuf>,
+    pub copy_count: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -125,12 +128,13 @@ impl ExternalAgentConfigService {
                 if should_include {
                     items.push(ExternalAgentConfigMigrationItem {
                         item_type: ExternalAgentConfigMigrationItemType::Config,
-                        description: format!(
-                            "Migrate {} into {}.",
-                            source_settings.display(),
-                            target_config.display()
-                        ),
+                        description:
+                            "Configuration - import Sandbox and Environment settings from Claude to Codex"
+                                .to_string(),
                         cwd: cwd.clone(),
+                        source_path: Some(source_settings),
+                        target_path: Some(target_config),
+                        copy_count: None,
                     });
                 }
             }
@@ -146,39 +150,43 @@ impl ExternalAgentConfigService {
         );
         let source_skill_names = collect_subdirectory_names(&source_skills)?;
         let target_skill_names = collect_subdirectory_names(&target_skills)?;
-        if source_skill_names
+        let missing_skills_count = source_skill_names
             .iter()
-            .any(|skill_name| !target_skill_names.contains(skill_name))
-        {
+            .filter(|skill_name| !target_skill_names.contains(*skill_name))
+            .count();
+        if missing_skills_count > 0 {
             items.push(ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Skills,
                 description: format!(
-                    "Copy skill folders from {} to {}.",
-                    source_skills.display(),
-                    target_skills.display()
+                    "Skills - import {} skills from Claude to Codex",
+                    missing_skills_count
                 ),
                 cwd: cwd.clone(),
+                source_path: Some(source_skills),
+                target_path: Some(target_skills),
+                copy_count: Some(missing_skills_count),
             });
         }
 
-        let source_agents_md = repo_root.map_or_else(
-            || self.claude_home.join("CLAUDE.md"),
-            |repo_root| repo_root.join("CLAUDE.md"),
-        );
+        let source_agents_md = match repo_root {
+            Some(repo_root) => pick_repo_claude_md(repo_root)?,
+            None => Some(self.claude_home.join("CLAUDE.md")),
+        };
         let target_agents_md = repo_root.map_or_else(
             || self.codex_home.join("AGENTS.md"),
             |repo_root| repo_root.join("AGENTS.md"),
         );
-        if source_agents_md.is_file() && is_missing_or_empty_text_file(&target_agents_md)? {
-            items.push(ExternalAgentConfigMigrationItem {
-                item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
-                description: format!(
-                    "Import {} to {}.",
-                    source_agents_md.display(),
-                    target_agents_md.display()
-                ),
-                cwd,
-            });
+        if let Some(source_agents_md) = source_agents_md {
+            if source_agents_md.is_file() && is_missing_or_empty_text_file(&target_agents_md)? {
+                items.push(ExternalAgentConfigMigrationItem {
+                    item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+                    description: "AGENTS.md - copy CLAUDE.md to AGENTS.md".to_string(),
+                    cwd,
+                    source_path: Some(source_agents_md),
+                    target_path: Some(target_agents_md),
+                    copy_count: None,
+                });
+            }
         }
 
         Ok(())
@@ -283,7 +291,10 @@ impl ExternalAgentConfigService {
 
     fn import_agents_md(&self, cwd: Option<&Path>) -> io::Result<()> {
         let (source_agents_md, target_agents_md) = if let Some(repo_root) = find_repo_root(cwd)? {
-            (repo_root.join("CLAUDE.md"), repo_root.join("AGENTS.md"))
+            let Some(source_agents_md) = pick_repo_claude_md(&repo_root)? else {
+                return Ok(());
+            };
+            (source_agents_md, repo_root.join("AGENTS.md"))
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
             return Ok(());
         } else {
@@ -374,6 +385,21 @@ fn is_missing_or_empty_text_file(path: &Path) -> io::Result<bool> {
     }
 
     Ok(fs::read_to_string(path)?.trim().is_empty())
+}
+
+fn pick_repo_claude_md(repo_root: &Path) -> io::Result<Option<PathBuf>> {
+    for candidate in [
+        repo_root.join(".claude").join("CLAUDE.md"),
+        repo_root.join("CLAUDE.md"),
+    ] {
+        if !candidate.is_file() {
+            continue;
+        }
+        if !fs::read_to_string(&candidate)?.trim().is_empty() {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> io::Result<()> {
@@ -637,30 +663,29 @@ mod tests {
         let expected = vec![
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Config,
-                description: format!(
-                    "Migrate {} into {}.",
-                    claude_home.join("settings.json").display(),
-                    codex_home.join("config.toml").display()
-                ),
+                description:
+                    "Configuration - import Sandbox and Environment settings from Claude to Codex"
+                        .to_string(),
                 cwd: None,
+                source_path: Some(claude_home.join("settings.json")),
+                target_path: Some(codex_home.join("config.toml")),
+                copy_count: None,
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::Skills,
-                description: format!(
-                    "Copy skill folders from {} to {}.",
-                    claude_home.join("skills").display(),
-                    agents_skills.display()
-                ),
+                description: "Skills - import 1 skills from Claude to Codex".to_string(),
                 cwd: None,
+                source_path: Some(claude_home.join("skills")),
+                target_path: Some(agents_skills.clone()),
+                copy_count: Some(1),
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
-                description: format!(
-                    "Import {} to {}.",
-                    claude_home.join("CLAUDE.md").display(),
-                    codex_home.join("AGENTS.md").display()
-                ),
+                description: "AGENTS.md - copy CLAUDE.md to AGENTS.md".to_string(),
                 cwd: None,
+                source_path: Some(claude_home.join("CLAUDE.md")),
+                target_path: Some(codex_home.join("AGENTS.md")),
+                copy_count: None,
             },
         ];
 
@@ -683,28 +708,79 @@ mod tests {
             })
             .expect("detect");
 
+        let repo_claude_md = repo_root.join("CLAUDE.md");
+        let repo_agents_md = repo_root.join("AGENTS.md");
         let expected = vec![
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
-                description: format!(
-                    "Import {} to {}.",
-                    repo_root.join("CLAUDE.md").display(),
-                    repo_root.join("AGENTS.md").display(),
-                ),
+                description: "AGENTS.md - copy CLAUDE.md to AGENTS.md".to_string(),
                 cwd: Some(repo_root.clone()),
+                source_path: Some(repo_claude_md.clone()),
+                target_path: Some(repo_agents_md.clone()),
+                copy_count: None,
             },
             ExternalAgentConfigMigrationItem {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
-                description: format!(
-                    "Import {} to {}.",
-                    repo_root.join("CLAUDE.md").display(),
-                    repo_root.join("AGENTS.md").display(),
-                ),
+                description: "AGENTS.md - copy CLAUDE.md to AGENTS.md".to_string(),
                 cwd: Some(repo_root),
+                source_path: Some(repo_claude_md),
+                target_path: Some(repo_agents_md),
+                copy_count: None,
             },
         ];
 
         assert_eq!(items, expected);
+    }
+
+    #[test]
+    fn detect_repo_prefers_dot_claude_claude_md_when_non_empty() {
+        let root = TempDir::new().expect("create tempdir");
+        let repo_root = root.path().join("repo");
+        let nested = repo_root.join("nested").join("child");
+        fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+        fs::create_dir_all(repo_root.join(".claude")).expect("create .claude dir");
+        fs::create_dir_all(&nested).expect("create nested");
+        fs::write(repo_root.join("CLAUDE.md"), "root rules").expect("write root source");
+        fs::write(repo_root.join(".claude").join("CLAUDE.md"), "claude rules")
+            .expect("write .claude source");
+
+        let items = service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
+            .detect(ExternalAgentConfigDetectOptions {
+                include_home: false,
+                cwds: Some(vec![nested]),
+            })
+            .expect("detect");
+
+        let expected = vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+            description: "AGENTS.md - copy CLAUDE.md to AGENTS.md".to_string(),
+            cwd: Some(repo_root.clone()),
+            source_path: Some(repo_root.join(".claude").join("CLAUDE.md")),
+            target_path: Some(repo_root.join("AGENTS.md")),
+            copy_count: None,
+        }];
+
+        assert_eq!(items, expected);
+    }
+
+    #[test]
+    fn detect_repo_skips_agents_md_when_all_sources_empty() {
+        let root = TempDir::new().expect("create tempdir");
+        let repo_root = root.path().join("repo");
+        fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+        fs::create_dir_all(repo_root.join(".claude")).expect("create .claude dir");
+        fs::write(repo_root.join("CLAUDE.md"), " \n\t").expect("write root empty");
+        fs::write(repo_root.join(".claude").join("CLAUDE.md"), " \n\t")
+            .expect("write .claude empty");
+
+        let items = service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
+            .detect(ExternalAgentConfigDetectOptions {
+                include_home: false,
+                cwds: Some(vec![repo_root]),
+            })
+            .expect("detect");
+
+        assert_eq!(items, Vec::<ExternalAgentConfigMigrationItem>::new());
     }
 
     #[test]
@@ -733,16 +809,25 @@ mod tests {
                     item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                     description: String::new(),
                     cwd: None,
+                    source_path: None,
+                    target_path: None,
+                    copy_count: None,
                 },
                 ExternalAgentConfigMigrationItem {
                     item_type: ExternalAgentConfigMigrationItemType::Config,
                     description: String::new(),
                     cwd: None,
+                    source_path: None,
+                    target_path: None,
+                    copy_count: None,
                 },
                 ExternalAgentConfigMigrationItem {
                     item_type: ExternalAgentConfigMigrationItemType::Skills,
                     description: String::new(),
                     cwd: None,
+                    source_path: None,
+                    target_path: None,
+                    copy_count: None,
                 },
             ])
             .expect("import");
@@ -791,6 +876,9 @@ mod tests {
                 item_type: ExternalAgentConfigMigrationItemType::Config,
                 description: String::new(),
                 cwd: None,
+                source_path: None,
+                target_path: None,
+                copy_count: None,
             }])
             .expect("import");
 
@@ -876,11 +964,17 @@ mod tests {
                     item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                     description: String::new(),
                     cwd: Some(repo_root.clone()),
+                    source_path: None,
+                    target_path: None,
+                    copy_count: None,
                 },
                 ExternalAgentConfigMigrationItem {
                     item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                     description: String::new(),
                     cwd: Some(repo_with_existing_target.clone()),
+                    source_path: None,
+                    target_path: None,
+                    copy_count: None,
                 },
             ])
             .expect("import");
@@ -909,12 +1003,45 @@ mod tests {
                 item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
                 description: String::new(),
                 cwd: Some(repo_root.clone()),
+                source_path: None,
+                target_path: None,
+                copy_count: None,
             }])
             .expect("import");
 
         assert_eq!(
             fs::read_to_string(repo_root.join("AGENTS.md")).expect("read target"),
             "Codex guidance"
+        );
+    }
+
+    #[test]
+    fn import_repo_agents_md_uses_dot_claude_claude_md_when_present() {
+        let root = TempDir::new().expect("create tempdir");
+        let repo_root = root.path().join("repo");
+        fs::create_dir_all(repo_root.join(".git")).expect("create git");
+        fs::create_dir_all(repo_root.join(".claude")).expect("create .claude");
+        fs::write(repo_root.join("CLAUDE.md"), "root source").expect("write root source");
+        fs::write(
+            repo_root.join(".claude").join("CLAUDE.md"),
+            "Claude code\nSee CLAUDE.md\n",
+        )
+        .expect("write .claude source");
+
+        service_for_paths(root.path().join(".claude"), root.path().join(".codex"))
+            .import(vec![ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::AgentsMd,
+                description: String::new(),
+                cwd: Some(repo_root.clone()),
+                source_path: None,
+                target_path: None,
+                copy_count: None,
+            }])
+            .expect("import");
+
+        assert_eq!(
+            fs::read_to_string(repo_root.join("AGENTS.md")).expect("read target"),
+            "Codex\nSee AGENTS.md\n"
         );
     }
 }

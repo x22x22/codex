@@ -7,4 +7,13 @@ export type ExternalAgentConfigMigrationItem = { itemType: ExternalAgentConfigMi
 /**
  * Null or empty means home-scoped migration; non-empty means repo-scoped migration.
  */
-cwd: string | null, };
+cwd: string | null, /**
+ * Optional link target for "from" (file or directory path).
+ */
+sourcePath: string | null, /**
+ * Optional link target for "to" (file or directory path).
+ */
+targetPath: string | null, /**
+ * Optional copyable count (e.g., number of skills folders).
+ */
+copyCount: number | null, };
