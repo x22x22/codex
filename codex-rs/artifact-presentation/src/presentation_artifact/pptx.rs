@@ -1063,6 +1063,7 @@ fn export_text_body_xml(
     let top_inset = points_to_emu(insets.top);
     let bottom_inset = points_to_emu(insets.bottom);
     format!(
+        // codespell:ignore lIns,rIns,tIns,bIns
         r#"<p:txBody><a:bodyPr wrap="{wrap}" lIns="{left_inset}" rIns="{right_inset}" tIns="{top_inset}" bIns="{bottom_inset}" anchor="{anchor}">{auto_fit}</a:bodyPr><a:lstStyle/>{paragraphs}</p:txBody>"#
     )
 }
@@ -1115,6 +1116,7 @@ fn export_table_cell_text_body_xml(
         let top_inset = points_to_emu(insets.top);
         let bottom_inset = points_to_emu(insets.bottom);
         format!(
+            // codespell:ignore lIns,rIns,tIns,bIns
             r#" lIns="{left_inset}" rIns="{right_inset}" tIns="{top_inset}" bIns="{bottom_inset}""#,
         )
     });
