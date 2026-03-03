@@ -9,6 +9,9 @@ use crate::tools::context::ToolPayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 use codex_protocol::models::ResponseInputItem;
+use codex_taint::TaintEffect;
+use codex_taint::TaintLabel;
+use codex_taint::TaintSource;
 
 pub struct McpHandler;
 
@@ -54,11 +57,28 @@ impl ToolHandler for McpHandler {
         .await;
 
         match response {
-            ResponseInputItem::McpToolCallOutput { result, .. } => Ok(ToolOutput::Mcp { result }),
+            ResponseInputItem::McpToolCallOutput { result, .. } => {
+                let taint_effect = if result.is_ok() {
+                    TaintEffect::Mark {
+                        label: TaintLabel::ExternalContent,
+                        source: TaintSource::McpTool,
+                    }
+                } else {
+                    TaintEffect::None
+                };
+                Ok(ToolOutput::Mcp {
+                    result,
+                    taint_effect,
+                })
+            }
             ResponseInputItem::FunctionCallOutput { output, .. } => {
                 let success = output.success;
                 let body = output.body;
-                Ok(ToolOutput::Function { body, success })
+                Ok(ToolOutput::Function {
+                    body,
+                    success,
+                    taint_effect: TaintEffect::None,
+                })
             }
             _ => Err(FunctionCallError::RespondToModel(
                 "mcp handler received unexpected response variant".to_string(),

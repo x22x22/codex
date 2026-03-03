@@ -3,6 +3,10 @@ use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::ShellCommandToolCallParams;
 use codex_protocol::models::ShellToolCallParams;
+use codex_taint::TaintEffect;
+use codex_taint::TaintLabel;
+use codex_taint::TaintSink;
+use codex_taint::TaintSource;
 use std::sync::Arc;
 
 use crate::codex::TurnContext;
@@ -387,6 +391,10 @@ impl ShellHandler {
             return Ok(output);
         }
 
+        session
+            .ensure_taint_sink_allowed(&turn.sub_id, TaintSink::shell_exec())
+            .await?;
+
         let source = ExecCommandSource::Agent;
         let emitter = ToolEmitter::shell(
             exec_params.command.clone(),
@@ -452,6 +460,10 @@ impl ShellHandler {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
+            taint_effect: TaintEffect::Mark {
+                label: TaintLabel::WorkspaceContent,
+                source: TaintSource::ShellOutput,
+            },
         })
     }
 }

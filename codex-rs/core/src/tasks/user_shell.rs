@@ -5,6 +5,9 @@ use async_trait::async_trait;
 use codex_async_utils::CancelErr;
 use codex_async_utils::OrCancelExt;
 use codex_protocol::user_input::UserInput;
+use codex_taint::TaintEffect;
+use codex_taint::TaintLabel;
+use codex_taint::TaintSource;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use uuid::Uuid;
@@ -321,6 +324,16 @@ async fn persist_user_shell_output(
         ResponseItem::Message { role, content, .. } => ResponseInputItem::Message { role, content },
         _ => unreachable!("user shell command output record should always be a message"),
     };
+
+    session
+        .apply_taint_effect(
+            &turn_context.sub_id,
+            TaintEffect::Mark {
+                label: TaintLabel::WorkspaceContent,
+                source: TaintSource::UserShellOutput,
+            },
+        )
+        .await;
 
     if let Err(items) = session
         .inject_response_items(vec![response_input_item])

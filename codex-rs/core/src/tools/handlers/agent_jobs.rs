@@ -460,6 +460,7 @@ mod spawn_agents_on_csv {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
+            taint_effect: codex_taint::TaintEffect::None,
         })
     }
 }
@@ -509,6 +510,7 @@ mod report_agent_job_result {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
+            taint_effect: codex_taint::TaintEffect::None,
         })
     }
 }

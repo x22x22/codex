@@ -18,6 +18,9 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_taint::TaintEffect;
+use codex_taint::TaintLabel;
+use codex_taint::TaintSource;
 use futures::Future;
 use tracing::debug;
 use tracing::instrument;
@@ -78,6 +81,17 @@ pub(crate) async fn handle_output_item_done(
         }
         // No tool call: convert messages/reasoning into turn items and mark them as complete.
         Ok(None) => {
+            if matches!(item, ResponseItem::WebSearchCall { .. }) {
+                ctx.sess
+                    .apply_taint_effect(
+                        &ctx.turn_context.sub_id,
+                        TaintEffect::Mark {
+                            label: TaintLabel::ExternalContent,
+                            source: TaintSource::WebSearch,
+                        },
+                    )
+                    .await;
+            }
             if let Some(turn_item) = handle_non_tool_response_item(&item, plan_mode).await {
                 if previously_active_item.is_none() {
                     ctx.sess

@@ -12,6 +12,8 @@ use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::skill_approval::SkillApprovalResponse;
+use codex_taint::TaintEffect;
+use codex_taint::TaintState;
 use tokio::sync::oneshot;
 
 use crate::codex::TurnContext;
@@ -75,6 +77,7 @@ pub(crate) struct TurnState {
     pending_skill_approvals: HashMap<String, oneshot::Sender<SkillApprovalResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
     pending_input: Vec<ResponseInputItem>,
+    control_taint: TaintState,
 }
 
 impl TurnState {
@@ -150,6 +153,18 @@ impl TurnState {
         self.pending_input.push(input);
     }
 
+    pub(crate) fn apply_taint_effect(&mut self, effect: TaintEffect) {
+        self.control_taint.apply(effect);
+    }
+
+    pub(crate) fn current_taint(&self) -> TaintState {
+        self.control_taint.clone()
+    }
+
+    pub(crate) fn reset_taint(&mut self) {
+        self.control_taint.reset();
+    }
+
     pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
@@ -170,5 +185,33 @@ impl ActiveTurn {
     pub(crate) async fn clear_pending(&self) {
         let mut ts = self.turn_state.lock().await;
         ts.clear_pending();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_taint::TaintLabel;
+    use codex_taint::TaintSource;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn turn_state_applies_and_resets_taint() {
+        let mut state = TurnState::default();
+        state.apply_taint_effect(TaintEffect::Mark {
+            label: TaintLabel::WorkspaceContent,
+            source: TaintSource::ReadFile,
+        });
+
+        let taint = state.current_taint();
+        assert_eq!(
+            taint.labels().iter().copied().collect::<Vec<_>>(),
+            vec![TaintLabel::WorkspaceContent]
+        );
+        assert_eq!(taint.recent_sources(), &[TaintSource::ReadFile]);
+
+        state.apply_taint_effect(TaintEffect::Reset);
+
+        assert!(state.current_taint().is_clean());
     }
 }

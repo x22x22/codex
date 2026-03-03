@@ -91,6 +91,7 @@ impl ToolHandler for PlanHandler {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
+            taint_effect: codex_taint::TaintEffect::None,
         })
     }
 }

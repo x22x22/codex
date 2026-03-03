@@ -172,6 +172,7 @@ impl ToolHandler for JsReplHandler {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::ContentItems(items),
             success: Some(true),
+            taint_effect: codex_taint::TaintEffect::None,
         })
     }
 }
@@ -193,6 +194,7 @@ impl ToolHandler for JsReplResetHandler {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text("js_repl kernel reset".to_string()),
             success: Some(true),
+            taint_effect: codex_taint::TaintEffect::None,
         })
     }
 }

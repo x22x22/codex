@@ -2,6 +2,9 @@ use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::openai_models::InputModality;
+use codex_taint::TaintEffect;
+use codex_taint::TaintLabel;
+use codex_taint::TaintSource;
 use serde::Deserialize;
 use tokio::fs;
 
@@ -110,6 +113,10 @@ impl ToolHandler for ViewImageHandler {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::ContentItems(content),
             success: Some(true),
+            taint_effect: TaintEffect::Mark {
+                label: TaintLabel::WorkspaceContent,
+                source: TaintSource::ViewImage,
+            },
         })
     }
 }

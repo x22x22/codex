@@ -216,6 +216,11 @@ impl ToolRegistry {
                 let output = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
+                let taint_effect = output.taint_effect().clone();
+                invocation
+                    .session
+                    .apply_taint_effect(&invocation.turn.sub_id, taint_effect)
+                    .await;
                 Ok(output.into_response(&call_id_owned, &payload_for_response))
             }
             Err(err) => Err(err),

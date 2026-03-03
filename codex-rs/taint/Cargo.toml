@@ -1,0 +1,12 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-taint"
+version.workspace = true
+
+[lib]
+name = "codex_taint"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

@@ -1,4 +1,7 @@
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_taint::TaintEffect;
+use codex_taint::TaintLabel;
+use codex_taint::TaintSource;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
@@ -149,6 +152,10 @@ impl ToolHandler for ReadFileHandler {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(collected.join("\n")),
             success: Some(true),
+            taint_effect: TaintEffect::Mark {
+                label: TaintLabel::WorkspaceContent,
+                source: TaintSource::ReadFile,
+            },
         })
     }
 }

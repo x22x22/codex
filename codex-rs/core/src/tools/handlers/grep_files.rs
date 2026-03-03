@@ -1,4 +1,7 @@
 use codex_protocol::models::FunctionCallOutputBody;
+use codex_taint::TaintEffect;
+use codex_taint::TaintLabel;
+use codex_taint::TaintSource;
 use std::path::Path;
 use std::time::Duration;
 
@@ -89,11 +92,19 @@ impl ToolHandler for GrepFilesHandler {
             Ok(ToolOutput::Function {
                 body: FunctionCallOutputBody::Text("No matches found.".to_string()),
                 success: Some(false),
+                taint_effect: TaintEffect::Mark {
+                    label: TaintLabel::WorkspaceContent,
+                    source: TaintSource::GrepFiles,
+                },
             })
         } else {
             Ok(ToolOutput::Function {
                 body: FunctionCallOutputBody::Text(search_results.join("\n")),
                 success: Some(true),
+                taint_effect: TaintEffect::Mark {
+                    label: TaintLabel::WorkspaceContent,
+                    source: TaintSource::GrepFiles,
+                },
             })
         }
     }

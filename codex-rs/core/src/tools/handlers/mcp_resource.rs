@@ -6,6 +6,9 @@ use std::time::Instant;
 
 use async_trait::async_trait;
 use codex_protocol::mcp::CallToolResult;
+use codex_taint::TaintEffect;
+use codex_taint::TaintLabel;
+use codex_taint::TaintSource;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
@@ -298,7 +301,7 @@ async fn handle_list_resources(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function { body, success } = &output else {
+                let ToolOutput::Function { body, success, .. } = &output else {
                     unreachable!("MCP resource handler should return function output");
                 };
                 let content = body.to_text().unwrap_or_default();
@@ -406,7 +409,7 @@ async fn handle_list_resource_templates(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function { body, success } = &output else {
+                let ToolOutput::Function { body, success, .. } = &output else {
                     unreachable!("MCP resource handler should return function output");
                 };
                 let content = body.to_text().unwrap_or_default();
@@ -499,7 +502,7 @@ async fn handle_read_resource(
     match payload_result {
         Ok(payload) => match serialize_function_output(payload) {
             Ok(output) => {
-                let ToolOutput::Function { body, success } = &output else {
+                let ToolOutput::Function { body, success, .. } = &output else {
                     unreachable!("MCP resource handler should return function output");
                 };
                 let content = body.to_text().unwrap_or_default();
@@ -627,6 +630,10 @@ where
     Ok(ToolOutput::Function {
         body: FunctionCallOutputBody::Text(content),
         success: Some(true),
+        taint_effect: TaintEffect::Mark {
+            label: TaintLabel::ExternalContent,
+            source: TaintSource::McpResource,
+        },
     })
 }
 

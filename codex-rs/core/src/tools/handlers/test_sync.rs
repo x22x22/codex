@@ -94,6 +94,7 @@ impl ToolHandler for TestSyncHandler {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text("ok".to_string()),
             success: Some(true),
+            taint_effect: codex_taint::TaintEffect::None,
         })
     }
 }

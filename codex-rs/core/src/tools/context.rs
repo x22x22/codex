@@ -9,6 +9,7 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ShellToolCallParams;
+use codex_taint::TaintEffect;
 use codex_utils_string::take_bytes_at_char_boundary;
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -68,9 +69,11 @@ pub enum ToolOutput {
         // or structured content items.
         body: FunctionCallOutputBody,
         success: Option<bool>,
+        taint_effect: TaintEffect,
     },
     Mcp {
         result: Result<CallToolResult, String>,
+        taint_effect: TaintEffect,
     },
 }
 
@@ -80,20 +83,32 @@ impl ToolOutput {
             ToolOutput::Function { body, .. } => {
                 telemetry_preview(&body.to_text().unwrap_or_default())
             }
-            ToolOutput::Mcp { result } => format!("{result:?}"),
+            ToolOutput::Mcp { result, .. } => format!("{result:?}"),
         }
     }
 
     pub fn success_for_logging(&self) -> bool {
         match self {
             ToolOutput::Function { success, .. } => success.unwrap_or(true),
-            ToolOutput::Mcp { result } => result.is_ok(),
+            ToolOutput::Mcp { result, .. } => result.is_ok(),
+        }
+    }
+
+    pub fn taint_effect(&self) -> &TaintEffect {
+        match self {
+            ToolOutput::Function { taint_effect, .. } | ToolOutput::Mcp { taint_effect, .. } => {
+                taint_effect
+            }
         }
     }
 
     pub fn into_response(self, call_id: &str, payload: &ToolPayload) -> ResponseInputItem {
         match self {
-            ToolOutput::Function { body, success } => {
+            ToolOutput::Function {
+                body,
+                success,
+                taint_effect: _,
+            } => {
                 // `custom_tool_call` is the Responses API item type for freeform
                 // tools (`ToolSpec::Freeform`, e.g. freeform `apply_patch`).
                 // Those payloads must round-trip as `custom_tool_call_output`
@@ -115,7 +130,10 @@ impl ToolOutput {
                 }
             }
             // Direct MCP response path for MCP tool result envelopes.
-            ToolOutput::Mcp { result } => ResponseInputItem::McpToolCallOutput {
+            ToolOutput::Mcp {
+                result,
+                taint_effect: _,
+            } => ResponseInputItem::McpToolCallOutput {
                 call_id: call_id.to_string(),
                 result,
             },
@@ -177,6 +195,7 @@ mod tests {
         let response = ToolOutput::Function {
             body: FunctionCallOutputBody::Text("patched".to_string()),
             success: Some(true),
+            taint_effect: TaintEffect::None,
         }
         .into_response("call-42", &payload);
 
@@ -197,6 +216,7 @@ mod tests {
         let response = ToolOutput::Function {
             body: FunctionCallOutputBody::Text("ok".to_string()),
             success: Some(true),
+            taint_effect: TaintEffect::None,
         }
         .into_response("fn-1", &payload);
 
@@ -229,6 +249,7 @@ mod tests {
                 },
             ]),
             success: Some(true),
+            taint_effect: TaintEffect::None,
         }
         .into_response("call-99", &payload);
 
@@ -250,6 +271,7 @@ mod tests {
                 },
             ]),
             success: Some(true),
+            taint_effect: TaintEffect::None,
         };
 
         assert_eq!(output.log_preview(), "preview");
@@ -285,5 +307,16 @@ mod tests {
 
         assert!(lines.len() <= TELEMETRY_PREVIEW_MAX_LINES + 1);
         assert_eq!(lines.last(), Some(&TELEMETRY_PREVIEW_TRUNCATION_NOTICE));
+    }
+
+    #[test]
+    fn taint_effect_defaults_to_none_when_unmarked() {
+        let output = ToolOutput::Function {
+            body: FunctionCallOutputBody::Text("ok".to_string()),
+            success: Some(true),
+            taint_effect: TaintEffect::None,
+        };
+
+        assert_eq!(output.taint_effect(), &TaintEffect::None);
     }
 }

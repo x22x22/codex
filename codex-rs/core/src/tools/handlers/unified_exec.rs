@@ -23,6 +23,10 @@ use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::PermissionProfile;
+use codex_taint::TaintEffect;
+use codex_taint::TaintLabel;
+use codex_taint::TaintSink;
+use codex_taint::TaintSource;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -215,6 +219,10 @@ impl ToolHandler for UnifiedExecHandler {
                     return Ok(output);
                 }
 
+                session
+                    .ensure_taint_sink_allowed(&turn.sub_id, TaintSink::shell_exec())
+                    .await?;
+
                 manager
                     .exec_command(
                         ExecCommandRequest {
@@ -274,6 +282,10 @@ impl ToolHandler for UnifiedExecHandler {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
+            taint_effect: TaintEffect::Mark {
+                label: TaintLabel::WorkspaceContent,
+                source: TaintSource::ShellOutput,
+            },
         })
     }
 }

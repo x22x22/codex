@@ -114,6 +114,7 @@ impl ToolHandler for ApplyPatchHandler {
                         Ok(ToolOutput::Function {
                             body: FunctionCallOutputBody::Text(content),
                             success: Some(true),
+                            taint_effect: codex_taint::TaintEffect::None,
                         })
                     }
                     InternalApplyPatchInvocation::DelegateToExec(apply) => {
@@ -166,6 +167,7 @@ impl ToolHandler for ApplyPatchHandler {
                         Ok(ToolOutput::Function {
                             body: FunctionCallOutputBody::Text(content),
                             success: Some(true),
+                            taint_effect: codex_taint::TaintEffect::None,
                         })
                     }
                 }
@@ -217,6 +219,7 @@ pub(crate) async fn intercept_apply_patch(
                     Ok(Some(ToolOutput::Function {
                         body: FunctionCallOutputBody::Text(content),
                         success: Some(true),
+                        taint_effect: codex_taint::TaintEffect::None,
                     }))
                 }
                 InternalApplyPatchInvocation::DelegateToExec(apply) => {
@@ -268,6 +271,7 @@ pub(crate) async fn intercept_apply_patch(
                     Ok(Some(ToolOutput::Function {
                         body: FunctionCallOutputBody::Text(content),
                         success: Some(true),
+                        taint_effect: codex_taint::TaintEffect::None,
                     }))
                 }
             }

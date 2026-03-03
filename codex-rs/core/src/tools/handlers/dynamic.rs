@@ -13,6 +13,10 @@ use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::protocol::EventMsg;
+use codex_taint::TaintEffect;
+use codex_taint::TaintLabel;
+use codex_taint::TaintSink;
+use codex_taint::TaintSource;
 use serde_json::Value;
 use tokio::sync::oneshot;
 use tracing::warn;
@@ -49,6 +53,9 @@ impl ToolHandler for DynamicToolHandler {
         };
 
         let args: Value = parse_arguments(&arguments)?;
+        session
+            .ensure_taint_sink_allowed(&turn.sub_id, TaintSink::external_dispatch())
+            .await?;
         let response = request_dynamic_tool(&session, turn.as_ref(), call_id, tool_name, args)
             .await
             .ok_or_else(|| {
@@ -70,6 +77,10 @@ impl ToolHandler for DynamicToolHandler {
         Ok(ToolOutput::Function {
             body,
             success: Some(success),
+            taint_effect: TaintEffect::Mark {
+                label: TaintLabel::ExternalContent,
+                source: TaintSource::DynamicTool,
+            },
         })
     }
 }

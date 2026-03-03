@@ -34,6 +34,10 @@ use codex_protocol::protocol::CollabWaitingEndEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
+use codex_taint::TaintEffect;
+use codex_taint::TaintLabel;
+use codex_taint::TaintSink;
+use codex_taint::TaintSource;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -221,6 +225,7 @@ mod spawn {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
+            taint_effect: TaintEffect::None,
         })
     }
 }
@@ -253,6 +258,9 @@ mod send_input {
         let receiver_thread_id = agent_id(&args.id)?;
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
+        session
+            .ensure_taint_sink_allowed(&turn.sub_id, TaintSink::agent_forward())
+            .await?;
         let (receiver_agent_nickname, receiver_agent_role) = session
             .services
             .agent_control
@@ -314,6 +322,7 @@ mod send_input {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
+            taint_effect: TaintEffect::None,
         })
     }
 }
@@ -428,6 +437,7 @@ mod resume_agent {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
+            taint_effect: TaintEffect::None,
         })
     }
 
@@ -641,6 +651,10 @@ pub(crate) mod wait {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: None,
+            taint_effect: TaintEffect::Mark {
+                label: TaintLabel::AgentContent,
+                source: TaintSource::AgentResult,
+            },
         })
     }
 
@@ -761,6 +775,10 @@ pub mod close_agent {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
+            taint_effect: TaintEffect::Mark {
+                label: TaintLabel::AgentContent,
+                source: TaintSource::AgentResult,
+            },
         })
     }
 }

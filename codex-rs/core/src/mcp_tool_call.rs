@@ -27,6 +27,7 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_taint::TaintSink;
 use rmcp::model::ToolAnnotations;
 use serde::Serialize;
 use std::sync::Arc;
@@ -100,6 +101,25 @@ pub(crate) async fn handle_mcp_tool_call(
             .otel_manager
             .counter("codex.mcp.call", 1, &[("status", status)]);
         return ResponseInputItem::McpToolCallOutput { call_id, result };
+    }
+
+    let is_read_only_tool = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.annotations.as_ref())
+        .and_then(|annotations| annotations.read_only_hint)
+        == Some(true);
+    if !is_read_only_tool
+        && let Err(err) = sess
+            .ensure_taint_sink_allowed(&turn_context.sub_id, TaintSink::external_dispatch())
+            .await
+    {
+        return ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.clone(),
+            output: FunctionCallOutputPayload {
+                body: FunctionCallOutputBody::Text(err.to_string()),
+                success: Some(false),
+            },
+        };
     }
 
     if let Some(decision) = maybe_request_mcp_tool_approval(

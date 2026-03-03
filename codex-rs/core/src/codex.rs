@@ -29,6 +29,7 @@ use crate::features::FEATURES;
 use crate::features::Feature;
 use crate::features::Features;
 use crate::features::maybe_push_unstable_features_warning;
+use crate::function_tool::FunctionCallError;
 use crate::models_manager::manager::ModelsManager;
 use crate::parse_command::parse_command;
 use crate::parse_turn_item;
@@ -92,6 +93,9 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_protocol::skill_approval::SkillApprovalResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_taint::TaintEffect;
+use codex_taint::TaintSink;
+use codex_taint::TaintState;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
@@ -3370,8 +3374,63 @@ impl Session {
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
+        turn_state.reset_taint();
         turn_state.push_pending_input(input.into());
         Ok(active_turn_id.clone())
+    }
+
+    pub(crate) async fn apply_taint_effect(&self, turn_id: &str, effect: TaintEffect) {
+        if matches!(effect, TaintEffect::None) {
+            return;
+        }
+
+        let active = self.active_turn.lock().await;
+        let Some(active_turn) = active.as_ref() else {
+            return;
+        };
+
+        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
+            return;
+        };
+
+        if active_turn_id != turn_id {
+            return;
+        }
+
+        let mut turn_state = active_turn.turn_state.lock().await;
+        tracing::debug!(%turn_id, ?effect, "applying taint effect");
+        turn_state.apply_taint_effect(effect);
+    }
+
+    pub(crate) async fn current_taint(&self, turn_id: &str) -> TaintState {
+        let active = self.active_turn.lock().await;
+        let Some(active_turn) = active.as_ref() else {
+            return TaintState::default();
+        };
+
+        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
+            return TaintState::default();
+        };
+
+        if active_turn_id != turn_id {
+            return TaintState::default();
+        }
+
+        let turn_state = active_turn.turn_state.lock().await;
+        turn_state.current_taint()
+    }
+
+    pub(crate) async fn ensure_taint_sink_allowed(
+        &self,
+        turn_id: &str,
+        sink: TaintSink,
+    ) -> Result<(), FunctionCallError> {
+        let taint = self.current_taint(turn_id).await;
+        if let Err(err) = taint.check_sink(sink) {
+            tracing::warn!(%turn_id, ?sink, recent_sources = ?err.recent_sources, "blocked taint sink");
+            return Err(FunctionCallError::RespondToModel(err.to_string()));
+        }
+        Ok(())
     }
 
     /// Returns the input if there was no task running to inject into

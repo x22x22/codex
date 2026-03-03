@@ -38,6 +38,7 @@ members = [
     "rmcp-client",
     "responses-api-proxy",
     "stdio-to-uds",
+    "taint",
     "otel",
     "tui",
     "utils/absolute-path",
@@ -116,6 +117,7 @@ codex-shell-command = { path = "shell-command" }
 codex-shell-escalation = { path = "shell-escalation" }
 codex-skills = { path = "skills" }
 codex-state = { path = "state" }
+codex-taint = { path = "taint" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-tui = { path = "tui" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }

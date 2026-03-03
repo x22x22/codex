@@ -34,6 +34,7 @@ codex-client = { workspace = true }
 codex-config = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }
+codex-taint = { workspace = true }
 codex-execpolicy = { workspace = true }
 codex-file-search = { workspace = true }
 codex-git = { workspace = true }

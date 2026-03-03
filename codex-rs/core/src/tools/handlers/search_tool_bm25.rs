@@ -144,6 +144,7 @@ impl ToolHandler for SearchToolBm25Handler {
             return Ok(ToolOutput::Function {
                 body: FunctionCallOutputBody::Text(content),
                 success: Some(true),
+                taint_effect: codex_taint::TaintEffect::None,
             });
         }
 
@@ -187,6 +188,7 @@ impl ToolHandler for SearchToolBm25Handler {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
+            taint_effect: codex_taint::TaintEffect::None,
         })
     }
 }

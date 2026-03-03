@@ -11,6 +11,7 @@ use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
 use codex_protocol::request_user_input::RequestUserInputArgs;
+use codex_taint::TaintEffect;
 
 fn format_allowed_modes() -> String {
     let mode_names: Vec<&str> = TUI_VISIBLE_COLLABORATION_MODES
@@ -107,6 +108,7 @@ impl ToolHandler for RequestUserInputHandler {
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
             success: Some(true),
+            taint_effect: TaintEffect::Reset,
         })
     }
 }
