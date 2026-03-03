@@ -655,7 +655,9 @@ pub(crate) struct ChatWidget {
     had_work_activity: bool,
     // Whether the current turn emitted a plan update.
     saw_plan_update_this_turn: bool,
-    // Whether the current turn emitted a proposed plan item.
+    // Whether the current turn emitted a proposed plan item that has not been superseded by a
+    // later steer. This is cleared when the user submits a steer so the plan popup only appears
+    // if a newer proposed plan arrives afterward.
     saw_plan_item_this_turn: bool,
     // Incremental buffer for streamed plan content.
     plan_delta_buffer: String,
