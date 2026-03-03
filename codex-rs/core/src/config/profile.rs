@@ -33,6 +33,8 @@ pub struct ConfigProfile {
     pub chatgpt_base_url: Option<String>,
     /// Optional path to a file containing model instructions.
     pub model_instructions_file: Option<AbsolutePathBuf>,
+    /// Optional absolute path to the PowerShell 7 runtime used by `ps_repl`.
+    pub ps_repl_path: Option<AbsolutePathBuf>,
     pub js_repl_node_path: Option<AbsolutePathBuf>,
     /// Ordered list of directories to search for Node modules in `js_repl`.
     pub js_repl_node_module_dirs: Option<Vec<AbsolutePathBuf>>,

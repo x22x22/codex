@@ -88,6 +88,7 @@ pub(crate) async fn apply_role_to_config(
             cwd: Some(config.cwd.clone()),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
+            ps_repl_path: config.ps_repl_path.clone(),
             js_repl_node_path: config.js_repl_node_path.clone(),
             ..Default::default()
         },

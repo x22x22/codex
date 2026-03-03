@@ -277,6 +277,8 @@ use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::network_approval::build_blocked_request_observer;
 use crate::tools::network_approval::build_network_policy_decider;
 use crate::tools::parallel::ToolCallRuntime;
+use crate::tools::ps_repl::PsReplHandle;
+use crate::tools::ps_repl::resolve_compatible_pwsh;
 use crate::tools::sandboxing::ApprovalStore;
 use crate::tools::spec::ToolsConfig;
 use crate::tools::spec::ToolsConfigParams;
@@ -376,6 +378,16 @@ impl Codex {
             warn!("{message}");
             config.features.disable(Feature::JsRepl);
             config.features.disable(Feature::JsReplToolsOnly);
+            config.startup_warnings.push(message);
+        }
+        if config.features.enabled(Feature::PsRepl)
+            && let Err(err) = resolve_compatible_pwsh(config.ps_repl_path.as_deref()).await
+        {
+            let message = format!(
+                "Disabled `ps_repl` for this session because the configured PowerShell runtime is unavailable or incompatible. {err}"
+            );
+            warn!("{message}");
+            config.features.disable(Feature::PsRepl);
             config.startup_warnings.push(message);
         }
 
@@ -608,6 +620,7 @@ pub(crate) struct Session {
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
     pub(crate) services: SessionServices,
+    ps_repl: Arc<PsReplHandle>,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
 }
@@ -663,6 +676,7 @@ pub(crate) struct TurnContext {
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
     pub(crate) tool_call_gate: Arc<ReadinessFlag>,
     pub(crate) truncation_policy: TruncationPolicy,
+    pub(crate) ps_repl: Arc<PsReplHandle>,
     pub(crate) js_repl: Arc<JsReplHandle>,
     pub(crate) dynamic_tools: Vec<DynamicToolSpec>,
     pub(crate) turn_metadata_state: Arc<TurnMetadataState>,
@@ -751,6 +765,7 @@ impl TurnContext {
             codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy,
+            ps_repl: Arc::clone(&self.ps_repl),
             js_repl: Arc::clone(&self.js_repl),
             dynamic_tools: self.dynamic_tools.clone(),
             turn_metadata_state: self.turn_metadata_state.clone(),
@@ -1056,6 +1071,7 @@ impl Session {
         model_info: ModelInfo,
         network: Option<NetworkProxy>,
         sub_id: String,
+        ps_repl: Arc<PsReplHandle>,
         js_repl: Arc<JsReplHandle>,
         skills_outcome: Arc<SkillLoadOutcome>,
     ) -> TurnContext {
@@ -1125,6 +1141,7 @@ impl Session {
             codex_linux_sandbox_exe: per_turn_config.codex_linux_sandbox_exe.clone(),
             tool_call_gate: Arc::new(ReadinessFlag::new()),
             truncation_policy: model_info.truncation_policy.into(),
+            ps_repl,
             js_repl,
             dynamic_tools: session_configuration.dynamic_tools.clone(),
             turn_metadata_state,
@@ -1519,6 +1536,7 @@ impl Session {
             config.js_repl_node_path.clone(),
             config.js_repl_node_module_dirs.clone(),
         ));
+        let ps_repl = Arc::new(PsReplHandle::with_pwsh_path(config.ps_repl_path.clone()));
 
         let sess = Arc::new(Session {
             conversation_id,
@@ -1530,6 +1548,7 @@ impl Session {
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             services,
+            ps_repl,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });
@@ -2167,6 +2186,7 @@ impl Session {
                 .as_ref()
                 .map(StartedNetworkProxy::proxy),
             sub_id,
+            Arc::clone(&self.ps_repl),
             Arc::clone(&self.js_repl),
             skills_outcome,
         );
@@ -4695,6 +4715,7 @@ async fn spawn_review_thread(
         final_output_json_schema: None,
         codex_linux_sandbox_exe: parent_turn_context.codex_linux_sandbox_exe.clone(),
         tool_call_gate: Arc::new(ReadinessFlag::new()),
+        ps_repl: Arc::clone(&sess.ps_repl),
         js_repl: Arc::clone(&sess.js_repl),
         dynamic_tools: parent_turn_context.dynamic_tools.clone(),
         truncation_policy: model_info.truncation_policy.into(),
@@ -8334,6 +8355,7 @@ mod tests {
             config.js_repl_node_path.clone(),
             config.js_repl_node_module_dirs.clone(),
         ));
+        let ps_repl = Arc::new(PsReplHandle::with_pwsh_path(config.ps_repl_path.clone()));
 
         let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
         let turn_context = Session::make_turn_context(
@@ -8345,6 +8367,7 @@ mod tests {
             model_info,
             None,
             "turn_id".to_string(),
+            Arc::clone(&ps_repl),
             Arc::clone(&js_repl),
             skills_outcome,
         );
@@ -8359,6 +8382,7 @@ mod tests {
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             services,
+            ps_repl,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         };
@@ -8502,6 +8526,7 @@ mod tests {
             config.js_repl_node_path.clone(),
             config.js_repl_node_module_dirs.clone(),
         ));
+        let ps_repl = Arc::new(PsReplHandle::with_pwsh_path(config.ps_repl_path.clone()));
 
         let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
         let turn_context = Arc::new(Session::make_turn_context(
@@ -8513,6 +8538,7 @@ mod tests {
             model_info,
             None,
             "turn_id".to_string(),
+            Arc::clone(&ps_repl),
             Arc::clone(&js_repl),
             skills_outcome,
         ));
@@ -8527,6 +8553,7 @@ mod tests {
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
             services,
+            ps_repl,
             js_repl,
             next_internal_sub_id: AtomicU64::new(0),
         });

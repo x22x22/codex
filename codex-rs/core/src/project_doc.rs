@@ -69,6 +69,25 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
     Some(section)
 }
 
+fn render_ps_repl_instructions(config: &Config) -> Option<String> {
+    if !config.features.enabled(Feature::PsRepl) {
+        return None;
+    }
+
+    let mut section = String::from("## PowerShell REPL (pwsh)\n");
+    section.push_str(
+        "- Use `ps_repl` for PowerShell-backed automation in a persistent `pwsh` kernel.\n",
+    );
+    section.push_str("- `ps_repl` is a freeform/custom tool. Direct `ps_repl` calls must send raw PowerShell input (optionally with first-line `# codex-ps-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n");
+    section.push_str("- Helpers: `$CodexTmpDir`, `Invoke-CodexTool -Name <string> -Arguments <object|string>`, `$Codex.TmpDir`, and `$Codex.Tool(<name>, <args>)`.\n");
+    section.push_str("- `Invoke-CodexTool` returns the raw tool output object. Use it for built-in tools, dynamic tools, and MCP tools.\n");
+    section.push_str("- PowerShell session state persists across calls, including variables, functions, aliases, imported modules, environment changes, and `$LASTEXITCODE`. Reset the kernel with `ps_repl_reset` when needed.\n");
+    section.push_str("- To share generated images with the model, write a file under `$CodexTmpDir`, call `Invoke-CodexTool -Name view_image -Arguments @{ path = \"/absolute/path\" }`, then delete the file.\n");
+    section.push_str("- Avoid direct `[Console]::Write*`, raw StdOut/StdErr writes, or other host-level output that bypasses PowerShell streams; they can corrupt the JSON line protocol. Use pipeline output, `Write-Output`, `Write-Host`, `Write-Verbose`, or `Write-Warning` instead.");
+
+    Some(section)
+}
+
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
 pub(crate) async fn get_user_instructions(
@@ -101,6 +120,13 @@ pub(crate) async fn get_user_instructions(
             output.push_str("\n\n");
         }
         output.push_str(&js_repl_section);
+    }
+
+    if let Some(ps_repl_section) = render_ps_repl_instructions(config) {
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(&ps_repl_section);
     }
 
     let skills_section = skills.and_then(render_skills_section);
@@ -489,6 +515,19 @@ mod tests {
             .await
             .expect("js_repl instructions expected");
         let expected = "## JavaScript REPL (Node)\n- Use `js_repl` for Node-backed JavaScript with top-level await in a persistent kernel.\n- `js_repl` is a freeform/custom tool. Direct `js_repl` calls must send raw JavaScript tool input (optionally with first-line `// codex-js-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n- Helpers: `codex.tmpDir` and `codex.tool(name, args?)`.\n- `codex.tool` executes a normal tool call and resolves to the raw tool output object. Use it for shell and non-shell tools alike.\n- To share generated images with the model, write a file under `codex.tmpDir`, call `await codex.tool(\"view_image\", { path: \"/absolute/path\" })`, then delete the file.\n- Top-level bindings persist across cells. If you hit `SyntaxError: Identifier 'x' has already been declared`, reuse the binding, pick a new name, wrap in `{ ... }` for block scope, or reset the kernel with `js_repl_reset`.\n- Top-level static import declarations (for example `import x from \"pkg\"`) are currently unsupported in `js_repl`; use dynamic imports with `await import(\"pkg\")` instead.\n- Do not call tools directly; use `js_repl` + `codex.tool(...)` for all tool calls, including shell commands.\n- MCP tools (if any) can also be called by name via `codex.tool(...)`.\n- Avoid direct access to `process.stdout` / `process.stderr` / `process.stdin`; it can corrupt the JSON line protocol. Use `console.log` and `codex.tool(...)`.";
+        assert_eq!(res, expected);
+    }
+
+    #[tokio::test]
+    async fn ps_repl_instructions_are_appended_when_enabled() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut cfg = make_config(&tmp, 4096, None).await;
+        cfg.features.enable(Feature::PsRepl);
+
+        let res = get_user_instructions(&cfg, None)
+            .await
+            .expect("ps_repl instructions expected");
+        let expected = "## PowerShell REPL (pwsh)\n- Use `ps_repl` for PowerShell-backed automation in a persistent `pwsh` kernel.\n- `ps_repl` is a freeform/custom tool. Direct `ps_repl` calls must send raw PowerShell input (optionally with first-line `# codex-ps-repl: timeout_ms=15000`). Do not wrap code in JSON (for example `{\"code\":\"...\"}`), quotes, or markdown code fences.\n- Helpers: `$CodexTmpDir`, `Invoke-CodexTool -Name <string> -Arguments <object|string>`, `$Codex.TmpDir`, and `$Codex.Tool(<name>, <args>)`.\n- `Invoke-CodexTool` returns the raw tool output object. Use it for built-in tools, dynamic tools, and MCP tools.\n- PowerShell session state persists across calls, including variables, functions, aliases, imported modules, environment changes, and `$LASTEXITCODE`. Reset the kernel with `ps_repl_reset` when needed.\n- To share generated images with the model, write a file under `$CodexTmpDir`, call `Invoke-CodexTool -Name view_image -Arguments @{ path = \"/absolute/path\" }`, then delete the file.\n- Avoid direct `[Console]::Write*`, raw StdOut/StdErr writes, or other host-level output that bypasses PowerShell streams; they can corrupt the JSON line protocol. Use pipeline output, `Write-Output`, `Write-Host`, `Write-Verbose`, or `Write-Warning` instead.";
         assert_eq!(res, expected);
     }
 

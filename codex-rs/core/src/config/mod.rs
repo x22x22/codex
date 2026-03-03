@@ -394,6 +394,9 @@ pub struct Config {
     /// code via [`ConfigOverrides`].
     pub main_execve_wrapper_exe: Option<PathBuf>,
 
+    /// Optional absolute path to the PowerShell 7 runtime used by `ps_repl`.
+    pub ps_repl_path: Option<PathBuf>,
+
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<PathBuf>,
 
@@ -1121,6 +1124,9 @@ pub struct ConfigToml {
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: Option<u64>,
 
+    /// Optional absolute path to the PowerShell 7 runtime used by `ps_repl`.
+    pub ps_repl_path: Option<AbsolutePathBuf>,
+
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<AbsolutePathBuf>,
 
@@ -1553,6 +1559,7 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub main_execve_wrapper_exe: Option<PathBuf>,
+    pub ps_repl_path: Option<PathBuf>,
     pub js_repl_node_path: Option<PathBuf>,
     pub js_repl_node_module_dirs: Option<Vec<PathBuf>>,
     pub zsh_path: Option<PathBuf>,
@@ -1683,6 +1690,7 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
+            ps_repl_path: ps_repl_path_override,
             js_repl_node_path: js_repl_node_path_override,
             js_repl_node_module_dirs: js_repl_node_module_dirs_override,
             zsh_path: zsh_path_override,
@@ -1981,6 +1989,9 @@ impl Config {
             "experimental compact prompt file",
         )?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
+        let ps_repl_path = ps_repl_path_override
+            .or(config_profile.ps_repl_path.map(Into::into))
+            .or(cfg.ps_repl_path.map(Into::into));
         let js_repl_node_path = js_repl_node_path_override
             .or(config_profile.js_repl_node_path.map(Into::into))
             .or(cfg.js_repl_node_path.map(Into::into));
@@ -2150,6 +2161,7 @@ impl Config {
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
             codex_linux_sandbox_exe,
             main_execve_wrapper_exe,
+            ps_repl_path,
             js_repl_node_path,
             js_repl_node_module_dirs,
             zsh_path,
@@ -4909,6 +4921,7 @@ model_verbosity = "high"
                 file_opener: UriBasedFileOpener::VsCode,
                 codex_linux_sandbox_exe: None,
                 main_execve_wrapper_exe: None,
+                ps_repl_path: None,
                 js_repl_node_path: None,
                 js_repl_node_module_dirs: Vec::new(),
                 zsh_path: None,
@@ -5037,6 +5050,7 @@ model_verbosity = "high"
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             main_execve_wrapper_exe: None,
+            ps_repl_path: None,
             js_repl_node_path: None,
             js_repl_node_module_dirs: Vec::new(),
             zsh_path: None,
@@ -5163,6 +5177,7 @@ model_verbosity = "high"
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             main_execve_wrapper_exe: None,
+            ps_repl_path: None,
             js_repl_node_path: None,
             js_repl_node_module_dirs: Vec::new(),
             zsh_path: None,
@@ -5275,6 +5290,7 @@ model_verbosity = "high"
             file_opener: UriBasedFileOpener::VsCode,
             codex_linux_sandbox_exe: None,
             main_execve_wrapper_exe: None,
+            ps_repl_path: None,
             js_repl_node_path: None,
             js_repl_node_module_dirs: Vec::new(),
             zsh_path: None,

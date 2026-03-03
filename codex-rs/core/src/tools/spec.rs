@@ -52,6 +52,7 @@ pub(crate) struct ToolsConfig {
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub request_permission_enabled: bool,
+    pub ps_repl_enabled: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
@@ -77,6 +78,7 @@ impl ToolsConfig {
             session_source,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
+        let include_ps_repl = features.enabled(Feature::PsRepl);
         let include_js_repl = features.enabled(Feature::JsRepl);
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
@@ -136,6 +138,7 @@ impl ToolsConfig {
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             request_permission_enabled,
+            ps_repl_enabled: include_ps_repl,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
@@ -1329,6 +1332,47 @@ JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
     })
 }
 
+fn create_ps_repl_tool() -> ToolSpec {
+    const PS_REPL_FREEFORM_GRAMMAR: &str = r#"
+start: pragma_source | plain_source
+
+pragma_source: PRAGMA_LINE NEWLINE ps_source
+plain_source: PS_SOURCE
+
+ps_source: PS_SOURCE
+
+PRAGMA_LINE: /[ \t]*# codex-ps-repl:[^\r\n]*/
+NEWLINE: /\r?\n/
+PS_SOURCE: /(?:\s*)(?:[^\s{\"'`]|#[^\r\n]|`[^`])[\s\S]*/
+"#;
+
+    ToolSpec::Freeform(FreeformTool {
+        name: "ps_repl".to_string(),
+        description: "Runs PowerShell in a persistent pwsh kernel. This is a freeform tool: send raw PowerShell source text, optionally with a first-line pragma like `# codex-ps-repl: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
+            .to_string(),
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: PS_REPL_FREEFORM_GRAMMAR.to_string(),
+        },
+    })
+}
+
+fn create_ps_repl_reset_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "ps_repl_reset".to_string(),
+        description:
+            "Restarts the ps_repl kernel for this run and clears persisted PowerShell session state."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_js_repl_reset_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "js_repl_reset".to_string(),
@@ -1658,6 +1702,8 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::McpResourceHandler;
     use crate::tools::handlers::MultiAgentHandler;
     use crate::tools::handlers::PlanHandler;
+    use crate::tools::handlers::PsReplHandler;
+    use crate::tools::handlers::PsReplResetHandler;
     use crate::tools::handlers::ReadFileHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::SearchToolBm25Handler;
@@ -1683,6 +1729,8 @@ pub(crate) fn build_specs(
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
     let search_tool_handler = Arc::new(SearchToolBm25Handler);
+    let ps_repl_handler = Arc::new(PsReplHandler);
+    let ps_repl_reset_handler = Arc::new(PsReplResetHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let request_permission_enabled = config.request_permission_enabled;
@@ -1736,6 +1784,13 @@ pub(crate) fn build_specs(
 
     builder.push_spec(PLAN_TOOL.clone());
     builder.register_handler("update_plan", plan_handler);
+
+    if config.ps_repl_enabled {
+        builder.push_spec(create_ps_repl_tool());
+        builder.push_spec(create_ps_repl_reset_tool());
+        builder.register_handler("ps_repl", ps_repl_handler);
+        builder.register_handler("ps_repl_reset", ps_repl_reset_handler);
+    }
 
     if config.js_repl_enabled {
         builder.push_spec(create_js_repl_tool());
@@ -2232,6 +2287,62 @@ mod tests {
             !tools.iter().any(|tool| tool.spec.name() == "js_repl_reset"),
             "js_repl_reset should be disabled when the feature is off"
         );
+    }
+
+    #[test]
+    fn ps_repl_requires_feature_flag() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let features = Features::with_defaults();
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+        assert!(
+            !tools.iter().any(|tool| tool.spec.name() == "ps_repl"),
+            "ps_repl should be disabled when the feature is off"
+        );
+        assert!(
+            !tools.iter().any(|tool| tool.spec.name() == "ps_repl_reset"),
+            "ps_repl_reset should be disabled when the feature is off"
+        );
+    }
+
+    #[test]
+    fn ps_repl_enabled_adds_tools() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::PsRepl);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        assert_contains_tool_names(&tools, &["ps_repl", "ps_repl_reset"]);
+    }
+
+    #[test]
+    fn ps_repl_freeform_grammar_mentions_pragma_and_ps_source() {
+        let ToolSpec::Freeform(FreeformTool { format, .. }) = create_ps_repl_tool() else {
+            panic!("ps_repl should use a freeform tool spec");
+        };
+
+        assert_eq!(format.syntax, "lark");
+        assert!(format.definition.contains("PRAGMA_LINE"));
+        assert!(format.definition.contains("PS_SOURCE"));
+        assert!(format.definition.contains("codex-ps-repl:"));
+        assert!(!format.definition.contains("(?!"));
     }
 
     #[test]

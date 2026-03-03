@@ -78,6 +78,8 @@ pub enum Feature {
     ShellTool,
 
     // Experimental
+    /// Enable PowerShell REPL tools backed by a persistent pwsh kernel.
+    PsRepl,
     /// Enable JavaScript REPL tools backed by a persistent Node kernel.
     JsRepl,
     /// Only expose js_repl tools directly to the model.
@@ -461,6 +463,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: true,
     },
     FeatureSpec {
+        id: Feature::PsRepl,
+        key: "ps_repl",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::JsRepl,
         key: "js_repl",
         stage: Stage::Experimental {
@@ -823,6 +831,12 @@ mod tests {
             ))
         );
         assert_eq!(Feature::JsRepl.default_enabled(), false);
+    }
+
+    #[test]
+    fn ps_repl_is_under_development_and_disabled_by_default() {
+        assert_eq!(Feature::PsRepl.stage(), Stage::UnderDevelopment);
+        assert_eq!(Feature::PsRepl.default_enabled(), false);
     }
 
     #[test]
