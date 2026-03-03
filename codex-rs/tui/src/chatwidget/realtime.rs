@@ -90,9 +90,11 @@ impl ChatWidget {
     pub(super) fn rendered_user_message_event_from_normalized_items(
         items: &[UserInput],
     ) -> RenderedUserMessageEvent {
-        let ResponseInputItem::Message { role, content } = ResponseInputItem::from(items.to_vec())
-        else {
-            unreachable!("user inputs must convert to a message response item");
+        let response_input_item = ResponseInputItem::from(items.to_vec());
+        let ResponseInputItem::Message { role, content } = response_input_item else {
+            unreachable!(
+                "user inputs must convert to ResponseInputItem::Message, got {response_input_item:?}"
+            );
         };
         debug_assert_eq!(role, "user");
 
