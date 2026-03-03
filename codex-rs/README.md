@@ -27,7 +27,7 @@ If you prefer a package manager, you can also install via npm (`npm install -g @
 
 ## What's new in the Rust CLI
 
-The Rust implementation is the maintained Codex CLI and serves as the default experience.
+The Rust implementation is now the maintained Codex CLI and serves as the default experience. It includes a number of features that the legacy TypeScript CLI never supported.
 
 ### Config
 
