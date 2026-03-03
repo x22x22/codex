@@ -125,9 +125,10 @@ impl PatchLayout {
         if options_state.selected_idx.is_none() {
             options_state.selected_idx = Some(0);
         }
+        let rows_width = width.saturating_add(2);
         let rows = patch_option_rows(options, options_state.selected_idx);
         let options_height =
-            measure_rows_height(&rows, &options_state, rows.len().max(1), width.max(1));
+            measure_rows_height(&rows, &options_state, rows.len().max(1), rows_width.max(1));
         let hint_lines = patch_hint_lines(request, options_state.selected_idx, state, width);
         let validation_lines = patch_validation_lines(options_state.selected_idx, state, width);
         let show_notes = state.is_some_and(|state| state.notes_visible(options_state.selected_idx));
@@ -207,9 +208,9 @@ impl PatchLayout {
 
         render_rows(
             Rect {
-                x: content_area.x,
+                x: content_area.x.saturating_sub(2),
                 y: cursor_y,
-                width: content_area.width,
+                width: content_area.width.saturating_add(2),
                 height: self.options_height,
             },
             buf,
@@ -329,14 +330,12 @@ fn patch_hint_lines(
 ) -> Vec<Line<'static>> {
     let mut hint = if state.is_some_and(|state| state.notes_visible(selected_idx)) {
         if state.is_some_and(PatchOverlayState::focus_is_notes) {
-            "enter to send | tab to go back | esc to interrupt".to_string()
+            "Press enter to send or tab to go back or esc to cancel".to_string()
         } else {
-            "enter or tab to edit follow up | esc to interrupt".to_string()
+            "Press enter or tab to edit follow up or esc to cancel".to_string()
         }
-    } else if selected_idx == Some(PATCH_REJECT_OPTION_INDEX) {
-        "tab to follow up | esc to interrupt".to_string()
     } else {
-        "esc to interrupt".to_string()
+        "Press enter to confirm or esc to cancel".to_string()
     };
     if request.thread_label().is_some() {
         hint.push_str(" | o to open thread");
