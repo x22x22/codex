@@ -5,7 +5,7 @@ Executes shell requests under the orchestrator: asks for approval when needed,
 builds a CommandSpec, and runs it under the current SandboxAttempt.
 */
 #[cfg(unix)]
-mod unix_escalation;
+pub(crate) mod unix_escalation;
 
 use crate::command_canonicalization::canonicalize_command_for_approval;
 use crate::exec::ExecToolCallOutput;
