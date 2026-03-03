@@ -307,7 +307,7 @@ impl PresentationArtifactManager {
                 document,
                 slide_index,
                 RenderOptions {
-                    scale: 1.0,
+                    scale,
                     include_background: true,
                 },
             )?;
@@ -315,7 +315,7 @@ impl PresentationArtifactManager {
                 &png_bytes,
                 &output_path,
                 preview_format,
-                scale,
+                1.0,
                 quality,
                 &request.action,
             )?;
@@ -332,7 +332,7 @@ impl PresentationArtifactManager {
                     document,
                     slide_index,
                     RenderOptions {
-                        scale: 1.0,
+                        scale,
                         include_background: true,
                     },
                 )?;
@@ -342,7 +342,7 @@ impl PresentationArtifactManager {
                     &png_bytes,
                     &target,
                     preview_format,
-                    scale,
+                    1.0,
                     quality,
                     &request.action,
                 )?;

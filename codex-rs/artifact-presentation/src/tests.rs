@@ -282,6 +282,408 @@ fn exported_images_are_real_pictures_with_media_parts() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn exported_charts_are_real_pictures_with_media_parts() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Chart Export" }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id.clone()),
+            action: "add_chart".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "chart_type": "bar",
+                "position": { "left": 48, "top": 64, "width": 320, "height": 220 },
+                "title": "Weekly Active Teams",
+                "categories": ["Week 1", "Week 2", "Week 3", "Week 4"],
+                "series": [
+                    { "name": "Actual", "values": [12, 18, 24, 31], "fill": "#2B5797" },
+                    { "name": "Target", "values": [15, 20, 26, 30], "fill": "#D97A00" }
+                ]
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let export_path = temp_dir.path().join("charts-as-images.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let pptx_path = temp_dir.path().join("charts-as-images.pptx");
+    let slide_xml = zip_entry_text(&pptx_path, "ppt/slides/slide1.xml")?;
+    let rels_xml = zip_entry_text(&pptx_path, "ppt/slides/_rels/slide1.xml.rels")?;
+    let content_types_xml = zip_entry_text(&pptx_path, "[Content_Types].xml")?;
+    let entry_names = zip_entry_names(&pptx_path)?;
+
+    assert!(slide_xml.contains("<p:pic>"));
+    assert!(slide_xml.contains(r#"descr="Weekly Active Teams""#));
+    assert!(slide_xml.contains(r#"r:embed="rIdImage1""#));
+    assert!(!slide_xml.contains("<c:chart"));
+    assert!(rels_xml.contains("relationships/image"));
+    assert!(!rels_xml.contains("relationships/chart"));
+    assert!(content_types_xml.contains(r#"Extension="png" ContentType="image/png""#));
+    assert!(!content_types_xml.contains("drawingml.chart+xml"));
+    assert!(entry_names.contains(&"ppt/media/image1.png".to_string()));
+    assert!(
+        !entry_names
+            .iter()
+            .any(|name| name.starts_with("ppt/charts/"))
+    );
+    Ok(())
+}
+
+#[test]
+fn exported_theme_uses_document_fonts_and_colors() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({
+                "name": "Theme Export",
+                "theme": {
+                    "color_scheme": {
+                        "accent1": "#123456",
+                        "bg1": "#FAF7F0",
+                        "tx1": "#222222"
+                    },
+                    "major_font": "Aptos Display",
+                    "minor_font": "Aptos"
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+
+    let export_path = temp_dir.path().join("theme-export.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let theme_xml = zip_entry_text(
+        &temp_dir.path().join("theme-export.pptx"),
+        "ppt/theme/theme1.xml",
+    )?;
+    assert!(theme_xml.contains(r#"<a:majorFont>"#));
+    assert!(theme_xml.contains(r#"typeface="Aptos Display""#));
+    assert!(theme_xml.contains(r#"typeface="Aptos""#));
+    assert!(theme_xml.contains(r#"<a:accent1><a:srgbClr val="123456"/></a:accent1>"#));
+    assert!(theme_xml.contains(r#"<a:lt1><a:srgbClr val="FAF7F0"/></a:lt1>"#));
+    assert!(theme_xml.contains(r#"<a:dk1><a:srgbClr val="222222"/></a:dk1>"#));
+    Ok(())
+}
+
+#[test]
+fn exported_text_shapes_preserve_text_styling() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({
+                "name": "Styled Text Export",
+                "theme": {
+                    "color_scheme": {},
+                    "major_font": "Aptos Display",
+                    "minor_font": "Aptos"
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id.clone();
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let added_text = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_text_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "text": "Alpha Beta",
+                "position": { "left": 40, "top": 40, "width": 220, "height": 80 },
+                "font_size": 24,
+                "font_family": "Aptos",
+                "color": "#112233",
+                "alignment": "right",
+                "bold": true,
+                "text_layout": {
+                    "vertical_alignment": "bottom",
+                    "auto_fit": "shrinkText"
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let text_id = added_text
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .cloned()
+        .expect("text id");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "format_text_range".to_string(),
+            args: serde_json::json!({
+                "element_id": text_id,
+                "query": "Beta",
+                "link": {
+                    "uri": "https://example.com/docs",
+                    "is_external": true
+                },
+                "spacing_before": 12,
+                "spacing_after": 6,
+                "line_spacing": 1.5,
+                "styling": {
+                    "italic": true,
+                    "underline": true,
+                    "color": "#445566"
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "add_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "geometry": "rectangle",
+                "position": { "left": 300, "top": 60, "width": 180, "height": 100 },
+                "fill": "#2F6B5F",
+                "text": "Status",
+                "text_style": {
+                    "font_family": "Aptos Display",
+                    "font_size": 20,
+                    "color": "#FFFFFF",
+                    "alignment": "center",
+                    "bold": true
+                },
+                "text_layout": {
+                    "vertical_alignment": "middle"
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let export_path = temp_dir.path().join("styled-text-export.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let slide_xml = zip_entry_text(
+        &temp_dir.path().join("styled-text-export.pptx"),
+        "ppt/slides/slide1.xml",
+    )?;
+    let rels_xml = zip_entry_text(
+        &temp_dir.path().join("styled-text-export.pptx"),
+        "ppt/slides/_rels/slide1.xml.rels",
+    )?;
+    assert!(slide_xml.contains(r#"anchor="b""#));
+    assert!(slide_xml.contains(r#"<a:normAutofit/>"#));
+    assert!(slide_xml.contains(r#"<a:pPr algn="r">"#));
+    assert!(slide_xml.contains(r#"<a:spcBef><a:spcPts val="1200"/></a:spcBef>"#));
+    assert!(slide_xml.contains(r#"<a:spcAft><a:spcPts val="600"/></a:spcAft>"#));
+    assert!(slide_xml.contains(r#"<a:lnSpc><a:spcPct val="150000"/></a:lnSpc>"#));
+    assert!(slide_xml.contains(r#"sz="2400""#));
+    assert!(slide_xml.contains(r#"b="1""#));
+    assert!(slide_xml.contains(r#"typeface="Aptos""#));
+    assert!(slide_xml.contains(r#"<a:srgbClr val="112233"/>"#));
+    assert!(slide_xml.contains(">Beta<"));
+    assert!(slide_xml.contains(r#"i="1""#));
+    assert!(slide_xml.contains(r#"u="sng""#));
+    assert!(slide_xml.contains(r#"<a:srgbClr val="445566"/>"#));
+    assert!(slide_xml.contains(r#"<a:hlinkClick r:id="rIdRange_"#));
+    assert!(slide_xml.contains(r#"typeface="Aptos Display""#));
+    assert!(slide_xml.contains(r#"<a:pPr algn="ctr">"#));
+    assert!(slide_xml.contains(r#"anchor="ctr""#));
+    assert!(slide_xml.contains(r#"<a:srgbClr val="FFFFFF"/>"#));
+    assert!(rels_xml.contains("relationships/hyperlink"));
+    assert!(rels_xml.contains(r#"Target="https://example.com/docs""#));
+    Ok(())
+}
+
+#[test]
+fn exported_table_cells_preserve_rich_text_styling() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({
+                "name": "Styled Table Export",
+                "theme": {
+                    "color_scheme": {},
+                    "major_font": "Aptos Display",
+                    "minor_font": "Aptos"
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id.clone();
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let added_table = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_table".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "position": { "left": 40, "top": 40, "width": 240, "height": 90 },
+                "rows": [["Alpha Beta"]]
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let table_id = added_table
+        .artifact_snapshot
+        .as_ref()
+        .and_then(|snapshot| snapshot.slides.first())
+        .and_then(|slide| slide.element_ids.first())
+        .cloned()
+        .expect("table id");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "update_table_cell".to_string(),
+            args: serde_json::json!({
+                "element_id": table_id,
+                "row": 0,
+                "column": 0,
+                "value": "Alpha Beta",
+                "alignment": "right",
+                "styling": {
+                    "font_family": "Aptos",
+                    "font_size": 20,
+                    "color": "#112233",
+                    "bold": true
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "format_text_range".to_string(),
+            args: serde_json::json!({
+                "element_id": table_id,
+                "row": 0,
+                "column": 0,
+                "query": "Beta",
+                "link": {
+                    "uri": "https://example.com/table",
+                    "is_external": true
+                },
+                "spacing_before": 8,
+                "spacing_after": 4,
+                "line_spacing": 1.25,
+                "styling": {
+                    "italic": true,
+                    "underline": true,
+                    "color": "#445566"
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let export_path = temp_dir.path().join("styled-table-export.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let slide_xml = zip_entry_text(
+        &temp_dir.path().join("styled-table-export.pptx"),
+        "ppt/slides/slide1.xml",
+    )?;
+    let rels_xml = zip_entry_text(
+        &temp_dir.path().join("styled-table-export.pptx"),
+        "ppt/slides/_rels/slide1.xml.rels",
+    )?;
+    assert!(slide_xml.contains(r#"<a:pPr algn="r">"#));
+    assert!(slide_xml.contains(r#"<a:spcBef><a:spcPts val="800"/></a:spcBef>"#));
+    assert!(slide_xml.contains(r#"<a:spcAft><a:spcPts val="400"/></a:spcAft>"#));
+    assert!(slide_xml.contains(r#"<a:lnSpc><a:spcPct val="125000"/></a:lnSpc>"#));
+    assert!(slide_xml.contains(r#"sz="2000""#));
+    assert!(slide_xml.contains(r#"b="1""#));
+    assert!(slide_xml.contains(r#"typeface="Aptos""#));
+    assert!(slide_xml.contains(r#"<a:srgbClr val="112233"/>"#));
+    assert!(slide_xml.contains(">Beta<"));
+    assert!(slide_xml.contains(r#"i="1""#));
+    assert!(slide_xml.contains(r#"u="sng""#));
+    assert!(slide_xml.contains(r#"<a:srgbClr val="445566"/>"#));
+    assert!(slide_xml.contains(r#"<a:hlinkClick r:id="rIdRange_"#));
+    assert!(rels_xml.contains("relationships/hyperlink"));
+    assert!(rels_xml.contains(r#"Target="https://example.com/table""#));
+    Ok(())
+}
+
+#[test]
 fn tool_request_accepts_sequential_actions() -> Result<(), Box<dyn std::error::Error>> {
     let request: PresentationArtifactToolRequest = serde_json::from_value(serde_json::json!({
         "actions": [
@@ -2206,6 +2608,95 @@ fn notes_visibility_controls_exported_notes() -> Result<(), Box<dyn std::error::
 }
 
 #[test]
+fn exported_notes_preserve_rich_text_styling() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({
+                "name": "Styled Notes Export",
+                "theme": {
+                    "color_scheme": {
+                        "tx1": "#222222"
+                    },
+                    "major_font": "Aptos Display",
+                    "minor_font": "Aptos"
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id.clone();
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({ "notes": "Alpha Beta" }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "format_text_range".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "notes": true,
+                "query": "Beta",
+                "link": {
+                    "uri": "https://example.com/notes",
+                    "is_external": true
+                },
+                "spacing_before": 10,
+                "spacing_after": 5,
+                "line_spacing": 1.4,
+                "styling": {
+                    "italic": true,
+                    "underline": true,
+                    "color": "#445566"
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let export_path = temp_dir.path().join("styled-notes-export.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let notes_xml = zip_entry_text(
+        &temp_dir.path().join("styled-notes-export.pptx"),
+        "ppt/notesSlides/notesSlide1.xml",
+    )?;
+    let rels_xml = zip_entry_text(
+        &temp_dir.path().join("styled-notes-export.pptx"),
+        "ppt/notesSlides/_rels/notesSlide1.xml.rels",
+    )?;
+    assert!(notes_xml.contains(r#"typeface="Aptos""#));
+    assert!(notes_xml.contains(r#"sz="1200""#));
+    assert!(notes_xml.contains(r#"<a:srgbClr val="222222"/>"#));
+    assert!(notes_xml.contains(">Beta<"));
+    assert!(notes_xml.contains(r#"i="1""#));
+    assert!(notes_xml.contains(r#"u="sng""#));
+    assert!(notes_xml.contains(r#"<a:srgbClr val="445566"/>"#));
+    assert!(notes_xml.contains(r#"<a:hlinkClick r:id="rIdRange_"#));
+    assert!(notes_xml.contains(r#"<a:spcBef><a:spcPts val="1000"/></a:spcBef>"#));
+    assert!(notes_xml.contains(r#"<a:spcAft><a:spcPts val="500"/></a:spcAft>"#));
+    assert!(notes_xml.contains(r#"<a:lnSpc><a:spcPct val="140000"/></a:lnSpc>"#));
+    assert!(rels_xml.contains("relationships/hyperlink"));
+    assert!(rels_xml.contains(r#"Target="https://example.com/notes""#));
+    Ok(())
+}
+
+#[test]
 fn image_placeholders_and_anchor_updates_work() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::tempdir()?;
     let mut manager = PresentationArtifactManager::default();
@@ -3689,7 +4180,10 @@ fn render_preview_renders_image_and_table_content() -> Result<(), Box<dyn std::e
     )?;
 
     assert_eq!(preview.get_pixel(80, 80).0, [0x2A, 0x80, 0xD7, 0xFF]);
-    assert_eq!(preview.get_pixel(270, 70).0, [0xEA, 0xF0, 0xF8, 0xFF]);
+    assert!(
+        rect_contains_pixel(&preview, 260, 72, 40, 24, [0xEA, 0xF0, 0xF8, 0xFF]),
+        "expected to find the table header fill color in the rendered preview"
+    );
     Ok(())
 }
 

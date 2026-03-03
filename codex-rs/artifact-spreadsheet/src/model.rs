@@ -982,6 +982,9 @@ impl SpreadsheetSheet {
         for address in range.addresses() {
             let cell = self.get_or_create_cell_mut(address);
             cell.formula = formula.clone();
+            if cell.formula.is_none() {
+                cell.value = None;
+            }
         }
         self.cells.retain(|_, cell| !cell.is_empty());
         Ok(())
@@ -1094,6 +1097,9 @@ impl SpreadsheetSheet {
                 };
                 let cell = self.get_or_create_cell_mut(address);
                 cell.formula = formula.clone();
+                if cell.formula.is_none() {
+                    cell.value = None;
+                }
             }
         }
         self.cells.retain(|_, cell| !cell.is_empty());
@@ -1741,24 +1747,7 @@ impl SpreadsheetArtifact {
         }
 
         match selected.as_str() {
-            "xlsx" => {
-                for sheet in &self.sheets {
-                    if !sheet.charts.is_empty()
-                        || !sheet.tables.is_empty()
-                        || !sheet.conditional_formats.is_empty()
-                        || !sheet.pivot_tables.is_empty()
-                    {
-                        return Err(SpreadsheetArtifactError::ExportFailed {
-                            path: path.to_path_buf(),
-                            message: format!(
-                                "xlsx export does not yet support charts, tables, conditional formats, or pivot tables on sheet `{}`; use json or bin export instead",
-                                sheet.name
-                            ),
-                        });
-                    }
-                }
-                write_xlsx(self, path)
-            }
+            "xlsx" => write_xlsx(self, path),
             "json" => {
                 let json = self.to_json()?;
                 std::fs::write(path, json).map_err(|error| {

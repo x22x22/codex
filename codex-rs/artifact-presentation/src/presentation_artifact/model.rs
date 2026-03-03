@@ -85,14 +85,14 @@ struct NamedTextStyle {
     built_in: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HyperlinkState {
     target: HyperlinkTarget,
     tooltip: Option<String>,
     highlight_click: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum HyperlinkTarget {
     Url(String),
     Slide(u32),
@@ -926,16 +926,16 @@ impl PresentationDocument {
         })
     }
 
-    fn to_ppt_rs(&self) -> Presentation {
+    fn to_ppt_rs(&self) -> Result<Presentation, PresentationArtifactError> {
         let mut presentation = self
             .name
             .as_deref()
             .map(Presentation::with_title)
             .unwrap_or_default();
         for slide in &self.slides {
-            presentation = presentation.add_slide(slide.to_ppt_rs(self.slide_size));
+            presentation = presentation.add_slide(slide.to_ppt_rs(self.slide_size, self)?);
         }
-        presentation
+        Ok(presentation)
     }
 }
 
@@ -1223,7 +1223,11 @@ fn xml_attribute(tag: &str, attribute: &str) -> Option<String> {
 }
 
 impl PresentationSlide {
-    fn to_ppt_rs(&self, slide_size: Rect) -> SlideContent {
+    fn to_ppt_rs(
+        &self,
+        slide_size: Rect,
+        document: &PresentationDocument,
+    ) -> Result<SlideContent, PresentationArtifactError> {
         let mut content = SlideContent::new("").layout(SlideLayout::Blank);
         if self.notes.visible && !self.notes.text.is_empty() {
             content = content.notes(&self.notes.text);
@@ -1391,24 +1395,22 @@ impl PresentationSlide {
                     content = content.table(builder.build());
                 }
                 PresentationElement::Chart(chart) => {
-                    let mut ppt_chart = Chart::new(
-                        chart.title.as_deref().unwrap_or("Chart"),
-                        chart.chart_type.to_ppt_rs(),
-                        chart.categories,
-                        points_to_emu(chart.frame.left),
-                        points_to_emu(chart.frame.top),
+                    let chart_bytes = render_chart_png_bytes(document, &chart)?;
+                    let ppt_chart = Image::from_bytes(
+                        chart_bytes,
                         points_to_emu(chart.frame.width),
                         points_to_emu(chart.frame.height),
+                        "png",
+                    )
+                    .position(
+                        points_to_emu(chart.frame.left),
+                        points_to_emu(chart.frame.top),
                     );
-                    for series in chart.series {
-                        ppt_chart =
-                            ppt_chart.add_series(ChartSeries::new(&series.name, series.values));
-                    }
-                    content = content.add_chart(ppt_chart);
+                    content = content.add_image(ppt_chart);
                 }
             }
         }
-        content
+        Ok(content)
     }
 }
 
@@ -1722,34 +1724,6 @@ enum ChartTypeSpec {
     StockHlc,
     StockOhlc,
     Combo,
-}
-
-impl ChartTypeSpec {
-    fn to_ppt_rs(self) -> ChartType {
-        match self {
-            Self::Bar => ChartType::Bar,
-            Self::BarHorizontal => ChartType::BarHorizontal,
-            Self::BarStacked => ChartType::BarStacked,
-            Self::BarStacked100 => ChartType::BarStacked100,
-            Self::Line => ChartType::Line,
-            Self::LineMarkers => ChartType::LineMarkers,
-            Self::LineStacked => ChartType::LineStacked,
-            Self::Pie => ChartType::Pie,
-            Self::Doughnut => ChartType::Doughnut,
-            Self::Area => ChartType::Area,
-            Self::AreaStacked => ChartType::AreaStacked,
-            Self::AreaStacked100 => ChartType::AreaStacked100,
-            Self::Scatter => ChartType::Scatter,
-            Self::ScatterLines => ChartType::ScatterLines,
-            Self::ScatterSmooth => ChartType::ScatterSmooth,
-            Self::Bubble => ChartType::Bubble,
-            Self::Radar => ChartType::Radar,
-            Self::RadarFilled => ChartType::RadarFilled,
-            Self::StockHlc => ChartType::StockHLC,
-            Self::StockOhlc => ChartType::StockOHLC,
-            Self::Combo => ChartType::Combo,
-        }
-    }
 }
 
 impl ConnectorKind {
