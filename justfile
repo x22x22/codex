@@ -84,7 +84,7 @@ write-app-server-schema *args:
 
 [no-cd]
 write-hooks-schema:
-    cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_schema_fixtures
+    cargo run --manifest-path ./codex-rs/Cargo.toml -p codex-hooks --bin write_hooks_schema_fixtures
 
 # Tail logs from the state SQLite database
 log *args:
