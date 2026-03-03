@@ -38,6 +38,38 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 
 const USER_SHELL_TIMEOUT_MS: u64 = 60 * 60 * 1000; // 1 hour
+const USER_SHELL_COLOR_TERM: &str = "xterm-256color";
+
+fn append_git_config_override(
+    env: &mut std::collections::HashMap<String, String>,
+    key: &str,
+    value: &str,
+) {
+    let next = env
+        .get("GIT_CONFIG_COUNT")
+        .and_then(|count| count.parse::<usize>().ok())
+        .unwrap_or(0);
+    env.insert("GIT_CONFIG_COUNT".to_string(), (next + 1).to_string());
+    env.insert(format!("GIT_CONFIG_KEY_{next}"), key.to_string());
+    env.insert(format!("GIT_CONFIG_VALUE_{next}"), value.to_string());
+}
+
+fn create_user_shell_env(
+    shell_environment_policy: &crate::config::types::ShellEnvironmentPolicy,
+    conversation_id: codex_protocol::ThreadId,
+) -> std::collections::HashMap<String, String> {
+    let mut env = create_env(shell_environment_policy, Some(conversation_id));
+    env.remove("NO_COLOR");
+    env.insert("FORCE_COLOR".to_string(), "1".to_string());
+    env.insert("CLICOLOR".to_string(), "1".to_string());
+    env.insert("CLICOLOR_FORCE".to_string(), "1".to_string());
+    env.insert("COLORTERM".to_string(), "truecolor".to_string());
+    if env.get("TERM").is_none_or(String::is_empty) {
+        env.insert("TERM".to_string(), USER_SHELL_COLOR_TERM.to_string());
+    }
+    append_git_config_override(&mut env, "color.ui", "always");
+    env
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UserShellCommandMode {
@@ -151,9 +183,9 @@ pub(crate) async fn execute_user_shell_command(
     let exec_env = ExecRequest {
         command: exec_command.clone(),
         cwd: cwd.clone(),
-        env: create_env(
+        env: create_user_shell_env(
             &turn_context.shell_environment_policy,
-            Some(session.conversation_id),
+            session.conversation_id,
         ),
         network: turn_context.network.clone(),
         // TODO(zhao-oai): Now that we have ExecExpiration::Cancellation, we
@@ -333,5 +365,42 @@ async fn persist_user_shell_output(
         session
             .record_conversation_items(turn_context, &response_items)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::types::ShellEnvironmentPolicy;
+    use crate::config::types::ShellEnvironmentPolicyInherit;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn create_user_shell_env_forces_color_and_preserves_existing_git_env_entries() {
+        let shell_environment_policy = ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::None,
+            r#set: std::collections::HashMap::from([
+                ("NO_COLOR".to_string(), "1".to_string()),
+                ("TERM".to_string(), String::new()),
+                ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
+                ("GIT_CONFIG_KEY_0".to_string(), "core.pager".to_string()),
+                ("GIT_CONFIG_VALUE_0".to_string(), "cat".to_string()),
+            ]),
+            ..Default::default()
+        };
+
+        let env = create_user_shell_env(&shell_environment_policy, codex_protocol::ThreadId::new());
+
+        assert_eq!(env.get("NO_COLOR"), None);
+        assert_eq!(env.get("FORCE_COLOR"), Some(&"1".to_string()));
+        assert_eq!(env.get("CLICOLOR"), Some(&"1".to_string()));
+        assert_eq!(env.get("CLICOLOR_FORCE"), Some(&"1".to_string()));
+        assert_eq!(env.get("COLORTERM"), Some(&"truecolor".to_string()));
+        assert_eq!(env.get("TERM"), Some(&USER_SHELL_COLOR_TERM.to_string()));
+        assert_eq!(env.get("GIT_CONFIG_COUNT"), Some(&"2".to_string()));
+        assert_eq!(env.get("GIT_CONFIG_KEY_0"), Some(&"core.pager".to_string()));
+        assert_eq!(env.get("GIT_CONFIG_VALUE_0"), Some(&"cat".to_string()));
+        assert_eq!(env.get("GIT_CONFIG_KEY_1"), Some(&"color.ui".to_string()));
+        assert_eq!(env.get("GIT_CONFIG_VALUE_1"), Some(&"always".to_string()));
     }
 }
