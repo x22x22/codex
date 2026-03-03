@@ -40,7 +40,6 @@ use std::io::Seek;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
 use thiserror::Error;
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -75,6 +74,8 @@ pub enum PresentationArtifactError {
     ImportFailed { path: PathBuf, message: String },
     #[error("failed to export PPTX `{path}`: {message}")]
     ExportFailed { path: PathBuf, message: String },
+    #[error("failed to render preview for action `{action}`: {message}")]
+    RenderFailed { action: String, message: String },
 }
 
 #[derive(Debug, Clone, Deserialize)]

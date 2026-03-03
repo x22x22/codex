@@ -715,94 +715,8 @@ fn slide_table_xml(slide: &PresentationSlide) -> String {
         .join("\n")
 }
 
-fn write_preview_images(
-    document: &PresentationDocument,
-    output_dir: &Path,
-    action: &str,
-) -> Result<(), PresentationArtifactError> {
-    let pptx_path = output_dir.join("preview.pptx");
-    let bytes = build_pptx_bytes(document, action).map_err(|message| {
-        PresentationArtifactError::ExportFailed {
-            path: pptx_path.clone(),
-            message,
-        }
-    })?;
-    std::fs::write(&pptx_path, bytes).map_err(|error| PresentationArtifactError::ExportFailed {
-        path: pptx_path.clone(),
-        message: error.to_string(),
-    })?;
-    render_pptx_to_pngs(&pptx_path, output_dir, action)
-}
-
-fn render_pptx_to_pngs(
-    pptx_path: &Path,
-    output_dir: &Path,
-    action: &str,
-) -> Result<(), PresentationArtifactError> {
-    let soffice_cmd = if cfg!(target_os = "macos")
-        && Path::new("/Applications/LibreOffice.app/Contents/MacOS/soffice").exists()
-    {
-        "/Applications/LibreOffice.app/Contents/MacOS/soffice"
-    } else {
-        "soffice"
-    };
-    let conversion = Command::new(soffice_cmd)
-        .arg("--headless")
-        .arg("--convert-to")
-        .arg("pdf")
-        .arg(pptx_path)
-        .arg("--outdir")
-        .arg(output_dir)
-        .output()
-        .map_err(|error| PresentationArtifactError::ExportFailed {
-            path: pptx_path.to_path_buf(),
-            message: format!("{action}: failed to execute LibreOffice: {error}"),
-        })?;
-    if !conversion.status.success() {
-        return Err(PresentationArtifactError::ExportFailed {
-            path: pptx_path.to_path_buf(),
-            message: format!(
-                "{action}: LibreOffice conversion failed: {}",
-                String::from_utf8_lossy(&conversion.stderr)
-            ),
-        });
-    }
-
-    let pdf_path = output_dir.join(
-        pptx_path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(|stem| format!("{stem}.pdf"))
-            .ok_or_else(|| PresentationArtifactError::ExportFailed {
-                path: pptx_path.to_path_buf(),
-                message: format!("{action}: preview pptx filename is invalid"),
-            })?,
-    );
-    let prefix = output_dir.join("slide");
-    let conversion = Command::new("pdftoppm")
-        .arg("-png")
-        .arg(&pdf_path)
-        .arg(&prefix)
-        .output()
-        .map_err(|error| PresentationArtifactError::ExportFailed {
-            path: pdf_path.clone(),
-            message: format!("{action}: failed to execute pdftoppm: {error}"),
-        })?;
-    std::fs::remove_file(&pdf_path).ok();
-    if !conversion.status.success() {
-        return Err(PresentationArtifactError::ExportFailed {
-            path: output_dir.to_path_buf(),
-            message: format!(
-                "{action}: pdftoppm conversion failed: {}",
-                String::from_utf8_lossy(&conversion.stderr)
-            ),
-        });
-    }
-    Ok(())
-}
-
-pub(crate) fn write_preview_image(
-    source_path: &Path,
+pub(crate) fn write_preview_image_bytes(
+    png_bytes: &[u8],
     target_path: &Path,
     format: PreviewOutputFormat,
     scale: f32,
@@ -810,7 +724,7 @@ pub(crate) fn write_preview_image(
     action: &str,
 ) -> Result<(), PresentationArtifactError> {
     if matches!(format, PreviewOutputFormat::Png) && scale == 1.0 {
-        std::fs::rename(source_path, target_path).map_err(|error| {
+        std::fs::write(target_path, png_bytes).map_err(|error| {
             PresentationArtifactError::ExportFailed {
                 path: target_path.to_path_buf(),
                 message: error.to_string(),
@@ -818,11 +732,12 @@ pub(crate) fn write_preview_image(
         })?;
         return Ok(());
     }
-    let mut preview =
-        image::open(source_path).map_err(|error| PresentationArtifactError::ExportFailed {
-            path: source_path.to_path_buf(),
+    let mut preview = image::load_from_memory(png_bytes).map_err(|error| {
+        PresentationArtifactError::ExportFailed {
+            path: target_path.to_path_buf(),
             message: format!("{action}: {error}"),
-        })?;
+        }
+    })?;
     if scale != 1.0 {
         let width = (preview.width() as f32 * scale).round().max(1.0) as u32;
         let height = (preview.height() as f32 * scale).round().max(1.0) as u32;
@@ -880,22 +795,7 @@ pub(crate) fn write_preview_image(
             })?;
         }
     }
-    std::fs::remove_file(source_path).ok();
     Ok(())
-}
-
-fn collect_pngs(output_dir: &Path) -> Result<Vec<PathBuf>, PresentationArtifactError> {
-    let mut files = std::fs::read_dir(output_dir)
-        .map_err(|error| PresentationArtifactError::ExportFailed {
-            path: output_dir.to_path_buf(),
-            message: error.to_string(),
-        })?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("png"))
-        .collect::<Vec<_>>();
-    files.sort();
-    Ok(files)
 }
 
 fn parse_preview_output_format(

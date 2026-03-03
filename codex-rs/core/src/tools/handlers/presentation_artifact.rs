@@ -1,8 +1,12 @@
 use async_trait::async_trait;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_artifact_presentation::PathAccessKind;
 use codex_artifact_presentation::PathAccessRequirement;
 use codex_artifact_presentation::PresentationArtifactError;
 use codex_artifact_presentation::PresentationArtifactToolRequest;
+use codex_protocol::models::FunctionCallOutputContentItem;
+use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use serde_json::to_string;
@@ -68,6 +72,19 @@ impl ToolHandler for PresentationArtifactHandler {
         };
 
         let request: PresentationArtifactToolRequest = parse_arguments(&arguments)?;
+        if request
+            .actions
+            .iter()
+            .any(|action| action.action == "render_preview")
+            && !turn
+                .model_info
+                .input_modalities
+                .contains(&InputModality::Image)
+        {
+            return Err(FunctionCallError::RespondToModel(
+                "render_preview is not allowed because you do not support image inputs".to_string(),
+            ));
+        }
         for access in request
             .required_path_accesses(&turn.cwd)
             .map_err(presentation_error)?
@@ -84,6 +101,26 @@ impl ToolHandler for PresentationArtifactHandler {
             )
             .await
             .map_err(presentation_error)?;
+
+        if let Some(preview) = response.rendered_preview.as_ref() {
+            let summary = format!(
+                "{} Artifact `{}` slide {}.",
+                response.summary,
+                response.artifact_id,
+                preview.slide_index + 1
+            );
+            let image_url = format!(
+                "data:image/png;base64,{}",
+                BASE64_STANDARD.encode(&preview.png_bytes)
+            );
+            return Ok(ToolOutput::Function {
+                body: FunctionCallOutputBody::ContentItems(vec![
+                    FunctionCallOutputContentItem::InputText { text: summary },
+                    FunctionCallOutputContentItem::InputImage { image_url },
+                ]),
+                success: Some(true),
+            });
+        }
 
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(to_string(&response).map_err(|error| {

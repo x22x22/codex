@@ -1,5 +1,6 @@
 use super::presentation_artifact::*;
 use base64::Engine;
+use image::GenericImageView;
 use pretty_assertions::assert_eq;
 use std::io::Read;
 
@@ -27,6 +28,28 @@ fn parse_ndjson_lines(ndjson: &str) -> Result<Vec<serde_json::Value>, serde_json
         .filter(|line| !line.is_empty())
         .map(serde_json::from_str)
         .collect()
+}
+
+fn load_preview(bytes: &[u8]) -> Result<image::DynamicImage, Box<dyn std::error::Error>> {
+    Ok(image::load_from_memory(bytes)?)
+}
+
+fn rect_contains_pixel(
+    image: &image::DynamicImage,
+    left: u32,
+    top: u32,
+    width: u32,
+    height: u32,
+    expected: [u8; 4],
+) -> bool {
+    for y in top..top.saturating_add(height) {
+        for x in left..left.saturating_add(width) {
+            if image.get_pixel(x, y).0 == expected {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[test]
@@ -509,12 +532,16 @@ fn image_fit_contain_preserves_aspect_ratio() {
 #[test]
 fn preview_image_writer_supports_jpeg_scale_and_svg() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempfile::tempdir()?;
-    let source_path = temp_dir.path().join("preview.png");
-    image::RgbaImage::from_pixel(80, 40, image::Rgba([0x22, 0x66, 0xAA, 0xFF]))
-        .save(&source_path)?;
+    let mut source_bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        80,
+        40,
+        image::Rgba([0x22, 0x66, 0xAA, 0xFF]),
+    ))
+    .write_to(&mut source_bytes, image::ImageFormat::Png)?;
     let target_path = temp_dir.path().join("preview.jpg");
-    write_preview_image(
-        &source_path,
+    write_preview_image_bytes(
+        &source_bytes.into_inner(),
         &target_path,
         PreviewOutputFormat::Jpeg,
         0.5,
@@ -527,14 +554,17 @@ fn preview_image_writer_supports_jpeg_scale_and_svg() -> Result<(), Box<dyn std:
         image::ImageFormat::from_path(&target_path)?,
         image::ImageFormat::Jpeg
     );
-    assert!(!source_path.exists());
 
-    let svg_source_path = temp_dir.path().join("preview-svg.png");
-    image::RgbaImage::from_pixel(32, 16, image::Rgba([0x55, 0xAA, 0x44, 0xFF]))
-        .save(&svg_source_path)?;
+    let mut svg_source_bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        32,
+        16,
+        image::Rgba([0x55, 0xAA, 0x44, 0xFF]),
+    ))
+    .write_to(&mut svg_source_bytes, image::ImageFormat::Png)?;
     let svg_target_path = temp_dir.path().join("preview.svg");
-    write_preview_image(
-        &svg_source_path,
+    write_preview_image_bytes(
+        &svg_source_bytes.into_inner(),
         &svg_target_path,
         PreviewOutputFormat::Svg,
         0.5,
@@ -544,7 +574,6 @@ fn preview_image_writer_supports_jpeg_scale_and_svg() -> Result<(), Box<dyn std:
     let svg = std::fs::read_to_string(&svg_target_path)?;
     assert!(svg.contains(r#"<svg xmlns="http://www.w3.org/2000/svg" width="16" height="8""#));
     assert!(svg.contains("data:image/png;base64,"));
-    assert!(!svg_source_path.exists());
     Ok(())
 }
 
@@ -3508,5 +3537,343 @@ fn proto_and_patch_actions_work_and_patch_history_is_atomic()
         temp_dir.path(),
     )?;
     assert_eq!(redone_proto.proto_json, Some(proto));
+    Ok(())
+}
+
+#[test]
+fn render_preview_returns_png_for_active_slide() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({
+                "name": "Preview",
+                "theme": {
+                    "color_scheme": {
+                        "bg1": "F7F4EA",
+                        "tx1": "1E1E1E"
+                    }
+                }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({
+                "background_fill": "#EAE4D5"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "geometry": "rectangle",
+                "position": { "left": 80, "top": 110, "width": 180, "height": 90 },
+                "fill": "#CC5533",
+                "text": "Preview card",
+                "text_style": { "color": "#FFFFFF", "alignment": "center", "bold": true }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_text_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "text": "Quarterly update",
+                "position": { "left": 72, "top": 40, "width": 320, "height": 44 },
+                "style": "title"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let response = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "render_preview".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let preview = response.rendered_preview.expect("rendered preview present");
+    let rendered = load_preview(&preview.png_bytes)?;
+
+    assert_eq!(preview.slide_index, 0);
+    assert_eq!(rendered.dimensions(), (720, 540));
+    assert_eq!(rendered.get_pixel(20, 20).0, [0xEA, 0xE4, 0xD5, 0xFF]);
+    assert_eq!(rendered.get_pixel(120, 150).0, [0xCC, 0x55, 0x33, 0xFF]);
+    Ok(())
+}
+
+#[test]
+fn render_preview_renders_image_and_table_content() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let image_path = temp_dir.path().join("preview-source.png");
+    image::RgbaImage::from_pixel(40, 30, image::Rgba([0x2A, 0x80, 0xD7, 0xFF]))
+        .save(&image_path)?;
+
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Image and table" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_image".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "path": image_path,
+                "position": { "left": 40, "top": 40, "width": 160, "height": 120 },
+                "fit": "contain"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_table".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "position": { "left": 240, "top": 60, "width": 220, "height": 120 },
+                "rows": [
+                    ["Metric", "Value"],
+                    ["ARR", "$9.2M"]
+                ],
+                "style_options": { "header_row": true }
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let response = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "render_preview".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let preview = load_preview(
+        &response
+            .rendered_preview
+            .expect("rendered preview present")
+            .png_bytes,
+    )?;
+
+    assert_eq!(preview.get_pixel(80, 80).0, [0x2A, 0x80, 0xD7, 0xFF]);
+    assert_eq!(preview.get_pixel(270, 70).0, [0xEA, 0xF0, 0xF8, 0xFF]);
+    Ok(())
+}
+
+#[test]
+fn render_preview_renders_chart_primitives() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Chart preview" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_chart".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "chart_type": "bar",
+                "position": { "left": 120, "top": 80, "width": 360, "height": 220 },
+                "title": "Pipeline",
+                "categories": ["Q1", "Q2", "Q3"],
+                "series": [
+                    { "name": "Actual", "values": [5, 7, 9], "fill": "#4E79A7" }
+                ]
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let response = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "render_preview".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let preview = load_preview(
+        &response
+            .rendered_preview
+            .expect("rendered preview present")
+            .png_bytes,
+    )?;
+
+    assert!(
+        rect_contains_pixel(&preview, 150, 120, 220, 180, [0x4E, 0x79, 0xA7, 0xFF]),
+        "expected to find the series fill color within the chart plot area"
+    );
+    Ok(())
+}
+
+#[test]
+fn export_preview_uses_native_renderer_for_single_slide() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Export preview" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({
+                "background_fill": "#F2E8DC"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_shape".to_string(),
+            args: serde_json::json!({
+                "slide_index": 0,
+                "geometry": "rectangle",
+                "position": { "left": 96, "top": 120, "width": 160, "height": 80 },
+                "fill": "#2F6B5F"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let target_path = temp_dir.path().join("preview.png");
+    let response = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "export_preview".to_string(),
+            args: serde_json::json!({
+                "path": target_path,
+                "slide_index": 0
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    let exported_path = response
+        .exported_paths
+        .first()
+        .expect("exported preview path present");
+    let preview = image::open(exported_path)?;
+
+    assert_eq!(response.exported_paths.len(), 1);
+    assert_eq!(preview.dimensions(), (720, 540));
+    assert_eq!(preview.get_pixel(20, 20).0, [0xF2, 0xE8, 0xDC, 0xFF]);
+    assert_eq!(preview.get_pixel(120, 150).0, [0x2F, 0x6B, 0x5F, 0xFF]);
+    Ok(())
+}
+
+#[test]
+fn export_preview_writes_all_slides_with_stable_names() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Export all previews" }),
+        },
+        temp_dir.path(),
+    )?;
+    let artifact_id = created.artifact_id;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({
+                "background_fill": "#FFF4CC"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({
+                "background_fill": "#D9EAF7"
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let output_dir = temp_dir.path().join("previews");
+    let response = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id),
+            action: "export_preview".to_string(),
+            args: serde_json::json!({
+                "path": output_dir
+            }),
+        },
+        temp_dir.path(),
+    )?;
+
+    assert_eq!(response.exported_paths.len(), 2);
+    assert_eq!(
+        response.exported_paths,
+        vec![
+            temp_dir.path().join("previews/slide-1.png"),
+            temp_dir.path().join("previews/slide-2.png"),
+        ]
+    );
+    let slide_1 = image::open(&response.exported_paths[0])?;
+    let slide_2 = image::open(&response.exported_paths[1])?;
+    assert_eq!(slide_1.get_pixel(20, 20).0, [0xFF, 0xF4, 0xCC, 0xFF]);
+    assert_eq!(slide_2.get_pixel(20, 20).0, [0xD9, 0xEA, 0xF7, 0xFF]);
     Ok(())
 }

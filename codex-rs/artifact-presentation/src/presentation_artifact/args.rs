@@ -25,6 +25,13 @@ struct ExportPreviewArgs {
 }
 
 #[derive(Debug, Default, Deserialize)]
+struct RenderPreviewArgs {
+    slide_index: Option<u32>,
+    scale: Option<f32>,
+    include_background: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 struct AddSlideArgs {
     layout: Option<String>,
     notes: Option<String>,

@@ -8,3 +8,4 @@ include!("proto.rs");
 include!("inspect.rs");
 include!("pptx.rs");
 include!("snapshot.rs");
+include!("render.rs");

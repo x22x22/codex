@@ -100,6 +100,7 @@ impl PresentationArtifactManager {
             "import_pptx" => self.import_pptx(request, cwd),
             "export_pptx" => self.export_pptx(request, cwd),
             "export_preview" => self.export_preview(request, cwd),
+            "render_preview" => self.render_preview(request),
             "get_summary" => self.get_summary(request),
             "list_slides" => self.list_slides(request),
             "list_layouts" => self.list_layouts(request),
@@ -286,82 +287,39 @@ impl PresentationArtifactManager {
             parse_preview_output_format(args.format.as_deref(), &output_path, &request.action)?;
         let scale = normalize_preview_scale(args.scale, &request.action)?;
         let quality = normalize_preview_quality(args.quality, &request.action)?;
-        if let Some(parent) = output_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| {
-                PresentationArtifactError::ExportFailed {
-                    path: output_path.clone(),
-                    message: error.to_string(),
+        let mut exported_paths = Vec::new();
+        if let Some(slide_index) = args.slide_index {
+            if let Some(parent) = output_path.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    PresentationArtifactError::ExportFailed {
+                        path: output_path.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+            }
+            let slide_index = usize::try_from(slide_index).map_err(|_| {
+                PresentationArtifactError::InvalidArgs {
+                    action: request.action.clone(),
+                    message: "`slide_index` does not fit in usize".to_string(),
                 }
             })?;
-        }
-        let temp_dir =
-            std::env::temp_dir().join(format!("presentation_preview_{}", Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&temp_dir).map_err(|error| {
-            PresentationArtifactError::ExportFailed {
-                path: output_path.clone(),
-                message: error.to_string(),
-            }
-        })?;
-        let preview_document = if let Some(slide_index) = args.slide_index {
-            let slide = document
-                .slides
-                .get(slide_index as usize)
-                .cloned()
-                .ok_or_else(|| {
-                    index_out_of_range(&request.action, slide_index as usize, document.slides.len())
-                })?;
-            let slide_id = slide.slide_id.clone();
-            PresentationDocument {
-                artifact_id: document.artifact_id.clone(),
-                name: document.name.clone(),
-                slide_size: document.slide_size,
-                theme: document.theme.clone(),
-                custom_text_styles: document.custom_text_styles.clone(),
-                layouts: Vec::new(),
-                slides: vec![slide],
-                active_slide_index: Some(0),
-                comment_self: document.comment_self.clone(),
-                comment_threads: document
-                    .comment_threads
-                    .iter()
-                    .filter(|thread| match &thread.target {
-                        CommentTarget::Slide { slide_id: target_slide_id }
-                        | CommentTarget::Element { slide_id: target_slide_id, .. }
-                        | CommentTarget::TextRange { slide_id: target_slide_id, .. } => {
-                            target_slide_id == &slide_id
-                        }
-                    })
-                    .cloned()
-                    .collect(),
-                next_slide_seq: 1,
-                next_element_seq: 1,
-                next_layout_seq: 1,
-                next_text_range_seq: document.next_text_range_seq,
-                next_comment_thread_seq: document.next_comment_thread_seq,
-                next_comment_message_seq: document.next_comment_message_seq,
-            }
-        } else {
-            document.clone()
-        };
-        write_preview_images(&preview_document, &temp_dir, &request.action)?;
-        let mut exported_paths = collect_pngs(&temp_dir)?;
-        if args.slide_index.is_some() {
-            let rendered =
-                exported_paths
-                    .pop()
-                    .ok_or_else(|| PresentationArtifactError::ExportFailed {
-                        path: output_path.clone(),
-                        message: "preview renderer produced no images".to_string(),
-                    })?;
-            write_preview_image(
-                &rendered,
+            let png_bytes = render_slide_png(
+                document,
+                slide_index,
+                RenderOptions {
+                    scale: 1.0,
+                    include_background: true,
+                },
+            )?;
+            write_preview_image_bytes(
+                &png_bytes,
                 &output_path,
                 preview_format,
                 scale,
                 quality,
                 &request.action,
             )?;
-            exported_paths = vec![output_path];
+            exported_paths.push(output_path);
         } else {
             std::fs::create_dir_all(&output_path).map_err(|error| {
                 PresentationArtifactError::ExportFailed {
@@ -369,30 +327,27 @@ impl PresentationArtifactManager {
                     message: error.to_string(),
                 }
             })?;
-            let mut relocated = Vec::new();
-            for rendered in exported_paths {
-                let filename = rendered.file_name().ok_or_else(|| {
-                    PresentationArtifactError::ExportFailed {
-                        path: output_path.clone(),
-                        message: "rendered preview had no filename".to_string(),
-                    }
-                })?;
-                let stem = Path::new(filename)
-                    .file_stem()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("preview");
-                let target = output_path.join(format!("{stem}.{}", preview_format.extension()));
-                write_preview_image(
-                    &rendered,
+            for slide_index in 0..document.slides.len() {
+                let png_bytes = render_slide_png(
+                    document,
+                    slide_index,
+                    RenderOptions {
+                        scale: 1.0,
+                        include_background: true,
+                    },
+                )?;
+                let target =
+                    output_path.join(format!("slide-{}.{}", slide_index + 1, preview_format.extension()));
+                write_preview_image_bytes(
+                    &png_bytes,
                     &target,
                     preview_format,
                     scale,
                     quality,
                     &request.action,
                 )?;
-                relocated.push(target);
+                exported_paths.push(target);
             }
-            exported_paths = relocated;
         }
         let mut response = PresentationArtifactResponse::new(
             artifact_id,
@@ -401,6 +356,36 @@ impl PresentationArtifactManager {
             snapshot_for_document(document),
         );
         response.exported_paths = exported_paths;
+        Ok(response)
+    }
+
+    fn render_preview(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: RenderPreviewArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document(&artifact_id, &request.action)?;
+        let slide_index = resolve_render_slide_index(document, args.slide_index, &request.action)?;
+        let png_bytes = render_slide_png(
+            document,
+            slide_index,
+            RenderOptions {
+                scale: normalize_preview_scale(args.scale, &request.action)?,
+                include_background: args.include_background.unwrap_or(true),
+            },
+        )?;
+        let mut response = PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Rendered preview for slide {}", slide_index + 1),
+            snapshot_for_document(document),
+        );
+        response.rendered_preview = Some(RenderedPreview {
+            slide_index,
+            png_bytes,
+        });
+        response.active_slide_index = document.active_slide_index;
         Ok(response)
     }
 
@@ -3031,6 +3016,7 @@ impl PresentationArtifactManager {
             proto_json: None,
             patch: None,
             active_slide_index: None,
+            rendered_preview: None,
         })
     }
 

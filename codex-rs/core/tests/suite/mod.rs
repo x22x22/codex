@@ -96,6 +96,7 @@ mod permissions_messages;
 mod personality;
 mod personality_migration;
 mod plugins;
+mod presentation_artifact;
 mod prompt_caching;
 mod quota_exceeded;
 mod read_file;

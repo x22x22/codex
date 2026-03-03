@@ -27,6 +27,14 @@ pub struct PresentationArtifactResponse {
     pub patch: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_slide_index: Option<usize>,
+    #[serde(skip)]
+    pub rendered_preview: Option<RenderedPreview>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RenderedPreview {
+    pub slide_index: usize,
+    pub png_bytes: Vec<u8>,
 }
 
 impl PresentationArtifactResponse {
@@ -52,6 +60,7 @@ impl PresentationArtifactResponse {
             proto_json: None,
             patch: None,
             active_slide_index: None,
+            rendered_preview: None,
         }
     }
 }
@@ -78,6 +87,7 @@ fn response_for_document_state(
         proto_json: None,
         patch: None,
         active_slide_index: document.and_then(|current| current.active_slide_index),
+        rendered_preview: None,
     }
 }
 

@@ -198,3 +198,10 @@ Example preview:
 
 Example JPEG preview:
 `{"artifact_id":"presentation_x","actions":[{"action":"export_preview","args":{"slide_index":0,"path":"artifacts/q2-update-slide1.jpg","format":"jpeg","scale":0.75,"quality":85}}]}`
+
+For model-visible previews, use `render_preview`. It renders a slide natively and returns inline image output instead of writing a file.
+
+Example inline preview:
+`{"artifact_id":"presentation_x","actions":[{"action":"render_preview","args":{"slide_index":0,"scale":1.0}}]}`
+
+`render_preview` defaults to the active slide when `slide_index` is omitted. It supports `scale` and `include_background`.

@@ -33,6 +33,7 @@ fn is_read_only_action(action: &str) -> bool {
             | "get_style"
             | "describe_styles"
             | "record_patch"
+            | "render_preview"
     )
 }
 
@@ -40,7 +41,7 @@ fn tracks_history(action: &str) -> bool {
     !is_read_only_action(action)
         && !matches!(
             action,
-            "export_pptx" | "export_preview" | "undo" | "redo" | "apply_patch"
+            "export_pptx" | "export_preview" | "render_preview" | "undo" | "redo" | "apply_patch"
         )
 }
 
