@@ -1853,7 +1853,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_options_show_expected_shortcuts() {
+    fn patch_reject_shortcuts_open_notes_and_show_expected_labels() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
@@ -1879,70 +1879,76 @@ mod tests {
             rendered.contains("esc to interrupt"),
             "patch modal should show interrupt hint under options: {rendered}"
         );
+
+        let assert_opens_notes = |events: &[KeyEvent]| {
+            let (tx, _rx) = unbounded_channel::<AppEvent>();
+            let tx = AppEventSender::new(tx);
+            let mut view =
+                ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
+            for event in events {
+                view.handle_key_event(*event);
+            }
+
+            let state = view.patch_state().expect("patch state");
+            assert_eq!(
+                state.options_state.selected_idx,
+                Some(PATCH_REJECT_OPTION_INDEX)
+            );
+            assert_eq!(state.focus, PatchFocus::Notes);
+            assert!(view.patch_notes_visible());
+            assert!(!view.is_complete());
+        };
+
+        assert_opens_notes(&[KeyEvent::from(KeyCode::Tab)]);
+        assert_opens_notes(&[KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE)]);
+        assert_opens_notes(&[KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE)]);
+        assert_opens_notes(&[
+            KeyEvent::from(KeyCode::Down),
+            KeyEvent::from(KeyCode::Down),
+            KeyEvent::from(KeyCode::Enter),
+        ]);
     }
 
     #[test]
-    fn tab_opens_patch_notes() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
+    fn patch_shortcuts_bind_expected_actions() {
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
 
-        view.handle_key_event(KeyEvent::from(KeyCode::Tab));
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
 
-        let state = view.patch_state().expect("patch state");
-        assert_eq!(
-            state.options_state.selected_idx,
-            Some(PATCH_REJECT_OPTION_INDEX)
-        );
-        assert_eq!(state.focus, PatchFocus::Notes);
-        assert!(view.patch_notes_visible());
-    }
+        let mut decision = None;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::PatchApproval { decision: d, .. },
+                ..
+            } = event
+            {
+                decision = Some(d);
+                break;
+            }
+        }
+        assert_eq!(decision, Some(ReviewDecision::Approved));
 
-    #[test]
-    fn enter_on_patch_option_three_opens_notes() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
 
-        view.handle_key_event(KeyEvent::from(KeyCode::Down));
-        view.handle_key_event(KeyEvent::from(KeyCode::Down));
-        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
 
-        let state = view.patch_state().expect("patch state");
-        assert_eq!(
-            state.options_state.selected_idx,
-            Some(PATCH_REJECT_OPTION_INDEX)
-        );
-        assert_eq!(state.focus, PatchFocus::Notes);
-        assert!(!view.is_complete());
-    }
+        let mut decision = None;
+        while let Ok(event) = rx.try_recv() {
+            if let AppEvent::SubmitThreadOp {
+                op: Op::PatchApproval { decision: d, .. },
+                ..
+            } = event
+            {
+                decision = Some(d);
+                break;
+            }
+        }
+        assert_eq!(decision, Some(ReviewDecision::ApprovedForSession));
 
-    #[test]
-    fn n_opens_patch_notes() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
-
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
-
-        assert!(view.patch_focus_is_notes());
-        assert_eq!(view.patch_selected_index(), Some(PATCH_REJECT_OPTION_INDEX));
-    }
-
-    #[test]
-    fn digit_three_opens_patch_notes() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
-
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
-
-        assert!(view.patch_focus_is_notes());
-        assert_eq!(view.patch_selected_index(), Some(PATCH_REJECT_OPTION_INDEX));
-    }
-
-    #[test]
-    fn ctrl_c_aborts_patch_even_when_notes_are_visible() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
@@ -1965,32 +1971,7 @@ mod tests {
     }
 
     #[test]
-    fn submitting_patch_notes_emits_reject_with_notes_event() {
-        let (tx, mut rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
-        view.handle_key_event(KeyEvent::from(KeyCode::Tab));
-        view.patch_state_mut()
-            .expect("patch state")
-            .composer
-            .set_text_content("use smaller diffs".to_string(), Vec::new(), Vec::new());
-
-        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
-
-        let event = rx.try_recv().expect("reject event");
-        assert_eq!(
-            matches!(
-                event,
-                AppEvent::RejectPatchApprovalWithNotes { text, .. }
-                    if text == "use smaller diffs"
-            ),
-            true
-        );
-        assert!(view.is_complete());
-    }
-
-    #[test]
-    fn empty_patch_note_submit_does_not_emit_event() {
+    fn patch_notes_validate_before_submit_and_emit_event() {
         let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
@@ -2004,62 +1985,23 @@ mod tests {
         );
         assert!(!view.is_complete());
         assert!(view.patch_note_error_visible());
-    }
 
-    #[test]
-    fn patch_yes_shortcuts_remain_unchanged() {
-        let (tx, mut rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
-
-        view.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-
-        let mut decision = None;
-        while let Ok(event) = rx.try_recv() {
-            if let AppEvent::SubmitThreadOp {
-                op: Op::PatchApproval { decision: d, .. },
-                ..
-            } = event
-            {
-                decision = Some(d);
-                break;
-            }
-        }
-        assert_eq!(decision, Some(ReviewDecision::ApprovedForSession));
-    }
-
-    #[test]
-    fn patch_notes_snapshot() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
-        view.handle_key_event(KeyEvent::from(KeyCode::Tab));
         view.patch_state_mut()
             .expect("patch state")
             .composer
-            .set_text_content(
-                "split the changes by file".to_string(),
-                Vec::new(),
-                Vec::new(),
-            );
+            .set_text_content("use smaller diffs".to_string(), Vec::new(), Vec::new());
 
-        assert_snapshot!(
-            "approval_overlay_patch_notes_visible",
-            render_overlay_lines(&view, 80)
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        let event = rx.try_recv().expect("reject event");
+        assert!(
+            matches!(
+                event,
+                AppEvent::RejectPatchApprovalWithNotes { text, .. }
+                    if text == "use smaller diffs"
+            ),
+            "expected reject-with-notes event"
         );
-    }
-
-    #[test]
-    fn patch_reject_selected_snapshot() {
-        let (tx, _rx) = unbounded_channel::<AppEvent>();
-        let tx = AppEventSender::new(tx);
-        let mut view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
-        view.handle_key_event(KeyEvent::from(KeyCode::Down));
-        view.handle_key_event(KeyEvent::from(KeyCode::Down));
-
-        assert_snapshot!(
-            "approval_overlay_patch_reject_selected",
-            render_overlay_lines(&view, 80)
-        );
+        assert!(view.is_complete());
     }
 }

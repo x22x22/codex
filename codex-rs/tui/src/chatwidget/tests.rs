@@ -7730,7 +7730,7 @@ async fn apply_patch_approval_sends_op_with_call_id() {
 }
 
 #[tokio::test]
-async fn apply_patch_reject_with_notes_emits_steering_event_without_interrupt_banner() {
+async fn apply_patch_notes_choose_between_soft_reject_and_abort() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let mut changes = HashMap::new();
     changes.insert(
@@ -7800,10 +7800,7 @@ async fn apply_patch_reject_with_notes_emits_steering_event_without_interrupt_ba
         !saw_interruption_banner,
         "soft reject should not show the interruption banner"
     );
-}
 
-#[tokio::test]
-async fn apply_patch_escape_from_notes_still_aborts() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
     let mut changes = HashMap::new();
     changes.insert(

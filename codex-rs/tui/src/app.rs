@@ -3868,8 +3868,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reject_patch_with_notes_submits_denied_then_user_input() -> Result<()> {
-        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+    async fn reject_patch_with_notes_submits_ops_and_renders_follow_up() -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
         app.active_thread_id = Some(thread_id);
 
@@ -3877,7 +3877,7 @@ mod tests {
             &mut app,
             thread_id,
             "call-1",
-            "please split this into smaller patches",
+            "i want the content to say bye instead.",
         )
         .await;
 
@@ -3892,28 +3892,13 @@ mod tests {
             op_rx.try_recv(),
             Ok(Op::UserInput {
                 items: vec![UserInput::Text {
-                    text: "please split this into smaller patches".to_string(),
+                    text: "i want the content to say bye instead.".to_string(),
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
             })
         );
-        Ok(())
-    }
 
-    #[tokio::test]
-    async fn reject_patch_with_notes_renders_follow_up_in_active_transcript() -> Result<()> {
-        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
-        let thread_id = ThreadId::new();
-        app.active_thread_id = Some(thread_id);
-
-        reject_patch_with_notes_for_test(
-            &mut app,
-            thread_id,
-            "call-2",
-            "i want the content to say bye instead.",
-        )
-        .await;
         drain_insert_history_cells(&mut app, &mut app_event_rx);
 
         let user_messages: Vec<String> = app
