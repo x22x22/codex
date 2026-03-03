@@ -29,6 +29,7 @@ use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConstrainedWithSource;
+use crate::config_loader::FeatureRequirementsToml;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::McpServerIdentity;
 use crate::config_loader::McpServerRequirement;
@@ -39,6 +40,8 @@ use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
+use crate::features::canonical_feature_for_key;
+use crate::features::feature_for_key;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -808,6 +811,88 @@ where
     }
 
     Ok(())
+}
+
+fn feature_requirements_display(feature_requirements: &BTreeMap<Feature, bool>) -> String {
+    let values = feature_requirements
+        .iter()
+        .map(|(feature, enabled)| format!("{}={enabled}", feature.key()))
+        .collect::<Vec<_>>();
+    format!("[{}]", values.join(", "))
+}
+
+fn apply_feature_requirements(
+    configured_features: Features,
+    feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<Features> {
+    let Some(Sourced {
+        value: feature_requirements,
+        source,
+    }) = feature_requirements
+    else {
+        return Ok(configured_features);
+    };
+
+    let mut pinned_features = BTreeMap::new();
+    for (key, enabled) in feature_requirements.entries {
+        if let Some(feature) = canonical_feature_for_key(&key) {
+            pinned_features.insert(feature, enabled);
+            continue;
+        }
+
+        if let Some(feature) = feature_for_key(&key) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "invalid `feature_requirements` entry `{key}` from {source}: use canonical feature key `{}`",
+                    feature.key()
+                ),
+            ));
+        }
+
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid `feature_requirements` entry `{key}` from {source}"),
+        ));
+    }
+
+    if pinned_features.is_empty() {
+        return Ok(configured_features);
+    }
+
+    let pinned_features_for_normalizer = pinned_features.clone();
+    let constrained =
+        Constrained::normalized(configured_features, move |mut candidate: Features| {
+            for (feature, enabled) in &pinned_features_for_normalizer {
+                candidate.set_enabled(*feature, *enabled);
+            }
+            candidate.normalize_dependencies();
+            candidate
+        })
+        .map_err(std::io::Error::from)?;
+    let constrained_features = ConstrainedWithSource::new(constrained, Some(source.clone()));
+    let normalized_features = constrained_features.get();
+
+    let allowed = feature_requirements_display(&pinned_features);
+    for (feature, enabled) in &pinned_features {
+        if normalized_features.enabled(*feature) != *enabled {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                ConstraintError::InvalidValue {
+                    field_name: "features",
+                    candidate: format!(
+                        "{}={}",
+                        feature.key(),
+                        normalized_features.enabled(*feature)
+                    ),
+                    allowed,
+                    requirement_source: source,
+                },
+            ));
+        }
+    }
+
+    Ok(normalized_features.clone())
 }
 
 fn mcp_server_matches_requirement(
@@ -1739,7 +1824,11 @@ impl Config {
             web_search_request: override_tools_web_search_request,
         };
 
-        let features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let configured_features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let features = apply_feature_requirements(
+            configured_features,
+            requirements.feature_requirements.clone(),
+        )?;
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let resolved_cwd = {
             use std::env;
@@ -2058,6 +2147,7 @@ impl Config {
             approval_policy: mut constrained_approval_policy,
             sandbox_policy: mut constrained_sandbox_policy,
             web_search_mode: mut constrained_web_search_mode,
+            feature_requirements: _,
             mcp_servers,
             exec_policy: _,
             enforce_residency,
@@ -5394,6 +5484,7 @@ model_verbosity = "high"
             allowed_web_search_modes: Some(vec![
                 crate::config_loader::WebSearchModeRequirement::Cached,
             ]),
+            feature_requirements: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
@@ -5998,6 +6089,7 @@ mcp_oauth_callback_url = "https://example.com/callback"
                 crate::config_loader::SandboxModeRequirement::ReadOnly,
             ]),
             allowed_web_search_modes: None,
+            feature_requirements: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
@@ -6116,6 +6208,110 @@ trust_level = "untrusted"
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn feature_requirements_override_default_feature_values() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                        entries: BTreeMap::from([
+                            ("personality".to_string(), true),
+                            ("shell_tool".to_string(), false),
+                        ]),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await?;
+
+        assert!(config.features.enabled(Feature::Personality));
+        assert!(!config.features.enabled(Feature::ShellTool));
+        assert!(
+            !config
+                .startup_warnings
+                .iter()
+                .any(|warning| warning.contains("Configured value for `features`")),
+            "{:?}",
+            config.startup_warnings
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_feature_config_is_normalized_by_requirements() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"
+[features]
+personality = false
+shell_tool = true
+"#,
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                        entries: BTreeMap::from([
+                            ("personality".to_string(), true),
+                            ("shell_tool".to_string(), false),
+                        ]),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await?;
+
+        assert!(config.features.enabled(Feature::Personality));
+        assert!(!config.features.enabled(Feature::ShellTool));
+        assert!(
+            !config
+                .startup_warnings
+                .iter()
+                .any(|warning| warning.contains("Configured value for `features`")),
+            "{:?}",
+            config.startup_warnings
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn feature_requirements_reject_legacy_aliases() {
+        let codex_home = TempDir::new().expect("tempdir");
+
+        let err = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                        entries: BTreeMap::from([("collab".to_string(), true)]),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await
+            .expect_err("legacy aliases should be rejected");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string()
+                .contains("use canonical feature key `multi_agent`"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
         let cfg: ConfigToml = toml::from_str(
