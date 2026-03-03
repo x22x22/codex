@@ -6130,10 +6130,10 @@ trust_level = "untrusted"
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(codex_home.path().to_path_buf()))
             .cloud_requirements(CloudRequirementsLoader::new(async {
-                Some(crate::config_loader::ConfigRequirementsToml {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
                     allowed_approval_policies: Some(vec![AskForApproval::UnlessTrusted]),
                     ..Default::default()
-                })
+                }))
             }))
             .build()
             .await?;
@@ -6185,10 +6185,10 @@ experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
                 TomlValue::String("on-request".to_string()),
             )])
             .cloud_requirements(CloudRequirementsLoader::new(async {
-                Some(crate::config_loader::ConfigRequirementsToml {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
                     allowed_approval_policies: Some(vec![AskForApproval::UnlessTrusted]),
                     ..Default::default()
-                })
+                }))
             }))
             .build()
             .await?;
@@ -6213,10 +6213,10 @@ experimental_realtime_ws_base_url = "http://127.0.0.1:8011"
             .codex_home(codex_home.path().to_path_buf())
             .fallback_cwd(Some(codex_home.path().to_path_buf()))
             .cloud_requirements(CloudRequirementsLoader::new(async {
-                Some(crate::config_loader::ConfigRequirementsToml {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
                     allowed_approval_policies: Some(vec![AskForApproval::UnlessTrusted]),
                     ..Default::default()
-                })
+                }))
             }))
             .build()
             .await?;
