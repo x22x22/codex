@@ -1,3 +1,4 @@
+use crate::config::Permissions;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::default_project_root_markers;
@@ -11,6 +12,8 @@ use crate::skills::model::SkillLoadOutcome;
 use crate::skills::model::SkillMetadata;
 use crate::skills::model::SkillPolicy;
 use crate::skills::model::SkillToolDependency;
+use crate::skills::permissions::compile_permission_profile;
+use crate::skills::permissions::normalize_permission_profile;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_protocol::models::PermissionProfile;
@@ -58,7 +61,23 @@ struct SkillMetadataFile {
     #[serde(default)]
     policy: Option<Policy>,
     #[serde(default)]
-    permissions: Option<PermissionProfile>,
+    permissions: Option<SkillPermissionsConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SkillPermissionsMode {
+    #[default]
+    Merge,
+    Exact,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SkillPermissionsConfig {
+    #[serde(default)]
+    mode: SkillPermissionsMode,
+    #[serde(flatten)]
+    profile: PermissionProfile,
 }
 
 #[derive(Default)]
@@ -67,6 +86,7 @@ struct LoadedSkillMetadata {
     dependencies: Option<SkillDependencies>,
     policy: Option<SkillPolicy>,
     permission_profile: Option<PermissionProfile>,
+    permissions: Option<Permissions>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -525,6 +545,7 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         dependencies,
         policy,
         permission_profile,
+        permissions,
     } = load_skill_metadata(path);
 
     validate_len(&name, MAX_NAME_LEN, "name")?;
@@ -547,6 +568,7 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         dependencies,
         policy,
         permission_profile,
+        permissions,
         path_to_skills_md: resolved_path,
         scope,
     })
@@ -612,11 +634,23 @@ fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
         policy,
         permissions,
     } = parsed;
+    let permission_profile = permissions
+        .as_ref()
+        .map(|permissions| normalize_permission_profile(permissions.profile.clone()))
+        .filter(|profile| !profile.is_empty());
+    let exact_permissions = permissions.and_then(|permissions| {
+        if matches!(permissions.mode, SkillPermissionsMode::Exact) {
+            compile_permission_profile(Some(permissions.profile))
+        } else {
+            None
+        }
+    });
     LoadedSkillMetadata {
         interface: resolve_interface(interface, skill_dir),
         dependencies: resolve_dependencies(dependencies),
         policy: resolve_policy(policy),
-        permission_profile: permissions.filter(|profile| !profile.is_empty()),
+        permission_profile,
+        permissions: exact_permissions,
     }
 }
 
@@ -856,7 +890,9 @@ mod tests {
     use crate::config::ConfigBuilder;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
+    use crate::config::Constrained;
     use crate::config::ProjectConfig;
+    use crate::config::types::ShellEnvironmentPolicy;
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;
     use crate::config_loader::ConfigRequirements;
@@ -1090,6 +1126,7 @@ mod tests {
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1247,6 +1284,7 @@ mod tests {
                 }),
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1303,6 +1341,7 @@ interface:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(skill_path.as_path()),
                 scope: SkillScope::User,
             }]
@@ -1422,6 +1461,7 @@ permissions:
                 macos: None,
             })
         );
+        assert_eq!(outcome.skills[0].permissions, None);
     }
 
     #[tokio::test]
@@ -1447,6 +1487,131 @@ permissions: {}
         );
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(outcome.skills[0].permission_profile, None);
+        assert_eq!(outcome.skills[0].permissions, None);
+    }
+
+    #[tokio::test]
+    async fn loads_exact_skill_permissions_from_yaml() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "permissions-skill-exact", "from yaml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+        fs::create_dir_all(skill_dir.join("data")).expect("create read path");
+        fs::create_dir_all(skill_dir.join("output")).expect("create write path");
+
+        write_skill_metadata_at(
+            skill_dir,
+            r#"
+permissions:
+  mode: exact
+  network: true
+  file_system:
+    read:
+      - "./data"
+    write:
+      - "./output"
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills_for_test(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        #[cfg(target_os = "macos")]
+        let macos_seatbelt_profile_extensions =
+            Some(crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions::default());
+        #[cfg(not(target_os = "macos"))]
+        let macos_seatbelt_profile_extensions = None;
+        assert_eq!(
+            outcome.skills[0].permissions,
+            Some(Permissions {
+                approval_policy: Constrained::allow_any(crate::protocol::AskForApproval::Never),
+                sandbox_policy: Constrained::allow_any(
+                    crate::protocol::SandboxPolicy::WorkspaceWrite {
+                        writable_roots: vec![
+                            AbsolutePathBuf::try_from(normalized(
+                                skill_dir.join("output").as_path(),
+                            ))
+                            .expect("absolute output path")
+                        ],
+                        read_only_access: crate::protocol::ReadOnlyAccess::Restricted {
+                            include_platform_defaults: true,
+                            readable_roots: vec![
+                                AbsolutePathBuf::try_from(normalized(
+                                    skill_dir.join("data").as_path(),
+                                ))
+                                .expect("absolute data path")
+                            ],
+                        },
+                        network_access: true,
+                        exclude_tmpdir_env_var: false,
+                        exclude_slash_tmp: false,
+                    }
+                ),
+                network: None,
+                allow_login_shell: true,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+                macos_seatbelt_profile_extensions,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_exact_skill_permissions_compile_default_sandbox() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let skill_path = write_skill(&codex_home, "demo", "permissions-empty-exact", "from yaml");
+        let skill_dir = skill_path.parent().expect("skill dir");
+
+        write_skill_metadata_at(
+            skill_dir,
+            r#"
+permissions:
+  mode: exact
+"#,
+        );
+
+        let cfg = make_config(&codex_home).await;
+        let outcome = load_skills_for_test(&cfg);
+
+        assert!(
+            outcome.errors.is_empty(),
+            "unexpected errors: {:?}",
+            outcome.errors
+        );
+        assert_eq!(outcome.skills.len(), 1);
+        #[cfg(target_os = "macos")]
+        let expected = Some(Permissions {
+            approval_policy: Constrained::allow_any(crate::protocol::AskForApproval::Never),
+            sandbox_policy: Constrained::allow_any(
+                crate::protocol::SandboxPolicy::new_read_only_policy(),
+            ),
+            network: None,
+            allow_login_shell: true,
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
+            windows_sandbox_mode: None,
+            macos_seatbelt_profile_extensions: Some(
+                crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions::default(),
+            ),
+        });
+        #[cfg(not(target_os = "macos"))]
+        let expected = Some(Permissions {
+            approval_policy: Constrained::allow_any(crate::protocol::AskForApproval::Never),
+            sandbox_policy: Constrained::allow_any(
+                crate::protocol::SandboxPolicy::new_read_only_policy(),
+            ),
+            network: None,
+            allow_login_shell: true,
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
+            windows_sandbox_mode: None,
+            macos_seatbelt_profile_extensions: None,
+        });
+        assert_eq!(outcome.skills[0].permission_profile, None);
+        assert_eq!(outcome.skills[0].permissions, expected);
     }
 
     #[cfg(target_os = "macos")]
@@ -1460,6 +1625,7 @@ permissions: {}
             skill_dir,
             r#"
 permissions:
+  mode: exact
   macos:
     preferences: "readwrite"
     automations:
@@ -1478,21 +1644,24 @@ permissions:
             outcome.errors
         );
         assert_eq!(outcome.skills.len(), 1);
+        let profile = outcome.skills[0]
+            .permissions
+            .as_ref()
+            .expect("permission profile");
         assert_eq!(
-            outcome.skills[0].permission_profile,
-            Some(PermissionProfile {
-                macos: Some(codex_protocol::models::MacOsPermissions {
-                    preferences: Some(codex_protocol::models::MacOsPreferencesValue::Mode(
-                        "readwrite".to_string(),
-                    ),),
-                    automations: Some(codex_protocol::models::MacOsAutomationValue::BundleIds(
-                        vec!["com.apple.Notes".to_string()],
-                    )),
-                    accessibility: Some(true),
-                    calendar: Some(true),
-                }),
-                ..Default::default()
-            })
+            profile.macos_seatbelt_profile_extensions,
+            Some(
+                crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions {
+                    macos_preferences:
+                        crate::seatbelt_permissions::MacOsPreferencesPermission::ReadWrite,
+                    macos_automation:
+                        crate::seatbelt_permissions::MacOsAutomationPermission::BundleIds(vec![
+                            "com.apple.Notes".to_string()
+                        ],),
+                    macos_accessibility: true,
+                    macos_calendar: true,
+                }
+            )
         );
     }
 
@@ -1507,6 +1676,7 @@ permissions:
             skill_dir,
             r#"
 permissions:
+  mode: exact
   macos:
     preferences: "readwrite"
     automations:
@@ -1526,19 +1696,17 @@ permissions:
         );
         assert_eq!(outcome.skills.len(), 1);
         assert_eq!(
-            outcome.skills[0].permission_profile,
-            Some(PermissionProfile {
-                macos: Some(codex_protocol::models::MacOsPermissions {
-                    preferences: Some(codex_protocol::models::MacOsPreferencesValue::Mode(
-                        "readwrite".to_string(),
-                    )),
-                    automations: Some(codex_protocol::models::MacOsAutomationValue::BundleIds(
-                        vec!["com.apple.Notes".to_string()],
-                    )),
-                    accessibility: Some(true),
-                    calendar: Some(true),
-                }),
-                ..Default::default()
+            outcome.skills[0].permissions,
+            Some(Permissions {
+                approval_policy: Constrained::allow_any(crate::protocol::AskForApproval::Never),
+                sandbox_policy: Constrained::allow_any(
+                    crate::protocol::SandboxPolicy::new_read_only_policy(),
+                ),
+                network: None,
+                allow_login_shell: true,
+                shell_environment_policy: ShellEnvironmentPolicy::default(),
+                windows_sandbox_mode: None,
+                macos_seatbelt_profile_extensions: None,
             })
         );
     }
@@ -1588,6 +1756,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1629,6 +1798,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1683,6 +1853,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1725,6 +1896,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1770,6 +1942,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&shared_skill_path),
                 scope: SkillScope::User,
             }]
@@ -1831,6 +2004,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -1868,6 +2042,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&shared_skill_path),
                 scope: SkillScope::Admin,
             }]
@@ -1909,6 +2084,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&linked_skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -1977,6 +2153,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&within_depth_path),
                 scope: SkillScope::User,
             }]
@@ -2005,6 +2182,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -2038,6 +2216,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -2080,6 +2259,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -2112,6 +2292,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::User,
             }]
@@ -2225,6 +2406,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -2261,6 +2443,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -2315,6 +2498,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permission_profile: None,
+                    permissions: None,
                     path_to_skills_md: normalized(&nested_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -2326,6 +2510,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permission_profile: None,
+                    permissions: None,
                     path_to_skills_md: normalized(&root_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -2366,6 +2551,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -2404,6 +2590,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -2446,6 +2633,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permission_profile: None,
+                    permissions: None,
                     path_to_skills_md: normalized(&repo_skill_path),
                     scope: SkillScope::Repo,
                 },
@@ -2457,6 +2645,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permission_profile: None,
+                    permissions: None,
                     path_to_skills_md: normalized(&user_skill_path),
                     scope: SkillScope::User,
                 },
@@ -2522,6 +2711,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permission_profile: None,
+                    permissions: None,
                     path_to_skills_md: first_path,
                     scope: SkillScope::Repo,
                 },
@@ -2533,6 +2723,7 @@ permissions:
                     dependencies: None,
                     policy: None,
                     permission_profile: None,
+                    permissions: None,
                     path_to_skills_md: second_path,
                     scope: SkillScope::Repo,
                 },
@@ -2605,6 +2796,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::Repo,
             }]
@@ -2664,6 +2856,7 @@ permissions:
                 dependencies: None,
                 policy: None,
                 permission_profile: None,
+                permissions: None,
                 path_to_skills_md: normalized(&skill_path),
                 scope: SkillScope::System,
             }]
