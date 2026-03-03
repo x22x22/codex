@@ -87,6 +87,13 @@ impl ChatWidget {
         )
     }
 
+    /// Build the compare key for a submitted pending steer using the same lossy
+    /// `UserInput -> ResponseInputItem -> UserMessageItem` normalization that core
+    /// applies when steering input into an active turn.
+    ///
+    /// Pending steers keep the full `UserMessage` for interrupt restore, but they
+    /// must match `ItemCompleted(UserMessage)` against the normalized shape core
+    /// later emits after draining pending input.
     pub(super) fn rendered_user_message_event_from_normalized_items(
         items: &[UserInput],
     ) -> RenderedUserMessageEvent {
