@@ -116,19 +116,7 @@ impl ChatWidget {
     pub(super) fn pending_steer_compare_key_from_item(
         item: &codex_protocol::items::UserMessageItem,
     ) -> PendingSteerCompareKey {
-        let mut image_count = 0;
-        for input in &item.content {
-            match input {
-                UserInput::Image { .. } | UserInput::LocalImage { .. } => image_count += 1,
-                UserInput::Text { .. } | UserInput::Skill { .. } | UserInput::Mention { .. } => {}
-                _ => {}
-            }
-        }
-
-        PendingSteerCompareKey {
-            message: item.message(),
-            image_count,
-        }
+        Self::pending_steer_compare_key_from_items(&item.content)
     }
 
     #[cfg(test)]
