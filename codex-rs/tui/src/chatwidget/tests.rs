@@ -1505,6 +1505,32 @@ async fn live_agent_message_renders_during_review_mode() {
     assert!(lines_to_single_string(&inserted[0]).contains("Review progress update"));
 }
 
+#[tokio::test]
+async fn thread_snapshot_replay_preserves_agent_message_during_review_mode() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event_replay(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            target: ReviewTarget::UncommittedChanges,
+            user_facing_hint: None,
+        }),
+    });
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_codex_event_replay(Event {
+        id: "review-message".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Review progress update".to_string(),
+            phase: None,
+        }),
+    });
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert!(lines_to_single_string(&inserted[0]).contains("Review progress update"));
+}
+
 /// Exiting review restores the pre-review context window indicator.
 #[tokio::test]
 async fn review_restores_context_window_indicator() {

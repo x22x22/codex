@@ -4468,12 +4468,14 @@ impl ChatWidget {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
             EventMsg::AgentMessage(AgentMessageEvent { .. })
-                if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot)) => {}
+                if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+                    && !self.is_review_mode => {}
             EventMsg::AgentMessage(AgentMessageEvent { message, .. })
                 if from_replay || self.is_review_mode =>
             {
-                // TODO(ccunningham): stop relying on legacy AgentMessage in review mode and
-                // forward ItemCompleted(TurnItem::AgentMessage(_)) instead.
+                // TODO(ccunningham): stop relying on legacy AgentMessage in review mode,
+                // including thread-snapshot replay, and forward
+                // ItemCompleted(TurnItem::AgentMessage(_)) instead.
                 self.on_agent_message(message)
             }
             EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
