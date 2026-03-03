@@ -768,11 +768,11 @@ pub(crate) fn trust_disabled_project_dirs_from_layer_stack(
             ConfigLayerSource::User { file } => Some(file.clone()),
             _ => None,
         })
-        .unwrap_or_else(|| {
-            cwd_abs
-                .join(CONFIG_TOML_FILE)
-                .expect("joining absolute cwd with config filename should succeed")
-        });
+        .or_else(|| cwd_abs.join(CONFIG_TOML_FILE).ok());
+    let Some(user_config_file) = user_config_file else {
+        tracing::warn!("failed to synthesize a user config path while gating skills");
+        return HashSet::new();
+    };
 
     let trust_context = match project_trust_context_sync(
         &merged,
