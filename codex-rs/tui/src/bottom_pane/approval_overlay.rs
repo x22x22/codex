@@ -382,7 +382,7 @@ impl ApprovalOverlay {
                 "enter or tab to edit rejection | esc to interrupt".to_string()
             }
         } else if self.patch_selected_index() == Some(PATCH_REJECT_OPTION_INDEX) {
-            "tab to explain rejection | esc to interrupt".to_string()
+            "tab to follow up | esc to interrupt".to_string()
         } else {
             "esc to interrupt".to_string()
         };

@@ -16,4 +16,4 @@ expression: "render_overlay_lines(&view, 80)"
     1. Yes, proceed
     2. Yes, and don't ask again for these files
   › 3. No, and tell Codex what to do differently
-  tab to explain rejection | esc to interrupt
+  tab to follow up | esc to interrupt
