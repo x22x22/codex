@@ -3846,7 +3846,7 @@ async fn normalized_item_completed_pops_pending_steer_with_local_image_and_text_
             path: image_path,
         }],
         remote_image_urls: Vec::new(),
-        text_elements: text_elements.clone(),
+        text_elements,
         mention_bindings: Vec::new(),
     });
 
