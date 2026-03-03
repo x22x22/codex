@@ -1,9 +1,11 @@
 use font8x8::BASIC_FONTS;
 use font8x8::UnicodeFonts;
+use fontdue::Font;
 use image::DynamicImage;
 use image::Rgba;
 use image::RgbaImage;
 use std::f32::consts::PI;
+use std::sync::{Arc, Mutex, OnceLock};
 use tiny_skia::FillRule;
 use tiny_skia::LineCap;
 use tiny_skia::LineJoin;
@@ -22,6 +24,19 @@ const DEFAULT_TABLE_GRID_HEX: &str = "BFC5CC";
 const DEFAULT_COMMENT_HEX: &str = "F3C83C";
 const DEFAULT_TEXT_INSET: u32 = 6;
 const MIN_TEXT_PIXELS: u32 = 8;
+const PREVIEW_SUPERSAMPLE_SCALE: f32 = 2.0;
+const CHART_EXPORT_SCALE: f32 = 2.0;
+const DEFAULT_PREVIEW_FONT_SIZE_RATIO: f32 = 0.85;
+const PREVIEW_FONT_DIRS: [&str; 3] = [
+    "/Library/Fonts",
+    "/System/Library/Fonts/Supplemental",
+    "/System/Library/Fonts",
+];
+const PREVIEW_FONT_FALLBACKS: [&str; 5] =
+    ["Arial", "Helvetica", "Avenir", "Times", "Courier"];
+
+static PREVIEW_FONT_CACHE: OnceLock<Mutex<std::collections::HashMap<String, Option<Arc<Font>>>>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RenderOptions {
@@ -47,6 +62,7 @@ struct TextRenderConfig {
     width: u32,
     font_px: u32,
     line_height: u32,
+    baseline_offset: u32,
     wrap: TextWrapMode,
     vertical_alignment: TextVerticalAlignment,
     alignment: TextAlignment,
@@ -72,12 +88,57 @@ fn render_slide_png(
         });
     }
 
+    let target_width = scaled_dimension(document.slide_size.width, options.scale);
+    let target_height = scaled_dimension(document.slide_size.height, options.scale);
+    let render_scale = options.scale * PREVIEW_SUPERSAMPLE_SCALE;
+    let mut canvas = render_slide_image(document, slide_index, options, render_scale)?;
+    if PREVIEW_SUPERSAMPLE_SCALE > 1.0 && (canvas.width() != target_width || canvas.height() != target_height)
+    {
+        canvas = image::imageops::resize(
+            &canvas,
+            target_width.max(1),
+            target_height.max(1),
+            image::imageops::FilterType::Lanczos3,
+        );
+    }
+
+    let mut output = std::io::Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(canvas)
+        .write_to(&mut output, image::ImageFormat::Png)
+        .map_err(|error| PresentationArtifactError::RenderFailed {
+            action: "render_preview".to_string(),
+            message: error.to_string(),
+        })?;
+    Ok(output.into_inner())
+}
+
+fn render_chart_png_bytes(
+    document: &PresentationDocument,
+    chart: &ChartElement,
+) -> Result<Vec<u8>, PresentationArtifactError> {
+    let rendered = render_chart_element(chart, document, CHART_EXPORT_SCALE)?;
+    let mut output = std::io::Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(rendered)
+        .write_to(&mut output, image::ImageFormat::Png)
+        .map_err(|error| PresentationArtifactError::RenderFailed {
+            action: "export_pptx".to_string(),
+            message: error.to_string(),
+        })?;
+    Ok(output.into_inner())
+}
+
+fn render_slide_image(
+    document: &PresentationDocument,
+    slide_index: usize,
+    options: RenderOptions,
+    render_scale: f32,
+) -> Result<RgbaImage, PresentationArtifactError> {
     let slide = document
         .slides
         .get(slide_index)
         .ok_or_else(|| index_out_of_range("render_preview", slide_index, document.slides.len()))?;
-    let width = scaled_dimension(document.slide_size.width, options.scale);
-    let height = scaled_dimension(document.slide_size.height, options.scale);
+    let width = scaled_dimension(document.slide_size.width, render_scale);
+    let height = scaled_dimension(document.slide_size.height, render_scale);
     let mut canvas = RgbaImage::from_pixel(width, height, Rgba([0, 0, 0, 0]));
 
     if options.include_background {
@@ -94,19 +155,11 @@ fn render_slide_png(
     let mut ordered = slide.elements.iter().collect::<Vec<_>>();
     ordered.sort_by_key(|element| element.z_order());
     for element in ordered {
-        render_element(&mut canvas, document, slide, element, options.scale)?;
+        render_element(&mut canvas, document, slide, element, render_scale)?;
     }
 
-    render_comment_overlays(&mut canvas, document, slide, options.scale);
-
-    let mut output = std::io::Cursor::new(Vec::new());
-    DynamicImage::ImageRgba8(canvas)
-        .write_to(&mut output, image::ImageFormat::Png)
-        .map_err(|error| PresentationArtifactError::RenderFailed {
-            action: "render_preview".to_string(),
-            message: error.to_string(),
-        })?;
-    Ok(output.into_inner())
+    render_comment_overlays(&mut canvas, document, slide, render_scale);
+    Ok(canvas)
 }
 
 fn render_element(
@@ -629,38 +682,41 @@ fn render_bar_chart(
     height: u32,
     scale: f32,
 ) {
-    let baseline = top + height;
-    draw_chart_axes(image, left, top, width, height);
+    let (min_value, max_value) = chart_value_domain(chart);
+    let baseline = chart_axis_y(top, height, min_value, max_value, 0.0);
+    draw_chart_axes(image, left, top, width, height, baseline);
     let series_count = chart.series.len().max(1) as u32;
     let category_count = chart.categories.len().max(1) as u32;
-    let max_value = chart
-        .series
-        .iter()
-        .flat_map(|series| series.values.iter().copied())
-        .fold(0.0f64, f64::max)
-        .max(1.0);
     let group_width = width as f32 / category_count as f32;
     let bar_width = (group_width / series_count as f32 * 0.72).max(2.0);
     for (series_index, series) in chart.series.iter().enumerate() {
         let color = chart_series_color(series, series_index);
         for (value_index, value) in series.values.iter().enumerate() {
-            let bar_height = ((*value / max_value) as f32 * height as f32).round().max(0.0) as u32;
             let x = left as f32
                 + group_width * value_index as f32
                 + (group_width - bar_width * series_count as f32) / 2.0
                 + bar_width * series_index as f32;
-            let y = baseline.saturating_sub(bar_height);
+            let value_y = chart_axis_y(top, height, min_value, max_value, *value);
+            let y = value_y.min(baseline);
+            let bar_height = value_y.abs_diff(baseline).max(1);
             fill_rect(
                 image,
                 x.round() as u32,
                 y,
                 bar_width.round().max(1.0) as u32,
-                bar_height.max(1),
+                bar_height,
                 color,
             );
         }
     }
-    render_category_labels(image, &chart.categories, left, baseline + 4, width, scale);
+    render_category_labels(
+        image,
+        &chart.categories,
+        left,
+        top + height + 4,
+        width,
+        scale,
+    );
 }
 
 fn render_line_chart(
@@ -672,21 +728,16 @@ fn render_line_chart(
     height: u32,
     scale: f32,
 ) {
-    draw_chart_axes(image, left, top, width, height);
-    let baseline = top + height;
+    let (min_value, max_value) = chart_value_domain(chart);
+    let baseline = chart_axis_y(top, height, min_value, max_value, 0.0);
+    draw_chart_axes(image, left, top, width, height, baseline);
     let point_count = chart.categories.len().max(2);
-    let max_value = chart
-        .series
-        .iter()
-        .flat_map(|series| series.values.iter().copied())
-        .fold(0.0f64, f64::max)
-        .max(1.0);
     for (series_index, series) in chart.series.iter().enumerate() {
         let color = chart_series_color(series, series_index);
         let mut points = Vec::new();
         for (value_index, value) in series.values.iter().enumerate() {
             let x = left as f32 + width as f32 * value_index as f32 / (point_count - 1) as f32;
-            let y = baseline as f32 - ((*value / max_value) as f32 * height as f32);
+            let y = chart_axis_y(top, height, min_value, max_value, *value) as f32;
             points.push((x, y));
         }
         if points.len() >= 2
@@ -717,7 +768,38 @@ fn render_line_chart(
             );
         }
     }
-    render_category_labels(image, &chart.categories, left, baseline + 4, width, scale);
+    render_category_labels(
+        image,
+        &chart.categories,
+        left,
+        top + height + 4,
+        width,
+        scale,
+    );
+}
+
+fn chart_value_domain(chart: &ChartElement) -> (f64, f64) {
+    let mut min_value = 0.0f64;
+    let mut max_value = 0.0f64;
+    for value in chart
+        .series
+        .iter()
+        .flat_map(|series| series.values.iter().copied())
+    {
+        min_value = min_value.min(value);
+        max_value = max_value.max(value);
+    }
+    if (max_value - min_value).abs() < f64::EPSILON {
+        max_value += 1.0;
+    }
+    (min_value, max_value)
+}
+
+fn chart_axis_y(top: u32, height: u32, min_value: f64, max_value: f64, value: f64) -> u32 {
+    let span = (max_value - min_value).max(f64::EPSILON);
+    let normalized = ((value - min_value) / span).clamp(0.0, 1.0);
+    let bottom = top + height;
+    bottom.saturating_sub((normalized * height as f64).round() as u32)
 }
 
 fn render_pie_chart(
@@ -776,9 +858,30 @@ fn render_chart_legend(
         if cursor >= left + width {
             break;
         }
-        fill_rect(image, cursor, top + (height.saturating_sub(swatch)) / 2, swatch, swatch, chart_series_color(series, index));
+        fill_rect(
+            image,
+            cursor,
+            top + (height.saturating_sub(swatch)) / 2,
+            swatch,
+            swatch,
+            chart_series_color(series, index),
+        );
         cursor += swatch + scaled_dimension(4, scale);
-        let label_width = scaled_dimension((series.name.chars().count() as u32).saturating_mul(7), scale).max(40);
+        let label_style = TextStyle {
+            font_size: Some(12),
+            color: Some(DEFAULT_TEXT_HEX.to_string()),
+            ..TextStyle::default()
+        };
+        let label_rich_text = RichTextState {
+            layout: TextLayoutState {
+                vertical_alignment: Some(TextVerticalAlignment::Middle),
+                ..TextLayoutState::default()
+            },
+            ..RichTextState::default()
+        };
+        let label_width = measure_text_width(&series.name, &label_style, &label_rich_text, None, scale)
+            .saturating_add(scaled_dimension(8, scale))
+            .max(40);
         draw_text_in_bounds(
             image,
             TextBounds {
@@ -788,23 +891,27 @@ fn render_chart_legend(
                 height,
             },
             &series.name,
-            &TextStyle {
-                font_size: Some(12),
-                color: Some(DEFAULT_TEXT_HEX.to_string()),
-                ..TextStyle::default()
-            },
-            &RichTextState {
-                layout: TextLayoutState {
-                    vertical_alignment: Some(TextVerticalAlignment::Middle),
-                    ..TextLayoutState::default()
-                },
-                ..RichTextState::default()
-            },
+            &label_style,
+            &label_rich_text,
             None,
             scale,
         );
         cursor += label_width + scaled_dimension(10, scale);
     }
+}
+
+fn measure_text_width(
+    text: &str,
+    style: &TextStyle,
+    rich_text: &RichTextState,
+    hyperlink: Option<&HyperlinkState>,
+    scale: f32,
+) -> u32 {
+    let font_px = scaled_dimension(style.font_size.unwrap_or(14), scale).max(MIN_TEXT_PIXELS);
+    styled_glyphs(text, style, rich_text, hyperlink)
+        .iter()
+        .map(|glyph| measure_glyph_width(glyph, font_px))
+        .sum()
 }
 
 fn render_comment_overlays(
@@ -922,11 +1029,12 @@ fn draw_text_in_bounds(
     let mut font_px = scaled_dimension(style.font_size.unwrap_or(14), scale).max(MIN_TEXT_PIXELS);
     let auto_fit = rich_text.layout.auto_fit.unwrap_or(TextAutoFitMode::None);
     let config = loop {
-        let line_height = ((font_px as f32) * 1.35).round().max(font_px as f32) as u32;
+        let (line_height, baseline_offset) = preview_line_metrics(style, font_px);
         let config = TextRenderConfig {
             width: content_width,
             font_px,
             line_height,
+            baseline_offset,
             wrap,
             vertical_alignment,
             alignment,
@@ -972,7 +1080,8 @@ fn draw_text_in_bounds(
 
         let mut x = start_x;
         for glyph in &line.glyphs {
-            let glyph_width = draw_bitmap_glyph(image, x, y, glyph, config.font_px);
+            let glyph_width =
+                draw_bitmap_glyph(image, x, y, glyph, config.font_px, config.baseline_offset);
             x = x.saturating_add(glyph_width);
             if glyph.ch == ' ' && justify_gap > 0 {
                 x = x.saturating_add(justify_gap);
@@ -1043,11 +1152,13 @@ fn layout_text_lines(glyphs: &[StyledGlyph], config: TextRenderConfig) -> Vec<Te
     let mut current_spaces = 0;
     for glyph in glyphs {
         if glyph.ch == '\n' {
-            lines.push(TextLine {
-                glyphs: std::mem::take(&mut current),
-                width: current_width,
-                spaces: current_spaces,
-            });
+            push_text_line(
+                &mut lines,
+                &mut current,
+                &mut current_width,
+                &mut current_spaces,
+                config.font_px,
+            );
             current_width = 0;
             current_spaces = 0;
             continue;
@@ -1057,13 +1168,21 @@ fn layout_text_lines(glyphs: &[StyledGlyph], config: TextRenderConfig) -> Vec<Te
             && !current.is_empty()
             && current_width.saturating_add(glyph_width) > config.width
         {
-            lines.push(TextLine {
-                glyphs: std::mem::take(&mut current),
-                width: current_width,
-                spaces: current_spaces,
-            });
+            push_text_line(
+                &mut lines,
+                &mut current,
+                &mut current_width,
+                &mut current_spaces,
+                config.font_px,
+            );
             current_width = 0;
             current_spaces = 0;
+            if matches!(glyph.ch, ' ' | '\t') {
+                continue;
+            }
+        }
+        if current.is_empty() && matches!(glyph.ch, ' ' | '\t') {
+            continue;
         }
         if glyph.ch == ' ' {
             current_spaces += 1;
@@ -1072,16 +1191,58 @@ fn layout_text_lines(glyphs: &[StyledGlyph], config: TextRenderConfig) -> Vec<Te
         current.push(glyph.clone());
     }
     if !current.is_empty() || lines.is_empty() {
-        lines.push(TextLine {
-            glyphs: current,
-            width: current_width,
-            spaces: current_spaces,
-        });
+        push_text_line(
+            &mut lines,
+            &mut current,
+            &mut current_width,
+            &mut current_spaces,
+            config.font_px,
+        );
     }
     lines
 }
 
+fn push_text_line(
+    lines: &mut Vec<TextLine>,
+    current: &mut Vec<StyledGlyph>,
+    current_width: &mut u32,
+    current_spaces: &mut usize,
+    font_px: u32,
+) {
+    while let Some(glyph) = current.last() {
+        if !matches!(glyph.ch, ' ' | '\t') {
+            break;
+        }
+        let Some(trimmed) = current.pop() else {
+            break;
+        };
+        *current_width = current_width.saturating_sub(measure_glyph_width(&trimmed, font_px));
+        if trimmed.ch == ' ' {
+            *current_spaces = current_spaces.saturating_sub(1);
+        }
+    }
+    lines.push(TextLine {
+        glyphs: std::mem::take(current),
+        width: *current_width,
+        spaces: *current_spaces,
+    });
+}
+
 fn draw_bitmap_glyph(
+    image: &mut RgbaImage,
+    left: u32,
+    top: u32,
+    glyph: &StyledGlyph,
+    font_px: u32,
+    baseline_offset: u32,
+) -> u32 {
+    if let Some(font) = preview_font_for_style(&glyph.style) {
+        return draw_outline_glyph(image, left, top, glyph, font_px, baseline_offset, &font);
+    }
+    draw_bitmap_glyph_fallback(image, left, top, glyph, font_px)
+}
+
+fn draw_bitmap_glyph_fallback(
     image: &mut RgbaImage,
     left: u32,
     top: u32,
@@ -1122,11 +1283,236 @@ fn draw_bitmap_glyph(
 }
 
 fn measure_glyph_width(glyph: &StyledGlyph, font_px: u32) -> u32 {
+    if let Some(font) = preview_font_for_style(&glyph.style) {
+        return measure_outline_glyph_width(glyph, font_px, &font);
+    }
+    measure_bitmap_glyph_width(glyph, font_px)
+}
+
+fn preview_line_metrics(style: &TextStyle, font_px: u32) -> (u32, u32) {
+    if let Some(font) = preview_font_for_style(style)
+        && let Some(metrics) = font.horizontal_line_metrics(font_px as f32)
+    {
+        return (
+            metrics.new_line_size.ceil().max(font_px as f32).max(1.0) as u32,
+            metrics.ascent.ceil().max(1.0) as u32,
+        );
+    }
+    (
+        ((font_px as f32) * 1.35).round().max(font_px as f32) as u32,
+        ((font_px as f32) * DEFAULT_PREVIEW_FONT_SIZE_RATIO)
+            .round()
+            .max(1.0) as u32,
+    )
+}
+
+fn measure_bitmap_glyph_width(glyph: &StyledGlyph, font_px: u32) -> u32 {
     let scale = (font_px / 8).max(1);
     match glyph.ch {
         ' ' => 4 * scale,
         '\t' => 8 * scale,
         _ => 8 * scale,
+    }
+}
+
+fn preview_font_for_style(style: &TextStyle) -> Option<Arc<Font>> {
+    let key = normalize_font_name(style.font_family.as_deref().unwrap_or("default"));
+    let cache = PREVIEW_FONT_CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    if let Ok(cache) = cache.lock()
+        && let Some(font) = cache.get(&key).cloned()
+    {
+        return font;
+    }
+
+    let font = load_preview_font(style.font_family.as_deref());
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(key, font.clone());
+    }
+    font
+}
+
+fn load_preview_font(requested_family: Option<&str>) -> Option<Arc<Font>> {
+    let mut candidates = requested_family
+        .into_iter()
+        .flat_map(preview_font_family_candidates)
+        .collect::<Vec<_>>();
+    candidates.extend(PREVIEW_FONT_FALLBACKS.iter().map(std::string::ToString::to_string));
+
+    for family in candidates {
+        if let Some(path) = find_system_font_path(&family)
+            && let Some(font) = load_preview_font_from_path(&path)
+        {
+            return Some(font);
+        }
+    }
+    None
+}
+
+fn preview_font_family_candidates(family: &str) -> Vec<String> {
+    let normalized = normalize_font_name(family);
+    let mut candidates = vec![family.to_string()];
+    if normalized.contains("aptos") {
+        candidates.extend(["Arial", "Helvetica", "Avenir"].map(str::to_string));
+    } else if normalized.contains("timesnewroman") {
+        candidates.push("Times".to_string());
+    } else if normalized.contains("couriernew") {
+        candidates.push("Courier".to_string());
+    }
+    candidates
+}
+
+fn find_system_font_path(family: &str) -> Option<PathBuf> {
+    let needle = normalize_font_name(family);
+    let mut partial_match = None;
+    for directory in PREVIEW_FONT_DIRS {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if !supported_preview_font_path(&path) {
+                continue;
+            }
+            let Some(stem) = path.file_stem() else {
+                continue;
+            };
+            let stem = stem.to_string_lossy();
+            let normalized_stem = normalize_font_name(&stem);
+            if normalized_stem == needle {
+                return Some(path);
+            }
+            if partial_match.is_none() && normalized_stem.contains(&needle) {
+                partial_match = Some(path);
+            }
+        }
+    }
+    partial_match
+}
+
+fn supported_preview_font_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| matches!(extension.to_ascii_lowercase().as_str(), "ttf" | "otf"))
+        .unwrap_or(false)
+}
+
+fn normalize_font_name(name: &str) -> String {
+    name.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn load_preview_font_from_path(path: &Path) -> Option<Arc<Font>> {
+    let bytes = std::fs::read(path).ok()?;
+    Font::from_bytes(bytes, fontdue::FontSettings::default())
+        .ok()
+        .map(Arc::new)
+}
+
+fn measure_outline_glyph_width(glyph: &StyledGlyph, font_px: u32, font: &Font) -> u32 {
+    let font_px = font_px.max(MIN_TEXT_PIXELS) as f32;
+    if glyph.ch == '\t' {
+        let space_metrics = font.metrics(' ', font_px);
+        return (space_metrics.advance_width.max(font_px / 3.0) * 4.0)
+            .ceil()
+            .max(1.0) as u32;
+    }
+    let metrics = font.metrics(glyph.ch, font_px);
+    metrics
+        .advance_width
+        .max(metrics.width as f32 + metrics.xmin.max(0) as f32)
+        .max(font_px / 3.0)
+        .ceil()
+        .max(1.0) as u32
+}
+
+fn draw_outline_glyph(
+    image: &mut RgbaImage,
+    left: u32,
+    top: u32,
+    glyph: &StyledGlyph,
+    font_px: u32,
+    baseline_offset: u32,
+    font: &Font,
+) -> u32 {
+    let font_px = font_px.max(MIN_TEXT_PIXELS);
+    let width = measure_outline_glyph_width(glyph, font_px, font);
+    if glyph.ch == ' ' || glyph.ch == '\t' {
+        return width;
+    }
+
+    let (metrics, bitmap) = font.rasterize(glyph.ch, font_px as f32);
+    let baseline = top as i32 + baseline_offset as i32;
+    let color = glyph_color(&glyph.style, glyph.is_link);
+    blit_font_bitmap(image, left, baseline, glyph, &metrics, &bitmap, color);
+    if glyph.style.bold {
+        blit_font_bitmap(
+            image,
+            left.saturating_add(1),
+            baseline,
+            glyph,
+            &metrics,
+            &bitmap,
+            color,
+        );
+    }
+    if glyph.style.underline || glyph.is_link {
+        let underline_y = top.saturating_add(font_px).saturating_sub(font_px / 8 + 1);
+        fill_rect(image, left, underline_y, width.max(1), (font_px / 12).max(1), color);
+    }
+    width
+}
+
+fn blit_font_bitmap(
+    image: &mut RgbaImage,
+    left: u32,
+    baseline: i32,
+    glyph: &StyledGlyph,
+    metrics: &fontdue::Metrics,
+    bitmap: &[u8],
+    color: Rgba<u8>,
+) {
+    if metrics.width == 0 || metrics.height == 0 {
+        return;
+    }
+    let origin_x = left as i32 + metrics.xmin;
+    let origin_y = baseline - metrics.height as i32 - metrics.ymin;
+    let italic_skew = if glyph.style.italic {
+        (metrics.height as f32 * 0.18).round().max(1.0) as i32
+    } else {
+        0
+    };
+
+    for row in 0..metrics.height {
+        let row_skew = if italic_skew > 0 {
+            (((metrics.height - row) as f32 / metrics.height as f32) * italic_skew as f32).round()
+                as i32
+        } else {
+            0
+        };
+        for column in 0..metrics.width {
+            let alpha = bitmap[row * metrics.width + column];
+            if alpha == 0 {
+                continue;
+            }
+            let dest_x = origin_x + column as i32 + row_skew;
+            let dest_y = origin_y + row as i32;
+            if dest_x < 0
+                || dest_y < 0
+                || dest_x >= image.width() as i32
+                || dest_y >= image.height() as i32
+            {
+                continue;
+            }
+            let source = Rgba([
+                color.0[0],
+                color.0[1],
+                color.0[2],
+                ((u16::from(alpha) * u16::from(color.0[3])) / 255) as u8,
+            ]);
+            blend_pixel(image.get_pixel_mut(dest_x as u32, dest_y as u32), source);
+        }
     }
 }
 
@@ -1326,9 +1712,10 @@ fn shape_path(
     let width = width.max(1) as f32;
     let height = height.max(1) as f32;
     match geometry {
-        ShapeGeometry::Rectangle | ShapeGeometry::RoundedRectangle => {
+        ShapeGeometry::Rectangle => {
             polygon_path(&[(0.0, 0.0), (width, 0.0), (width, height), (0.0, height)])
         }
+        ShapeGeometry::RoundedRectangle => rounded_rectangle_path(width, height),
         ShapeGeometry::Ellipse => ellipse_path(width as u32, height as u32),
         ShapeGeometry::Triangle => polygon_path(&[(width / 2.0, 0.0), (width, height), (0.0, height)]),
         ShapeGeometry::RightTriangle => polygon_path(&[(0.0, 0.0), (width, height), (0.0, height)]),
@@ -1478,6 +1865,55 @@ fn ellipse_path(width: u32, height: u32) -> Result<TinyPath, PresentationArtifac
         })
         .collect::<Vec<_>>();
     polygon_path(&points)
+}
+
+fn rounded_rectangle_path(width: f32, height: f32) -> Result<TinyPath, PresentationArtifactError> {
+    let radius = (width.min(height) * 0.18).max(2.0);
+    let radius = radius.min(width / 2.0).min(height / 2.0);
+    let control = radius * (4.0 * (2.0_f32.sqrt() - 1.0) / 3.0);
+    let mut builder = PathBuilder::new();
+    builder.move_to(radius, 0.0);
+    builder.line_to(width - radius, 0.0);
+    builder.cubic_to(
+        width - radius + control,
+        0.0,
+        width,
+        radius - control,
+        width,
+        radius,
+    );
+    builder.line_to(width, height - radius);
+    builder.cubic_to(
+        width,
+        height - radius + control,
+        width - radius + control,
+        height,
+        width - radius,
+        height,
+    );
+    builder.line_to(radius, height);
+    builder.cubic_to(
+        radius - control,
+        height,
+        0.0,
+        height - radius + control,
+        0.0,
+        height - radius,
+    );
+    builder.line_to(0.0, radius);
+    builder.cubic_to(
+        0.0,
+        radius - control,
+        radius - control,
+        0.0,
+        radius,
+        0.0,
+    );
+    builder.close();
+    builder.finish().ok_or_else(|| PresentationArtifactError::RenderFailed {
+        action: "render_preview".to_string(),
+        message: "failed to build rounded rectangle path".to_string(),
+    })
 }
 
 fn regular_polygon_path(
@@ -1743,10 +2179,17 @@ fn draw_vertical_line(image: &mut RgbaImage, x: u32, color: Rgba<u8>, thickness:
     fill_rect(image, x.saturating_sub(thickness / 2), 0, thickness.max(1), image.height(), color);
 }
 
-fn draw_chart_axes(image: &mut RgbaImage, left: u32, top: u32, width: u32, height: u32) {
+fn draw_chart_axes(
+    image: &mut RgbaImage,
+    left: u32,
+    top: u32,
+    width: u32,
+    plot_height: u32,
+    baseline: u32,
+) {
     let axis_color = parse_rgba(DEFAULT_TABLE_GRID_HEX, 255);
-    fill_rect(image, left, top, 1, height, axis_color);
-    fill_rect(image, left, top + height, width, 1, axis_color);
+    fill_rect(image, left, top, 1, plot_height, axis_color);
+    fill_rect(image, left, baseline, width, 1, axis_color);
 }
 
 fn render_category_labels(
@@ -1851,4 +2294,80 @@ fn resolve_render_slide_index(
         });
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn wrapped_lines_skip_leading_spaces() {
+        let text = "One strong visual lands the story.";
+        let style = TextStyle::default();
+        let glyphs = styled_glyphs(text, &style, &RichTextState::default(), None);
+        let prefix = "One strong visual lands the";
+        let width = glyphs
+            .iter()
+            .take(prefix.chars().count())
+            .map(|glyph| measure_glyph_width(glyph, 14))
+            .sum();
+        let lines = layout_text_lines(
+            &glyphs,
+            TextRenderConfig {
+                width,
+                font_px: 14,
+                line_height: 18,
+                baseline_offset: 12,
+                wrap: TextWrapMode::Square,
+                vertical_alignment: TextVerticalAlignment::Top,
+                alignment: TextAlignment::Left,
+            },
+        );
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0].glyphs.iter().map(|glyph| glyph.ch).collect::<String>(),
+            prefix
+        );
+        assert_eq!(
+            lines[1].glyphs.iter().map(|glyph| glyph.ch).collect::<String>(),
+            "story."
+        );
+    }
+
+    #[test]
+    fn wrapped_lines_trim_trailing_spaces() {
+        let text = "One strong visual lands the story.";
+        let style = TextStyle::default();
+        let glyphs = styled_glyphs(text, &style, &RichTextState::default(), None);
+        let prefix = "One strong visual lands the ";
+        let width = glyphs
+            .iter()
+            .take(prefix.chars().count())
+            .map(|glyph| measure_glyph_width(glyph, 14))
+            .sum();
+        let lines = layout_text_lines(
+            &glyphs,
+            TextRenderConfig {
+                width,
+                font_px: 14,
+                line_height: 18,
+                baseline_offset: 12,
+                wrap: TextWrapMode::Square,
+                vertical_alignment: TextVerticalAlignment::Top,
+                alignment: TextAlignment::Left,
+            },
+        );
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0].glyphs.iter().map(|glyph| glyph.ch).collect::<String>(),
+            "One strong visual lands the"
+        );
+        assert_eq!(
+            lines[1].glyphs.iter().map(|glyph| glyph.ch).collect::<String>(),
+            "story."
+        );
+    }
 }

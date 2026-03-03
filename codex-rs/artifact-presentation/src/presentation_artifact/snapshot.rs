@@ -69,6 +69,13 @@ fn layout_list(document: &PresentationDocument) -> Vec<LayoutListEntry> {
         .collect()
 }
 
+fn master_layout_list(document: &PresentationDocument) -> Vec<LayoutListEntry> {
+    layout_list(document)
+        .into_iter()
+        .filter(|layout| layout.kind == "master")
+        .collect()
+}
+
 fn points_to_emu(points: u32) -> u32 {
     points.saturating_mul(POINT_TO_EMU)
 }
@@ -223,54 +230,12 @@ fn load_image_payload_from_uri(
     uri: &str,
     action: &str,
 ) -> Result<ImagePayload, PresentationArtifactError> {
-    let response =
-        reqwest::blocking::get(uri).map_err(|error| PresentationArtifactError::InvalidArgs {
-            action: action.to_string(),
-            message: format!("failed to fetch image `{uri}`: {error}"),
-        })?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(PresentationArtifactError::InvalidArgs {
-            action: action.to_string(),
-            message: format!("failed to fetch image `{uri}`: HTTP {status}"),
-        });
-    }
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.split(';').next().unwrap_or(value).trim().to_string());
-    let bytes = response
-        .bytes()
-        .map_err(|error| PresentationArtifactError::InvalidArgs {
-            action: action.to_string(),
-            message: format!("failed to read image `{uri}`: {error}"),
-        })?;
-    build_image_payload(
-        bytes.to_vec(),
-        infer_remote_image_filename(uri, content_type.as_deref()),
-        action,
-    )
-}
-
-fn infer_remote_image_filename(uri: &str, content_type: Option<&str>) -> String {
-    let path_name = reqwest::Url::parse(uri)
-        .ok()
-        .and_then(|url| {
-            url.path_segments()
-                .and_then(Iterator::last)
-                .map(str::to_owned)
-        })
-        .filter(|segment| !segment.is_empty());
-    match (path_name, content_type) {
-        (Some(path_name), _) if Path::new(&path_name).extension().is_some() => path_name,
-        (Some(path_name), Some(content_type)) => {
-            format!("{path_name}.{}", image_extension_from_mime(content_type))
-        }
-        (Some(path_name), None) => path_name,
-        (None, Some(content_type)) => format!("image.{}", image_extension_from_mime(content_type)),
-        (None, None) => "image.png".to_string(),
-    }
+    Err(PresentationArtifactError::UnsupportedFeature {
+        action: action.to_string(),
+        message: format!(
+            "remote image URIs are not supported for `{action}`; download the image locally or provide `data_url`/`blob` instead (`{uri}`)"
+        ),
+    })
 }
 
 fn build_image_payload(

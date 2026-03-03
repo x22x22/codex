@@ -85,14 +85,14 @@ struct NamedTextStyle {
     built_in: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct HyperlinkState {
     target: HyperlinkTarget,
     tooltip: Option<String>,
     highlight_click: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum HyperlinkTarget {
     Url(String),
     Slide(u32),
@@ -131,6 +131,44 @@ impl HyperlinkTarget {
 
     fn is_external(&self) -> bool {
         matches!(self, Self::Url(_) | Self::Email { .. } | Self::File(_))
+    }
+
+    fn adjust_for_insert(&mut self, inserted_index: usize) {
+        if let Self::Slide(slide_index) = self
+            && *slide_index as usize >= inserted_index
+        {
+            *slide_index += 1;
+        }
+    }
+
+    fn adjust_for_move(&mut self, from_index: usize, to_index: usize) {
+        let Self::Slide(slide_index_ref) = self else {
+            return;
+        };
+        let slide_index = *slide_index_ref as usize;
+        *slide_index_ref = if slide_index == from_index {
+            to_index as u32
+        } else if from_index < to_index && (from_index + 1..=to_index).contains(&slide_index) {
+            (slide_index - 1) as u32
+        } else if to_index < from_index && (to_index..from_index).contains(&slide_index) {
+            (slide_index + 1) as u32
+        } else {
+            *slide_index_ref
+        };
+    }
+
+    fn adjust_for_delete(&mut self, deleted_index: usize) -> bool {
+        let Self::Slide(slide_index_ref) = self else {
+            return false;
+        };
+        let slide_index = *slide_index_ref as usize;
+        if slide_index == deleted_index {
+            return true;
+        }
+        if slide_index > deleted_index {
+            *slide_index_ref -= 1;
+        }
+        false
     }
 }
 
@@ -217,6 +255,18 @@ impl HyperlinkState {
             ppt_rs::escape_xml(&self.target.relationship_target()),
         )
     }
+
+    fn adjust_for_insert(&mut self, inserted_index: usize) {
+        self.target.adjust_for_insert(inserted_index);
+    }
+
+    fn adjust_for_move(&mut self, from_index: usize, to_index: usize) {
+        self.target.adjust_for_move(from_index, to_index);
+    }
+
+    fn adjust_for_delete(&mut self, deleted_index: usize) -> bool {
+        self.target.adjust_for_delete(deleted_index)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -285,7 +335,7 @@ enum TextVerticalAlignment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CommentAuthorProfile {
+pub(super) struct CommentAuthorProfile {
     display_name: String,
     initials: String,
     email: Option<String>,
@@ -332,7 +382,7 @@ enum CommentTarget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CommentThread {
+pub(super) struct CommentThread {
     thread_id: String,
     target: CommentTarget,
     position: Option<CommentPosition>,
@@ -714,6 +764,7 @@ impl PresentationDocument {
             }
             Some(_) => {}
         }
+        self.adjust_hyperlinks_for_insert(inserted_index);
     }
 
     fn adjust_active_slide_for_move(&mut self, from_index: usize, to_index: usize) {
@@ -728,6 +779,7 @@ impl PresentationDocument {
                 active_index
             });
         }
+        self.adjust_hyperlinks_for_move(from_index, to_index);
     }
 
     fn adjust_active_slide_for_delete(&mut self, deleted_index: usize) {
@@ -740,6 +792,36 @@ impl PresentationDocument {
             Some(active_index) if deleted_index < active_index => Some(active_index - 1),
             Some(active_index) => Some(active_index),
         };
+        self.adjust_hyperlinks_for_delete(deleted_index);
+    }
+
+    fn adjust_hyperlinks_for_insert(&mut self, inserted_index: usize) {
+        self.visit_hyperlinks_mut(|hyperlink| {
+            hyperlink.adjust_for_insert(inserted_index);
+            true
+        });
+    }
+
+    fn adjust_hyperlinks_for_move(&mut self, from_index: usize, to_index: usize) {
+        self.visit_hyperlinks_mut(|hyperlink| {
+            hyperlink.adjust_for_move(from_index, to_index);
+            true
+        });
+    }
+
+    fn adjust_hyperlinks_for_delete(&mut self, deleted_index: usize) {
+        self.visit_hyperlinks_mut(|hyperlink| !hyperlink.adjust_for_delete(deleted_index));
+    }
+
+    fn visit_hyperlinks_mut<F>(&mut self, mut visit: F)
+    where
+        F: FnMut(&mut HyperlinkState) -> bool,
+    {
+        for slide in &mut self.slides {
+            for element in &mut slide.elements {
+                element.visit_hyperlinks_mut(&mut visit);
+            }
+        }
     }
 
     fn next_layout_id(&mut self) -> String {
@@ -926,16 +1008,16 @@ impl PresentationDocument {
         })
     }
 
-    fn to_ppt_rs(&self) -> Presentation {
+    fn to_ppt_rs(&self) -> Result<Presentation, PresentationArtifactError> {
         let mut presentation = self
             .name
             .as_deref()
             .map(Presentation::with_title)
             .unwrap_or_default();
         for slide in &self.slides {
-            presentation = presentation.add_slide(slide.to_ppt_rs(self.slide_size));
+            presentation = presentation.add_slide(slide.to_ppt_rs(self.slide_size, self)?);
         }
-        presentation
+        Ok(presentation)
     }
 }
 
@@ -1051,6 +1133,38 @@ fn import_pptx_images(
         }
     }
     Ok(())
+}
+
+fn import_pptx_slide_size(path: &Path) -> Result<Option<Rect>, PresentationArtifactError> {
+    let file = std::fs::File::open(path).map_err(|error| PresentationArtifactError::ImportFailed {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|error| PresentationArtifactError::ImportFailed {
+            path: path.to_path_buf(),
+            message: error.to_string(),
+        })?;
+    let Some(xml) = zip_entry_string_if_exists(&mut archive, "ppt/presentation.xml").map_err(
+        |message| PresentationArtifactError::ImportFailed {
+            path: path.to_path_buf(),
+            message,
+        },
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(width) =
+        xml_tag_attribute(&xml, "<p:sldSz", "cx").and_then(|value| value.parse::<u32>().ok())
+    else {
+        return Ok(None);
+    };
+    let Some(height) =
+        xml_tag_attribute(&xml, "<p:sldSz", "cy").and_then(|value| value.parse::<u32>().ok())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(Rect::from_emu(0, 0, width, height)))
 }
 
 fn zip_entry_string_if_exists<R: Read + Seek>(
@@ -1223,7 +1337,11 @@ fn xml_attribute(tag: &str, attribute: &str) -> Option<String> {
 }
 
 impl PresentationSlide {
-    fn to_ppt_rs(&self, slide_size: Rect) -> SlideContent {
+    fn to_ppt_rs(
+        &self,
+        slide_size: Rect,
+        document: &PresentationDocument,
+    ) -> Result<SlideContent, PresentationArtifactError> {
         let mut content = SlideContent::new("").layout(SlideLayout::Blank);
         if self.notes.visible && !self.notes.text.is_empty() {
             content = content.notes(&self.notes.text);
@@ -1391,24 +1509,22 @@ impl PresentationSlide {
                     content = content.table(builder.build());
                 }
                 PresentationElement::Chart(chart) => {
-                    let mut ppt_chart = Chart::new(
-                        chart.title.as_deref().unwrap_or("Chart"),
-                        chart.chart_type.to_ppt_rs(),
-                        chart.categories,
-                        points_to_emu(chart.frame.left),
-                        points_to_emu(chart.frame.top),
+                    let chart_bytes = render_chart_png_bytes(document, &chart)?;
+                    let ppt_chart = Image::from_bytes(
+                        chart_bytes,
                         points_to_emu(chart.frame.width),
                         points_to_emu(chart.frame.height),
+                        "png",
+                    )
+                    .position(
+                        points_to_emu(chart.frame.left),
+                        points_to_emu(chart.frame.top),
                     );
-                    for series in chart.series {
-                        ppt_chart =
-                            ppt_chart.add_series(ChartSeries::new(&series.name, series.values));
-                    }
-                    content = content.add_chart(ppt_chart);
+                    content = content.add_image(ppt_chart);
                 }
             }
         }
-        content
+        Ok(content)
     }
 }
 
@@ -1475,6 +1591,45 @@ impl PresentationElement {
             Self::Image(element) => element.z_order = z_order,
             Self::Table(element) => element.z_order = z_order,
             Self::Chart(element) => element.z_order = z_order,
+        }
+    }
+
+    fn visit_hyperlinks_mut<F>(&mut self, visit: &mut F)
+    where
+        F: FnMut(&mut HyperlinkState) -> bool,
+    {
+        match self {
+            Self::Text(element) => {
+                if let Some(hyperlink) = element.hyperlink.as_mut()
+                    && !visit(hyperlink)
+                {
+                    element.hyperlink = None;
+                }
+                for range in &mut element.rich_text.ranges {
+                    if let Some(hyperlink) = range.hyperlink.as_mut()
+                        && !visit(hyperlink)
+                    {
+                        range.hyperlink = None;
+                    }
+                }
+            }
+            Self::Shape(element) => {
+                if let Some(hyperlink) = element.hyperlink.as_mut()
+                    && !visit(hyperlink)
+                {
+                    element.hyperlink = None;
+                }
+                if let Some(rich_text) = element.rich_text.as_mut() {
+                    for range in &mut rich_text.ranges {
+                        if let Some(hyperlink) = range.hyperlink.as_mut()
+                            && !visit(hyperlink)
+                        {
+                            range.hyperlink = None;
+                        }
+                    }
+                }
+            }
+            Self::Connector(_) | Self::Image(_) | Self::Table(_) | Self::Chart(_) => {}
         }
     }
 }
@@ -1722,34 +1877,6 @@ enum ChartTypeSpec {
     StockHlc,
     StockOhlc,
     Combo,
-}
-
-impl ChartTypeSpec {
-    fn to_ppt_rs(self) -> ChartType {
-        match self {
-            Self::Bar => ChartType::Bar,
-            Self::BarHorizontal => ChartType::BarHorizontal,
-            Self::BarStacked => ChartType::BarStacked,
-            Self::BarStacked100 => ChartType::BarStacked100,
-            Self::Line => ChartType::Line,
-            Self::LineMarkers => ChartType::LineMarkers,
-            Self::LineStacked => ChartType::LineStacked,
-            Self::Pie => ChartType::Pie,
-            Self::Doughnut => ChartType::Doughnut,
-            Self::Area => ChartType::Area,
-            Self::AreaStacked => ChartType::AreaStacked,
-            Self::AreaStacked100 => ChartType::AreaStacked100,
-            Self::Scatter => ChartType::Scatter,
-            Self::ScatterLines => ChartType::ScatterLines,
-            Self::ScatterSmooth => ChartType::ScatterSmooth,
-            Self::Bubble => ChartType::Bubble,
-            Self::Radar => ChartType::Radar,
-            Self::RadarFilled => ChartType::RadarFilled,
-            Self::StockHlc => ChartType::StockHLC,
-            Self::StockOhlc => ChartType::StockOHLC,
-            Self::Combo => ChartType::Combo,
-        }
-    }
 }
 
 impl ConnectorKind {

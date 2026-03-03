@@ -472,7 +472,7 @@ fn chart_data_label_override_to_proto(override_spec: &ChartDataLabelOverride) ->
     })
 }
 
-fn comment_author_to_proto(author: &CommentAuthorProfile) -> Value {
+pub(super) fn comment_author_to_proto(author: &CommentAuthorProfile) -> Value {
     serde_json::json!({
         "displayName": author.display_name,
         "initials": author.initials,
@@ -480,7 +480,7 @@ fn comment_author_to_proto(author: &CommentAuthorProfile) -> Value {
     })
 }
 
-fn comment_thread_to_proto(thread: &CommentThread) -> Value {
+pub(super) fn comment_thread_to_proto(thread: &CommentThread) -> Value {
     serde_json::json!({
         "kind": "comment",
         "threadId": thread.thread_id,

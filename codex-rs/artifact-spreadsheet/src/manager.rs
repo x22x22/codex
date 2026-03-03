@@ -1704,7 +1704,7 @@ impl SpreadsheetArtifactManager {
         let args: CreateDifferentialFormatArgs = parse_args(&request.action, &request.args)?;
         let artifact_id = required_artifact_id(&request)?;
         let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
-        let style_id = artifact.create_differential_format(args.format);
+        let style_id = artifact.create_differential_format(args.format)?;
         let format = artifact
             .get_differential_format(style_id)
             .cloned()
@@ -2265,6 +2265,7 @@ impl SpreadsheetArtifactManager {
         let action = request.action.clone();
         let artifact_id = required_artifact_id(&request)?;
         let artifact = self.get_artifact_mut(&artifact_id, &request.action)?;
+        artifact.validate_style_index(style_index, &request.action)?;
         {
             let sheet = artifact.sheet_lookup_mut(
                 &request.action,

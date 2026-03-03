@@ -239,6 +239,18 @@ impl SpreadsheetNumberFormat {
     }
 
     fn normalized(mut self) -> Self {
+        if let Some(format_id) = self.format_id
+            && let Some(format_code) = builtin_number_format_code(format_id)
+        {
+            self.format_code = Some(format_code);
+            return self;
+        }
+        if self.format_id.is_none() {
+            self.format_id = self
+                .format_code
+                .as_deref()
+                .and_then(builtin_number_format_id);
+        }
         if self.format_code.is_none() {
             self.format_code = self.format_id.and_then(builtin_number_format_code);
         }
@@ -493,6 +505,7 @@ impl SpreadsheetArtifact {
         } else {
             format
         };
+        self.validate_cell_format_references(&created, "create_cell_format")?;
         Ok(insert_with_next_id(&mut self.cell_formats, created))
     }
 
@@ -500,8 +513,12 @@ impl SpreadsheetArtifact {
         self.cell_formats.get(&format_id)
     }
 
-    pub fn create_differential_format(&mut self, format: SpreadsheetDifferentialFormat) -> u32 {
-        insert_with_next_id(&mut self.differential_formats, format)
+    pub fn create_differential_format(
+        &mut self,
+        format: SpreadsheetDifferentialFormat,
+    ) -> Result<u32, SpreadsheetArtifactError> {
+        self.validate_differential_format_references(&format, "create_differential_format")?;
+        Ok(insert_with_next_id(&mut self.differential_formats, format))
     }
 
     pub fn get_differential_format(
@@ -533,6 +550,70 @@ impl SpreadsheetArtifact {
                 .and_then(|id| self.number_formats.get(&id).cloned()),
             wrap_text: resolved.wrap_text,
         })
+    }
+
+    pub fn validate_style_index(
+        &self,
+        style_index: u32,
+        action: &str,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        if style_index == 0 || self.cell_formats.contains_key(&style_index) {
+            return Ok(());
+        }
+        Err(SpreadsheetArtifactError::InvalidArgs {
+            action: action.to_string(),
+            message: format!("style index `{style_index}` was not found"),
+        })
+    }
+
+    fn validate_cell_format_references(
+        &self,
+        format: &SpreadsheetCellFormat,
+        action: &str,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        validate_optional_reference(
+            format.text_style_id,
+            &self.text_styles,
+            "text style",
+            action,
+        )?;
+        validate_optional_reference(format.fill_id, &self.fills, "fill", action)?;
+        validate_optional_reference(format.border_id, &self.borders, "border", action)?;
+        validate_optional_reference(
+            format.number_format_id,
+            &self.number_formats,
+            "number format",
+            action,
+        )?;
+        validate_optional_reference(
+            format.base_cell_style_format_id,
+            &self.cell_formats,
+            "base cell format",
+            action,
+        )?;
+        Ok(())
+    }
+
+    fn validate_differential_format_references(
+        &self,
+        format: &SpreadsheetDifferentialFormat,
+        action: &str,
+    ) -> Result<(), SpreadsheetArtifactError> {
+        validate_optional_reference(
+            format.text_style_id,
+            &self.text_styles,
+            "text style",
+            action,
+        )?;
+        validate_optional_reference(format.fill_id, &self.fills, "fill", action)?;
+        validate_optional_reference(format.border_id, &self.borders, "border", action)?;
+        validate_optional_reference(
+            format.number_format_id,
+            &self.number_formats,
+            "number format",
+            action,
+        )?;
+        Ok(())
     }
 }
 
@@ -566,6 +647,23 @@ fn resolve_cell_format_recursive(
     })
 }
 
+fn validate_optional_reference<T>(
+    id: Option<u32>,
+    map: &BTreeMap<u32, T>,
+    kind: &str,
+    action: &str,
+) -> Result<(), SpreadsheetArtifactError> {
+    if let Some(id) = id
+        && !map.contains_key(&id)
+    {
+        return Err(SpreadsheetArtifactError::InvalidArgs {
+            action: action.to_string(),
+            message: format!("{kind} `{id}` was not found"),
+        });
+    }
+    Ok(())
+}
+
 fn builtin_number_format_code(format_id: u32) -> Option<String> {
     match format_id {
         0 => Some("General".to_string()),
@@ -575,6 +673,19 @@ fn builtin_number_format_code(format_id: u32) -> Option<String> {
         4 => Some("#,##0.00".to_string()),
         9 => Some("0%".to_string()),
         10 => Some("0.00%".to_string()),
+        _ => None,
+    }
+}
+
+fn builtin_number_format_id(format_code: &str) -> Option<u32> {
+    match format_code {
+        "General" => Some(0),
+        "0" => Some(1),
+        "0.00" => Some(2),
+        "#,##0" => Some(3),
+        "#,##0.00" => Some(4),
+        "0%" => Some(9),
+        "0.00%" => Some(10),
         _ => None,
     }
 }

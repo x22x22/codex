@@ -3,6 +3,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::CodexAuth;
+use codex_core::features::Feature;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
@@ -46,7 +47,12 @@ async fn presentation_artifact_render_preview_returns_inline_image() -> anyhow::
         cwd,
         session_configured,
         ..
-    } = test_codex().build(&server).await?;
+    } = test_codex()
+        .with_config(|config| {
+            config.features.enable(Feature::Artifact);
+        })
+        .build(&server)
+        .await?;
 
     let call_id = "presentation-render-preview";
     let arguments = serde_json::json!({
@@ -206,6 +212,7 @@ async fn presentation_artifact_render_preview_fails_for_text_only_model() -> any
     let TestCodex { codex, cwd, .. } = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
+            config.features.enable(Feature::Artifact);
             config.model = Some(model_slug.to_string());
         })
         .build(&server)

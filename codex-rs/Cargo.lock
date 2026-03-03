@@ -1440,7 +1440,6 @@ dependencies = [
  "codex-chatgpt",
  "codex-cloud-requirements",
  "codex-core",
- "codex-execpolicy",
  "codex-feedback",
  "codex-file-search",
  "codex-login",
@@ -1455,7 +1454,6 @@ dependencies = [
  "codex-utils-json-to-toml",
  "core_test_support",
  "futures",
- "os_info",
  "owo-colors",
  "pretty_assertions",
  "rmcp",
@@ -1552,16 +1550,15 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "font8x8",
+ "fontdue",
  "image",
  "ppt-rs",
  "pretty_assertions",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tiny-skia",
- "tiny_http",
  "uuid",
  "zip 2.4.2",
 ]
@@ -4101,6 +4098,16 @@ name = "font8x8"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "875488b8711a968268c7cf5d139578713097ca4635a76044e8fe8eedf831d07e"
+
+[[package]]
+name = "fontdue"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e57e16b3fe8ff4364c0661fdaac543fb38b29ea9bc9c2f45612d90adf931d2b"
+dependencies = [
+ "hashbrown 0.15.5",
+ "ttf-parser",
+]
 
 [[package]]
 name = "foreign-types"
@@ -10567,6 +10574,12 @@ dependencies = [
  "syn 2.0.114",
  "termcolor",
 ]
+
+[[package]]
+name = "ttf-parser"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c591d83f69777866b9126b24c6dd9a18351f177e49d625920d19f989fd31cf8"
 
 [[package]]
 name = "tungstenite"
