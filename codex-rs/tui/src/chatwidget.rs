@@ -37,8 +37,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
-use crate::app_event::RealtimeAudioDeviceKind;
 use self::realtime::PendingSteerCompareKey;
+use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
