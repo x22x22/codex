@@ -370,7 +370,7 @@ impl BottomPane {
             // We need three pieces of information after routing the key:
             // whether Esc completed the view, whether the view finished for any
             // reason, and whether a paste-burst timer should be scheduled.
-            let (ctrl_c_completed, view_complete, view_in_paste_burst) = {
+            let (ctrl_c_completed, view_complete, _view_in_paste_burst) = {
                 let last_index = self.view_stack.len() - 1;
                 let view = &mut self.view_stack[last_index];
                 let prefer_esc =
@@ -390,16 +390,9 @@ impl BottomPane {
             if ctrl_c_completed {
                 self.view_stack.pop();
                 self.on_active_view_complete();
-                if let Some(next_view) = self.view_stack.last()
-                    && next_view.is_in_paste_burst()
-                {
-                    self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
-                }
             } else if view_complete {
                 self.view_stack.clear();
                 self.on_active_view_complete();
-            } else if view_in_paste_burst {
-                self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
             self.request_redraw();
             InputResult::None
@@ -429,9 +422,6 @@ impl BottomPane {
             let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
             if needs_redraw {
                 self.request_redraw();
-            }
-            if self.composer.is_in_paste_burst() {
-                self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
             input_result
         }
@@ -926,10 +916,6 @@ impl BottomPane {
     /// Height (terminal rows) required by the current bottom pane.
     pub(crate) fn request_redraw(&self) {
         self.frame_requester.schedule_frame();
-    }
-
-    pub(crate) fn request_redraw_in(&self, dur: Duration) {
-        self.frame_requester.schedule_frame_in(dur);
     }
 
     // --- History helpers ---

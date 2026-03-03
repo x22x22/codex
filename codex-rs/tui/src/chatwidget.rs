@@ -157,6 +157,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
+use tokio::time::sleep;
 use tracing::debug;
 use tracing::warn;
 
@@ -212,6 +213,7 @@ use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
+use crate::bottom_pane::ChatComposer;
 use crate::bottom_pane::CollaborationModeIndicator;
 use crate::bottom_pane::ColumnWidthMode;
 use crate::bottom_pane::DOUBLE_PRESS_QUIT_SHORTCUT_ENABLED;
@@ -609,6 +611,8 @@ pub(crate) struct ChatWidget {
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
     frame_requester: FrameRequester,
+    paste_burst_timeout_tick_generation: u64,
+    pending_paste_burst_timeout_tick: Option<u64>,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
     // One-shot tooltip override for the primary startup session.
@@ -2916,6 +2920,8 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
+            paste_burst_timeout_tick_generation: 0,
+            pending_paste_burst_timeout_tick: None,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
             suppress_session_configured_redraw: false,
@@ -3100,6 +3106,8 @@ impl ChatWidget {
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
+            paste_burst_timeout_tick_generation: 0,
+            pending_paste_burst_timeout_tick: None,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
             suppress_session_configured_redraw: false,
@@ -3265,6 +3273,8 @@ impl ChatWidget {
             forked_from: None,
             queued_user_messages: VecDeque::new(),
             queued_message_edit_binding,
+            paste_burst_timeout_tick_generation: 0,
+            pending_paste_burst_timeout_tick: None,
             show_welcome_banner: false,
             startup_tooltip_override: None,
             suppress_session_configured_redraw: true,
@@ -3485,6 +3495,8 @@ impl ChatWidget {
                 InputResult::None => {}
             },
         }
+
+        self.schedule_paste_burst_timeout_if_needed();
     }
 
     /// Attach a local image to the composer when the active model supports image inputs.
@@ -4032,24 +4044,45 @@ impl ChatWidget {
 
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
+        self.schedule_paste_burst_timeout_if_needed();
     }
 
-    // Returns true if caller should skip rendering this frame (a future frame is scheduled).
-    pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
-        if self.bottom_pane.flush_paste_burst_if_due() {
-            // A paste just flushed; request an immediate redraw and skip this frame.
-            self.request_redraw();
-            true
-        } else if self.bottom_pane.is_in_paste_burst() {
-            // While capturing a burst, schedule a follow-up tick and skip this frame
-            // to avoid redundant renders between ticks.
-            frame_requester.schedule_frame_in(
-                crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
-            );
-            true
-        } else {
-            false
+    pub(crate) fn handle_paste_burst_timeout_tick(&mut self, token: u64) {
+        if self.pending_paste_burst_timeout_tick != Some(token) {
+            return;
         }
+        self.pending_paste_burst_timeout_tick = None;
+
+        if !self.bottom_pane.is_in_paste_burst() {
+            return;
+        }
+
+        if self.bottom_pane.flush_paste_burst_if_due() {
+            self.request_redraw();
+        }
+
+        self.schedule_paste_burst_timeout_if_needed();
+    }
+
+    fn schedule_paste_burst_timeout_if_needed(&mut self) {
+        if !self.bottom_pane.is_in_paste_burst() {
+            self.pending_paste_burst_timeout_tick = None;
+            return;
+        }
+        if self.pending_paste_burst_timeout_tick.is_some() {
+            return;
+        }
+
+        self.paste_burst_timeout_tick_generation =
+            self.paste_burst_timeout_tick_generation.wrapping_add(1);
+        let token = self.paste_burst_timeout_tick_generation;
+        self.pending_paste_burst_timeout_tick = Some(token);
+
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            sleep(ChatComposer::recommended_paste_flush_delay()).await;
+            app_event_tx.send(AppEvent::PasteBurstTimeoutTick { token });
+        });
     }
 
     fn flush_active_cell(&mut self) {

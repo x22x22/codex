@@ -1717,6 +1717,8 @@ async fn make_chatwidget_manual(
         thread_name: None,
         forked_from: None,
         frame_requester: FrameRequester::test_dummy(),
+        paste_burst_timeout_tick_generation: 0,
+        pending_paste_burst_timeout_tick: None,
         show_welcome_banner: true,
         startup_tooltip_override: None,
         queued_user_messages: VecDeque::new(),

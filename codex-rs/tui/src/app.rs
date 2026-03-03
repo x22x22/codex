@@ -1899,12 +1899,6 @@ impl App {
                         self.render_transcript_once(tui);
                     }
                     self.chat_widget.maybe_post_pending_notification(tui);
-                    if self
-                        .chat_widget
-                        .handle_paste_burst_tick(tui.frame_requester())
-                    {
-                        return Ok(AppRunControl::Continue);
-                    }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
                     tui.draw(
@@ -2150,6 +2144,9 @@ impl App {
             }
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
+            }
+            AppEvent::PasteBurstTimeoutTick { token } => {
+                self.chat_widget.handle_paste_burst_timeout_tick(token);
             }
             AppEvent::CodexEvent(event) => {
                 self.enqueue_primary_event(event).await?;
