@@ -2162,7 +2162,7 @@ pub(crate) fn new_patch_event(
 pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    lines.push(vec!["• ".dim(), "Failed to apply patch".red().bold()].into());
+    lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
 
     if !stderr.trim().is_empty() {
         let output = output_lines(
