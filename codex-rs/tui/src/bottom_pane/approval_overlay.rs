@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -6,19 +5,9 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPaneView;
 use crate::bottom_pane::CancellationEvent;
-use crate::bottom_pane::ChatComposer;
-use crate::bottom_pane::ChatComposerConfig;
 use crate::bottom_pane::list_selection_view::ListSelectionView;
 use crate::bottom_pane::list_selection_view::SelectionItem;
 use crate::bottom_pane::list_selection_view::SelectionViewParams;
-use crate::bottom_pane::scroll_state::ScrollState;
-use crate::bottom_pane::selection_popup_common::GenericDisplayRow;
-use crate::bottom_pane::selection_popup_common::measure_rows_height;
-use crate::bottom_pane::selection_popup_common::menu_surface_inset;
-use crate::bottom_pane::selection_popup_common::menu_surface_padding_height;
-use crate::bottom_pane::selection_popup_common::render_menu_surface;
-use crate::bottom_pane::selection_popup_common::render_rows;
-use crate::bottom_pane::selection_popup_common::wrap_styled_line;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
@@ -47,45 +36,14 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
-use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
-use unicode_width::UnicodeWidthStr;
 
-const PATCH_REJECT_OPTION_INDEX: usize = 2;
-const PATCH_NOTES_PLACEHOLDER: &str = "Tell Codex what to do differently";
-const PATCH_EMPTY_NOTES_MESSAGE: &str = "Add guidance before sending.";
-const PATCH_MIN_OVERLAY_HEIGHT: u16 = 8;
-const PATCH_MIN_COMPOSER_HEIGHT: u16 = 3;
-const PATCH_MAX_COMPOSER_HEIGHT: u16 = 8;
+mod patch_ui;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PatchFocus {
-    Options,
-    Notes,
-}
-
-struct PatchOverlayState {
-    focus: PatchFocus,
-    options_state: ScrollState,
-    composer: ChatComposer,
-    notes_visible: bool,
-    note_submit_attempted: bool,
-}
-
-fn line_to_owned(line: Line<'_>) -> Line<'static> {
-    Line {
-        style: line.style,
-        alignment: line.alignment,
-        spans: line
-            .spans
-            .into_iter()
-            .map(|span| Span {
-                style: span.style,
-                content: Cow::Owned(span.content.into_owned()),
-            })
-            .collect(),
-    }
-}
+use patch_ui::PATCH_REJECT_OPTION_INDEX;
+use patch_ui::PatchFocus;
+use patch_ui::PatchLayout;
+use patch_ui::PatchOverlayState;
 
 /// Request coming from the agent that needs user approval.
 #[derive(Clone, Debug)]
@@ -173,33 +131,11 @@ impl ApprovalOverlay {
         self.current_complete = false;
         let header = build_header(&request);
         let (options, params) = Self::build_options(&request, header, &self.features);
-        self.patch_state =
-            matches!(request, ApprovalRequest::ApplyPatch { .. }).then(|| self.new_patch_state());
+        self.patch_state = matches!(request, ApprovalRequest::ApplyPatch { .. })
+            .then(|| PatchOverlayState::new(&self.app_event_tx));
         self.current_request = Some(request);
         self.options = options;
         self.list = ListSelectionView::new(params, self.app_event_tx.clone());
-    }
-
-    fn new_patch_state(&self) -> PatchOverlayState {
-        let mut composer = ChatComposer::new_with_config(
-            true,
-            self.app_event_tx.clone(),
-            false,
-            PATCH_NOTES_PLACEHOLDER.to_string(),
-            false,
-            ChatComposerConfig::plain_text(),
-        );
-        composer.set_footer_hint_override(Some(Vec::new()));
-        PatchOverlayState {
-            focus: PatchFocus::Options,
-            options_state: ScrollState {
-                selected_idx: Some(0),
-                ..Default::default()
-            },
-            composer,
-            notes_visible: false,
-            note_submit_attempted: false,
-        }
     }
 
     fn build_options(
@@ -314,116 +250,19 @@ impl ApprovalOverlay {
 
     fn patch_selected_index(&self) -> Option<usize> {
         self.patch_state()
-            .and_then(|state| state.options_state.selected_idx)
-    }
-
-    fn patch_focus_is_notes(&self) -> bool {
-        self.patch_state()
-            .is_some_and(|state| matches!(state.focus, PatchFocus::Notes))
+            .and_then(PatchOverlayState::selected_index)
     }
 
     fn patch_note_text(&self) -> String {
         self.patch_state()
-            .map(|state| state.composer.current_text_with_pending())
+            .map(PatchOverlayState::note_text)
             .unwrap_or_default()
     }
 
-    fn patch_notes_visible(&self) -> bool {
-        let Some(state) = self.patch_state() else {
-            return false;
-        };
-        state.options_state.selected_idx == Some(PATCH_REJECT_OPTION_INDEX)
-            && (state.notes_visible
-                || !state.composer.current_text_with_pending().trim().is_empty())
-    }
-
-    fn patch_note_error_visible(&self) -> bool {
-        self.patch_notes_visible()
-            && self
-                .patch_state()
-                .is_some_and(|state| state.note_submit_attempted)
-            && self.patch_note_text().trim().is_empty()
-    }
-
-    fn patch_title_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let line = Line::from("Would you like to make the following edits?".bold());
-        wrap_styled_line(&line, width.max(1))
-            .into_iter()
-            .map(line_to_owned)
-            .collect()
-    }
-
-    fn patch_option_rows(&self) -> Vec<GenericDisplayRow> {
-        let selected_idx = self.patch_selected_index();
-        self.options
-            .iter()
-            .enumerate()
-            .map(|(idx, option)| {
-                let prefix = if selected_idx == Some(idx) {
-                    '›'
-                } else {
-                    ' '
-                };
-                let prefix_label = format!("{prefix} {}. ", idx + 1);
-                GenericDisplayRow {
-                    name: format!("{prefix_label}{}", option.label),
-                    display_shortcut: option
-                        .display_shortcut
-                        .or_else(|| option.additional_shortcuts.first().copied()),
-                    wrap_indent: Some(UnicodeWidthStr::width(prefix_label.as_str())),
-                    ..Default::default()
-                }
-            })
-            .collect()
-    }
-
-    fn patch_hint_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut hint = if self.patch_notes_visible() {
-            if self.patch_focus_is_notes() {
-                "enter to send | tab to go back | esc to interrupt".to_string()
-            } else {
-                "enter or tab to edit follow up | esc to interrupt".to_string()
-            }
-        } else if self.patch_selected_index() == Some(PATCH_REJECT_OPTION_INDEX) {
-            "tab to follow up | esc to interrupt".to_string()
-        } else {
-            "esc to interrupt".to_string()
-        };
-        if self
-            .current_request
+    fn patch_layout(&self, width: u16) -> Option<PatchLayout> {
+        self.current_request
             .as_ref()
-            .and_then(ApprovalRequest::thread_label)
-            .is_some()
-        {
-            hint.push_str(" | o to open thread");
-        }
-        let line = Line::from(hint).dim();
-        wrap_styled_line(&line, width.max(1))
-            .into_iter()
-            .map(line_to_owned)
-            .collect()
-    }
-
-    fn patch_validation_lines(&self, width: u16) -> Vec<Line<'static>> {
-        if !self.patch_note_error_visible() {
-            return Vec::new();
-        }
-        let line = Line::from(PATCH_EMPTY_NOTES_MESSAGE).red();
-        wrap_styled_line(&line, width.max(1))
-            .into_iter()
-            .map(line_to_owned)
-            .collect()
-    }
-
-    fn patch_notes_input_height(&self, width: u16) -> u16 {
-        self.patch_state()
-            .map(|state| {
-                state
-                    .composer
-                    .desired_height(width.max(1))
-                    .clamp(PATCH_MIN_COMPOSER_HEIGHT, PATCH_MAX_COMPOSER_HEIGHT)
-            })
-            .unwrap_or(PATCH_MIN_COMPOSER_HEIGHT)
+            .and_then(|request| PatchLayout::new(request, &self.options, self.patch_state(), width))
     }
 
     fn patch_select_index(&mut self, idx: usize) {
@@ -805,202 +644,29 @@ impl BottomPaneView for ApprovalOverlay {
 
 impl Renderable for ApprovalOverlay {
     fn desired_height(&self, width: u16) -> u16 {
-        let Some(request @ ApprovalRequest::ApplyPatch { .. }) = self.current_request.as_ref()
-        else {
-            return self.list.desired_height(width);
-        };
-
-        let outer = Rect::new(0, 0, width, u16::MAX);
-        let inner = menu_surface_inset(outer);
-        let inner_width = inner.width.max(1);
-        let title_height = self.patch_title_lines(inner_width).len() as u16;
-        let header = build_header(request);
-        let header_height = header.desired_height(inner_width);
-        let rows = self.patch_option_rows();
-        let mut state = self
-            .patch_state()
-            .map(|patch_state| patch_state.options_state)
-            .unwrap_or_default();
-        if state.selected_idx.is_none() {
-            state.selected_idx = Some(0);
-        }
-        let options_height =
-            measure_rows_height(&rows, &state, rows.len().max(1), inner_width.max(1));
-        let hint_height = self.patch_hint_lines(inner_width).len() as u16;
-        let notes_height = if self.patch_notes_visible() {
-            self.patch_notes_input_height(inner_width)
-        } else {
-            0
-        };
-        let validation_height = self.patch_validation_lines(inner_width).len() as u16;
-        let height = title_height
-            + 1
-            + header_height
-            + 1
-            + options_height
-            + hint_height
-            + notes_height
-            + validation_height
-            + menu_surface_padding_height();
-        height.max(PATCH_MIN_OVERLAY_HEIGHT)
+        self.patch_layout(width).map_or_else(
+            || self.list.desired_height(width),
+            |layout| layout.total_height(),
+        )
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let Some(request @ ApprovalRequest::ApplyPatch { .. }) = self.current_request.as_ref()
-        else {
+        let Some(layout) = self.patch_layout(area.width) else {
             self.list.render(area, buf);
             return;
         };
-        let content_area = render_menu_surface(area, buf);
-        if content_area.width == 0 || content_area.height == 0 {
-            return;
-        }
-
-        let width = content_area.width.max(1);
-        let title_lines = self.patch_title_lines(width);
-        let header = build_header(request);
-        let header_height = header.desired_height(width);
-        let rows = self.patch_option_rows();
-        let mut state = self
-            .patch_state()
-            .map(|patch_state| patch_state.options_state)
-            .unwrap_or_default();
-        if state.selected_idx.is_none() {
-            state.selected_idx = Some(0);
-        }
-        let options_height = measure_rows_height(&rows, &state, rows.len().max(1), width.max(1));
-        let hint_lines = self.patch_hint_lines(width);
-        let validation_lines = self.patch_validation_lines(width);
-        let validation_height = validation_lines.len() as u16;
-        let notes_height = if self.patch_notes_visible() {
-            self.patch_notes_input_height(width)
-        } else {
-            0
-        };
-
-        let mut cursor_y = content_area.y;
-        for line in title_lines {
-            Paragraph::new(line).render(
-                Rect {
-                    x: content_area.x,
-                    y: cursor_y,
-                    width: content_area.width,
-                    height: 1,
-                },
-                buf,
-            );
-            cursor_y = cursor_y.saturating_add(1);
-        }
-        cursor_y = cursor_y.saturating_add(1);
-
-        header.render(
-            Rect {
-                x: content_area.x,
-                y: cursor_y,
-                width: content_area.width,
-                height: header_height.min(
-                    content_area
-                        .height
-                        .saturating_sub(cursor_y - content_area.y),
-                ),
-            },
-            buf,
-        );
-        cursor_y = cursor_y.saturating_add(header_height).saturating_add(1);
-
-        let options_area = Rect {
-            x: content_area.x,
-            y: cursor_y,
-            width: content_area.width,
-            height: options_height,
-        };
-        render_rows(
-            options_area,
-            buf,
-            &rows,
-            &state,
-            rows.len().max(1),
-            "No options",
-        );
-        cursor_y = cursor_y.saturating_add(options_height);
-
-        for line in hint_lines {
-            Paragraph::new(line).render(
-                Rect {
-                    x: content_area.x,
-                    y: cursor_y,
-                    width: content_area.width,
-                    height: 1,
-                },
-                buf,
-            );
-            cursor_y = cursor_y.saturating_add(1);
-        }
-
-        if self.patch_notes_visible() {
-            let notes_area =
-                Rect {
-                    x: content_area.x,
-                    y: cursor_y,
-                    width: content_area.width,
-                    height: notes_height.min(content_area.height.saturating_sub(
-                        cursor_y.saturating_sub(content_area.y) + validation_height,
-                    )),
-                };
-            if let Some(state) = self.patch_state() {
-                state.composer.render(notes_area, buf);
-            }
-            cursor_y = cursor_y.saturating_add(notes_area.height);
-        }
-
-        for line in validation_lines {
-            Paragraph::new(line).render(
-                Rect {
-                    x: content_area.x,
-                    y: cursor_y,
-                    width: content_area.width,
-                    height: 1,
-                },
-                buf,
-            );
-            cursor_y = cursor_y.saturating_add(1);
-        }
+        layout.render(area, self.patch_state(), buf);
     }
 
     fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        if !self.patch_focus_is_notes() || !self.patch_notes_visible() {
+        let Some(state) = self.patch_state() else {
+            return self.list.cursor_pos(area);
+        };
+        if !state.focus_is_notes() || !state.notes_visible() {
             return self.list.cursor_pos(area);
         }
-        let content_area = menu_surface_inset(area);
-        if content_area.width == 0 || content_area.height == 0 {
-            return None;
-        }
-        let width = content_area.width.max(1);
-        let title_height = self.patch_title_lines(width).len() as u16;
-        let header_height = self
-            .current_request
-            .as_ref()
-            .map(build_header)
-            .map(|header| header.desired_height(width))
-            .unwrap_or(0);
-        let rows = self.patch_option_rows();
-        let mut state = self
-            .patch_state()
-            .map(|patch_state| patch_state.options_state)
-            .unwrap_or_default();
-        if state.selected_idx.is_none() {
-            state.selected_idx = Some(0);
-        }
-        let options_height = measure_rows_height(&rows, &state, rows.len().max(1), width.max(1));
-        let hint_height = self.patch_hint_lines(width).len() as u16;
-        let notes_area = Rect {
-            x: content_area.x,
-            y: content_area.y + title_height + 1 + header_height + 1 + options_height + hint_height,
-            width: content_area.width,
-            height: self.patch_notes_input_height(width),
-        };
-        self.patch_state()
-            .and_then(|state| state.composer.cursor_pos(notes_area))
+        self.patch_layout(area.width)
+            .and_then(|layout| layout.cursor_pos(area, state))
     }
 }
 
