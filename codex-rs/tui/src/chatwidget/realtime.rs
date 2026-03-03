@@ -1,10 +1,4 @@
 use super::*;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::is_image_close_tag_text;
-use codex_protocol::models::is_image_open_tag_text;
-use codex_protocol::models::is_local_image_close_tag_text;
-use codex_protocol::models::is_local_image_open_tag_text;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
@@ -61,6 +55,12 @@ pub(super) struct RenderedUserMessageEvent {
     pub(super) text_elements: Vec<TextElement>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct PendingSteerCompareKey {
+    pub(super) message: String,
+    pub(super) image_count: usize,
+}
+
 impl ChatWidget {
     pub(super) fn rendered_user_message_event_from_parts(
         message: String,
@@ -87,52 +87,48 @@ impl ChatWidget {
         )
     }
 
-    /// Build the compare key for a submitted pending steer using the same lossy
-    /// `UserInput -> ResponseInputItem -> UserMessageItem` normalization that core
-    /// applies when steering input into an active turn.
-    ///
-    /// Pending steers keep the full `UserMessage` for interrupt restore, but they
-    /// must match `ItemCompleted(UserMessage)` against the normalized shape core
-    /// later emits after draining pending input.
-    pub(super) fn rendered_user_message_event_from_normalized_items(
+    /// Build the compare key for a submitted pending steer without invoking the
+    /// expensive request-serialization path. Pending steers only need to match the
+    /// committed `ItemCompleted(UserMessage)` emitted after core drains input, which
+    /// preserves flattened text and total image count but not UI-only text ranges or
+    /// local image paths.
+    pub(super) fn pending_steer_compare_key_from_items(
         items: &[UserInput],
-    ) -> RenderedUserMessageEvent {
-        let response_input_item = ResponseInputItem::from(items.to_vec());
-        let ResponseInputItem::Message { role, content } = response_input_item else {
-            unreachable!(
-                "user inputs must convert to ResponseInputItem::Message, got {response_input_item:?}"
-            );
-        };
-        debug_assert_eq!(role, "user");
-
+    ) -> PendingSteerCompareKey {
         let mut message = String::new();
-        let mut remote_image_urls = Vec::new();
+        let mut image_count = 0;
 
-        for (idx, content_item) in content.iter().enumerate() {
-            match content_item {
-                ContentItem::InputText { text } => {
-                    if (is_local_image_open_tag_text(text) || is_image_open_tag_text(text))
-                        && matches!(content.get(idx + 1), Some(ContentItem::InputImage { .. }))
-                        || (idx > 0
-                            && (is_local_image_close_tag_text(text)
-                                || is_image_close_tag_text(text))
-                            && matches!(content.get(idx - 1), Some(ContentItem::InputImage { .. })))
-                    {
-                        continue;
-                    }
-                    message.push_str(text);
-                }
-                ContentItem::InputImage { image_url } => remote_image_urls.push(image_url.clone()),
-                ContentItem::OutputText { .. } => {}
+        for item in items {
+            match item {
+                UserInput::Text { text, .. } => message.push_str(text),
+                UserInput::Image { .. } | UserInput::LocalImage { .. } => image_count += 1,
+                UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                _ => {}
             }
         }
 
-        Self::rendered_user_message_event_from_parts(
+        PendingSteerCompareKey {
             message,
-            Vec::new(),
-            Vec::new(),
-            remote_image_urls,
-        )
+            image_count,
+        }
+    }
+
+    pub(super) fn pending_steer_compare_key_from_item(
+        item: &codex_protocol::items::UserMessageItem,
+    ) -> PendingSteerCompareKey {
+        let mut image_count = 0;
+        for input in &item.content {
+            match input {
+                UserInput::Image { .. } | UserInput::LocalImage { .. } => image_count += 1,
+                UserInput::Text { .. } | UserInput::Skill { .. } | UserInput::Mention { .. } => {}
+                _ => {}
+            }
+        }
+
+        PendingSteerCompareKey {
+            message: item.message(),
+            image_count,
+        }
     }
 
     #[cfg(test)]

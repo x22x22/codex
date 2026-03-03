@@ -38,6 +38,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crate::app_event::RealtimeAudioDeviceKind;
+use self::realtime::PendingSteerCompareKey;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
@@ -760,7 +761,7 @@ impl From<&str> for UserMessage {
 
 struct PendingSteer {
     user_message: UserMessage,
-    compare_key: RenderedUserMessageEvent,
+    compare_key: PendingSteerCompareKey,
 }
 
 pub(crate) fn create_initial_user_message(
@@ -4288,7 +4289,7 @@ impl ChatWidget {
                 text_elements: text_elements.clone(),
                 mention_bindings: mention_bindings.clone(),
             },
-            compare_key: Self::rendered_user_message_event_from_normalized_items(&items),
+            compare_key: Self::pending_steer_compare_key_from_items(&items),
         });
         let personality = self
             .config
@@ -4656,10 +4657,11 @@ impl ChatWidget {
                         unreachable!("user message item should convert to a legacy user message");
                     };
                     let rendered = Self::rendered_user_message_event_from_event(&event);
+                    let compare_key = Self::pending_steer_compare_key_from_item(item);
                     let should_render = if self
                         .pending_steers
                         .front()
-                        .is_some_and(|pending| pending.compare_key == rendered)
+                        .is_some_and(|pending| pending.compare_key == compare_key)
                     {
                         self.pending_steers.pop_front();
                         self.refresh_pending_input_preview();

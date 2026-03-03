@@ -3236,12 +3236,10 @@ fn complete_assistant_message(
 fn pending_steer(text: &str) -> PendingSteer {
     PendingSteer {
         user_message: UserMessage::from(text),
-        compare_key: ChatWidget::rendered_user_message_event_from_parts(
-            text.to_string(),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-        ),
+        compare_key: PendingSteerCompareKey {
+            message: text.to_string(),
+            image_count: 0,
+        },
     }
 }
 
@@ -3875,7 +3873,7 @@ async fn item_completed_only_pops_front_pending_steer() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn normalized_item_completed_pops_pending_steer_with_local_image_and_text_elements() {
+async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
     chat.on_task_started();
@@ -3911,21 +3909,18 @@ async fn normalized_item_completed_pops_pending_steer_with_local_image_and_text_
     let pending = chat.pending_steers.front().unwrap();
     assert_eq!(pending.user_message.local_images.len(), 1);
     assert_eq!(pending.user_message.text_elements.len(), 1);
-    assert!(pending.compare_key.local_images.is_empty());
-    assert!(pending.compare_key.text_elements.is_empty());
     assert_eq!(pending.compare_key.message, text);
-    assert_eq!(pending.compare_key.remote_image_urls.len(), 1);
-    let compare_key = pending.compare_key.clone();
+    assert_eq!(pending.compare_key.image_count, 1);
 
     complete_user_message_for_inputs(
         &mut chat,
         "user-1",
         vec![
             UserInput::Image {
-                image_url: compare_key.remote_image_urls[0].clone(),
+                image_url: "data:image/png;base64,placeholder".to_string(),
             },
             UserInput::Text {
-                text: compare_key.message,
+                text,
                 text_elements: Vec::new(),
             },
         ],
