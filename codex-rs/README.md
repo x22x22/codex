@@ -7,12 +7,12 @@ We provide Codex CLI as a standalone, native executable to ensure a zero-depende
 The easiest way to install Codex is with the native installer for your platform:
 
 ```bash
-# macOS or Linux
+# Mac + Linux
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
 ```powershell
-# Windows (PowerShell)
+# Windows
 powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"
 ```
 

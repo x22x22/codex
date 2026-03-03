@@ -13,12 +13,12 @@
 Use the native installer for your platform:
 
 ```bash
-# macOS or Linux
+# Mac + Linux
 curl -fsSL https://chatgpt.com/codex/install.sh | sh
 ```
 
 ```powershell
-# Windows (PowerShell)
+# Windows
 powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"
 ```
 
