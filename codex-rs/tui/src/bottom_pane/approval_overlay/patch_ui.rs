@@ -160,6 +160,7 @@ impl PatchLayout {
             + self.header_height
             + 1
             + self.options_height
+            + 1
             + self.hint_lines.len() as u16
             + self.notes_height
             + self.validation_lines.len() as u16
@@ -220,6 +221,7 @@ impl PatchLayout {
             "No options",
         );
         cursor_y = cursor_y.saturating_add(self.options_height);
+        cursor_y = cursor_y.saturating_add(1);
 
         for line in &self.hint_lines {
             Paragraph::new(line.clone()).render(
@@ -273,6 +275,7 @@ impl PatchLayout {
             + self.header_height
             + 1
             + self.options_height
+            + 1
             + self.hint_lines.len() as u16;
         let validation_height = self.validation_lines.len() as u16;
         Some(Rect {
