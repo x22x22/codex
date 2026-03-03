@@ -198,6 +198,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                     state.active_turn_snapshot().unwrap_or_else(|| Turn {
                         id: payload.turn_id.clone(),
                         items: Vec::new(),
+                        hook_runs: Vec::new(),
                         error: None,
                         status: TurnStatus::InProgress,
                     })
@@ -1175,6 +1176,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .send_server_notification(ServerNotification::ItemCompleted(notification))
                 .await;
         }
+        EventMsg::HookStarted(_) => {}
+        EventMsg::HookCompleted(_) => {}
         EventMsg::ExitedReviewMode(review_event) => {
             let review = match review_event.review_output {
                 Some(output) => render_review_output_text(&output),
@@ -1607,6 +1610,7 @@ async fn emit_turn_completed_with_status(
         turn: Turn {
             id: event_turn_id,
             items: vec![],
+            hook_runs: vec![],
             error,
             status,
         },

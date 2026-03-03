@@ -4757,6 +4757,7 @@ impl CodexMessageProcessor {
                 let turn = Turn {
                     id: turn_id.clone(),
                     items: vec![],
+                    hook_runs: vec![],
                     error: None,
                     status: TurnStatus::InProgress,
                 };
@@ -5044,6 +5045,7 @@ impl CodexMessageProcessor {
         Turn {
             id: turn_id,
             items,
+            hook_runs: vec![],
             error: None,
             status: TurnStatus::InProgress,
         }
