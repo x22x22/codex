@@ -3927,9 +3927,32 @@ async fn item_completed_pops_pending_steer_with_local_image_and_text_elements() 
     );
 
     assert!(chat.pending_steers.is_empty());
-    let inserted = drain_insert_history(&mut rx);
-    assert_eq!(inserted.len(), 1);
-    assert!(lines_to_single_string(&inserted[0]).contains("note"));
+
+    let mut user_cell = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let AppEvent::InsertHistoryCell(cell) = ev
+            && let Some(cell) = cell.as_any().downcast_ref::<UserHistoryCell>()
+        {
+            user_cell = Some((
+                cell.message.clone(),
+                cell.text_elements.clone(),
+                cell.local_image_paths.clone(),
+                cell.remote_image_urls.clone(),
+            ));
+            break;
+        }
+    }
+
+    let (stored_message, stored_elements, stored_images, stored_remote_image_urls) =
+        user_cell.expect("expected pending steer user history cell");
+    assert_eq!(stored_message, "note");
+    assert_eq!(
+        stored_elements,
+        vec![TextElement::new((0..4).into(), Some("note".to_string()))]
+    );
+    assert_eq!(stored_images.len(), 1);
+    assert!(stored_images[0].ends_with("pending-steer.png"));
+    assert!(stored_remote_image_urls.is_empty());
 }
 
 #[tokio::test]

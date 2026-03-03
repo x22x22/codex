@@ -4660,18 +4660,29 @@ impl ChatWidget {
                     };
                     let rendered = Self::rendered_user_message_event_from_event(&event);
                     let compare_key = Self::pending_steer_compare_key_from_item(item);
-                    let should_render = if self
+                    if self
                         .pending_steers
                         .front()
                         .is_some_and(|pending| pending.compare_key == compare_key)
                     {
-                        self.pending_steers.pop_front();
+                        let pending = self
+                            .pending_steers
+                            .pop_front()
+                            .expect("checked front pending steer");
                         self.refresh_pending_input_preview();
-                        true
-                    } else {
-                        self.last_rendered_user_message_event.as_ref() != Some(&rendered)
-                    };
-                    if should_render {
+                        let pending_event = UserMessageEvent {
+                            message: pending.user_message.text,
+                            images: Some(pending.user_message.remote_image_urls),
+                            local_images: pending
+                                .user_message
+                                .local_images
+                                .into_iter()
+                                .map(|image| image.path)
+                                .collect(),
+                            text_elements: pending.user_message.text_elements,
+                        };
+                        self.on_user_message_event(pending_event);
+                    } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
                         self.on_user_message_event(event);
                     }
                 }
