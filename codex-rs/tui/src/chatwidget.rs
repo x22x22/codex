@@ -4105,10 +4105,6 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        self.submit_user_message_internal(user_message, true);
-    }
-
-    fn submit_user_message_internal(&mut self, user_message: UserMessage, render_in_history: bool) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
@@ -4139,7 +4135,7 @@ impl ChatWidget {
             return;
         }
 
-        let render_in_history = render_in_history && !self.agent_turn_running;
+        let render_in_history = !self.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
