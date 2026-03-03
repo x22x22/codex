@@ -1,4 +1,9 @@
 const CODEX_METADATA_ENTRY: &str = "ppt/codex-document.json";
+const DEFAULT_SLIDE_MASTER_TEXT_STYLES: &str = r#"<p:txStyles>
+<p:titleStyle/>
+<p:bodyStyle/>
+<p:otherStyle/>
+</p:txStyles>"#;
 
 fn import_codex_metadata_document(path: &Path) -> Result<Option<PresentationDocument>, String> {
     let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
@@ -333,6 +338,12 @@ fn patch_pptx_package(
                 .map_err(|error| error.to_string())?;
             continue;
         }
+        if name == "ppt/slideMasters/slideMaster1.xml" {
+            writer
+                .write_all(update_slide_master_xml(bytes)?.as_bytes())
+                .map_err(|error| error.to_string())?;
+            continue;
+        }
         if let Some(slide_number) = parse_slide_xml_path(&name) {
             writer
                 .write_all(
@@ -450,6 +461,24 @@ fn update_presentation_xml_dimensions(
             points_to_emu(slide_size.width)
         ),
     )
+}
+
+fn update_slide_master_xml(existing_bytes: Vec<u8>) -> Result<String, String> {
+    let existing = String::from_utf8(existing_bytes).map_err(|error| error.to_string())?;
+    if existing.contains("<p:txStyles>") {
+        return Ok(existing);
+    }
+
+    let closing_tag = "</p:sldMaster>";
+    let start = existing
+        .find(closing_tag)
+        .ok_or_else(|| "slide master xml is missing `</p:sldMaster>`".to_string())?;
+    Ok(format!(
+        "{}{}{}",
+        &existing[..start],
+        DEFAULT_SLIDE_MASTER_TEXT_STYLES,
+        &existing[start..]
+    ))
 }
 
 fn replace_self_closing_xml_tag(xml: &str, tag: &str, replacement: &str) -> Result<String, String> {

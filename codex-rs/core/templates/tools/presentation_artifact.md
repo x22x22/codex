@@ -14,6 +14,7 @@ Supported actions:
 - `get_summary`
 - `list_slides`
 - `list_layouts`
+- `list_masters`
 - `list_layout_placeholders`
 - `list_slide_placeholders`
 - `inspect`
@@ -63,6 +64,8 @@ Supported actions:
 - `insert_text_after`
 - `set_hyperlink`
 - `set_comment_author`
+- `list_comment_threads`
+- `get_comment_thread`
 - `add_comment_thread`
 - `add_comment_reply`
 - `toggle_comment_reaction`
@@ -104,6 +107,8 @@ Example layout flow:
 
 Layout references in `create_layout.parent_layout_id`, `add_layout_placeholder.layout_id`, `add_slide`, `insert_slide`, `set_slide_layout`, and `list_layout_placeholders` accept either a layout id or a layout name. Name matching prefers exact id, then exact name, then case-insensitive name.
 
+Use `list_masters` when you only want layouts with `kind: "master"` instead of the full mixed layout list.
+
 `insert_slide` accepts `index` or `after_slide_index`. If neither is provided, the new slide is inserted immediately after the active slide, or appended if no active slide is set yet.
 
 Example inspect:
@@ -123,6 +128,14 @@ Example proto export:
 Rich text is supported on notes, text boxes, shapes with text, and table cells. Use `set_rich_text` to replace a full rich-text payload, `set_notes_rich_text` for speaker notes, and `format_text_range` to annotate a substring by `query` or explicit codepoint range. `inspect`, `resolve`, and `to_proto` surface text-range anchors as `tr/<range_id>`.
 
 Comment threads are supported through `set_comment_author`, `add_comment_thread`, `add_comment_reply`, `toggle_comment_reaction`, `resolve_comment_thread`, and `reopen_comment_thread`. Thread anchors resolve as `th/<thread_id>`, and comment records appear in both `inspect` and `to_proto`.
+
+Use `list_comment_threads` for an explicit collection payload and `get_comment_thread` when you already know the thread id.
+
+Example list comment threads:
+`{"artifact_id":"presentation_x","actions":[{"action":"list_comment_threads","args":{}}]}`
+
+Example get comment thread:
+`{"artifact_id":"presentation_x","actions":[{"action":"get_comment_thread","args":{"thread_id":"thread_1"}}]}`
 
 Charts support richer series metadata plus `update_chart` and `add_chart_series`, including legend, axis, data-label, marker, fill, and per-point override state.
 

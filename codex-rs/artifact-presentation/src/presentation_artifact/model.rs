@@ -285,7 +285,7 @@ enum TextVerticalAlignment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CommentAuthorProfile {
+pub(super) struct CommentAuthorProfile {
     display_name: String,
     initials: String,
     email: Option<String>,
@@ -332,7 +332,7 @@ enum CommentTarget {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CommentThread {
+pub(super) struct CommentThread {
     thread_id: String,
     target: CommentTarget,
     position: Option<CommentPosition>,

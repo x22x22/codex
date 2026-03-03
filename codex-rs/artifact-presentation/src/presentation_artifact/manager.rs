@@ -104,6 +104,7 @@ impl PresentationArtifactManager {
             "get_summary" => self.get_summary(request),
             "list_slides" => self.list_slides(request),
             "list_layouts" => self.list_layouts(request),
+            "list_masters" => self.list_masters(request),
             "list_layout_placeholders" => self.list_layout_placeholders(request),
             "list_slide_placeholders" => self.list_slide_placeholders(request),
             "inspect" => self.inspect(request),
@@ -149,6 +150,8 @@ impl PresentationArtifactManager {
             "insert_text_after" => self.insert_text_after(request),
             "set_hyperlink" => self.set_hyperlink(request),
             "set_comment_author" => self.set_comment_author(request),
+            "list_comment_threads" => self.list_comment_threads(request),
+            "get_comment_thread" => self.get_comment_thread(request),
             "add_comment_thread" => self.add_comment_thread(request),
             "add_comment_reply" => self.add_comment_reply(request),
             "toggle_comment_reaction" => self.toggle_comment_reaction(request),
@@ -449,6 +452,24 @@ impl PresentationArtifactManager {
             snapshot_for_document(document),
         );
         response.layout_list = Some(layout_list(document));
+        response.theme = Some(document.theme_snapshot());
+        Ok(response)
+    }
+
+    fn list_masters(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document(&artifact_id, &request.action)?;
+        let masters = master_layout_list(document);
+        let mut response = PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Listed {} masters", masters.len()),
+            snapshot_for_document(document),
+        );
+        response.layout_list = Some(masters);
         response.theme = Some(document.theme_snapshot());
         Ok(response)
     }
@@ -2510,6 +2531,54 @@ impl PresentationArtifactManager {
             "Updated comment author".to_string(),
             snapshot_for_document(document),
         ))
+    }
+
+    fn list_comment_threads(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document(&artifact_id, &request.action)?;
+        let mut response = PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Listed {} comment threads", document.comment_threads.len()),
+            snapshot_for_document(document),
+        );
+        response.resolved_record = Some(serde_json::json!({
+            "commentSelf": document.comment_self.as_ref().map(comment_author_to_proto),
+            "commentThreads": document
+                .comment_threads
+                .iter()
+                .map(comment_thread_to_proto)
+                .collect::<Vec<_>>(),
+        }));
+        Ok(response)
+    }
+
+    fn get_comment_thread(
+        &mut self,
+        request: PresentationArtifactRequest,
+    ) -> Result<PresentationArtifactResponse, PresentationArtifactError> {
+        let args: CommentThreadIdArgs = parse_args(&request.action, &request.args)?;
+        let artifact_id = required_artifact_id(&request)?;
+        let document = self.get_document(&artifact_id, &request.action)?;
+        let thread = document
+            .comment_threads
+            .iter()
+            .find(|thread| thread.thread_id == args.thread_id)
+            .ok_or_else(|| PresentationArtifactError::InvalidArgs {
+                action: request.action.clone(),
+                message: format!("unknown comment thread `{}`", args.thread_id),
+            })?;
+        let mut response = PresentationArtifactResponse::new(
+            artifact_id,
+            request.action,
+            format!("Retrieved comment thread `{}`", args.thread_id),
+            snapshot_for_document(document),
+        );
+        response.resolved_record = Some(comment_thread_to_proto(thread));
+        Ok(response)
     }
 
     fn add_comment_thread(

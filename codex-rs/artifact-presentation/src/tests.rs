@@ -132,7 +132,7 @@ fn manager_can_import_exported_presentation() -> Result<(), Box<dyn std::error::
     )?;
     manager.execute(
         PresentationArtifactRequest {
-            artifact_id: Some(artifact_id.clone()),
+            artifact_id: Some(artifact_id),
             action: "add_shape".to_string(),
             args: serde_json::json!({
                 "slide_index": 0,
@@ -278,6 +278,48 @@ fn exported_images_are_real_pictures_with_media_parts() -> Result<(), Box<dyn st
     assert!(rels_xml.contains(r#"Target="../media/image1.png""#));
     assert!(content_types_xml.contains(r#"Extension="png" ContentType="image/png""#));
     assert!(entry_names.contains(&"ppt/media/image1.png".to_string()));
+    Ok(())
+}
+
+#[test]
+fn exported_slide_master_includes_text_styles() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempfile::tempdir()?;
+    let mut manager = PresentationArtifactManager::default();
+    let created = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: None,
+            action: "create".to_string(),
+            args: serde_json::json!({ "name": "Slide Master Styles" }),
+        },
+        temp_dir.path(),
+    )?;
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id.clone()),
+            action: "add_slide".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+
+    let export_path = temp_dir.path().join("slide-master-styles.pptx");
+    manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(created.artifact_id),
+            action: "export_pptx".to_string(),
+            args: serde_json::json!({ "path": export_path }),
+        },
+        temp_dir.path(),
+    )?;
+
+    let slide_master_xml = zip_entry_text(
+        &temp_dir.path().join("slide-master-styles.pptx"),
+        "ppt/slideMasters/slideMaster1.xml",
+    )?;
+    assert!(slide_master_xml.contains("<p:txStyles>"));
+    assert!(slide_master_xml.contains("<p:titleStyle/>"));
+    assert!(slide_master_xml.contains("<p:bodyStyle/>"));
+    assert!(slide_master_xml.contains("<p:otherStyle/>"));
     Ok(())
 }
 
@@ -489,7 +531,7 @@ fn exported_text_shapes_preserve_text_styling() -> Result<(), Box<dyn std::error
     )?;
     manager.execute(
         PresentationArtifactRequest {
-            artifact_id: Some(artifact_id.clone()),
+            artifact_id: Some(artifact_id),
             action: "add_shape".to_string(),
             args: serde_json::json!({
                 "slide_index": 0,
@@ -1627,6 +1669,23 @@ fn manager_supports_layout_theme_notes_and_inspect() -> Result<(), Box<dyn std::
         temp_dir.path(),
     )?;
     assert_eq!(child_layouts.layout_list.as_ref().map(Vec::len), Some(2));
+    let listed_masters = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "list_masters".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    assert_eq!(listed_masters.layout_list.as_ref().map(Vec::len), Some(1));
+    assert_eq!(
+        listed_masters
+            .layout_list
+            .as_ref()
+            .and_then(|layouts| layouts.first())
+            .map(|layout| (layout.name.clone(), layout.kind.clone())),
+        Some(("Brand Master".to_string(), "master".to_string()))
+    );
     let layout_id = child_layouts
         .layout_list
         .as_ref()
@@ -3488,6 +3547,41 @@ fn rich_text_comments_tables_and_charts_roundtrip_through_metadata()
         },
         temp_dir.path(),
     )?;
+    let comment_threads = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "list_comment_threads".to_string(),
+            args: serde_json::json!({}),
+        },
+        temp_dir.path(),
+    )?;
+    let comment_threads = comment_threads
+        .resolved_record
+        .expect("comment thread collection");
+    assert_eq!(
+        comment_threads["commentSelf"]["displayName"],
+        serde_json::json!("Jamie Fox")
+    );
+    assert_eq!(
+        comment_threads["commentThreads"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        comment_threads["commentThreads"][0]["threadId"],
+        serde_json::json!("thread_1")
+    );
+    let comment_thread = manager.execute(
+        PresentationArtifactRequest {
+            artifact_id: Some(artifact_id.clone()),
+            action: "get_comment_thread".to_string(),
+            args: serde_json::json!({ "thread_id": "thread_1" }),
+        },
+        temp_dir.path(),
+    )?;
+    let comment_thread = comment_thread.resolved_record.expect("comment thread");
+    assert_eq!(comment_thread["anchor"], serde_json::json!("th/thread_1"));
+    assert_eq!(comment_thread["status"], serde_json::json!("active"));
+    assert_eq!(comment_thread["messages"].as_array().map(Vec::len), Some(2));
 
     let table_added = manager.execute(
         PresentationArtifactRequest {

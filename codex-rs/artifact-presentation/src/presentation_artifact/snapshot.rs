@@ -69,6 +69,13 @@ fn layout_list(document: &PresentationDocument) -> Vec<LayoutListEntry> {
         .collect()
 }
 
+fn master_layout_list(document: &PresentationDocument) -> Vec<LayoutListEntry> {
+    layout_list(document)
+        .into_iter()
+        .filter(|layout| layout.kind == "master")
+        .collect()
+}
+
 fn points_to_emu(points: u32) -> u32 {
     points.saturating_mul(POINT_TO_EMU)
 }

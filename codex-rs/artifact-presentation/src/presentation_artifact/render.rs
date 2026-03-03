@@ -1184,7 +1184,9 @@ fn push_text_line(
         if !matches!(glyph.ch, ' ' | '\t') {
             break;
         }
-        let trimmed = current.pop().expect("last glyph must exist");
+        let Some(trimmed) = current.pop() else {
+            break;
+        };
         *current_width = current_width.saturating_sub(measure_glyph_width(&trimmed, font_px));
         if trimmed.ch == ' ' {
             *current_spaces = current_spaces.saturating_sub(1);
