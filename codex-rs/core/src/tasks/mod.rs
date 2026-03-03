@@ -217,6 +217,9 @@ impl Session {
                 .collect::<Vec<_>>();
             for response_item in pending_response_items {
                 if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
+                    // Keep leftover user input on the same persistence + lifecycle path as the
+                    // normal pre-sampling drain. This helper records the response item once, then
+                    // emits ItemStarted/UserMessage and ItemCompleted/UserMessage for clients.
                     self.record_user_prompt_and_emit_turn_item(
                         turn_context.as_ref(),
                         &user_message.content,
