@@ -27,7 +27,6 @@ use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
-use crate::features::Features;
 use crate::features::maybe_push_unstable_features_warning;
 #[cfg(test)]
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -143,6 +142,7 @@ use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
+use crate::config::ManagedFeatures;
 use crate::config::StartedNetworkProxy;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
@@ -605,7 +605,7 @@ pub(crate) struct Session {
     state: Mutex<SessionState>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
-    features: Features,
+    features: ManagedFeatures,
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
@@ -659,7 +659,7 @@ pub(crate) struct TurnContext {
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
-    pub(crate) features: Features,
+    pub(crate) features: ManagedFeatures,
     pub(crate) ghost_snapshot: GhostSnapshotConfig,
     pub(crate) final_output_json_schema: Option<Value>,
     pub(crate) codex_linux_sandbox_exe: Option<PathBuf>,
@@ -2985,7 +2985,7 @@ impl Session {
         self.features.enabled(feature)
     }
 
-    pub(crate) fn features(&self) -> Features {
+    pub(crate) fn features(&self) -> ManagedFeatures {
         self.features.clone()
     }
 
@@ -8619,7 +8619,7 @@ mod tests {
     #[tokio::test]
     async fn record_model_warning_appends_user_message() {
         let (mut session, turn_context) = make_session_and_context().await;
-        let features = Features::with_defaults();
+        let features = crate::features::Features::with_defaults().into();
         session.features = features;
 
         session

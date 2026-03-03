@@ -29,9 +29,11 @@ use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConstrainedWithSource;
+use crate::config_loader::FeatureRequirementsToml;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::McpServerIdentity;
 use crate::config_loader::McpServerRequirement;
+use crate::config_loader::RequirementSource;
 use crate::config_loader::ResidencyRequirement;
 use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
@@ -39,6 +41,8 @@ use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
+use crate::features::canonical_feature_for_key;
+use crate::features::feature_for_key;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -171,6 +175,109 @@ pub struct Permissions {
     /// Optional macOS seatbelt extension profile used to extend default
     /// seatbelt permissions when running under seatbelt.
     pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManagedFeatures {
+    value: ConstrainedWithSource<Features>,
+}
+
+impl ManagedFeatures {
+    fn new(value: ConstrainedWithSource<Features>) -> Self {
+        Self { value }
+    }
+
+    fn from_configured(
+        configured_features: Features,
+        feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+    ) -> std::io::Result<Self> {
+        let (pinned_features, source) = match feature_requirements {
+            Some(Sourced {
+                value: feature_requirements,
+                source,
+            }) => (
+                parse_feature_requirements(feature_requirements, &source)?,
+                Some(source),
+            ),
+            None => (BTreeMap::new(), None),
+        };
+
+        let pinned_features_for_normalizer = pinned_features.clone();
+        let constrained = Constrained::normalized(configured_features, move |mut candidate| {
+            for (feature, enabled) in &pinned_features_for_normalizer {
+                candidate.set_enabled(*feature, *enabled);
+            }
+            candidate.normalize_dependencies();
+            candidate
+        })
+        .map_err(std::io::Error::from)?;
+        let managed_features = Self::new(ConstrainedWithSource::new(constrained, source.clone()));
+        validate_pinned_features(&managed_features, &pinned_features, source.as_ref())?;
+        Ok(managed_features)
+    }
+
+    pub fn to_features(&self) -> Features {
+        self.value.get().clone()
+    }
+
+    fn update(&mut self, update: impl FnOnce(&mut Features)) {
+        let mut next = self.to_features();
+        update(&mut next);
+        self.value
+            .set(next)
+            .expect("managed feature constraints should remain satisfiable");
+    }
+
+    pub fn set_enabled(&mut self, feature: Feature, enabled: bool) -> &mut Self {
+        self.update(|features| {
+            features.set_enabled(feature, enabled);
+        });
+        self
+    }
+
+    pub fn enable(&mut self, feature: Feature) -> &mut Self {
+        self.set_enabled(feature, true)
+    }
+
+    pub fn disable(&mut self, feature: Feature) -> &mut Self {
+        self.set_enabled(feature, false)
+    }
+
+    pub fn apply_map(&mut self, entries: &BTreeMap<String, bool>) -> &mut Self {
+        self.update(|features| {
+            features.apply_map(entries);
+        });
+        self
+    }
+
+    pub fn record_legacy_usage_force(&mut self, alias: &str, feature: Feature) -> &mut Self {
+        self.update(|features| {
+            features.record_legacy_usage_force(alias, feature);
+        });
+        self
+    }
+
+    pub fn record_legacy_usage(&mut self, alias: &str, feature: Feature) -> &mut Self {
+        self.update(|features| {
+            features.record_legacy_usage(alias, feature);
+        });
+        self
+    }
+}
+
+impl From<Features> for ManagedFeatures {
+    fn from(features: Features) -> Self {
+        Self::from_configured(features, None)
+            .expect("unconstrained features should always be constructible")
+    }
+}
+
+impl std::ops::Deref for ManagedFeatures {
+    type Target = Features;
+
+    fn deref(&self) -> &Self::Target {
+        self.value.get()
+    }
 }
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -475,7 +582,7 @@ pub struct Config {
     pub ghost_snapshot: GhostSnapshotConfig,
 
     /// Centralized feature flags; source of truth for feature gating.
-    pub features: Features,
+    pub features: ManagedFeatures,
 
     /// When `true`, suppress warnings about unstable (under development) features.
     pub suppress_unstable_features_warning: bool,
@@ -807,6 +914,223 @@ where
         })?;
     }
 
+    Ok(())
+}
+
+fn feature_requirements_display(feature_requirements: &BTreeMap<Feature, bool>) -> String {
+    let values = feature_requirements
+        .iter()
+        .map(|(feature, enabled)| format!("{}={enabled}", feature.key()))
+        .collect::<Vec<_>>();
+    format!("[{}]", values.join(", "))
+}
+
+fn parse_feature_requirements(
+    feature_requirements: FeatureRequirementsToml,
+    source: &RequirementSource,
+) -> std::io::Result<BTreeMap<Feature, bool>> {
+    let mut pinned_features = BTreeMap::new();
+    for (key, enabled) in feature_requirements.entries {
+        if let Some(feature) = canonical_feature_for_key(&key) {
+            pinned_features.insert(feature, enabled);
+            continue;
+        }
+
+        if let Some(feature) = feature_for_key(&key) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "invalid `feature_requirements` entry `{key}` from {source}: use canonical feature key `{}`",
+                    feature.key()
+                ),
+            ));
+        }
+
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid `feature_requirements` entry `{key}` from {source}"),
+        ));
+    }
+
+    Ok(pinned_features)
+}
+
+fn validate_pinned_features(
+    normalized_features: &Features,
+    pinned_features: &BTreeMap<Feature, bool>,
+    source: Option<&RequirementSource>,
+) -> std::io::Result<()> {
+    let Some(source) = source else {
+        return Ok(());
+    };
+    let allowed = feature_requirements_display(pinned_features);
+    for (feature, enabled) in pinned_features {
+        if normalized_features.enabled(*feature) != *enabled {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                ConstraintError::InvalidValue {
+                    field_name: "features",
+                    candidate: format!(
+                        "{}={}",
+                        feature.key(),
+                        normalized_features.enabled(*feature)
+                    ),
+                    allowed,
+                    requirement_source: source.clone(),
+                },
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn explicit_feature_settings_in_config(cfg: &ConfigToml) -> Vec<(String, Feature, bool)> {
+    let mut explicit_settings = Vec::new();
+
+    if let Some(features) = cfg.features.as_ref() {
+        for (key, enabled) in &features.entries {
+            if let Some(feature) = feature_for_key(key) {
+                explicit_settings.push((format!("features.{key}"), feature, *enabled));
+            }
+        }
+    }
+    if let Some(enabled) = cfg.experimental_use_unified_exec_tool {
+        explicit_settings.push((
+            "experimental_use_unified_exec_tool".to_string(),
+            Feature::UnifiedExec,
+            enabled,
+        ));
+    }
+    if let Some(enabled) = cfg.experimental_use_freeform_apply_patch {
+        explicit_settings.push((
+            "experimental_use_freeform_apply_patch".to_string(),
+            Feature::ApplyPatchFreeform,
+            enabled,
+        ));
+    }
+    if let Some(enabled) = cfg.tools.as_ref().and_then(|tools| tools.web_search) {
+        explicit_settings.push((
+            "tools.web_search".to_string(),
+            Feature::WebSearchRequest,
+            enabled,
+        ));
+    }
+
+    for (profile_name, profile) in &cfg.profiles {
+        if let Some(features) = profile.features.as_ref() {
+            for (key, enabled) in &features.entries {
+                if let Some(feature) = feature_for_key(key) {
+                    explicit_settings.push((
+                        format!("profiles.{profile_name}.features.{key}"),
+                        feature,
+                        *enabled,
+                    ));
+                }
+            }
+        }
+        if let Some(enabled) = profile.include_apply_patch_tool {
+            explicit_settings.push((
+                format!("profiles.{profile_name}.include_apply_patch_tool"),
+                Feature::ApplyPatchFreeform,
+                enabled,
+            ));
+        }
+        if let Some(enabled) = profile.experimental_use_unified_exec_tool {
+            explicit_settings.push((
+                format!("profiles.{profile_name}.experimental_use_unified_exec_tool"),
+                Feature::UnifiedExec,
+                enabled,
+            ));
+        }
+        if let Some(enabled) = profile.experimental_use_freeform_apply_patch {
+            explicit_settings.push((
+                format!("profiles.{profile_name}.experimental_use_freeform_apply_patch"),
+                Feature::ApplyPatchFreeform,
+                enabled,
+            ));
+        }
+        if let Some(enabled) = profile.tools_web_search {
+            explicit_settings.push((
+                format!("profiles.{profile_name}.tools_web_search"),
+                Feature::WebSearchRequest,
+                enabled,
+            ));
+        }
+    }
+
+    explicit_settings
+}
+
+pub(crate) fn validate_explicit_feature_settings_in_config_toml(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<()> {
+    let Some(Sourced {
+        value: feature_requirements,
+        source,
+    }) = feature_requirements
+    else {
+        return Ok(());
+    };
+
+    let pinned_features = parse_feature_requirements(feature_requirements.clone(), source)?;
+    if pinned_features.is_empty() {
+        return Ok(());
+    }
+
+    let allowed = feature_requirements_display(&pinned_features);
+    for (path, feature, enabled) in explicit_feature_settings_in_config(cfg) {
+        if pinned_features
+            .get(&feature)
+            .is_some_and(|required| *required != enabled)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                ConstraintError::InvalidValue {
+                    field_name: "features",
+                    candidate: format!("{path}={enabled}"),
+                    allowed,
+                    requirement_source: source.clone(),
+                },
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) fn validate_feature_requirements_in_config_toml(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<()> {
+    fn validate_profile(
+        cfg: &ConfigToml,
+        profile_name: Option<&str>,
+        profile: &ConfigProfile,
+        feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+    ) -> std::io::Result<()> {
+        let configured_features = Features::from_config(cfg, profile, FeatureOverrides::default());
+        ManagedFeatures::from_configured(configured_features, feature_requirements.cloned())
+            .map(|_| ())
+            .map_err(|err| {
+                if let Some(profile_name) = profile_name {
+                    std::io::Error::new(
+                        err.kind(),
+                        format!(
+                            "invalid feature configuration for profile `{profile_name}`: {err}"
+                        ),
+                    )
+                } else {
+                    err
+                }
+            })
+    }
+
+    validate_profile(cfg, None, &ConfigProfile::default(), feature_requirements)?;
+    for (profile_name, profile) in &cfg.profiles {
+        validate_profile(cfg, Some(profile_name), profile, feature_requirements)?;
+    }
     Ok(())
 }
 
@@ -1737,7 +2061,11 @@ impl Config {
             web_search_request: override_tools_web_search_request,
         };
 
-        let features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let configured_features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let features = ManagedFeatures::from_configured(
+            configured_features,
+            requirements.feature_requirements.clone(),
+        )?;
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let resolved_cwd = {
             use std::env;
@@ -2054,6 +2382,7 @@ impl Config {
             approval_policy: mut constrained_approval_policy,
             sandbox_policy: mut constrained_sandbox_policy,
             web_search_mode: mut constrained_web_search_mode,
+            feature_requirements: _,
             mcp_servers,
             exec_policy: _,
             enforce_residency,
@@ -4963,7 +5292,7 @@ model_verbosity = "high"
                 use_experimental_unified_exec_tool: !cfg!(windows),
                 background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
                 ghost_snapshot: GhostSnapshotConfig::default(),
-                features: Features::with_defaults(),
+                features: Features::with_defaults().into(),
                 suppress_unstable_features_warning: false,
                 active_profile: Some("o3".to_string()),
                 active_project: ProjectConfig { trust_level: None },
@@ -5093,7 +5422,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
-            features: Features::with_defaults(),
+            features: Features::with_defaults().into(),
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt3".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -5221,7 +5550,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
-            features: Features::with_defaults(),
+            features: Features::with_defaults().into(),
             suppress_unstable_features_warning: false,
             active_profile: Some("zdr".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -5335,7 +5664,7 @@ model_verbosity = "high"
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
-            features: Features::with_defaults(),
+            features: Features::with_defaults().into(),
             suppress_unstable_features_warning: false,
             active_profile: Some("gpt5".to_string()),
             active_project: ProjectConfig { trust_level: None },
@@ -5390,6 +5719,7 @@ model_verbosity = "high"
             allowed_web_search_modes: Some(vec![
                 crate::config_loader::WebSearchModeRequirement::Cached,
             ]),
+            feature_requirements: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
@@ -6021,6 +6351,7 @@ mcp_oauth_callback_url = "https://example.com/callback"
                 crate::config_loader::SandboxModeRequirement::ReadOnly,
             ]),
             allowed_web_search_modes: None,
+            feature_requirements: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
@@ -6139,6 +6470,141 @@ trust_level = "untrusted"
         );
         Ok(())
     }
+
+    #[tokio::test]
+    async fn feature_requirements_override_default_feature_values() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                        entries: BTreeMap::from([
+                            ("personality".to_string(), true),
+                            ("shell_tool".to_string(), false),
+                        ]),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await?;
+
+        assert!(config.features.enabled(Feature::Personality));
+        assert!(!config.features.enabled(Feature::ShellTool));
+        assert!(
+            !config
+                .startup_warnings
+                .iter()
+                .any(|warning| warning.contains("Configured value for `features`")),
+            "{:?}",
+            config.startup_warnings
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_feature_config_is_normalized_by_requirements() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"
+[features]
+personality = false
+shell_tool = true
+"#,
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                        entries: BTreeMap::from([
+                            ("personality".to_string(), true),
+                            ("shell_tool".to_string(), false),
+                        ]),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await?;
+
+        assert!(config.features.enabled(Feature::Personality));
+        assert!(!config.features.enabled(Feature::ShellTool));
+        assert!(
+            !config
+                .startup_warnings
+                .iter()
+                .any(|warning| warning.contains("Configured value for `features`")),
+            "{:?}",
+            config.startup_warnings
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn feature_requirements_normalize_runtime_feature_mutations() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let mut config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                        entries: BTreeMap::from([
+                            ("personality".to_string(), true),
+                            ("shell_tool".to_string(), false),
+                        ]),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await?;
+
+        config
+            .features
+            .disable(Feature::Personality)
+            .enable(Feature::ShellTool);
+
+        assert!(config.features.enabled(Feature::Personality));
+        assert!(!config.features.enabled(Feature::ShellTool));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn feature_requirements_reject_legacy_aliases() {
+        let codex_home = TempDir::new().expect("tempdir");
+
+        let err = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
+                        entries: BTreeMap::from([("collab".to_string(), true)]),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await
+            .expect_err("legacy aliases should be rejected");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string()
+                .contains("use canonical feature key `multi_agent`"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn experimental_realtime_ws_base_url_loads_from_config_toml() -> std::io::Result<()> {
         let cfg: ConfigToml = toml::from_str(
