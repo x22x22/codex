@@ -817,6 +817,9 @@ where
 fn apply_requirement_feature_constraints(
     features: &mut Features,
     requirement_features: Option<&Sourced<RequirementsFeaturesToml>>,
+    cfg: &ConfigToml,
+    config_profile: &ConfigProfile,
+    feature_overrides: &FeatureOverrides,
     startup_warnings: &mut Vec<String>,
 ) -> std::io::Result<()> {
     let Some(requirement_features) = requirement_features else {
@@ -865,7 +868,9 @@ fn apply_requirement_feature_constraints(
             ));
         }
 
-        if features.enabled(spec.id) {
+        if features.enabled(spec.id)
+            && feature_is_explicitly_enabled(spec.id, cfg, config_profile, feature_overrides)
+        {
             startup_warnings.push(format!(
                 "Configured value for `features.{key}` is disallowed by requirements; forcing false."
             ));
@@ -873,7 +878,61 @@ fn apply_requirement_feature_constraints(
         features.disable(spec.id);
     }
 
+    features.normalize_dependencies();
+
     Ok(())
+}
+
+fn feature_is_explicitly_enabled(
+    feature: Feature,
+    cfg: &ConfigToml,
+    config_profile: &ConfigProfile,
+    feature_overrides: &FeatureOverrides,
+) -> bool {
+    feature_map_explicitly_enables(cfg.features.as_ref(), feature)
+        || feature_map_explicitly_enables(config_profile.features.as_ref(), feature)
+        || legacy_feature_setting_explicitly_enables(
+            feature,
+            cfg,
+            config_profile,
+            feature_overrides,
+        )
+}
+
+fn feature_map_explicitly_enables(features: Option<&FeaturesToml>, feature: Feature) -> bool {
+    features.is_some_and(|features| {
+        features.entries.iter().any(|(key, enabled)| {
+            *enabled
+                && (canonical_feature_spec(key).map(|spec| spec.id) == Some(feature)
+                    || canonical_feature_for_alias(key) == Some(feature))
+        })
+    })
+}
+
+fn legacy_feature_setting_explicitly_enables(
+    feature: Feature,
+    cfg: &ConfigToml,
+    config_profile: &ConfigProfile,
+    feature_overrides: &FeatureOverrides,
+) -> bool {
+    match feature {
+        Feature::ApplyPatchFreeform => {
+            config_profile.include_apply_patch_tool == Some(true)
+                || cfg.experimental_use_freeform_apply_patch == Some(true)
+                || config_profile.experimental_use_freeform_apply_patch == Some(true)
+                || feature_overrides.include_apply_patch_tool == Some(true)
+        }
+        Feature::UnifiedExec => {
+            cfg.experimental_use_unified_exec_tool == Some(true)
+                || config_profile.experimental_use_unified_exec_tool == Some(true)
+        }
+        Feature::WebSearchRequest => {
+            cfg.tools.as_ref().and_then(|tools| tools.web_search) == Some(true)
+                || config_profile.tools_web_search == Some(true)
+                || feature_overrides.web_search_request == Some(true)
+        }
+        _ => false,
+    }
 }
 
 fn mcp_server_matches_requirement(
@@ -1805,10 +1864,13 @@ impl Config {
             web_search_request: override_tools_web_search_request,
         };
 
-        let mut features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let mut features = Features::from_config(&cfg, &config_profile, feature_overrides.clone());
         apply_requirement_feature_constraints(
             &mut features,
             requirements.features.as_ref(),
+            &cfg,
+            &config_profile,
+            &feature_overrides,
             &mut startup_warnings,
         )?;
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
@@ -6309,8 +6371,40 @@ speaker = "Desk Speakers"
     }
 
     #[tokio::test]
-    async fn managed_feature_requirements_disable_unified_exec_with_warning() -> std::io::Result<()>
-    {
+    async fn managed_feature_requirements_disable_default_feature_without_warning()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    features: Some(crate::config_loader::RequirementsFeaturesToml {
+                        entries: [("unified_exec".to_string(), false)].into_iter().collect(),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await?;
+
+        assert!(!config.features.enabled(Feature::UnifiedExec));
+        assert!(!config.use_experimental_unified_exec_tool);
+        assert!(
+            !config
+                .startup_warnings
+                .iter()
+                .any(|warning| warning.contains("features.unified_exec")),
+            "{:?}",
+            config.startup_warnings
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn managed_feature_requirements_warn_on_explicit_local_override() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         std::fs::write(
             codex_home.path().join(CONFIG_TOML_FILE),
@@ -6342,6 +6436,39 @@ unified_exec = true
                 .iter()
                 .any(|warning| warning.contains("features.unified_exec"))
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn managed_feature_requirements_re_normalize_feature_dependencies() -> std::io::Result<()>
+    {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"
+[features]
+js_repl = true
+js_repl_tools_only = true
+"#,
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    features: Some(crate::config_loader::RequirementsFeaturesToml {
+                        entries: [("js_repl".to_string(), false)].into_iter().collect(),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await?;
+
+        assert!(!config.features.enabled(Feature::JsRepl));
+        assert!(!config.features.enabled(Feature::JsReplToolsOnly));
 
         Ok(())
     }

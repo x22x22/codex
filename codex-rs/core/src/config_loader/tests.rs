@@ -494,6 +494,9 @@ async fn load_requirements_toml_produces_expected_constraints() -> anyhow::Resul
 allowed_approval_policies = ["never", "on-request"]
 allowed_web_search_modes = ["cached"]
 enforce_residency = "us"
+
+[features]
+unified_exec = false
 "#,
     )
     .await?;
@@ -514,6 +517,24 @@ enforce_residency = "us"
             .as_deref()
             .cloned(),
         Some(vec![crate::config_loader::WebSearchModeRequirement::Cached])
+    );
+    assert_eq!(
+        config_requirements_toml
+            .features
+            .as_ref()
+            .map(|requirements| requirements.value.clone()),
+        Some(crate::config_loader::RequirementsFeaturesToml {
+            entries: [("unified_exec".to_string(), false)].into_iter().collect(),
+        })
+    );
+    assert_eq!(
+        config_requirements_toml
+            .features
+            .as_ref()
+            .map(|requirements| requirements.source.clone()),
+        Some(RequirementSource::SystemRequirementsToml {
+            file: AbsolutePathBuf::from_absolute_path(&requirements_file)?,
+        })
     );
     let config_requirements: ConfigRequirements = config_requirements_toml.try_into()?;
     assert_eq!(
@@ -551,6 +572,15 @@ enforce_residency = "us"
     assert_eq!(
         config_requirements.enforce_residency.value(),
         Some(crate::config_loader::ResidencyRequirement::Us)
+    );
+    assert_eq!(
+        config_requirements
+            .features
+            .as_ref()
+            .map(|requirements| requirements.value.clone()),
+        Some(crate::config_loader::RequirementsFeaturesToml {
+            entries: [("unified_exec".to_string(), false)].into_iter().collect(),
+        })
     );
     Ok(())
 }
@@ -668,7 +698,9 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         allowed_approval_policies: Some(vec![AskForApproval::Never]),
         allowed_sandbox_modes: None,
         allowed_web_search_modes: None,
-        features: None,
+        features: Some(crate::config_loader::RequirementsFeaturesToml {
+            entries: [("unified_exec".to_string(), false)].into_iter().collect(),
+        }),
         mcp_servers: None,
         rules: None,
         enforce_residency: None,
@@ -690,6 +722,7 @@ async fn load_config_layers_includes_cloud_requirements() -> anyhow::Result<()> 
         layers.requirements_toml().allowed_approval_policies,
         expected.allowed_approval_policies
     );
+    assert_eq!(layers.requirements_toml().features, expected.features);
     assert_eq!(
         layers
             .requirements()

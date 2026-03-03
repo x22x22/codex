@@ -351,16 +351,20 @@ impl Features {
         }
 
         overrides.apply(&mut features);
-        if features.enabled(Feature::JsReplToolsOnly) && !features.enabled(Feature::JsRepl) {
-            tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
-            features.disable(Feature::JsReplToolsOnly);
-        }
+        features.normalize_dependencies();
 
         features
     }
 
     pub fn enabled_features(&self) -> Vec<Feature> {
         self.enabled.iter().copied().collect()
+    }
+
+    pub(crate) fn normalize_dependencies(&mut self) {
+        if self.enabled(Feature::JsReplToolsOnly) && !self.enabled(Feature::JsRepl) {
+            tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
+            self.disable(Feature::JsReplToolsOnly);
+        }
     }
 }
 
