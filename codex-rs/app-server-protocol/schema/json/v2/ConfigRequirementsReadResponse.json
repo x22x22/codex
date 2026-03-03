@@ -81,6 +81,15 @@
               "type": "null"
             }
           ]
+        },
+        "features": {
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
         }
       },
       "type": "object"

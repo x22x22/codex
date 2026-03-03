@@ -402,13 +402,21 @@ fn web_search_details() -> &'static str {
 }
 
 /// Keys accepted in `[features]` tables.
-fn feature_for_key(key: &str) -> Option<Feature> {
+pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
     for spec in FEATURES {
         if spec.key == key {
             return Some(spec.id);
         }
     }
     legacy::feature_for_key(key)
+}
+
+pub(crate) fn canonical_feature_spec(key: &str) -> Option<&'static FeatureSpec> {
+    FEATURES.iter().find(|spec| spec.key == key)
+}
+
+pub(crate) fn canonical_feature_for_alias(key: &str) -> Option<Feature> {
+    legacy::canonical_feature_for_alias(key)
 }
 
 /// Returns `true` if the provided string matches a known feature toggle key.

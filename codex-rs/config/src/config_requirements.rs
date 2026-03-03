@@ -79,6 +79,7 @@ pub struct ConfigRequirements {
     pub approval_policy: ConstrainedWithSource<AskForApproval>,
     pub sandbox_policy: ConstrainedWithSource<SandboxPolicy>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
+    pub features: Option<Sourced<RequirementsFeaturesToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
@@ -101,6 +102,7 @@ impl Default for ConfigRequirements {
                 Constrained::allow_any(WebSearchMode::Cached),
                 None,
             ),
+            features: None,
             mcp_servers: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(Constrained::allow_any(None), None),
@@ -140,6 +142,12 @@ pub struct NetworkRequirementsToml {
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct RequirementsFeaturesToml {
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, bool>,
 }
 
 /// Normalized network constraints derived from requirements TOML.
@@ -233,6 +241,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_approval_policies: Option<Vec<AskForApproval>>,
     pub allowed_sandbox_modes: Option<Vec<SandboxModeRequirement>>,
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
+    pub features: Option<RequirementsFeaturesToml>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
@@ -267,6 +276,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_approval_policies: Option<Sourced<Vec<AskForApproval>>>,
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
+    pub features: Option<Sourced<RequirementsFeaturesToml>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
@@ -302,6 +312,7 @@ impl ConfigRequirementsWithSources {
                 allowed_approval_policies,
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
+                features,
                 mcp_servers,
                 rules,
                 enforce_residency,
@@ -315,6 +326,7 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            features,
             mcp_servers,
             rules,
             enforce_residency,
@@ -324,6 +336,7 @@ impl ConfigRequirementsWithSources {
             allowed_approval_policies: allowed_approval_policies.map(|sourced| sourced.value),
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
+            features: features.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
@@ -370,6 +383,7 @@ impl ConfigRequirementsToml {
         self.allowed_approval_policies.is_none()
             && self.allowed_sandbox_modes.is_none()
             && self.allowed_web_search_modes.is_none()
+            && self.features.is_none()
             && self.mcp_servers.is_none()
             && self.rules.is_none()
             && self.enforce_residency.is_none()
@@ -385,6 +399,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            features,
             mcp_servers,
             rules,
             enforce_residency,
@@ -553,6 +568,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             approval_policy,
             sandbox_policy,
             web_search_mode,
+            features,
             mcp_servers,
             exec_policy,
             enforce_residency,
@@ -588,6 +604,7 @@ mod tests {
             allowed_approval_policies,
             allowed_sandbox_modes,
             allowed_web_search_modes,
+            features,
             mcp_servers,
             rules,
             enforce_residency,
@@ -600,6 +617,7 @@ mod tests {
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             allowed_web_search_modes: allowed_web_search_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            features: features.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             enforce_residency: enforce_residency
@@ -622,6 +640,9 @@ mod tests {
             WebSearchModeRequirement::Cached,
             WebSearchModeRequirement::Live,
         ];
+        let features = RequirementsFeaturesToml {
+            entries: BTreeMap::from([(String::from("unified_exec"), false)]),
+        };
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
 
@@ -631,6 +652,7 @@ mod tests {
             allowed_approval_policies: Some(allowed_approval_policies.clone()),
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
+            features: Some(features.clone()),
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
@@ -651,6 +673,7 @@ mod tests {
                     allowed_web_search_modes,
                     enforce_source.clone(),
                 )),
+                features: Some(Sourced::new(features, enforce_source.clone())),
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: Some(Sourced::new(enforce_residency, enforce_source)),
@@ -683,6 +706,7 @@ mod tests {
                 )),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                features: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
@@ -723,6 +747,7 @@ mod tests {
                 )),
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
+                features: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
@@ -1123,6 +1148,28 @@ mod tests {
                 RequirementSource::Unknown,
             ))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn deserialize_feature_requirements() -> Result<()> {
+        let toml_str = r#"
+            [features]
+            unified_exec = false
+        "#;
+        let requirements: ConfigRequirements =
+            with_unknown_source(from_str(toml_str)?).try_into()?;
+
+        assert_eq!(
+            requirements.features,
+            Some(Sourced::new(
+                RequirementsFeaturesToml {
+                    entries: BTreeMap::from([(String::from("unified_exec"), false)]),
+                },
+                RequirementSource::Unknown,
+            ))
+        );
+
         Ok(())
     }
 

@@ -32,6 +32,7 @@ use crate::config_loader::ConstrainedWithSource;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::McpServerIdentity;
 use crate::config_loader::McpServerRequirement;
+use crate::config_loader::RequirementsFeaturesToml;
 use crate::config_loader::ResidencyRequirement;
 use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
@@ -39,6 +40,9 @@ use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
+use crate::features::Stage;
+use crate::features::canonical_feature_for_alias;
+use crate::features::canonical_feature_spec;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -805,6 +809,68 @@ where
                 ),
             )
         })?;
+    }
+
+    Ok(())
+}
+
+fn apply_requirement_feature_constraints(
+    features: &mut Features,
+    requirement_features: Option<&Sourced<RequirementsFeaturesToml>>,
+    startup_warnings: &mut Vec<String>,
+) -> std::io::Result<()> {
+    let Some(requirement_features) = requirement_features else {
+        return Ok(());
+    };
+
+    for (key, enabled) in &requirement_features.value.entries {
+        if *enabled {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "requirements features can only disable features; `{key}` was set to true (set by {})",
+                    requirement_features.source
+                ),
+            ));
+        }
+
+        let Some(spec) = canonical_feature_spec(key) else {
+            if let Some(feature) = canonical_feature_for_alias(key) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "requirements features uses legacy key `{key}` (set by {}); use canonical key `{}` instead",
+                        requirement_features.source,
+                        feature.key()
+                    ),
+                ));
+            }
+
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "requirements features contains unknown feature key `{key}` (set by {})",
+                    requirement_features.source
+                ),
+            ));
+        };
+
+        if matches!(spec.stage, Stage::Removed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "requirements features contains removed feature key `{key}` (set by {})",
+                    requirement_features.source
+                ),
+            ));
+        }
+
+        if features.enabled(spec.id) {
+            startup_warnings.push(format!(
+                "Configured value for `features.{key}` is disallowed by requirements; forcing false."
+            ));
+        }
+        features.disable(spec.id);
     }
 
     Ok(())
@@ -1739,7 +1805,12 @@ impl Config {
             web_search_request: override_tools_web_search_request,
         };
 
-        let features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let mut features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        apply_requirement_feature_constraints(
+            &mut features,
+            requirements.features.as_ref(),
+            &mut startup_warnings,
+        )?;
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let resolved_cwd = {
             use std::env;
@@ -2058,6 +2129,7 @@ impl Config {
             approval_policy: mut constrained_approval_policy,
             sandbox_policy: mut constrained_sandbox_policy,
             web_search_mode: mut constrained_web_search_mode,
+            features: _,
             mcp_servers,
             exec_policy: _,
             enforce_residency,
@@ -5394,6 +5466,7 @@ model_verbosity = "high"
             allowed_web_search_modes: Some(vec![
                 crate::config_loader::WebSearchModeRequirement::Cached,
             ]),
+            features: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
@@ -5419,6 +5492,7 @@ model_verbosity = "high"
                 constrained,
                 Some(requirement_source),
             ),
+            features: None,
             ..Default::default()
         };
         let config_layer_stack = crate::config_loader::ConfigLayerStack::new(
@@ -5998,6 +6072,7 @@ mcp_oauth_callback_url = "https://example.com/callback"
                 crate::config_loader::SandboxModeRequirement::ReadOnly,
             ]),
             allowed_web_search_modes: None,
+            features: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,
@@ -6231,6 +6306,115 @@ speaker = "Desk Speakers"
             Some("Desk Speakers")
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn managed_feature_requirements_disable_unified_exec_with_warning() -> std::io::Result<()>
+    {
+        let codex_home = TempDir::new()?;
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            r#"
+[features]
+unified_exec = true
+"#,
+        )?;
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    features: Some(crate::config_loader::RequirementsFeaturesToml {
+                        entries: [("unified_exec".to_string(), false)].into_iter().collect(),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await?;
+
+        assert!(!config.features.enabled(Feature::UnifiedExec));
+        assert!(!config.use_experimental_unified_exec_tool);
+        assert!(
+            config
+                .startup_warnings
+                .iter()
+                .any(|warning| warning.contains("features.unified_exec"))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn managed_feature_requirements_reject_true_values() {
+        let codex_home = TempDir::new().expect("tempdir");
+
+        let err = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    features: Some(crate::config_loader::RequirementsFeaturesToml {
+                        entries: [("unified_exec".to_string(), true)].into_iter().collect(),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await
+            .expect_err("requirements feature true should fail");
+
+        assert!(err.to_string().contains("can only disable features"));
+    }
+
+    #[tokio::test]
+    async fn managed_feature_requirements_reject_unknown_feature_keys() {
+        let codex_home = TempDir::new().expect("tempdir");
+
+        let err = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    features: Some(crate::config_loader::RequirementsFeaturesToml {
+                        entries: [("definitely_fake_feature".to_string(), false)]
+                            .into_iter()
+                            .collect(),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await
+            .expect_err("unknown feature key should fail");
+
+        assert!(err.to_string().contains("unknown feature key"));
+    }
+
+    #[tokio::test]
+    async fn managed_feature_requirements_reject_legacy_aliases() {
+        let codex_home = TempDir::new().expect("tempdir");
+
+        let err = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .fallback_cwd(Some(codex_home.path().to_path_buf()))
+            .cloud_requirements(CloudRequirementsLoader::new(async {
+                Ok(Some(crate::config_loader::ConfigRequirementsToml {
+                    features: Some(crate::config_loader::RequirementsFeaturesToml {
+                        entries: [("experimental_use_unified_exec_tool".to_string(), false)]
+                            .into_iter()
+                            .collect(),
+                    }),
+                    ..Default::default()
+                }))
+            }))
+            .build()
+            .await
+            .expect_err("legacy alias should fail");
+
+        assert!(err.to_string().contains("legacy key"));
+        assert!(err.to_string().contains("unified_exec"));
     }
 }
 

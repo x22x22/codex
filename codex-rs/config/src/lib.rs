@@ -21,6 +21,7 @@ pub use config_requirements::McpServerRequirement;
 pub use config_requirements::NetworkConstraints;
 pub use config_requirements::NetworkRequirementsToml;
 pub use config_requirements::RequirementSource;
+pub use config_requirements::RequirementsFeaturesToml;
 pub use config_requirements::ResidencyRequirement;
 pub use config_requirements::SandboxModeRequirement;
 pub use config_requirements::Sourced;

@@ -40,6 +40,7 @@ pub use codex_config::McpServerRequirement;
 pub use codex_config::NetworkConstraints;
 pub use codex_config::NetworkRequirementsToml;
 pub use codex_config::RequirementSource;
+pub use codex_config::RequirementsFeaturesToml;
 pub use codex_config::ResidencyRequirement;
 pub use codex_config::SandboxModeRequirement;
 pub use codex_config::Sourced;

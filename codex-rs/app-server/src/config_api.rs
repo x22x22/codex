@@ -127,6 +127,9 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
             }
             normalized
         }),
+        features: requirements
+            .features
+            .map(|features| features.entries.into_iter().collect()),
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
@@ -212,6 +215,9 @@ mod tests {
             allowed_web_search_modes: Some(vec![
                 codex_core::config_loader::WebSearchModeRequirement::Cached,
             ]),
+            features: Some(codex_core::config_loader::RequirementsFeaturesToml {
+                entries: [("unified_exec".to_string(), false)].into_iter().collect(),
+            }),
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
@@ -248,6 +254,10 @@ mod tests {
             Some(vec![WebSearchMode::Cached, WebSearchMode::Disabled]),
         );
         assert_eq!(
+            mapped.features,
+            Some([("unified_exec".to_string(), false)].into_iter().collect())
+        );
+        assert_eq!(
             mapped.enforce_residency,
             Some(codex_app_server_protocol::ResidencyRequirement::Us),
         );
@@ -275,6 +285,7 @@ mod tests {
             allowed_approval_policies: None,
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
+            features: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,

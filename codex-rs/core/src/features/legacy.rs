@@ -47,14 +47,15 @@ pub(crate) fn legacy_feature_keys() -> impl Iterator<Item = &'static str> {
     ALIASES.iter().map(|alias| alias.legacy_key)
 }
 
-pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
+pub(crate) fn canonical_feature_for_alias(key: &str) -> Option<Feature> {
     ALIASES
         .iter()
         .find(|alias| alias.legacy_key == key)
-        .map(|alias| {
-            log_alias(alias.legacy_key, alias.feature);
-            alias.feature
-        })
+        .map(|alias| alias.feature)
+}
+
+pub(crate) fn feature_for_key(key: &str) -> Option<Feature> {
+    canonical_feature_for_alias(key).inspect(|feature| log_alias(key, *feature))
 }
 
 #[derive(Debug, Default)]
