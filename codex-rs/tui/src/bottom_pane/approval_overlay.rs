@@ -250,8 +250,7 @@ impl ApprovalOverlay {
 
     fn patch_selected_index(&self) -> Option<usize> {
         self.patch_state()
-            .map(|_| self.list.scroll_state().selected_idx)
-            .flatten()
+            .and_then(|_| self.list.scroll_state().selected_idx)
     }
 
     fn patch_note_text(&self) -> String {
