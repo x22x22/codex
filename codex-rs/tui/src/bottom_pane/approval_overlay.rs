@@ -367,6 +367,9 @@ impl ApprovalOverlay {
                 let prefix_label = format!("{prefix} {}. ", idx + 1);
                 GenericDisplayRow {
                     name: format!("{prefix_label}{}", option.label),
+                    display_shortcut: option
+                        .display_shortcut
+                        .or_else(|| option.additional_shortcuts.first().copied()),
                     wrap_indent: Some(UnicodeWidthStr::width(prefix_label.as_str())),
                     ..Default::default()
                 }
@@ -1275,7 +1278,7 @@ fn patch_options() -> Vec<ApprovalOption> {
         ApprovalOption {
             label: "No, and tell Codex what to do differently".to_string(),
             decision: ApprovalDecision::PatchRejectWithNotes,
-            display_shortcut: None,
+            display_shortcut: Some(key_hint::plain(KeyCode::Tab)),
             additional_shortcuts: vec![key_hint::plain(KeyCode::Char('n'))],
         },
     ]
@@ -1850,12 +1853,24 @@ mod tests {
     }
 
     #[test]
-    fn patch_option_three_no_longer_shows_esc_shortcut() {
+    fn patch_options_show_expected_shortcuts() {
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx);
         let view = ApprovalOverlay::new(make_patch_request(), tx, Features::with_defaults());
         let rendered = render_overlay_lines(&view, 80);
 
+        assert!(
+            rendered.contains("(y)"),
+            "patch option should show y shortcut: {rendered}"
+        );
+        assert!(
+            rendered.contains("(a)"),
+            "patch option should show a shortcut: {rendered}"
+        );
+        assert!(
+            rendered.contains("(tab)"),
+            "patch option should show tab shortcut: {rendered}"
+        );
         assert!(
             !rendered.contains("(esc)"),
             "patch option should not show esc shortcut: {rendered}"
