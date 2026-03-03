@@ -4574,7 +4574,6 @@ impl ChatWidget {
                     self.on_user_message_event(ev);
                 }
             }
-            EventMsg::RawResponseItem(_) => {}
             EventMsg::EnteredReviewMode(review_request) => {
                 self.on_entered_review_mode(review_request, from_replay)
             }
@@ -4605,7 +4604,8 @@ impl ChatWidget {
                     });
                 }
             }
-            EventMsg::ItemStarted(_)
+            EventMsg::RawResponseItem(_)
+            | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)
             | EventMsg::ReasoningRawContentDelta(_)
