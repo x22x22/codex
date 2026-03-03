@@ -7637,13 +7637,6 @@ impl ChatWidget {
         {
             collaboration_mode.reasoning_effort = Some(Some(effort));
         }
-        let user_message = UserMessage {
-            text,
-            local_images: Vec::new(),
-            remote_image_urls: Vec::new(),
-            text_elements: Vec::new(),
-            mention_bindings: Vec::new(),
-        };
         if self.agent_turn_running
             && self.active_collaboration_mask.as_ref() != Some(&collaboration_mode)
         {
@@ -7653,7 +7646,15 @@ impl ChatWidget {
             return;
         }
         self.set_collaboration_mask(collaboration_mode);
-        if self.is_plan_streaming_in_tui() {
+        let should_queue = self.is_plan_streaming_in_tui();
+        let user_message = UserMessage {
+            text,
+            local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
+            text_elements: Vec::new(),
+            mention_bindings: Vec::new(),
+        };
+        if should_queue {
             self.queue_user_message(user_message);
         } else {
             self.submit_user_message(user_message);
