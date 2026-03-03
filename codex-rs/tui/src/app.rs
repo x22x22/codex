@@ -1074,6 +1074,47 @@ impl App {
         submitted
     }
 
+    async fn reject_patch_approval_with_notes(
+        &mut self,
+        thread_id: ThreadId,
+        approval_id: String,
+        text: String,
+    ) {
+        let denied = self
+            .submit_op_to_thread(
+                thread_id,
+                Op::PatchApproval {
+                    id: approval_id,
+                    decision: ReviewDecision::Denied,
+                },
+            )
+            .await;
+        if !denied {
+            return;
+        }
+
+        let steered = self
+            .submit_op_to_thread(
+                thread_id,
+                Op::UserInput {
+                    items: vec![UserInput::Text {
+                        text: text.clone(),
+                        text_elements: Vec::new(),
+                    }],
+                    final_output_json_schema: None,
+                },
+            )
+            .await;
+        if steered && self.active_thread_id == Some(thread_id) {
+            self.chat_widget.render_submitted_user_message(
+                text,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+        }
+    }
+
     async fn refresh_pending_thread_approvals(&mut self) {
         let channels: Vec<(ThreadId, Arc<Mutex<ThreadEventStore>>)> = self
             .thread_event_channels
@@ -2167,29 +2208,8 @@ impl App {
                 approval_id,
                 text,
             } => {
-                let denied = self
-                    .submit_op_to_thread(
-                        thread_id,
-                        Op::PatchApproval {
-                            id: approval_id,
-                            decision: ReviewDecision::Denied,
-                        },
-                    )
+                self.reject_patch_approval_with_notes(thread_id, approval_id, text)
                     .await;
-                if denied {
-                    let _ = self
-                        .submit_op_to_thread(
-                            thread_id,
-                            Op::UserInput {
-                                items: vec![UserInput::Text {
-                                    text,
-                                    text_elements: Vec::new(),
-                                }],
-                                final_output_json_schema: None,
-                            },
-                        )
-                        .await;
-                }
             }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
@@ -3882,6 +3902,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reject_patch_with_notes_renders_follow_up_in_active_transcript() -> Result<()> {
+        let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.active_thread_id = Some(thread_id);
+
+        reject_patch_with_notes_for_test(
+            &mut app,
+            thread_id,
+            "call-2",
+            "i want the content to say bye instead.",
+        )
+        .await;
+        drain_insert_history_cells(&mut app, &mut app_event_rx);
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(
+            user_messages,
+            vec!["i want the content to say bye instead.".to_string()]
+        );
+        assert_snapshot!(
+            "reject_patch_with_notes_follow_up_user_prompt",
+            render_transcript_cells_for_snapshot(&app, 80)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn reject_patch_with_notes_skips_steering_when_deny_fails() -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
 
@@ -4652,29 +4707,40 @@ mod tests {
         approval_id: &str,
         text: &str,
     ) {
-        let denied = app
-            .submit_op_to_thread(
-                thread_id,
-                Op::PatchApproval {
-                    id: approval_id.to_string(),
-                    decision: ReviewDecision::Denied,
-                },
-            )
+        app.reject_patch_approval_with_notes(thread_id, approval_id.to_string(), text.to_string())
             .await;
-        if denied {
-            let _ = app
-                .submit_op_to_thread(
-                    thread_id,
-                    Op::UserInput {
-                        items: vec![UserInput::Text {
-                            text: text.to_string(),
-                            text_elements: Vec::new(),
-                        }],
-                        final_output_json_schema: None,
-                    },
-                )
-                .await;
+    }
+
+    fn drain_insert_history_cells(
+        app: &mut App,
+        app_event_rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    ) {
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                app.transcript_cells.push(cell.into());
+            }
         }
+    }
+
+    fn render_transcript_cells_for_snapshot(app: &App, width: u16) -> String {
+        app.transcript_cells
+            .iter()
+            .enumerate()
+            .flat_map(|(idx, cell)| {
+                let mut lines = cell.display_lines(width);
+                if idx > 0 && !lines.is_empty() {
+                    lines.insert(0, Line::from(""));
+                }
+                lines
+            })
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn test_otel_manager(config: &Config, model: &str) -> OtelManager {

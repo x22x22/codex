@@ -2162,8 +2162,7 @@ pub(crate) fn new_patch_event(
 pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // Failure title
-    lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
+    lines.push(vec!["• ".dim(), "Failed to apply patch".red().bold()].into());
 
     if !stderr.trim().is_empty() {
         let output = output_lines(
@@ -2183,6 +2182,12 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     }
 
     PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_patch_apply_declined() -> PlainHistoryCell {
+    PlainHistoryCell {
+        lines: vec![vec!["• ".dim(), "Accepting revision".bold()].into()],
+    }
 }
 
 pub(crate) fn new_view_image_tool_call(path: PathBuf, cwd: &Path) -> PlainHistoryCell {

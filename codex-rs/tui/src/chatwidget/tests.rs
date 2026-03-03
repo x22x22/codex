@@ -7559,6 +7559,32 @@ async fn apply_patch_events_emit_history_cells() {
 }
 
 #[tokio::test]
+async fn apply_patch_declined_shows_accepting_revision_without_detail() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "declined".into(),
+        msg: EventMsg::PatchApplyEnd(PatchApplyEndEvent {
+            call_id: "call-declined".into(),
+            turn_id: "turn-declined".into(),
+            stdout: String::new(),
+            stderr: "patch rejected by user".into(),
+            success: false,
+            changes: HashMap::new(),
+            status: CorePatchApplyStatus::Declined,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("declined patch cell"));
+    assert_snapshot!("apply_patch_declined_accepting_revision", rendered);
+    assert!(
+        !rendered.contains("patch rejected by user"),
+        "declined patch row should not show the low-level rejection detail"
+    );
+}
+
+#[tokio::test]
 async fn apply_patch_manual_approval_adjusts_header() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
 

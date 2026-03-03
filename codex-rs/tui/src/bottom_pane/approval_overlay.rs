@@ -379,7 +379,7 @@ impl ApprovalOverlay {
             if self.patch_focus_is_notes() {
                 "enter to send | tab to go back | esc to interrupt".to_string()
             } else {
-                "enter or tab to edit rejection | esc to interrupt".to_string()
+                "enter or tab to edit follow up | esc to interrupt".to_string()
             }
         } else if self.patch_selected_index() == Some(PATCH_REJECT_OPTION_INDEX) {
             "tab to follow up | esc to interrupt".to_string()
