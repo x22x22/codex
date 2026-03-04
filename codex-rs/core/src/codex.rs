@@ -204,7 +204,10 @@ use crate::mentions::collect_explicit_app_ids;
 use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
+use crate::plugins::PluginCapabilitySummary;
 use crate::plugins::PluginsManager;
+use crate::plugins::annotate_tools_with_plugin_sources;
+use crate::plugins::render_explicit_plugin_instructions;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -4926,19 +4929,32 @@ pub(crate) async fn run_turn(
         .services
         .plugins_manager
         .plugins_for_config(&turn_context.config);
-    let available_connectors = if turn_context.config.features.enabled(Feature::Apps) {
-        let mcp_tools = match sess
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
-            .list_all_tools()
-            .or_cancel(&cancellation_token)
-            .await
-        {
-            Ok(mcp_tools) => mcp_tools,
-            Err(_) => return None,
+    // Plain-text @plugin mentions are resolved from the current session's
+    // enabled plugins, then converted into turn-scoped guidance below.
+    let mentioned_plugins =
+        collect_explicit_plugin_mentions(&input, loaded_plugins.capability_index().plugins());
+    let mcp_tools =
+        if turn_context.config.features.enabled(Feature::Apps) || !mentioned_plugins.is_empty() {
+            // Plugin mentions need raw MCP/app inventory even when app tools
+            // are normally hidden so we can describe the plugin's currently
+            // usable capabilities for this turn.
+            match sess
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .list_all_tools()
+                .or_cancel(&cancellation_token)
+                .await
+            {
+                Ok(mcp_tools) => mcp_tools,
+                Err(_) if turn_context.config.features.enabled(Feature::Apps) => return None,
+                Err(_) => HashMap::new(),
+            }
+        } else {
+            HashMap::new()
         };
+    let available_connectors = if turn_context.config.features.enabled(Feature::Apps) {
         let connectors = connectors::merge_plugin_apps_with_accessible(
             loaded_plugins.effective_apps(),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
@@ -4953,18 +4969,6 @@ pub(crate) async fn run_turn(
         .map_or_else(HashMap::new, |outcome| {
             build_skill_name_counts(&outcome.skills, &outcome.disabled_paths).1
         });
-    let mentioned_plugins =
-        collect_explicit_plugin_mentions(&input, loaded_plugins.capability_index().plugins());
-    if !mentioned_plugins.is_empty() {
-        trace!(
-            turn_id = %turn_context.sub_id,
-            plugins = ?mentioned_plugins
-                .iter()
-                .map(|plugin| plugin.display_name.as_str())
-                .collect::<Vec<_>>(),
-            "resolved explicit plugin mentions"
-        );
-    }
     let mentioned_skills = skills_outcome.as_ref().map_or_else(Vec::new, |outcome| {
         collect_explicit_skill_mentions(
             &input,
@@ -5013,12 +5017,29 @@ pub(crate) async fn run_turn(
             .await;
     }
 
+    let plugin_items =
+        build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
         &skill_items,
         &available_connectors,
         &skill_name_counts_lower,
     ));
+    // Explicit @plugin mentions can make a plugin's enabled apps callable for
+    // this turn without persisting those connectors as sticky user selections.
+    let mut turn_enabled_connectors = explicitly_enabled_connectors.clone();
+    turn_enabled_connectors.extend(
+        mentioned_plugins
+            .iter()
+            .flat_map(|plugin| plugin.app_connector_ids.iter())
+            .map(|connector_id| connector_id.0.clone())
+            .filter(|connector_id| {
+                available_connectors
+                    .iter()
+                    .any(|connector| connector.is_enabled && connector.id == *connector_id)
+            }),
+    );
     let connector_names_by_id = available_connectors
         .iter()
         .map(|connector| (connector.id.as_str(), connector.name.as_str()))
@@ -5054,6 +5075,10 @@ pub(crate) async fn run_turn(
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
+            .await;
+    }
+    if !plugin_items.is_empty() {
+        sess.record_conversation_items(&turn_context, &plugin_items)
             .await;
     }
 
@@ -5124,7 +5149,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
-            &explicitly_enabled_connectors,
+            &turn_enabled_connectors,
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
             cancellation_token.child_token(),
@@ -5670,17 +5695,21 @@ async fn built_tools(
         .or_cancel(cancellation_token)
         .await?;
     drop(mcp_connection_manager);
+    let loaded_plugins = sess
+        .services
+        .plugins_manager
+        .plugins_for_config(&turn_context.config);
+    // Annotate tool descriptions at runtime so prompt-visible tools and
+    // search_tool_bm25 share the same plugin provenance without mutating the
+    // cached MCP tool inventory.
+    mcp_tools = annotate_tools_with_plugin_sources(mcp_tools, loaded_plugins.capability_index());
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
     let connectors = if turn_context.features.enabled(Feature::Apps) {
-        let plugin_apps = sess
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config);
         let connectors = connectors::merge_plugin_apps_with_accessible(
-            plugin_apps.effective_apps(),
+            loaded_plugins.effective_apps(),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
         );
         Some(connectors::with_app_enabled_state(
@@ -5691,6 +5720,8 @@ async fn built_tools(
         None
     };
 
+    // Keep the connector-grouped app view around for the router even though
+    // app tools only become prompt-visible after explicit selection/discovery.
     let app_tools = connectors.as_ref().map(|connectors| {
         filter_codex_apps_mcp_tools(&mcp_tools, connectors, &turn_context.config)
     });
@@ -5733,6 +5764,55 @@ async fn built_tools(
         app_tools,
         turn_context.dynamic_tools.as_slice(),
     )))
+}
+
+fn build_plugin_injections(
+    mentioned_plugins: &[PluginCapabilitySummary],
+    mcp_tools: &HashMap<String, crate::mcp_connection_manager::ToolInfo>,
+    available_connectors: &[connectors::AppInfo],
+) -> Vec<ResponseItem> {
+    if mentioned_plugins.is_empty() {
+        return Vec::new();
+    }
+
+    let visible_mcp_server_names = mcp_tools
+        .values()
+        .filter(|tool| tool.server_name != CODEX_APPS_MCP_SERVER_NAME)
+        .map(|tool| tool.server_name.clone())
+        .collect::<HashSet<String>>();
+    let enabled_connectors_by_id = available_connectors
+        .iter()
+        .filter(|connector| connector.is_enabled)
+        .map(|connector| {
+            (
+                connector.id.as_str(),
+                connectors::connector_display_label(connector),
+            )
+        })
+        .collect::<HashMap<&str, String>>();
+
+    // Turn each explicit @plugin mention into a developer hint that points the
+    // model at the plugin's visible MCP servers, enabled apps, and skill prefix.
+    mentioned_plugins
+        .iter()
+        .filter_map(|plugin| {
+            let available_mcp_servers = plugin
+                .mcp_server_names
+                .iter()
+                .filter(|server_name| visible_mcp_server_names.contains(server_name.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            let available_apps = plugin
+                .app_connector_ids
+                .iter()
+                .filter_map(|connector_id| enabled_connectors_by_id.get(connector_id.0.as_str()))
+                .cloned()
+                .collect::<Vec<_>>();
+            render_explicit_plugin_instructions(plugin, &available_mcp_servers, &available_apps)
+                .map(DeveloperInstructions::new)
+                .map(ResponseItem::from)
+        })
+        .collect()
 }
 
 #[derive(Debug)]

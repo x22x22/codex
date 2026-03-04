@@ -1,9 +1,8 @@
 use super::load_plugin_manifest;
-use super::marketplace::MarketplaceError;
-use super::marketplace::resolve_marketplace_plugin;
 use super::plugin_manifest_name;
 use super::store::DEFAULT_PLUGIN_VERSION;
 use super::store::PluginId;
+use super::store::PluginInstallRequest;
 use super::store::PluginInstallResult;
 use super::store::PluginStore;
 use super::store::PluginStoreError;
@@ -18,6 +17,7 @@ use crate::config_loader::ConfigLayerStack;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
+use crate::mcp_connection_manager::ToolInfo;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -25,6 +25,7 @@ use serde::Deserialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 use serde_json::json;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -38,13 +39,6 @@ const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AppConnectorId(pub String);
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginInstallRequest {
-    pub plugin_name: String,
-    pub marketplace_name: String,
-    pub cwd: PathBuf,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedPlugin {
@@ -100,10 +94,146 @@ impl PluginCapabilitySummary {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginCapabilityIndex {
+    plugins: Vec<PluginCapabilitySummary>,
+    plugin_index_by_config_name: HashMap<String, usize>,
+    plugin_indexes_by_connector_id: HashMap<AppConnectorId, Vec<usize>>,
+    plugin_indexes_by_mcp_server_name: HashMap<String, Vec<usize>>,
+}
+
+impl PluginCapabilityIndex {
+    fn from_plugins(plugins: &[LoadedPlugin]) -> Self {
+        let mut capability_index = Self::default();
+
+        for plugin in plugins {
+            let Some(summary) = PluginCapabilitySummary::from_plugin(plugin) else {
+                continue;
+            };
+
+            let plugin_index = capability_index.plugins.len();
+            capability_index
+                .plugin_index_by_config_name
+                .insert(summary.config_name.clone(), plugin_index);
+
+            for connector_id in &summary.app_connector_ids {
+                capability_index
+                    .plugin_indexes_by_connector_id
+                    .entry(connector_id.clone())
+                    .or_default()
+                    .push(plugin_index);
+            }
+
+            for server_name in &summary.mcp_server_names {
+                capability_index
+                    .plugin_indexes_by_mcp_server_name
+                    .entry(server_name.clone())
+                    .or_default()
+                    .push(plugin_index);
+            }
+
+            capability_index.plugins.push(summary);
+        }
+
+        capability_index
+    }
+
+    pub fn plugins(&self) -> &[PluginCapabilitySummary] {
+        &self.plugins
+    }
+
+    pub fn plugin_for_config_name(&self, config_name: &str) -> Option<&PluginCapabilitySummary> {
+        self.plugin_index_by_config_name
+            .get(config_name)
+            .map(|plugin_index| &self.plugins[*plugin_index])
+    }
+
+    pub fn plugins_for_connector_id(
+        &self,
+        connector_id: &AppConnectorId,
+    ) -> Vec<&PluginCapabilitySummary> {
+        self.plugin_indexes_by_connector_id
+            .get(connector_id)
+            .into_iter()
+            .flatten()
+            .map(|plugin_index| &self.plugins[*plugin_index])
+            .collect()
+    }
+
+    pub fn plugins_for_mcp_server_name(&self, server_name: &str) -> Vec<&PluginCapabilitySummary> {
+        self.plugin_indexes_by_mcp_server_name
+            .get(server_name)
+            .into_iter()
+            .flatten()
+            .map(|plugin_index| &self.plugins[*plugin_index])
+            .collect()
+    }
+}
+
+pub(crate) fn annotate_tools_with_plugin_sources(
+    mut tools: HashMap<String, ToolInfo>,
+    capability_index: &PluginCapabilityIndex,
+) -> HashMap<String, ToolInfo> {
+    for tool in tools.values_mut() {
+        // Recover plugin provenance from the app connector or MCP server and
+        // append it to the shared description text used by both prompt tools
+        // and search_tool_bm25 indexing.
+        let mut plugin_names = match tool.connector_id.as_ref() {
+            Some(connector_id) => capability_index
+                .plugins_for_connector_id(&AppConnectorId(connector_id.clone()))
+                .into_iter()
+                .map(|plugin| plugin.display_name.as_str())
+                .collect::<Vec<_>>(),
+            None => capability_index
+                .plugins_for_mcp_server_name(tool.server_name.as_str())
+                .into_iter()
+                .map(|plugin| plugin.display_name.as_str())
+                .collect::<Vec<_>>(),
+        };
+
+        if plugin_names.is_empty() {
+            continue;
+        }
+
+        plugin_names.sort_unstable();
+        plugin_names.dedup();
+
+        let plugin_source_note = if plugin_names.len() == 1 {
+            format!("This tool is part of plugin `{}`.", plugin_names[0])
+        } else {
+            format!(
+                "This tool is part of plugins {}.",
+                plugin_names
+                    .into_iter()
+                    .map(|plugin_name| format!("`{plugin_name}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+
+        let description = tool
+            .tool
+            .description
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("");
+        let annotated_description = if description.is_empty() {
+            plugin_source_note
+        } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
+            format!("{description} {plugin_source_note}")
+        } else {
+            format!("{description}. {plugin_source_note}")
+        };
+        tool.tool.description = Some(Cow::Owned(annotated_description));
+    }
+
+    tools
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginLoadOutcome {
     plugins: Vec<LoadedPlugin>,
-    capability_summaries: Vec<PluginCapabilitySummary>,
+    capability_index: PluginCapabilityIndex,
 }
 
 impl Default for PluginLoadOutcome {
@@ -114,13 +244,10 @@ impl Default for PluginLoadOutcome {
 
 impl PluginLoadOutcome {
     fn from_plugins(plugins: Vec<LoadedPlugin>) -> Self {
-        let capability_summaries = plugins
-            .iter()
-            .filter_map(PluginCapabilitySummary::from_plugin)
-            .collect::<Vec<_>>();
+        let capability_index = PluginCapabilityIndex::from_plugins(&plugins);
         Self {
             plugins,
-            capability_summaries,
+            capability_index,
         }
     }
 
@@ -163,8 +290,8 @@ impl PluginLoadOutcome {
         apps
     }
 
-    pub fn capability_summaries(&self) -> &[PluginCapabilitySummary] {
-        &self.capability_summaries
+    pub fn capability_index(&self) -> &PluginCapabilityIndex {
+        &self.capability_index
     }
 
     pub fn plugins(&self) -> &[LoadedPlugin] {
@@ -239,17 +366,10 @@ impl PluginsManager {
         &self,
         request: PluginInstallRequest,
     ) -> Result<PluginInstallResult, PluginInstallError> {
-        let resolved = resolve_marketplace_plugin(
-            &request.cwd,
-            &request.plugin_name,
-            &request.marketplace_name,
-        )?;
         let store = self.store.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            store.install(resolved.source_path.into_path_buf(), resolved.plugin_id)
-        })
-        .await
-        .map_err(PluginInstallError::join)??;
+        let result = tokio::task::spawn_blocking(move || store.install(request))
+            .await
+            .map_err(PluginInstallError::join)??;
 
         ConfigService::new_with_defaults(self.codex_home.clone())
             .write_value(ConfigValueWriteParams {
@@ -272,9 +392,6 @@ impl PluginsManager {
 #[derive(Debug, thiserror::Error)]
 pub enum PluginInstallError {
     #[error("{0}")]
-    Marketplace(#[from] MarketplaceError),
-
-    #[error("{0}")]
     Store(#[from] PluginStoreError),
 
     #[error("{0}")]
@@ -287,18 +404,6 @@ pub enum PluginInstallError {
 impl PluginInstallError {
     fn join(source: tokio::task::JoinError) -> Self {
         Self::Join(source)
-    }
-
-    pub fn is_invalid_request(&self) -> bool {
-        matches!(
-            self,
-            Self::Marketplace(
-                MarketplaceError::InvalidMarketplaceFile { .. }
-                    | MarketplaceError::PluginNotFound { .. }
-                    | MarketplaceError::DuplicatePlugin { .. }
-                    | MarketplaceError::InvalidPlugin(_)
-            ) | Self::Store(PluginStoreError::Invalid(_))
-        )
     }
 }
 
@@ -888,6 +993,15 @@ mod tests {
                 AppConnectorId("connector_gmail".to_string()),
             ]
         );
+        assert_eq!(
+            outcome
+                .capability_index()
+                .plugins_for_connector_id(&AppConnectorId("connector_example".to_string()))
+                .into_iter()
+                .map(|plugin| plugin.config_name.clone())
+                .collect::<Vec<_>>(),
+            vec!["plugin-a@test".to_string(), "plugin-b@test".to_string()]
+        );
     }
 
     #[test]
@@ -956,7 +1070,7 @@ mod tests {
         ]);
 
         assert_eq!(
-            outcome.capability_summaries(),
+            outcome.capability_index().plugins(),
             &[
                 PluginCapabilitySummary {
                     has_skills: true,
@@ -976,6 +1090,30 @@ mod tests {
                     ..summary("beta@test", "beta-plugin")
                 },
             ]
+        );
+        assert_eq!(
+            outcome
+                .capability_index()
+                .plugins_for_connector_id(&connector("connector_example"))
+                .into_iter()
+                .map(|plugin| plugin.config_name.clone())
+                .collect::<Vec<_>>(),
+            vec!["alpha@test".to_string(), "beta@test".to_string()]
+        );
+        assert_eq!(
+            outcome
+                .capability_index()
+                .plugins_for_mcp_server_name("alpha")
+                .into_iter()
+                .map(|plugin| plugin.config_name.clone())
+                .collect::<Vec<_>>(),
+            vec!["alpha@test".to_string()]
+        );
+        assert_eq!(
+            outcome
+                .capability_index()
+                .plugin_for_config_name("empty@test"),
+            None
         );
     }
 
@@ -1063,36 +1201,12 @@ mod tests {
     #[tokio::test]
     async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
         let tmp = tempfile::tempdir().unwrap();
-        let repo_root = tmp.path().join("repo");
-        fs::create_dir_all(repo_root.join(".git")).unwrap();
-        fs::create_dir_all(repo_root.join(".agents/plugins")).unwrap();
-        write_plugin(
-            &repo_root.join(".agents/plugins"),
-            "sample-plugin",
-            "sample-plugin",
-        );
-        fs::write(
-            repo_root.join(".agents/plugins/marketplace.json"),
-            r#"{
-  "name": "debug",
-  "plugins": [
-    {
-      "name": "sample-plugin",
-      "source": {
-        "source": "local",
-        "path": "./sample-plugin"
-      }
-    }
-  ]
-}"#,
-        )
-        .unwrap();
+        write_plugin(tmp.path(), "sample-plugin", "sample-plugin");
 
         let result = PluginsManager::new(tmp.path().to_path_buf())
             .install_plugin(PluginInstallRequest {
-                plugin_name: "sample-plugin".to_string(),
-                marketplace_name: "debug".to_string(),
-                cwd: repo_root.clone(),
+                source_path: tmp.path().join("sample-plugin"),
+                marketplace_name: None,
             })
             .await
             .unwrap();

@@ -53,7 +53,7 @@ pub(crate) fn collect_explicit_app_ids(input: &[UserInput]) -> HashSet<String> {
 ///
 /// This is currently the core-side fallback path for plugin mentions. It
 /// matches unambiguous plugin `display_name`s from the filtered capability
-/// index, case-insensitively, using a conservative `[A-Za-z0-9_:-]` token set.
+/// index, case-insensitively, by scanning for exact `@display name` matches.
 ///
 /// It is hand-rolled because core only has a `$...` / `[$...](...)` mention
 /// parser today, and the existing TUI `@...` logic is file-autocomplete, not
@@ -71,43 +71,59 @@ pub(crate) fn collect_explicit_plugin_mentions(
         return Vec::new();
     }
 
+    let mut display_name_counts = HashMap::new();
+    for plugin in plugins {
+        *display_name_counts
+            .entry(plugin.display_name.to_lowercase())
+            .or_insert(0) += 1;
+    }
+
+    let mut display_names = display_name_counts.keys().cloned().collect::<Vec<_>>();
+    display_names.sort_by_key(|display_name| std::cmp::Reverse(display_name.len()));
+
     let mut mentioned_display_names = HashSet::new();
     for text in input.iter().filter_map(|item| match item {
         UserInput::Text { text, .. } => Some(text.as_str()),
         _ => None,
     }) {
-        let text_bytes = text.as_bytes();
+        let text = text.to_lowercase();
         let mut index = 0;
-        while index < text_bytes.len() {
-            if text_bytes[index] != b'@' {
-                index += 1;
+        while let Some(relative_at_sign) = text[index..].find('@') {
+            let at_sign = index + relative_at_sign;
+            if text[..at_sign]
+                .chars()
+                .next_back()
+                .is_some_and(is_plugin_mention_body_char)
+            {
+                index = at_sign + 1;
                 continue;
             }
 
-            if index > 0 && is_plugin_mention_char(text_bytes[index - 1]) {
-                index += 1;
-                continue;
-            }
-
-            let name_start = index + 1;
-            let Some(first_name_byte) = text_bytes.get(name_start) else {
-                index += 1;
+            let Some((matched_display_name, matched_len)) =
+                display_names.iter().find_map(|display_name| {
+                    text[at_sign + 1..].starts_with(display_name).then(|| {
+                        let end = at_sign + 1 + display_name.len();
+                        text[end..]
+                            .chars()
+                            .next()
+                            .is_none_or(|ch| !is_plugin_mention_body_char(ch))
+                            .then_some((display_name, display_name.len()))
+                    })?
+                })
+            else {
+                index = at_sign + 1;
                 continue;
             };
-            if !is_plugin_mention_char(*first_name_byte) {
-                index += 1;
-                continue;
-            }
 
-            let mut name_end = name_start + 1;
-            while let Some(next_byte) = text_bytes.get(name_end)
-                && is_plugin_mention_char(*next_byte)
+            if display_name_counts
+                .get(matched_display_name)
+                .copied()
+                .unwrap_or(0)
+                == 1
             {
-                name_end += 1;
+                mentioned_display_names.insert(matched_display_name.clone());
             }
-
-            mentioned_display_names.insert(text[name_start..name_end].to_ascii_lowercase());
-            index = name_end;
+            index = at_sign + 1 + matched_len;
         }
     }
 
@@ -115,21 +131,11 @@ pub(crate) fn collect_explicit_plugin_mentions(
         return Vec::new();
     }
 
-    let mut display_name_counts = HashMap::new();
-    for plugin in plugins {
-        *display_name_counts
-            .entry(plugin.display_name.to_ascii_lowercase())
-            .or_insert(0) += 1;
-    }
-
     let mut selected = Vec::new();
     let mut seen_display_names = HashSet::new();
     for plugin in plugins {
-        let display_name = plugin.display_name.to_ascii_lowercase();
+        let display_name = plugin.display_name.to_lowercase();
         if !mentioned_display_names.contains(&display_name) {
-            continue;
-        }
-        if display_name_counts.get(&display_name).copied().unwrap_or(0) != 1 {
             continue;
         }
         if seen_display_names.insert(display_name) {
@@ -169,8 +175,8 @@ pub(crate) fn build_connector_slug_counts(
     counts
 }
 
-fn is_plugin_mention_char(byte: u8) -> bool {
-    matches!(byte, b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' | b':')
+fn is_plugin_mention_body_char(ch: char) -> bool {
+    ch.is_alphanumeric() || matches!(ch, '_' | '-' | ':')
 }
 
 #[cfg(test)]
@@ -260,19 +266,46 @@ mod tests {
     }
 
     #[test]
-    fn collect_explicit_plugin_mentions_skips_ambiguous_display_names() {
+    fn collect_explicit_plugin_mentions_resolves_non_slug_display_names() {
+        let spaced_plugins = vec![plugin("Google Calendar")];
+        let spaced_mentioned = collect_explicit_plugin_mentions(
+            &[text_input("use @Google Calendar")],
+            &spaced_plugins,
+        );
+        assert_eq!(spaced_mentioned, vec![plugin("Google Calendar")]);
+
+        let unicode_plugins = vec![plugin("Café")];
+        let unicode_mentioned =
+            collect_explicit_plugin_mentions(&[text_input("use @Café")], &unicode_plugins);
+        assert_eq!(unicode_mentioned, vec![plugin("Café")]);
+    }
+
+    #[test]
+    fn collect_explicit_plugin_mentions_prefers_longer_display_names() {
+        let plugins = vec![plugin("Google"), plugin("Google Calendar")];
+
+        let mentioned =
+            collect_explicit_plugin_mentions(&[text_input("use @Google Calendar")], &plugins);
+
+        assert_eq!(mentioned, vec![plugin("Google Calendar")]);
+    }
+
+    #[test]
+    fn collect_explicit_plugin_mentions_does_not_fall_back_from_ambiguous_longer_name() {
         let plugins = vec![
+            plugin("Google"),
             PluginCapabilitySummary {
-                config_name: "sample@test".to_string(),
-                ..plugin("sample")
+                config_name: "calendar-1@test".to_string(),
+                ..plugin("Google Calendar")
             },
             PluginCapabilitySummary {
-                config_name: "sample@prod".to_string(),
-                ..plugin("sample")
+                config_name: "calendar-2@test".to_string(),
+                ..plugin("Google Calendar")
             },
         ];
 
-        let mentioned = collect_explicit_plugin_mentions(&[text_input("use @sample")], &plugins);
+        let mentioned =
+            collect_explicit_plugin_mentions(&[text_input("use @Google Calendar")], &plugins);
 
         assert_eq!(mentioned, Vec::<PluginCapabilitySummary>::new());
     }

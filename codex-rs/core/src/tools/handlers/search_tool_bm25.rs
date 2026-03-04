@@ -13,6 +13,7 @@ use crate::connectors;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
+use crate::plugins::annotate_tools_with_plugin_sources;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -125,6 +126,14 @@ impl ToolHandler for SearchToolBm25Handler {
         );
         let mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, &connectors);
         let mcp_tools = connectors::filter_codex_apps_tools_by_policy(mcp_tools, &turn.config);
+        let loaded_plugins = session
+            .services
+            .plugins_manager
+            .plugins_for_config(&turn.config);
+        // Reuse the same runtime annotation as prompt tool building so plugin
+        // names become searchable through normal description indexing.
+        let mcp_tools =
+            annotate_tools_with_plugin_sources(mcp_tools, loaded_plugins.capability_index());
 
         let mut entries: Vec<ToolEntry> = mcp_tools
             .into_iter()
