@@ -2865,7 +2865,6 @@
     "WindowsSandboxSetupStartParams": {
       "properties": {
         "cwd": {
-          "format": "path",
           "type": [
             "string",
             "null"

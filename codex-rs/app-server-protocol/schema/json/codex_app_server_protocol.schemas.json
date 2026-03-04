@@ -15326,7 +15326,6 @@
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
           "cwd": {
-            "format": "path",
             "type": [
               "string",
               "null"
