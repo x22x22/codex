@@ -22,6 +22,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
+use core_test_support::responses::mount_sse_once;
 use core_test_support::responses::mount_sse_sequence;
 use core_test_support::responses::sse;
 use core_test_support::responses::start_mock_server;
@@ -181,13 +182,13 @@ async fn search_tool_flag_adds_tool() -> Result<()> {
 
     let server = start_mock_server().await;
     let apps_server = AppsTestServer::mount(&server).await?;
-    let mock = mount_sse_sequence(
+    let mock = mount_sse_once(
         &server,
-        vec![sse(vec![
+        sse(vec![
             ev_response_created("resp-1"),
             ev_assistant_message("msg-1", "done"),
             ev_completed("resp-1"),
-        ])],
+        ]),
     )
     .await;
 
