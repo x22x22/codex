@@ -562,6 +562,30 @@
       },
       "type": "object"
     },
+    "FileSystemAccessMode": {
+      "enum": [
+        "none",
+        "read",
+        "write"
+      ],
+      "type": "string"
+    },
+    "FilesystemPermissionToml": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/FileSystemAccessMode"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/definitions/FileSystemAccessMode"
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "FilesystemPermissionsToml": {
+      "type": "object"
+    },
     "ForcedLoginMethod": {
       "enum": [
         "chatgpt",
@@ -1089,18 +1113,28 @@
       },
       "type": "object"
     },
-    "PermissionsToml": {
+    "PermissionProfileNetworkToml": {
       "additionalProperties": false,
       "properties": {
-        "network": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/NetworkToml"
-            }
-          ],
-          "description": "Network proxy settings from `[permissions.network]`. User config can enable the proxy; managed requirements may still constrain values."
+        "enabled": {
+          "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "PermissionProfileToml": {
+      "additionalProperties": false,
+      "properties": {
+        "filesystem": {
+          "$ref": "#/definitions/FilesystemPermissionsToml"
+        },
+        "network": {
+          "$ref": "#/definitions/PermissionProfileNetworkToml"
+        }
+      },
+      "type": "object"
+    },
+    "PermissionsToml": {
       "type": "object"
     },
     "Personality": {
@@ -1663,6 +1697,10 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "default_permissions": {
+      "description": "Default named permissions profile to apply from the `[permissions]` table.",
+      "type": "string"
+    },
     "developer_instructions": {
       "default": null,
       "description": "Developer instructions inserted as a `developer` role message.",
@@ -2025,6 +2063,15 @@
       ],
       "description": "Optional verbosity control for GPT-5 models (Responses API `text.verbosity`)."
     },
+    "network": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/NetworkToml"
+        }
+      ],
+      "default": null,
+      "description": "Top-level network proxy settings."
+    },
     "notice": {
       "allOf": [
         {
@@ -2060,7 +2107,7 @@
         }
       ],
       "default": null,
-      "description": "Nested permissions settings."
+      "description": "Named permissions profiles."
     },
     "personality": {
       "allOf": [
