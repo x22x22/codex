@@ -44,7 +44,6 @@ use codex_core::plugins::PluginsManager;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
-use codex_protocol::config_types::ServiceTier;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::WebSearchAction;
@@ -1047,6 +1046,7 @@ pub(crate) fn new_session_info(
     is_first_event: bool,
     tooltip_override: Option<String>,
     auth_plan: Option<PlanType>,
+    show_fast_status: bool,
 ) -> SessionInfoCell {
     let SessionConfiguredEvent {
         model,
@@ -1057,7 +1057,7 @@ pub(crate) fn new_session_info(
     let header = SessionHeaderHistoryCell::new(
         model.clone(),
         reasoning_effort,
-        config.service_tier,
+        show_fast_status,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
     );
@@ -1139,7 +1139,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     model: String,
     model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
-    service_tier: Option<ServiceTier>,
+    show_fast_status: bool,
     directory: PathBuf,
 }
 
@@ -1147,7 +1147,7 @@ impl SessionHeaderHistoryCell {
     pub(crate) fn new(
         model: String,
         reasoning_effort: Option<ReasoningEffortConfig>,
-        service_tier: Option<ServiceTier>,
+        show_fast_status: bool,
         directory: PathBuf,
         version: &'static str,
     ) -> Self {
@@ -1155,7 +1155,7 @@ impl SessionHeaderHistoryCell {
             model,
             Style::default(),
             reasoning_effort,
-            service_tier,
+            show_fast_status,
             directory,
             version,
         )
@@ -1165,7 +1165,7 @@ impl SessionHeaderHistoryCell {
         model: String,
         model_style: Style,
         reasoning_effort: Option<ReasoningEffortConfig>,
-        service_tier: Option<ServiceTier>,
+        show_fast_status: bool,
         directory: PathBuf,
         version: &'static str,
     ) -> Self {
@@ -1174,7 +1174,7 @@ impl SessionHeaderHistoryCell {
             model,
             model_style,
             reasoning_effort,
-            service_tier,
+            show_fast_status,
             directory,
         }
     }
@@ -1216,13 +1216,6 @@ impl SessionHeaderHistoryCell {
             ReasoningEffortConfig::None => "none",
         })
     }
-
-    fn speed_label(&self) -> &'static str {
-        match self.service_tier {
-            Some(ServiceTier::Fast) => "fast",
-            _ => "standard",
-        }
-    }
 }
 
 impl HistoryCell for SessionHeaderHistoryCell {
@@ -1243,8 +1236,6 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
-        const CHANGE_SPEED_HINT_COMMAND: &str = "/fast";
-        const CHANGE_SPEED_HINT_EXPLANATION: &str = " to change";
         const DIR_LABEL: &str = "directory:";
         let label_width = DIR_LABEL.len();
 
@@ -1254,12 +1245,6 @@ impl HistoryCell for SessionHeaderHistoryCell {
             label_width = label_width
         );
         let reasoning_label = self.reasoning_label();
-        let model_value_width = UnicodeWidthStr::width(self.model.as_str())
-            + reasoning_label
-                .map(|reasoning| 1 + UnicodeWidthStr::width(reasoning))
-                .unwrap_or_default();
-        let speed_value_width = UnicodeWidthStr::width(self.speed_label());
-        let hint_column_width = model_value_width.max(speed_value_width) + 3;
         let model_spans: Vec<Span<'static>> = {
             let mut spans = vec![
                 Span::from(format!("{model_label} ")).dim(),
@@ -1269,7 +1254,11 @@ impl HistoryCell for SessionHeaderHistoryCell {
                 spans.push(Span::from(" "));
                 spans.push(Span::from(reasoning));
             }
-            spans.push(" ".repeat(hint_column_width - model_value_width).dim());
+            if self.show_fast_status {
+                spans.push("  ".into());
+                spans.push(Span::styled("fast", self.model_style));
+            }
+            spans.push("   ".dim());
             spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
             spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
             spans
@@ -1282,24 +1271,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
 
-        let speed_label = format!(
-            "{speed_label:<label_width$}",
-            speed_label = "speed:",
-            label_width = label_width
-        );
-        let speed_spans = vec![
-            Span::from(format!("{speed_label} ")).dim(),
-            Span::styled(self.speed_label(), self.model_style),
-            " ".repeat(hint_column_width - speed_value_width).dim(),
-            CHANGE_SPEED_HINT_COMMAND.cyan(),
-            CHANGE_SPEED_HINT_EXPLANATION.dim(),
-        ];
-
         let lines = vec![
             make_row(title_spans),
             make_row(Vec::new()),
             make_row(model_spans),
-            make_row(speed_spans),
             make_row(dir_spans),
         ];
 
@@ -2627,6 +2602,7 @@ mod tests {
             false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
+            false,
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -2644,6 +2620,7 @@ mod tests {
             false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
+            false,
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -2660,6 +2637,7 @@ mod tests {
             true,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
+            false,
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -2678,6 +2656,7 @@ mod tests {
             false,
             Some("Model just became available".to_string()),
             Some(PlanType::Free),
+            false,
         );
 
         let rendered = render_transcript(&cell).join("\n");
@@ -3310,7 +3289,7 @@ mod tests {
         let cell = SessionHeaderHistoryCell::new(
             "gpt-4o".to_string(),
             Some(ReasoningEffortConfig::High),
-            Some(ServiceTier::Fast),
+            true,
             std::env::temp_dir(),
             "test",
         );
@@ -3320,16 +3299,29 @@ mod tests {
             .iter()
             .find(|line| line.contains("model:"))
             .expect("model line");
-        let speed_line = lines
+
+        assert!(model_line.contains("gpt-4o high  fast"));
+        assert!(model_line.contains("/model to change"));
+    }
+
+    #[test]
+    fn session_header_hides_fast_status_when_disabled() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-4o".to_string(),
+            Some(ReasoningEffortConfig::High),
+            false,
+            std::env::temp_dir(),
+            "test",
+        );
+
+        let lines = render_lines(&cell.display_lines(80));
+        let model_line = lines
             .iter()
-            .find(|line| line.contains("speed:"))
-            .expect("speed line");
+            .find(|line| line.contains("model:"))
+            .expect("model line");
 
         assert!(model_line.contains("gpt-4o high"));
-        assert!(model_line.contains("/model to change"));
-        assert!(speed_line.contains("fast"));
-        assert!(speed_line.contains("/fast to change"));
-        assert_eq!(model_line.find("/model"), speed_line.find("/fast"));
+        assert!(!model_line.contains("fast"));
     }
 
     #[test]

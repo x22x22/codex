@@ -1189,6 +1189,7 @@ impl ChatWidget {
         self.sync_fast_command_enabled();
         self.sync_personality_command_enabled();
         let startup_tooltip_override = self.startup_tooltip_override.take();
+        let show_fast_status = self.should_show_fast_status(event.service_tier);
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -1198,6 +1199,7 @@ impl ChatWidget {
             self.auth_manager
                 .auth_cached()
                 .and_then(|auth| auth.account_plan_type()),
+            show_fast_status,
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -7060,6 +7062,15 @@ impl ChatWidget {
         self.config.service_tier
     }
 
+    pub(crate) fn should_show_fast_status(&self, service_tier: Option<ServiceTier>) -> bool {
+        matches!(service_tier, Some(ServiceTier::Fast))
+            && self
+                .auth_manager
+                .auth_cached()
+                .as_ref()
+                .is_some_and(|auth| auth.is_chatgpt_auth())
+    }
+
     fn fast_mode_enabled(&self) -> bool {
         self.config.features.enabled(Feature::FastMode)
     }
@@ -7394,7 +7405,7 @@ impl ChatWidget {
             DEFAULT_MODEL_DISPLAY_NAME.to_string(),
             placeholder_style,
             None,
-            config.service_tier,
+            false,
             config.cwd.clone(),
             CODEX_CLI_VERSION,
         ))

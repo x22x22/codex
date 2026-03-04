@@ -801,7 +801,8 @@ impl App {
         history_cell::SessionHeaderHistoryCell::new(
             self.chat_widget.current_model().to_string(),
             self.chat_widget.current_reasoning_effort(),
-            self.chat_widget.current_service_tier(),
+            self.chat_widget
+                .should_show_fast_status(self.chat_widget.current_service_tier()),
             self.config.cwd.clone(),
             version,
         )
@@ -4394,6 +4395,7 @@ mod tests {
                 is_first,
                 None,
                 None,
+                false,
             )) as Arc<dyn HistoryCell>
         };
 
@@ -5032,6 +5034,7 @@ mod tests {
                 is_first,
                 None,
                 None,
+                false,
             )) as Arc<dyn HistoryCell>
         };
 
