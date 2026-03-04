@@ -12,6 +12,10 @@ use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 #[cfg(any(unix, test))]
 use codex_protocol::models::PermissionProfile;
 #[cfg(any(unix, test))]
+use codex_protocol::protocol::FileSystemSandboxPolicy;
+#[cfg(any(unix, test))]
+use codex_protocol::protocol::NetworkSandboxPolicy;
+#[cfg(any(unix, test))]
 use codex_utils_absolute_path::AbsolutePathBuf;
 #[cfg(any(unix, test))]
 use dunce::canonicalize as canonicalize_path;
@@ -89,10 +93,14 @@ pub(crate) fn compile_permission_profile(
     let macos_permissions = macos.unwrap_or_default();
     let macos_seatbelt_profile_extensions =
         build_macos_seatbelt_profile_extensions(&macos_permissions);
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
 
     Some(Permissions {
         approval_policy: Constrained::allow_any(AskForApproval::Never),
         sandbox_policy: Constrained::allow_any(sandbox_policy),
+        file_system_sandbox_policy,
+        network_sandbox_policy,
         network: None,
         allow_login_shell: true,
         shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -234,6 +242,8 @@ mod tests {
     use codex_protocol::models::MacOsPreferencesValue;
     use codex_protocol::models::NetworkPermissions;
     use codex_protocol::models::PermissionProfile;
+    use codex_protocol::protocol::FileSystemSandboxPolicy;
+    use codex_protocol::protocol::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -241,6 +251,25 @@ mod tests {
 
     fn absolute_path(path: &Path) -> AbsolutePathBuf {
         AbsolutePathBuf::try_from(path).expect("absolute path")
+    }
+
+    fn expected_permissions(sandbox_policy: SandboxPolicy) -> Permissions {
+        Permissions {
+            approval_policy: Constrained::allow_any(AskForApproval::Never),
+            sandbox_policy: Constrained::allow_any(sandbox_policy.clone()),
+            file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
+            network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
+            network: None,
+            allow_login_shell: true,
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
+            windows_sandbox_mode: None,
+            #[cfg(target_os = "macos")]
+            macos_seatbelt_profile_extensions: Some(
+                crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions::default(),
+            ),
+            #[cfg(not(target_os = "macos"))]
+            macos_seatbelt_profile_extensions: None,
+        }
     }
 
     #[test]
@@ -269,37 +298,24 @@ mod tests {
 
         assert_eq!(
             profile,
-            Permissions {
-                approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: Constrained::allow_any(SandboxPolicy::WorkspaceWrite {
-                    writable_roots: vec![
-                        AbsolutePathBuf::try_from(skill_dir.join("output"))
-                            .expect("absolute output path")
+            expected_permissions(SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![
+                    AbsolutePathBuf::try_from(skill_dir.join("output"))
+                        .expect("absolute output path")
+                ],
+                read_only_access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: vec![
+                        AbsolutePathBuf::try_from(
+                            dunce::canonicalize(&read_dir).unwrap_or(read_dir)
+                        )
+                        .expect("absolute read path")
                     ],
-                    read_only_access: ReadOnlyAccess::Restricted {
-                        include_platform_defaults: true,
-                        readable_roots: vec![
-                            AbsolutePathBuf::try_from(
-                                dunce::canonicalize(&read_dir).unwrap_or(read_dir)
-                            )
-                            .expect("absolute read path")
-                        ],
-                    },
-                    network_access: true,
-                    exclude_tmpdir_env_var: false,
-                    exclude_slash_tmp: false,
-                }),
-                network: None,
-                allow_login_shell: true,
-                shell_environment_policy: ShellEnvironmentPolicy::default(),
-                windows_sandbox_mode: None,
-                #[cfg(target_os = "macos")]
-                macos_seatbelt_profile_extensions: Some(
-                    crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions::default(),
-                ),
-                #[cfg(not(target_os = "macos"))]
-                macos_seatbelt_profile_extensions: None,
-            }
+                },
+                network_access: true,
+                exclude_tmpdir_env_var: false,
+                exclude_slash_tmp: false,
+            })
         );
     }
 
@@ -330,23 +346,10 @@ mod tests {
 
         assert_eq!(
             profile,
-            Permissions {
-                approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: Constrained::allow_any(SandboxPolicy::ReadOnly {
-                    access: ReadOnlyAccess::FullAccess,
-                    network_access: true,
-                }),
-                network: None,
-                allow_login_shell: true,
-                shell_environment_policy: ShellEnvironmentPolicy::default(),
-                windows_sandbox_mode: None,
-                #[cfg(target_os = "macos")]
-                macos_seatbelt_profile_extensions: Some(
-                    crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions::default(),
-                ),
-                #[cfg(not(target_os = "macos"))]
-                macos_seatbelt_profile_extensions: None,
-            }
+            expected_permissions(SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
+                network_access: true,
+            })
         );
     }
 
@@ -371,31 +374,18 @@ mod tests {
 
         assert_eq!(
             profile,
-            Permissions {
-                approval_policy: Constrained::allow_any(AskForApproval::Never),
-                sandbox_policy: Constrained::allow_any(SandboxPolicy::ReadOnly {
-                    access: ReadOnlyAccess::Restricted {
-                        include_platform_defaults: true,
-                        readable_roots: vec![
-                            AbsolutePathBuf::try_from(
-                                dunce::canonicalize(&read_dir).unwrap_or(read_dir)
-                            )
-                            .expect("absolute read path")
-                        ],
-                    },
-                    network_access: true,
-                }),
-                network: None,
-                allow_login_shell: true,
-                shell_environment_policy: ShellEnvironmentPolicy::default(),
-                windows_sandbox_mode: None,
-                #[cfg(target_os = "macos")]
-                macos_seatbelt_profile_extensions: Some(
-                    crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions::default(),
-                ),
-                #[cfg(not(target_os = "macos"))]
-                macos_seatbelt_profile_extensions: None,
-            }
+            expected_permissions(SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::Restricted {
+                    include_platform_defaults: true,
+                    readable_roots: vec![
+                        AbsolutePathBuf::try_from(
+                            dunce::canonicalize(&read_dir).unwrap_or(read_dir)
+                        )
+                        .expect("absolute read path")
+                    ],
+                },
+                network_access: true,
+            })
         );
     }
 
