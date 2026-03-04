@@ -161,6 +161,7 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
+    SetTitle(String),
 
     /// Apply rollback semantics to local transcript cells.
     ///
