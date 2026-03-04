@@ -6,6 +6,7 @@ use codex_network_proxy::ConfigState;
 use codex_network_proxy::NetworkDecision;
 use codex_network_proxy::NetworkPolicyDecider;
 use codex_network_proxy::NetworkProxy;
+use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_network_proxy::NetworkProxyConstraints;
 use codex_network_proxy::NetworkProxyHandle;
@@ -107,13 +108,9 @@ impl NetworkProxySpec {
         policy_decider: Option<Arc<dyn NetworkPolicyDecider>>,
         blocked_request_observer: Option<Arc<dyn BlockedRequestObserver>>,
         enable_network_approval_flow: bool,
+        audit_metadata: NetworkProxyAuditMetadata,
     ) -> std::io::Result<StartedNetworkProxy> {
-        let state =
-            build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
-                std::io::Error::other(format!("failed to build network proxy state: {err}"))
-            })?;
-        let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
-        let state = NetworkProxyState::with_reloader(state, reloader);
+        let state = self.build_state_with_audit_metadata(audit_metadata)?;
         let mut builder = NetworkProxy::builder().state(Arc::new(state));
         if enable_network_approval_flow
             && matches!(
@@ -141,6 +138,22 @@ impl NetworkProxySpec {
             .await
             .map_err(|err| std::io::Error::other(format!("failed to run network proxy: {err}")))?;
         Ok(StartedNetworkProxy::new(proxy, handle))
+    }
+
+    fn build_state_with_audit_metadata(
+        &self,
+        audit_metadata: NetworkProxyAuditMetadata,
+    ) -> std::io::Result<NetworkProxyState> {
+        let state =
+            build_config_state(self.config.clone(), self.constraints.clone()).map_err(|err| {
+                std::io::Error::other(format!("failed to build network proxy state: {err}"))
+            })?;
+        let reloader = Arc::new(StaticNetworkProxyReloader::new(state.clone()));
+        Ok(NetworkProxyState::with_reloader_and_audit_metadata(
+            state,
+            reloader,
+            audit_metadata,
+        ))
     }
 
     fn apply_requirements(
@@ -190,6 +203,13 @@ impl NetworkProxySpec {
             constraints.dangerously_allow_non_loopback_admin =
                 Some(dangerously_allow_non_loopback_admin);
         }
+        if let Some(dangerously_allow_all_unix_sockets) =
+            requirements.dangerously_allow_all_unix_sockets
+        {
+            config.network.dangerously_allow_all_unix_sockets = dangerously_allow_all_unix_sockets;
+            constraints.dangerously_allow_all_unix_sockets =
+                Some(dangerously_allow_all_unix_sockets);
+        }
         if let Some(allowed_domains) = requirements.allowed_domains.clone() {
             // Seed the managed allowlist when the user left the field
             // unspecified. If the user configured an allowlist, keep that
@@ -238,9 +258,27 @@ impl NetworkProxySpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use codex_network_proxy::NetworkMode;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn build_state_with_audit_metadata_threads_metadata_to_state() {
+        let spec = NetworkProxySpec {
+            config: NetworkProxyConfig::default(),
+            constraints: NetworkProxyConstraints::default(),
+        };
+        let metadata = NetworkProxyAuditMetadata {
+            conversation_id: Some("conversation-1".to_string()),
+            app_version: Some("1.2.3".to_string()),
+            user_account_id: Some("acct-1".to_string()),
+            ..NetworkProxyAuditMetadata::default()
+        };
+
+        let state = spec
+            .build_state_with_audit_metadata(metadata.clone())
+            .expect("state should build");
+        assert_eq!(state.audit_metadata(), &metadata);
+    }
 
     #[test]
     fn managed_requirements_preserve_more_restrictive_user_network_settings() -> std::io::Result<()>
@@ -264,6 +302,7 @@ mod tests {
             allow_upstream_proxy: Some(true),
             dangerously_allow_non_loopback_proxy: Some(true),
             dangerously_allow_non_loopback_admin: Some(true),
+            dangerously_allow_all_unix_sockets: None,
             allowed_domains: Some(vec!["*.openai.com".to_string()]),
             denied_domains: Some(vec!["evil.com".to_string()]),
             allow_unix_sockets: Some(vec!["/tmp/a.sock".to_string(), "/tmp/b.sock".to_string()]),
@@ -280,6 +319,7 @@ mod tests {
             allow_upstream_proxy: Some(false),
             dangerously_allow_non_loopback_proxy: Some(false),
             dangerously_allow_non_loopback_admin: Some(false),
+            dangerously_allow_all_unix_sockets: None,
             mode: Some(NetworkMode::Limited),
             allowed_domains: Some(vec!["api.openai.com".to_string()]),
             denied_domains: Some(vec!["tracker.com".to_string(), "evil.com".to_string()]),
@@ -318,6 +358,7 @@ mod tests {
                 allow_upstream_proxy: Some(true),
                 dangerously_allow_non_loopback_proxy: Some(true),
                 dangerously_allow_non_loopback_admin: Some(true),
+                dangerously_allow_all_unix_sockets: None,
                 allowed_domains: Some(vec!["*.openai.com".to_string()]),
                 denied_domains: Some(vec!["evil.com".to_string()]),
                 allow_unix_sockets: Some(vec![
@@ -349,6 +390,7 @@ mod tests {
             allow_upstream_proxy: Some(false),
             dangerously_allow_non_loopback_proxy: Some(false),
             dangerously_allow_non_loopback_admin: Some(false),
+            dangerously_allow_all_unix_sockets: None,
             allowed_domains: None,
             denied_domains: Some(vec!["evil.com".to_string()]),
             allow_unix_sockets: None,
@@ -365,6 +407,7 @@ mod tests {
             allow_upstream_proxy: Some(true),
             dangerously_allow_non_loopback_proxy: Some(true),
             dangerously_allow_non_loopback_admin: Some(true),
+            dangerously_allow_all_unix_sockets: None,
             mode: Some(NetworkMode::Full),
             allowed_domains: None,
             denied_domains: Some(vec!["tracker.com".to_string()]),
@@ -397,6 +440,7 @@ mod tests {
                 allow_upstream_proxy: Some(false),
                 dangerously_allow_non_loopback_proxy: Some(false),
                 dangerously_allow_non_loopback_admin: Some(false),
+                dangerously_allow_all_unix_sockets: None,
                 allowed_domains: None,
                 denied_domains: Some(vec!["evil.com".to_string()]),
                 allow_unix_sockets: None,
@@ -417,6 +461,7 @@ mod tests {
             allow_upstream_proxy: None,
             dangerously_allow_non_loopback_proxy: None,
             dangerously_allow_non_loopback_admin: None,
+            dangerously_allow_all_unix_sockets: None,
             allowed_domains: None,
             denied_domains: None,
             allow_unix_sockets: None,
@@ -451,6 +496,7 @@ mod tests {
             allow_upstream_proxy: None,
             dangerously_allow_non_loopback_proxy: None,
             dangerously_allow_non_loopback_admin: None,
+            dangerously_allow_all_unix_sockets: None,
             allowed_domains: Some(vec!["*.openai.com".to_string()]),
             denied_domains: None,
             allow_unix_sockets: None,
