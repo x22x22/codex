@@ -1254,6 +1254,12 @@ impl HistoryCell for SessionHeaderHistoryCell {
             label_width = label_width
         );
         let reasoning_label = self.reasoning_label();
+        let model_value_width = UnicodeWidthStr::width(self.model.as_str())
+            + reasoning_label
+                .map(|reasoning| 1 + UnicodeWidthStr::width(reasoning))
+                .unwrap_or_default();
+        let speed_value_width = UnicodeWidthStr::width(self.speed_label());
+        let hint_column_width = model_value_width.max(speed_value_width) + 3;
         let model_spans: Vec<Span<'static>> = {
             let mut spans = vec![
                 Span::from(format!("{model_label} ")).dim(),
@@ -1263,7 +1269,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
                 spans.push(Span::from(" "));
                 spans.push(Span::from(reasoning));
             }
-            spans.push("   ".dim());
+            spans.push(" ".repeat(hint_column_width - model_value_width).dim());
             spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
             spans.push(CHANGE_MODEL_HINT_EXPLANATION.dim());
             spans
@@ -1284,7 +1290,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let speed_spans = vec![
             Span::from(format!("{speed_label} ")).dim(),
             Span::styled(self.speed_label(), self.model_style),
-            "   ".dim(),
+            " ".repeat(hint_column_width - speed_value_width).dim(),
             CHANGE_SPEED_HINT_COMMAND.cyan(),
             CHANGE_SPEED_HINT_EXPLANATION.dim(),
         ];
@@ -3323,6 +3329,7 @@ mod tests {
         assert!(model_line.contains("/model to change"));
         assert!(speed_line.contains("Fast"));
         assert!(speed_line.contains("/fast to change"));
+        assert_eq!(model_line.find("/model"), speed_line.find("/fast"));
     }
 
     #[test]
