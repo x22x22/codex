@@ -1479,6 +1479,103 @@ async fn auto_compact_runs_after_token_limit_hit() {
 // Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
+async fn auto_compact_keeps_last_real_user_message_when_prompt_is_summary_shaped() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", "SECOND_REPLY"),
+        ev_completed_with_tokens("r2", 330_000),
+    ]);
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r3", 200),
+    ]);
+    let sse4 = sse(vec![
+        ev_assistant_message("m4", FINAL_REPLY),
+        ev_completed_with_tokens("r4", 120),
+    ]);
+
+    let request_log = mount_sse_sequence(&server, vec![sse1, sse2, sse3, sse4]).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let summary_shaped_prompt = format!("{SUMMARY_PREFIX}\ncustom compact prompt");
+    let compact_prompt = summary_shaped_prompt.clone();
+    let mut builder = test_codex().with_config(move |config| {
+        config.model_provider = model_provider;
+        config.compact_prompt = Some(summary_shaped_prompt);
+        config.model_auto_compact_token_limit = Some(200_000);
+    });
+    let codex = builder.build(&server).await.unwrap().codex;
+
+    for user in [FIRST_AUTO_MSG, SECOND_AUTO_MSG, POST_AUTO_USER_MSG] {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: user.into(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .await
+            .unwrap();
+
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    }
+
+    let requests = request_log.requests();
+    let follow_up = requests
+        .iter()
+        .rev()
+        .find(|request| {
+            let body = request.body_json().to_string();
+            body.contains(POST_AUTO_USER_MSG) && !body_contains_text(&body, &compact_prompt)
+        })
+        .expect("follow-up request missing");
+
+    let follow_up_body = follow_up.body_json();
+    let input_follow_up = follow_up_body
+        .get("input")
+        .and_then(|v| v.as_array())
+        .expect("follow-up input");
+    let user_texts: Vec<String> = input_follow_up
+        .iter()
+        .filter(|item| item.get("type").and_then(|v| v.as_str()) == Some("message"))
+        .filter(|item| item.get("role").and_then(|v| v.as_str()) == Some("user"))
+        .filter_map(|item| {
+            item.get("content")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|entry| entry.get("text"))
+                .and_then(|v| v.as_str())
+                .map(std::string::ToString::to_string)
+        })
+        .collect();
+
+    assert!(
+        user_texts.iter().any(|text| text == SECOND_AUTO_MSG),
+        "summary-shaped compact prompts must not drop the last real user message"
+    );
+    assert!(
+        user_texts.iter().any(|text| text == POST_AUTO_USER_MSG),
+        "follow-up request should include the new user message"
+    );
+    assert!(
+        user_texts
+            .iter()
+            .any(|text| text.contains(AUTO_SUMMARY_TEXT)),
+        "follow-up request should include the compacted summary"
+    );
+}
+
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn auto_compact_emits_context_compaction_items() {
     skip_if_no_network!();
 

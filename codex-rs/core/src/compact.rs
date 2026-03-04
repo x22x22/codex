@@ -93,6 +93,13 @@ async fn run_compact_task_inner(
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
+    let has_synthetic_compact_prompt = matches!(
+        input.as_slice(),
+        [UserInput::Text {
+            text,
+            text_elements,
+        }] if text == turn_context.compact_prompt() && text_elements.is_empty()
+    );
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
@@ -195,11 +202,16 @@ async fn run_compact_task_inner(
     };
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
     let mut user_messages = collect_user_messages(compaction_history_items);
-    // Local compaction appends one synthetic user prompt for the compaction model call. Rebuild
-    // from the local prompt history so we can drop only that trailing synthetic input and preserve
-    // any earlier real user message even if its text happens to equal the configured compact
-    // prompt.
-    user_messages.pop();
+    if has_synthetic_compact_prompt
+        && user_messages
+            .last()
+            .is_some_and(|message| message == turn_context.compact_prompt())
+    {
+        // Local inline compaction appends one synthetic user prompt for the compaction model call.
+        // Rebuild from the local prompt history so we can drop only that trailing synthetic input
+        // and preserve earlier real user messages, including ones whose text matches the prompt.
+        user_messages.pop();
+    }
 
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
 
