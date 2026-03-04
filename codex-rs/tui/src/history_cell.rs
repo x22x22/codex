@@ -44,6 +44,7 @@ use codex_core::plugins::PluginsManager;
 use codex_core::web_search::web_search_detail;
 use codex_otel::RuntimeMetricsSummary;
 use codex_protocol::account::PlanType;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::mcp::Resource;
 use codex_protocol::mcp::ResourceTemplate;
 use codex_protocol::models::WebSearchAction;
@@ -1056,6 +1057,7 @@ pub(crate) fn new_session_info(
     let header = SessionHeaderHistoryCell::new(
         model.clone(),
         reasoning_effort,
+        config.service_tier,
         config.cwd.clone(),
         CODEX_CLI_VERSION,
     );
@@ -1137,6 +1139,7 @@ pub(crate) struct SessionHeaderHistoryCell {
     model: String,
     model_style: Style,
     reasoning_effort: Option<ReasoningEffortConfig>,
+    service_tier: Option<ServiceTier>,
     directory: PathBuf,
 }
 
@@ -1144,6 +1147,7 @@ impl SessionHeaderHistoryCell {
     pub(crate) fn new(
         model: String,
         reasoning_effort: Option<ReasoningEffortConfig>,
+        service_tier: Option<ServiceTier>,
         directory: PathBuf,
         version: &'static str,
     ) -> Self {
@@ -1151,6 +1155,7 @@ impl SessionHeaderHistoryCell {
             model,
             Style::default(),
             reasoning_effort,
+            service_tier,
             directory,
             version,
         )
@@ -1160,6 +1165,7 @@ impl SessionHeaderHistoryCell {
         model: String,
         model_style: Style,
         reasoning_effort: Option<ReasoningEffortConfig>,
+        service_tier: Option<ServiceTier>,
         directory: PathBuf,
         version: &'static str,
     ) -> Self {
@@ -1168,6 +1174,7 @@ impl SessionHeaderHistoryCell {
             model,
             model_style,
             reasoning_effort,
+            service_tier,
             directory,
         }
     }
@@ -1209,6 +1216,13 @@ impl SessionHeaderHistoryCell {
             ReasoningEffortConfig::None => "none",
         })
     }
+
+    fn speed_label(&self) -> &'static str {
+        match self.service_tier {
+            Some(ServiceTier::Fast) => "Fast",
+            _ => "Standard",
+        }
+    }
 }
 
 impl HistoryCell for SessionHeaderHistoryCell {
@@ -1229,6 +1243,8 @@ impl HistoryCell for SessionHeaderHistoryCell {
 
         const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
         const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
+        const CHANGE_SPEED_HINT_COMMAND: &str = "/fast";
+        const CHANGE_SPEED_HINT_EXPLANATION: &str = " to change";
         const DIR_LABEL: &str = "directory:";
         let label_width = DIR_LABEL.len();
 
@@ -1260,10 +1276,24 @@ impl HistoryCell for SessionHeaderHistoryCell {
         let dir = self.format_directory(Some(dir_max_width));
         let dir_spans = vec![Span::from(dir_prefix).dim(), Span::from(dir)];
 
+        let speed_label = format!(
+            "{speed_label:<label_width$}",
+            speed_label = "speed:",
+            label_width = label_width
+        );
+        let speed_spans = vec![
+            Span::from(format!("{speed_label} ")).dim(),
+            Span::styled(self.speed_label(), self.model_style),
+            "   ".dim(),
+            CHANGE_SPEED_HINT_COMMAND.cyan(),
+            CHANGE_SPEED_HINT_EXPLANATION.dim(),
+        ];
+
         let lines = vec![
             make_row(title_spans),
             make_row(Vec::new()),
             make_row(model_spans),
+            make_row(speed_spans),
             make_row(dir_spans),
         ];
 
@@ -3274,18 +3304,25 @@ mod tests {
         let cell = SessionHeaderHistoryCell::new(
             "gpt-4o".to_string(),
             Some(ReasoningEffortConfig::High),
+            Some(ServiceTier::Fast),
             std::env::temp_dir(),
             "test",
         );
 
         let lines = render_lines(&cell.display_lines(80));
         let model_line = lines
-            .into_iter()
+            .iter()
             .find(|line| line.contains("model:"))
             .expect("model line");
+        let speed_line = lines
+            .iter()
+            .find(|line| line.contains("speed:"))
+            .expect("speed line");
 
         assert!(model_line.contains("gpt-4o high"));
         assert!(model_line.contains("/model to change"));
+        assert!(speed_line.contains("Fast"));
+        assert!(speed_line.contains("/fast to change"));
     }
 
     #[test]

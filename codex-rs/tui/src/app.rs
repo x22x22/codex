@@ -801,6 +801,7 @@ impl App {
         history_cell::SessionHeaderHistoryCell::new(
             self.chat_widget.current_model().to_string(),
             self.chat_widget.current_reasoning_effort(),
+            self.chat_widget.current_service_tier(),
             self.config.cwd.clone(),
             version,
         )

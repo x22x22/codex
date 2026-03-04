@@ -7394,6 +7394,7 @@ impl ChatWidget {
             DEFAULT_MODEL_DISPLAY_NAME.to_string(),
             placeholder_style,
             None,
+            config.service_tier,
             config.cwd.clone(),
             CODEX_CLI_VERSION,
         ))
