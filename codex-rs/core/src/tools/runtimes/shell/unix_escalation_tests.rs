@@ -30,6 +30,10 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
+#[cfg(target_os = "macos")]
+use codex_protocol::protocol::FileSystemSandboxPolicy;
+#[cfg(target_os = "macos")]
+use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
 use codex_shell_escalation::ExecResult;
@@ -481,6 +485,10 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
     let permissions = Permissions {
         approval_policy: Constrained::allow_any(AskForApproval::Never),
         sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+        file_system_sandbox_policy: FileSystemSandboxPolicy::from(
+            &SandboxPolicy::new_read_only_policy(),
+        ),
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
         network: None,
         allow_login_shell: true,
         shell_environment_policy: ShellEnvironmentPolicy::default(),
