@@ -634,6 +634,55 @@
         }
       ]
     },
+    "HooksToml": {
+      "additionalProperties": false,
+      "description": "Lifecycle hook command config deserialized from `[hooks]` in config.toml.",
+      "properties": {
+        "compaction": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "session_end": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "session_start": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subagent_end": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "subagent_start": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "turn_end": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "turn_start": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "MemoriesToml": {
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
@@ -1909,6 +1958,23 @@
       ],
       "default": null,
       "description": "Settings that govern if and what will be written to `~/.codex/history.jsonl`."
+    },
+    "hooks": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HooksToml"
+        }
+      ],
+      "default": {
+        "compaction": null,
+        "session_end": null,
+        "session_start": null,
+        "subagent_end": null,
+        "subagent_start": null,
+        "turn_end": null,
+        "turn_start": null
+      },
+      "description": "Optional external hook commands keyed by lifecycle event."
     },
     "instructions": {
       "description": "System instructions.",
