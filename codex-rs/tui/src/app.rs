@@ -735,10 +735,12 @@ fn decorate_title_context(
 
 fn compute_title_context(
     title_override: Option<String>,
+    thread_name: Option<String>,
     task_running: bool,
     tick: u128,
 ) -> Option<String> {
     let context = title_override
+        .or(thread_name)
         .as_deref()
         .map(str::trim)
         .filter(|name| !name.is_empty())
@@ -1787,6 +1789,7 @@ impl App {
         let task_running = app.chat_widget.is_task_running();
         let title_context = compute_title_context(
             app.chat_widget.title_override(),
+            app.chat_widget.thread_name(),
             task_running,
             title_animation_tick(),
         );
@@ -1897,6 +1900,7 @@ impl App {
             let task_running = app.chat_widget.is_task_running();
             let title_context = compute_title_context(
                 app.chat_widget.title_override(),
+                app.chat_widget.thread_name(),
                 task_running,
                 title_animation_tick(),
             );
@@ -3817,14 +3821,22 @@ mod tests {
     }
 
     #[test]
-    fn title_context_defaults_to_none_without_manual_title() {
-        assert_eq!(compute_title_context(None, false, 0), None);
+    fn title_context_uses_thread_name_when_idle() {
+        assert_eq!(
+            compute_title_context(None, Some("named thread".to_string()), false, 0),
+            Some("named thread".to_string())
+        );
     }
 
     #[test]
     fn title_context_prefers_manual_title_when_idle() {
         assert_eq!(
-            compute_title_context(Some("manual title".to_string()), false, 0),
+            compute_title_context(
+                Some("manual title".to_string()),
+                Some("named thread".to_string()),
+                false,
+                0,
+            ),
             Some("manual title".to_string())
         );
     }
