@@ -11,6 +11,7 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_env;
+use crate::exec::execute_exec_env_after_spawn;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args;
 use crate::protocol::SandboxPolicy;
@@ -418,6 +419,15 @@ pub async fn execute_env(
 ) -> crate::error::Result<ExecToolCallOutput> {
     let effective_policy = env.sandbox_policy.clone();
     execute_exec_env(env, &effective_policy, stdout_stream).await
+}
+
+pub async fn execute_env_after_spawn(
+    env: ExecRequest,
+    stdout_stream: Option<StdoutStream>,
+    after_spawn: Box<dyn FnOnce() + Send>,
+) -> crate::error::Result<ExecToolCallOutput> {
+    let effective_policy = env.sandbox_policy.clone();
+    execute_exec_env_after_spawn(env, &effective_policy, stdout_stream, after_spawn).await
 }
 
 #[cfg(test)]
