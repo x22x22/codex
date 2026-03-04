@@ -1,14 +1,23 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Result;
+use codex_core::CodexAuth;
+use codex_core::ThreadManager;
+use codex_core::built_in_model_providers;
+use codex_core::features::Feature;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_protocol::openai_models::ModelsResponse;
+use codex_protocol::protocol::SessionSource;
+use core_test_support::load_default_config_for_test;
 use core_test_support::responses::mount_function_call_agent_response;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
-use core_test_support::test_codex::test_codex;
 use std::collections::HashSet;
 use std::path::Path;
 use std::process::Command as StdCommand;
+use std::sync::Arc;
+use tempfile::TempDir;
 
 const MODEL_WITH_TOOL: &str = "test-gpt-5.1-codex";
 
@@ -126,8 +135,57 @@ async fn grep_files_tool_reports_empty_results() -> Result<()> {
 
 #[allow(clippy::expect_used)]
 async fn build_test_codex(server: &wiremock::MockServer) -> Result<TestCodex> {
-    let mut builder = test_codex().with_model(MODEL_WITH_TOOL);
-    builder.build(server).await
+    let mut model_catalog: ModelsResponse =
+        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+    let template = model_catalog
+        .models
+        .iter()
+        .find(|model| model.slug == "gpt-5.1")
+        .cloned()
+        .or_else(|| model_catalog.models.first().cloned())
+        .expect("models catalog should contain at least one model");
+    let mut model = template;
+    model.slug = MODEL_WITH_TOOL.to_string();
+    model.display_name = "Test GPT 5.1 Codex".to_string();
+    model.experimental_supported_tools = vec!["grep_files".to_string()];
+    model_catalog.models.push(model);
+
+    let home = Arc::new(TempDir::new()?);
+    let cwd = Arc::new(TempDir::new()?);
+    let mut config = load_default_config_for_test(&home).await;
+    config.cwd = cwd.path().to_path_buf();
+    config.model = Some(MODEL_WITH_TOOL.to_string());
+    config.model_catalog = Some(model_catalog);
+    config.model_provider = codex_core::ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let auth_manager = codex_core::test_support::auth_manager_from_auth_with_home(
+        CodexAuth::from_api_key("dummy"),
+        config.codex_home.clone(),
+    );
+    let thread_manager = Arc::new(ThreadManager::new(
+        config.codex_home.clone(),
+        auth_manager,
+        SessionSource::Exec,
+        config.model_catalog.clone(),
+        CollaborationModesConfig {
+            default_mode_request_user_input: config
+                .features
+                .enabled(Feature::DefaultModeRequestUserInput),
+        },
+    ));
+    let new_thread = thread_manager.start_thread(config.clone()).await?;
+
+    Ok(TestCodex {
+        home,
+        cwd,
+        codex: new_thread.thread,
+        session_configured: new_thread.session_configured,
+        config,
+        thread_manager,
+    })
 }
 
 fn collect_file_names(content: &str) -> HashSet<String> {
