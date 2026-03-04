@@ -1908,26 +1908,7 @@ impl App {
                     // but tui-textarea expects \n. Normalize CR to LF.
                     // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
                     // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
-                    let raw_char_count = pasted.chars().count();
-                    let raw_cr_count = pasted.chars().filter(|ch| *ch == '\r').count();
-                    let raw_lf_count = pasted.chars().filter(|ch| *ch == '\n').count();
-                    let raw_preview: String = pasted.chars().take(120).collect();
                     let pasted = pasted.replace("\r", "\n");
-                    let normalized_char_count = pasted.chars().count();
-                    let normalized_cr_count = pasted.chars().filter(|ch| *ch == '\r').count();
-                    let normalized_lf_count = pasted.chars().filter(|ch| *ch == '\n').count();
-                    let normalized_preview: String = pasted.chars().take(120).collect();
-                    tracing::error!(
-                        raw_char_count,
-                        raw_cr_count,
-                        raw_lf_count,
-                        normalized_char_count,
-                        normalized_cr_count,
-                        normalized_lf_count,
-                        raw_preview = %raw_preview.escape_debug(),
-                        normalized_preview = %normalized_preview.escape_debug(),
-                        "handling tui paste event"
-                    );
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {

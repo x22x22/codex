@@ -420,10 +420,8 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
         std::process::exit(1);
     }
 
-    let log_path = PathBuf::from("/Users/aibrahim/.codex/log/codex-tui.log");
-    if let Some(parent) = log_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    let log_dir = codex_core::config::log_dir(&config)?;
+    std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
     let mut log_file_opts = OpenOptions::new();
     log_file_opts.create(true).append(true);
@@ -438,7 +436,7 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
         log_file_opts.mode(0o600);
     }
 
-    let log_file = log_file_opts.open(&log_path)?;
+    let log_file = log_file_opts.open(log_dir.join("codex-tui.log"))?;
 
     // Wrap file in non‑blocking writer.
     let (non_blocking, _guard) = non_blocking(log_file);
@@ -510,7 +508,7 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
         .await
         .map(|db| log_db::start(db).with_filter(env_filter()));
 
-    let init_result = tracing_subscriber::registry()
+    let _ = tracing_subscriber::registry()
         .with(file_layer)
         .with(feedback_layer)
         .with(feedback_metadata_layer)
@@ -518,18 +516,6 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
         .with(otel_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
-    if let Err(err) = init_result {
-        #[allow(clippy::print_stderr)]
-        {
-            eprintln!(
-                "Failed to initialize tracing subscriber for {}: {err}",
-                log_path.display()
-            );
-        }
-        return Err(std::io::Error::other(format!(
-            "failed to initialize tracing subscriber: {err}"
-        )));
-    }
 
     run_ratatui_app(
         cli,
