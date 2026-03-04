@@ -645,6 +645,25 @@ impl Default for FileSystemSandboxPolicy {
 }
 
 impl FileSystemSandboxPolicy {
+    fn has_root_access(&self, predicate: impl Fn(FileSystemAccessMode) -> bool) -> bool {
+        matches!(self.kind, FileSystemSandboxKind::Restricted)
+            && self.entries.iter().any(|entry| {
+                matches!(
+                    &entry.path,
+                    FileSystemPath::Special { value }
+                        if value.kind == FileSystemSpecialPathKind::Root && predicate(entry.access)
+                )
+            })
+    }
+
+    fn has_explicit_deny_entries(&self) -> bool {
+        matches!(self.kind, FileSystemSandboxKind::Restricted)
+            && self
+                .entries
+                .iter()
+                .any(|entry| entry.access == FileSystemAccessMode::None)
+    }
+
     pub fn unrestricted() -> Self {
         Self {
             kind: FileSystemSandboxKind::Unrestricted,
@@ -670,13 +689,10 @@ impl FileSystemSandboxPolicy {
     pub fn has_full_disk_read_access(&self) -> bool {
         match self.kind {
             FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => true,
-            FileSystemSandboxKind::Restricted => self.entries.iter().any(|entry| {
-                matches!(
-                    &entry.path,
-                    FileSystemPath::Special { value }
-                        if value.kind == FileSystemSpecialPathKind::Root && entry.access.can_read()
-                )
-            }),
+            FileSystemSandboxKind::Restricted => {
+                self.has_root_access(FileSystemAccessMode::can_read)
+                    && !self.has_explicit_deny_entries()
+            }
         }
     }
 
@@ -684,13 +700,10 @@ impl FileSystemSandboxPolicy {
     pub fn has_full_disk_write_access(&self) -> bool {
         match self.kind {
             FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => true,
-            FileSystemSandboxKind::Restricted => self.entries.iter().any(|entry| {
-                matches!(
-                    &entry.path,
-                    FileSystemPath::Special { value }
-                        if value.kind == FileSystemSpecialPathKind::Root && entry.access.can_write()
-                )
-            }),
+            FileSystemSandboxKind::Restricted => {
+                self.has_root_access(FileSystemAccessMode::can_write)
+                    && !self.has_explicit_deny_entries()
+            }
         }
     }
 
@@ -715,11 +728,24 @@ impl FileSystemSandboxPolicy {
         }
 
         let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        let mut readable_roots = Vec::new();
+        if self.has_root_access(FileSystemAccessMode::can_read)
+            && let Some(cwd_absolute) = cwd_absolute.as_ref()
+        {
+            readable_roots.push(absolute_root_path_for_cwd(cwd_absolute));
+        }
+
         dedup_absolute_paths(
-            self.entries
-                .iter()
-                .filter(|entry| entry.access.can_read())
-                .filter_map(|entry| resolve_file_system_path(&entry.path, cwd_absolute.as_ref()))
+            readable_roots
+                .into_iter()
+                .chain(
+                    self.entries
+                        .iter()
+                        .filter(|entry| entry.access.can_read())
+                        .filter_map(|entry| {
+                            resolve_file_system_path(&entry.path, cwd_absolute.as_ref())
+                        }),
+                )
                 .collect(),
         )
     }
@@ -733,11 +759,24 @@ impl FileSystemSandboxPolicy {
 
         let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
         let unreadable_roots = self.get_unreadable_roots_with_cwd(cwd);
+        let mut writable_roots = Vec::new();
+        if self.has_root_access(FileSystemAccessMode::can_write)
+            && let Some(cwd_absolute) = cwd_absolute.as_ref()
+        {
+            writable_roots.push(absolute_root_path_for_cwd(cwd_absolute));
+        }
+
         dedup_absolute_paths(
-            self.entries
-                .iter()
-                .filter(|entry| entry.access.can_write())
-                .filter_map(|entry| resolve_file_system_path(&entry.path, cwd_absolute.as_ref()))
+            writable_roots
+                .into_iter()
+                .chain(
+                    self.entries
+                        .iter()
+                        .filter(|entry| entry.access.can_write())
+                        .filter_map(|entry| {
+                            resolve_file_system_path(&entry.path, cwd_absolute.as_ref())
+                        }),
+                )
                 .collect(),
         )
         .into_iter()
@@ -1433,6 +1472,16 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
             }
         }
     }
+}
+
+fn absolute_root_path_for_cwd(cwd: &AbsolutePathBuf) -> AbsolutePathBuf {
+    let root = cwd
+        .as_path()
+        .ancestors()
+        .last()
+        .unwrap_or_else(|| panic!("cwd must have a filesystem root"));
+    AbsolutePathBuf::from_absolute_path(root)
+        .unwrap_or_else(|err| panic!("cwd root must be an absolute path: {err}"))
 }
 
 fn resolve_file_system_path(
@@ -3843,6 +3892,57 @@ mod tests {
         }]);
         assert!(writable.has_full_disk_read_access());
         assert!(writable.has_full_disk_write_access());
+    }
+
+    #[test]
+    fn restricted_file_system_policy_treats_root_with_carveouts_as_scoped_access() {
+        let cwd = TempDir::new().expect("tempdir");
+        let cwd_absolute =
+            AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute tempdir");
+        let root = absolute_root_path_for_cwd(&cwd_absolute);
+        let blocked = AbsolutePathBuf::resolve_path_against_base("blocked", cwd.path())
+            .expect("resolve blocked");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath {
+                        kind: FileSystemSpecialPathKind::Root,
+                        subpath: None,
+                    },
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath {
+                        kind: FileSystemSpecialPathKind::CurrentWorkingDirectory,
+                        subpath: Some(PathBuf::from("blocked")),
+                    },
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        assert!(!policy.has_full_disk_read_access());
+        assert!(!policy.has_full_disk_write_access());
+        assert_eq!(
+            policy.get_readable_roots_with_cwd(cwd.path()),
+            vec![root.clone()]
+        );
+        assert_eq!(
+            policy.get_unreadable_roots_with_cwd(cwd.path()),
+            vec![blocked.clone()]
+        );
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(writable_roots[0].root, root);
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .iter()
+                .any(|path| path.as_path() == blocked.as_path())
+        );
     }
 
     #[test]
