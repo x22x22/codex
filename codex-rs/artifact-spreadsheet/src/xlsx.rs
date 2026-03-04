@@ -893,12 +893,13 @@ fn parse_pivot_caches(
 }
 
 fn sheet_relationships_path(sheet_part: &str) -> Result<String, SpreadsheetArtifactError> {
-    let Some(parent) = Path::new(sheet_part).parent() else {
+    let sheet_part = sheet_part.replace('\\', "/");
+    let Some(parent) = Path::new(&sheet_part).parent() else {
         return Err(SpreadsheetArtifactError::Serialization {
             message: format!("sheet part `{sheet_part}` has no parent"),
         });
     };
-    let Some(file_name) = Path::new(sheet_part)
+    let Some(file_name) = Path::new(&sheet_part)
         .file_name()
         .and_then(|value| value.to_str())
     else {
@@ -906,24 +907,26 @@ fn sheet_relationships_path(sheet_part: &str) -> Result<String, SpreadsheetArtif
             message: format!("sheet part `{sheet_part}` has no file name"),
         });
     };
-    Ok(format!("{}/_rels/{file_name}.rels", parent.display()))
+    let parent = parent.to_string_lossy().replace('\\', "/");
+    Ok(format!("{parent}/_rels/{file_name}.rels"))
 }
 
 fn normalize_relationship_target(
     source_part: &str,
     target: &str,
 ) -> Result<String, SpreadsheetArtifactError> {
+    let source_part = source_part.replace('\\', "/");
+    let target = target.replace('\\', "/");
     if target.starts_with('/') {
         return Ok(target.trim_start_matches('/').to_string());
     }
 
-    let base =
-        Path::new(source_part)
-            .parent()
-            .ok_or_else(|| SpreadsheetArtifactError::Serialization {
-                message: format!("source part `{source_part}` has no parent"),
-            })?;
-    let joined = base.join(target);
+    let base = Path::new(&source_part).parent().ok_or_else(|| {
+        SpreadsheetArtifactError::Serialization {
+            message: format!("source part `{source_part}` has no parent"),
+        }
+    })?;
+    let joined = base.join(&target);
     let mut normalized = PathBuf::new();
     for component in joined.components() {
         match component {
@@ -935,7 +938,7 @@ fn normalize_relationship_target(
             std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
         }
     }
-    Ok(normalized.to_string_lossy().into_owned())
+    Ok(normalized.to_string_lossy().replace('\\', "/"))
 }
 
 fn parse_native_table(xml: &str) -> Result<crate::SpreadsheetTable, SpreadsheetArtifactError> {
@@ -2848,4 +2851,28 @@ fn xml_unescape(value: &str) -> String {
         .replace("&gt;", ">")
         .replace("&lt;", "<")
         .replace("&amp;", "&")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_relationship_target;
+    use super::sheet_relationships_path;
+
+    #[test]
+    fn relationship_paths_use_zip_separators() {
+        assert_eq!(
+            sheet_relationships_path("xl/worksheets/sheet1.xml").unwrap(),
+            "xl/worksheets/_rels/sheet1.xml.rels"
+        );
+        assert_eq!(
+            normalize_relationship_target("xl/worksheets/sheet1.xml", "../tables/table1.xml")
+                .unwrap(),
+            "xl/tables/table1.xml"
+        );
+        assert_eq!(
+            normalize_relationship_target("xl\\drawings\\drawing1.xml", "..\\charts\\chart1.xml")
+                .unwrap(),
+            "xl/charts/chart1.xml"
+        );
+    }
 }
