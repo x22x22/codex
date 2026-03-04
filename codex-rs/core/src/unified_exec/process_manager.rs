@@ -47,6 +47,7 @@ use crate::unified_exec::async_watcher::start_streaming_output;
 use crate::unified_exec::clamp_yield_time;
 use crate::unified_exec::generate_chunk_id;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
+use crate::unified_exec::process::EscalationSession;
 use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::UnifiedExecProcess;
@@ -528,6 +529,7 @@ impl UnifiedExecProcessManager {
         &self,
         env: &ExecRequest,
         tty: bool,
+        escalation_session: Option<EscalationSession>,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let (program, args) = env
             .command
@@ -555,7 +557,15 @@ impl UnifiedExecProcessManager {
         };
         let spawned =
             spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        UnifiedExecProcess::from_spawned(spawned, env.sandbox).await
+        #[cfg(unix)]
+        let escalation_session = {
+            let mut escalation_session = escalation_session;
+            if let Some(session) = escalation_session.as_mut() {
+                session.close_client_socket();
+            }
+            escalation_session
+        };
+        UnifiedExecProcess::from_spawned(spawned, env.sandbox, escalation_session).await
     }
 
     pub(super) async fn open_session_with_sandbox(
@@ -569,7 +579,8 @@ impl UnifiedExecProcessManager {
             Some(context.session.conversation_id),
         ));
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = UnifiedExecRuntime::new(self);
+        let mut runtime =
+            UnifiedExecRuntime::new(self, context.turn.tools_config.unified_exec_backend);
         let exec_approval_requirement = context
             .session
             .services
