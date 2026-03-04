@@ -1940,14 +1940,14 @@ impl Config {
                 let (mut file_system_sandbox_policy, network_sandbox_policy) =
                     compile_permission_profile(permissions, default_permissions)?;
                 let mut sandbox_policy = file_system_sandbox_policy
-                    .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd);
+                    .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd)?;
                 if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
                     add_additional_file_system_writes(
                         &mut file_system_sandbox_policy,
                         &additional_writable_roots,
                     );
                     sandbox_policy = file_system_sandbox_policy
-                        .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd);
+                        .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd)?;
                 }
                 (
                     sandbox_policy,
@@ -3146,6 +3146,97 @@ default_permissions = "workspace"
         assert_eq!(
             err.to_string(),
             "config defines `[permissions]` profiles but does not set `default_permissions`"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cwd = TempDir::new()?;
+        std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+        let external_write_path = if cfg!(windows) { r"C:\temp" } else { "/tmp" };
+
+        let err = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                default_permissions: Some("workspace".to_string()),
+                permissions: Some(PermissionsToml {
+                    entries: BTreeMap::from([(
+                        "workspace".to_string(),
+                        PermissionProfileToml {
+                            extends: None,
+                            filesystem: Some(FilesystemPermissionsToml {
+                                entries: BTreeMap::from([(
+                                    external_write_path.to_string(),
+                                    FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                                )]),
+                            }),
+                            network: None,
+                        },
+                    )]),
+                }),
+                ..Default::default()
+            },
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )
+        .expect_err("writes outside the workspace root should be rejected");
+
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+        assert!(
+            err.to_string()
+                .contains("filesystem writes outside the workspace root"),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn permissions_profiles_reject_unsupported_network_fields() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cwd = TempDir::new()?;
+        std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+        let err = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                default_permissions: Some("workspace".to_string()),
+                permissions: Some(PermissionsToml {
+                    entries: BTreeMap::from([(
+                        "workspace".to_string(),
+                        PermissionProfileToml {
+                            extends: None,
+                            filesystem: Some(FilesystemPermissionsToml {
+                                entries: BTreeMap::from([(
+                                    ":minimal".to_string(),
+                                    FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                                )]),
+                            }),
+                            network: Some(NetworkToml {
+                                enabled: Some(true),
+                                proxy_url: Some("http://127.0.0.1:43128".to_string()),
+                                ..Default::default()
+                            }),
+                        },
+                    )]),
+                }),
+                ..Default::default()
+            },
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..Default::default()
+            },
+            codex_home.path().to_path_buf(),
+        )
+        .expect_err("unsupported profile network fields should be rejected");
+
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+        assert!(
+            err.to_string()
+                .contains("uses unsupported `[permissions.workspace.network]` fields"),
+            "{err}"
         );
         Ok(())
     }

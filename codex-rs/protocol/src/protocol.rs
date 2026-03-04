@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::fmt;
+use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -669,8 +670,8 @@ impl FileSystemSandboxPolicy {
         &self,
         network_policy: NetworkSandboxPolicy,
         cwd: &Path,
-    ) -> SandboxPolicy {
-        match self.kind {
+    ) -> io::Result<SandboxPolicy> {
+        Ok(match self.kind {
             FileSystemSandboxKind::ExternalSandbox => SandboxPolicy::ExternalSandbox {
                 network_access: if network_policy.is_enabled() {
                     NetworkAccess::Enabled
@@ -768,13 +769,13 @@ impl FileSystemSandboxPolicy {
                 }
 
                 if has_full_disk_write_access {
-                    return if network_policy.is_enabled() {
+                    return Ok(if network_policy.is_enabled() {
                         SandboxPolicy::DangerFullAccess
                     } else {
                         SandboxPolicy::ExternalSandbox {
                             network_access: NetworkAccess::Restricted,
                         }
-                    };
+                    });
                 }
 
                 let read_only_access = if has_full_disk_read_access {
@@ -786,11 +787,7 @@ impl FileSystemSandboxPolicy {
                     }
                 };
 
-                if workspace_root_writable
-                    || !writable_roots.is_empty()
-                    || tmpdir_writable
-                    || slash_tmp_writable
-                {
+                if workspace_root_writable {
                     SandboxPolicy::WorkspaceWrite {
                         writable_roots: dedup_absolute_paths(writable_roots),
                         read_only_access,
@@ -798,6 +795,11 @@ impl FileSystemSandboxPolicy {
                         exclude_tmpdir_env_var: !tmpdir_writable,
                         exclude_slash_tmp: !slash_tmp_writable,
                     }
+                } else if !writable_roots.is_empty() || tmpdir_writable || slash_tmp_writable {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "permissions profile requests filesystem writes outside the workspace root, which is not supported until the runtime enforces FileSystemSandboxPolicy directly",
+                    ));
                 } else {
                     SandboxPolicy::ReadOnly {
                         access: read_only_access,
@@ -805,7 +807,7 @@ impl FileSystemSandboxPolicy {
                     }
                 }
             }
-        }
+        })
     }
 }
 
@@ -3677,6 +3679,36 @@ mod tests {
                 writable_root.root.as_path().display()
             );
         }
+    }
+
+    #[test]
+    fn file_system_policy_rejects_legacy_bridge_for_non_workspace_writes() {
+        let cwd = if cfg!(windows) {
+            Path::new(r"C:\workspace")
+        } else {
+            Path::new("/tmp/workspace")
+        };
+        let external_write_path = if cfg!(windows) {
+            AbsolutePathBuf::from_absolute_path(r"C:\temp").expect("absolute windows temp path")
+        } else {
+            AbsolutePathBuf::from_absolute_path("/tmp").expect("absolute tmp path")
+        };
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: external_write_path,
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+
+        let err = policy
+            .to_legacy_sandbox_policy(NetworkSandboxPolicy::Restricted, cwd)
+            .expect_err("non-workspace writes should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("filesystem writes outside the workspace root"),
+            "{err}"
+        );
     }
 
     #[test]
