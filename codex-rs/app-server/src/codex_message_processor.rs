@@ -6119,6 +6119,7 @@ impl CodexMessageProcessor {
             WindowsSandboxSetupMode::Unelevated => CoreWindowsSandboxSetupMode::Unelevated,
         };
         let config = Arc::clone(&self.config);
+        let command_cwd = params.cwd.unwrap_or_else(|| config.cwd.clone());
         let outgoing = Arc::clone(&self.outgoing);
         let connection_id = request_id.connection_id;
 
@@ -6127,7 +6128,7 @@ impl CodexMessageProcessor {
                 mode,
                 policy: config.permissions.sandbox_policy.get().clone(),
                 policy_cwd: config.cwd.clone(),
-                command_cwd: config.cwd.clone(),
+                command_cwd,
                 env_map: std::env::vars().collect(),
                 codex_home: config.codex_home.clone(),
                 active_profile: config.active_profile.clone(),
