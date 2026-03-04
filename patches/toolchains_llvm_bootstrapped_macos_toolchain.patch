@@ -1,0 +1,586 @@
+diff --git a/3rd_party/macosx.sdk/MacOSX15.4.sdk.BUILD.bazel b/3rd_party/macosx.sdk/MacOSX15.4.sdk.BUILD.bazel
+index 881d74378..d2c5938e2 100644
+--- a/3rd_party/macosx.sdk/MacOSX15.4.sdk.BUILD.bazel
++++ b/3rd_party/macosx.sdk/MacOSX15.4.sdk.BUILD.bazel
+@@ -1,7 +1,67 @@
+-load("@toolchains_llvm_bootstrapped//:directory.bzl", "headers_directory")
++load("@bazel_skylib//rules/directory:directory.bzl", "directory")
++load("@bazel_skylib//rules/directory:subdirectory.bzl", "subdirectory")
++load("@toolchains_llvm_bootstrapped//:directory.bzl", "copied_directory", "headers_directory", "submodule_directory")
+ 
+ headers_directory(
+     name = "sysroot",
+     path = ".",
+     visibility = ["//visibility:public"],
+ )
++
++directory(
++    name = "sysroot_headers_for_module_map",
++    srcs = glob(
++        ["**"],
++        exclude = [
++            "usr/include/**",
++        ],
++    ),
++    visibility = ["//visibility:public"],
++)
++
++copied_directory(
++    name = "libcxx_headers_directory",
++    srcs = glob(
++        ["usr/include/c++/v1/**"],
++        exclude = ["usr/include/c++/v1/module.modulemap"],
++    ),
++    strip_prefix = "usr/include/c++/v1",
++)
++
++subdirectory(
++    name = "libcxx_headers",
++    parent = ":libcxx_headers_directory",
++    path = "prebuilts/libcxx_headers_directory",
++    visibility = ["//visibility:public"],
++)
++
++submodule_directory(
++    name = "libcxx_headers_for_module_map",
++    directory = ":libcxx_headers",
++    visibility = ["//visibility:public"],
++)
++
++copied_directory(
++    name = "usr_include_directory",
++    srcs = glob(
++        ["usr/include/**"],
++        exclude = [
++            "usr/include/**/*.modulemap",
++            "usr/include/c++/v1/**",
++        ],
++    ),
++    strip_prefix = "usr/include",
++)
++
++subdirectory(
++    name = "usr_include",
++    parent = ":usr_include_directory",
++    path = "prebuilts/usr_include_directory",
++    visibility = ["//visibility:public"],
++)
++
++submodule_directory(
++    name = "usr_include_for_module_map",
++    directory = ":usr_include",
++    visibility = ["//visibility:public"],
++)
+diff --git a/directory.bzl b/directory.bzl
+index 87e58dafa..404a111c3 100644
+--- a/directory.bzl
++++ b/directory.bzl
+@@ -1,3 +1,5 @@
++load("@bazel_lib//lib:copy_file.bzl", "copy_file")
++load("@bazel_skylib//lib:paths.bzl", "paths")
+ load("@bazel_skylib//rules/directory:directory.bzl", "directory")
+ load("@bazel_skylib//rules/directory:providers.bzl", "DirectoryInfo")
+ load("@bazel_skylib//rules/directory:subdirectory.bzl", "subdirectory")
+@@ -34,8 +36,37 @@ def headers_directory(name, path, visibility = None):
+         visibility = visibility,
+     )
+ 
++def copied_directory(name, srcs, strip_prefix = "", visibility = None):
++    copied_srcs = []
++
++    for file in srcs:
++        relative = file
++        if strip_prefix:
++            prefix = strip_prefix + "/"
++            if not file.startswith(prefix):
++                fail("{} does not start with {}".format(file, prefix))
++            relative = file[len(prefix):]
++
++        out = "prebuilts/{}/{}".format(name, relative)
++        copy_file(
++            name = "copy_{}_{}".format(
++                name,
++                relative.replace("/", "_").replace(".", "_"),
++            ),
++            src = file,
++            out = out,
++        )
++        copied_srcs.append(out)
++
++    directory(
++        name = name,
++        srcs = copied_srcs,
++        visibility = visibility,
++    )
++
+ # Marker provider.
+ SourceDirectoryInfo = provider()
++GeneratedHeaderModuleInfo = provider(fields = ["headers", "strip_dot_h"])
+ 
+ def _headers_directory_impl(ctx):
+     return [
+@@ -54,3 +85,42 @@ _headers_directory = rule(
+     },
+ )
+ 
++def _generated_header_modules_impl(ctx):
++    directory_path = ctx.attr.directory[DirectoryInfo].path
++    headers = []
++
++    for file in ctx.attr.directory[DefaultInfo].files.to_list():
++        if paths.dirname(file.path) == directory_path:
++            headers.append(file)
++
++    return [
++        DefaultInfo(files = ctx.attr.directory[DefaultInfo].files),
++        GeneratedHeaderModuleInfo(
++            headers = headers,
++            strip_dot_h = ctx.attr.strip_dot_h,
++        ),
++    ]
++
++generated_header_modules = rule(
++    implementation = _generated_header_modules_impl,
++    attrs = {
++        "directory": attr.label(),
++        "strip_dot_h": attr.bool(default = True),
++    },
++)
++
++def _submodule_directory_impl(ctx):
++    return [
++        ctx.attr.directory[DirectoryInfo],
++        SourceDirectoryInfo(),
++        DefaultInfo(
++            files = ctx.attr.directory[DefaultInfo].files,
++        ),
++    ]
++
++submodule_directory = rule(
++    implementation = _submodule_directory_impl,
++    attrs = {
++        "directory": attr.label(),
++    },
++)
+diff --git a/runtimes/module_map.BUILD.bazel b/runtimes/module_map.BUILD.bazel
+index 08c2ab6f7..0bf5632d2 100644
+--- a/runtimes/module_map.BUILD.bazel
++++ b/runtimes/module_map.BUILD.bazel
+@@ -1,4 +1,7 @@
+ module "crosstool" [system] {
++  export *
+ %submodules%
++%generated_header_modules%
++%headers%
+ %textual_headers%
+ }
+diff --git a/runtimes/module_map.bzl b/runtimes/module_map.bzl
+index 72eaf555e..b5dfb25d9 100644
+--- a/runtimes/module_map.bzl
++++ b/runtimes/module_map.bzl
+@@ -1,27 +1,72 @@
+ load("@bazel_skylib//lib:paths.bzl", "paths")
+ load("@bazel_skylib//rules/directory:providers.bzl", "DirectoryInfo")
+-load("//:directory.bzl", "SourceDirectoryInfo")
++load("//:directory.bzl", "GeneratedHeaderModuleInfo", "SourceDirectoryInfo")
+ 
+-IncludePathInfo = provider()
++IncludePathInfo = provider(fields = ["generated_header_modules", "generated_header_modules_preserve_ext", "headers", "submodule_directories", "textual_headers"])
++
++def _is_header(file):
++    basename = file.basename
++    return "." not in basename or basename.endswith((".h", ".hh", ".hpp", ".hxx", ".inc"))
++
++def _header(file, *, execroot_prefix):
++    return "  header \"{}{}\"".format(execroot_prefix, file.path)
+ 
+ def _textual_header(file, *, execroot_prefix):
+     return "  textual header \"{}{}\"".format(execroot_prefix, file.path)
+ 
+-def _umbrella_submodule(directory, *, execroot_prefix):
+-    path = execroot_prefix + paths.normalize(directory.path).replace("//", "/")
++def _umbrella_submodule(directory_path, *, execroot_prefix):
++    path = execroot_prefix + paths.normalize(directory_path).replace("//", "/")
+ 
+     return """
+   module "{path}" {{
+     umbrella "{path}"
++    explicit module * {{
++      export *
++    }}
+   }}""".format(path = path)
+ 
++def _header_module_name(file, *, strip_dot_h):
++    basename = file.basename
++    if strip_dot_h and basename.endswith(".h"):
++        return basename[:-2]
++    return basename
++
++def _header_submodule(module_name, files, *, execroot_prefix):
++    headers = "\n".join([
++        "    header \"{}{}\"".format(execroot_prefix, file.path)
++        for file in files
++    ])
++
++    return """
++  module "{module_name}" {{
++{headers}
++    export *
++  }}""".format(
++        module_name = module_name,
++        headers = headers,
++    )
++
++def _grouped_header_submodules(files, *, execroot_prefix, strip_dot_h):
++    grouped = {}
++    for file in files:
++        name = _header_module_name(file, strip_dot_h = strip_dot_h)
++        grouped.setdefault(name, []).append(file)
++
++    return [
++        _header_submodule(
++            name,
++            sorted(grouped[name], key = lambda file: file.path),
++            execroot_prefix = execroot_prefix,
++        )
++        for name in sorted(grouped.keys())
++    ]
++
+ def _module_map_impl(ctx):
+     module_map = ctx.actions.declare_file(ctx.attr.name + ".modulemap")
+ 
+-    # The builtin include directories are relative to the execroot, but the
+-    # paths in the module map must be relative to the directory that contains
+-    # the module map.
+-    execroot_prefix = (module_map.dirname.count("/") + 1) * "../"
++    # Paths in the module map are interpreted relative to the execroot because
++    # the toolchain enables -fmodule-map-file-home-is-cwd.
++    execroot_prefix = ""
+     include_path_info = ctx.attr.include_path[IncludePathInfo]
+ 
+     template_dict = ctx.actions.template_dict()
+@@ -34,6 +79,32 @@ def _module_map_impl(ctx):
+         allow_closure = True,
+     )
+ 
++    generated_header_modules = _grouped_header_submodules(
++        include_path_info.generated_header_modules.to_list(),
++        execroot_prefix = execroot_prefix,
++        strip_dot_h = True,
++    ) + _grouped_header_submodules(
++        include_path_info.generated_header_modules_preserve_ext.to_list(),
++        execroot_prefix = execroot_prefix,
++        strip_dot_h = False,
++    )
++
++    template_dict.add_joined(
++        "%generated_header_modules%",
++        depset(generated_header_modules),
++        join_with = "\n",
++        map_each = lambda text: text,
++        allow_closure = True,
++    )
++
++    template_dict.add_joined(
++        "%headers%",
++        include_path_info.headers,
++        join_with = "\n",
++        map_each = lambda file: _header(file, execroot_prefix = execroot_prefix),
++        allow_closure = True,
++    )
++
+     template_dict.add_joined(
+         "%textual_headers%",
+         include_path_info.textual_headers,
+@@ -69,17 +140,33 @@ module_map = rule(
+ 
+ def _include_path_impl(ctx):
+     submodule_directories = []
++    generated_header_module_depsets = []
++    generated_header_module_preserve_ext_depsets = []
++    headers_depsets = []
+     textual_headers_depsets = []
+ 
+     for src in ctx.attr.srcs:
+-        if SourceDirectoryInfo in src or DirectoryInfo not in src:
+-            # We're either a source directory or an output directory (Tree Artifact).
+-            submodule_directories.append(src[DefaultInfo].files)
++        if GeneratedHeaderModuleInfo in src:
++            info = src[GeneratedHeaderModuleInfo]
++            if info.strip_dot_h:
++                generated_header_module_depsets.append(depset(info.headers))
++            else:
++                generated_header_module_preserve_ext_depsets.append(depset(info.headers))
++        elif SourceDirectoryInfo in src:
++            submodule_directories.append(depset([src[DirectoryInfo].path]))
++        elif DirectoryInfo not in src:
++            # We're an output directory (Tree Artifact).
++            submodule_directories.append(depset([file.path for file in src[DefaultInfo].files.to_list()]))
+         else:
+-            textual_headers_depsets.append(src[DirectoryInfo].transitive_files)
++            headers_depsets.append(depset(
++                direct = [file for file in src[DirectoryInfo].transitive_files.to_list() if _is_header(file)],
++            ))
+ 
+     return [
+         IncludePathInfo(
++            generated_header_modules = depset([], transitive = generated_header_module_depsets),
++            generated_header_modules_preserve_ext = depset([], transitive = generated_header_module_preserve_ext_depsets),
++            headers = depset([], transitive = headers_depsets),
+             submodule_directories = depset([], transitive = submodule_directories),
+             textual_headers = depset([], transitive = textual_headers_depsets),
+         ),
+diff --git a/toolchain/BUILD.bazel b/toolchain/BUILD.bazel
+index d38c47181..28228733b 100644
+--- a/toolchain/BUILD.bazel
++++ b/toolchain/BUILD.bazel
+@@ -104,9 +104,13 @@ cc_args_list(
+ cc_args_list(
+     name = "resource_dir",
+     args = select({
+-        "@platforms//os:macos": [],
++        "@platforms//os:macos": [
++            "//toolchain/args:clang_disable_builtin_include_search",
++            "//toolchain/args:clang_builtin_headers_include_search_paths",
++        ],
+         "//conditions:default": [
+             "//toolchain/args:resource_dir",
++            "//toolchain/args:clang_builtin_headers_include_search_paths",
+         ],
+     }),
+ )
+@@ -214,6 +218,9 @@ cc_args_list(
+ cc_args_list(
+     name = "macos_toolchain_args",
+     args = [
++        "//toolchain/args/macos:macos_disable_default_cxx_include_search",
++        "//toolchain/args/macos:macos_libcxx_headers_include_search_paths",
++        "//toolchain/args/macos:macos_usr_include_search_paths",
+         "//toolchain/args/macos:macos_minimum_os_flags",
+     ],
+ )
+diff --git a/toolchain/args/BUILD.bazel b/toolchain/args/BUILD.bazel
+index 3ccc692fe..c165a6cf5 100644
+--- a/toolchain/args/BUILD.bazel
++++ b/toolchain/args/BUILD.bazel
+@@ -17,6 +17,7 @@ package(default_visibility = ["//visibility:public"])
+ cc_args(
+     name = "resource_dir",
+     actions = [
++        "@rules_cc//cc/toolchains/actions:compile_actions",
+         "@rules_cc//cc/toolchains/actions:link_actions",
+         # We may need it for other actions too?
+     ],
+@@ -32,6 +33,56 @@ cc_args(
+     ],
+ )
+ 
++alias(
++    name = "clang_builtin_headers_include_search_directory",
++    actual = select({
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_x86_64": "@llvm-toolchain-minimal-21.1.8-linux-amd64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_aarch64": "@llvm-toolchain-minimal-21.1.8-linux-arm64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_x86_64_gnu": "@llvm-toolchain-minimal-21.1.8-linux-amd64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_aarch64_gnu": "@llvm-toolchain-minimal-21.1.8-linux-arm64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_x86_64_musl": "@llvm-toolchain-minimal-21.1.8-linux-amd64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:linux_aarch64_musl": "@llvm-toolchain-minimal-21.1.8-linux-arm64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:macos_x86_64": "@llvm-toolchain-minimal-21.1.8-darwin-arm64//:builtin_headers_for_header_parser_subdirectory",
++        "@toolchains_llvm_bootstrapped//platforms/config:macos_aarch64": "@llvm-toolchain-minimal-21.1.8-darwin-arm64//:builtin_headers_for_header_parser_subdirectory",
++        "@toolchains_llvm_bootstrapped//platforms/config:windows_x86_64": "@llvm-toolchain-minimal-21.1.8-windows-amd64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:windows_aarch64": "@llvm-toolchain-minimal-21.1.8-windows-arm64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:none_wasm32": "@llvm-toolchain-minimal-21.1.8-linux-amd64//:builtin_headers",
++        "@toolchains_llvm_bootstrapped//platforms/config:none_wasm64": "@llvm-toolchain-minimal-21.1.8-linux-amd64//:builtin_headers",
++    }),
++    visibility = ["//toolchain:__subpackages__"],
++)
++
++cc_args(
++    name = "clang_disable_builtin_include_search",
++    actions = [
++        "@rules_cc//cc/toolchains/actions:compile_actions",
++    ],
++    args = [
++        "-nobuiltininc",
++    ],
++)
++
++cc_args(
++    name = "clang_builtin_headers_include_search_paths",
++    actions = [
++        "@rules_cc//cc/toolchains/actions:compile_actions",
++        "@rules_cc//cc/toolchains/actions:link_actions",
++    ],
++    args = [
++        "-isystem",
++        "{clang_builtin_headers_include_search_path}",
++    ],
++    format = {
++        "clang_builtin_headers_include_search_path": ":clang_builtin_headers_include_search_directory",
++    },
++    data = [
++        ":clang_builtin_headers_include_search_directory",
++    ],
++    allowlist_include_directories = [
++        ":clang_builtin_headers_include_search_directory",
++    ],
++)
++
+ cc_args(
+     name = "llvm_target_for_platform",
+     actions = [
+@@ -61,6 +112,17 @@ cc_args(
+     ],
+ )
+ 
++cc_args(
++    name = "module_map_home_cwd",
++    actions = [
++        "@rules_cc//cc/toolchains/actions:compile_actions",
++    ],
++    args = [
++        "-Xclang",
++        "-fmodule-map-file-home-is-cwd",
++    ],
++)
++
+ cc_args(
+     name = "libcxx_headers_include_search_paths",
+     actions = [
+diff --git a/toolchain/args/macos/BUILD.bazel b/toolchain/args/macos/BUILD.bazel
+index 0ff9fd6b0..346f609be 100644
+--- a/toolchain/args/macos/BUILD.bazel
++++ b/toolchain/args/macos/BUILD.bazel
+@@ -27,6 +27,69 @@ cc_args(
+     ],
+ )
+ 
++cc_args(
++    name = "macos_disable_default_cxx_include_search",
++    actions = [
++        "@rules_cc//cc/toolchains/actions:compile_actions",
++    ],
++    args = [
++        "-nostdinc++",
++    ],
++)
++
++cc_args(
++    name = "macos_libcxx_headers_include_search_paths",
++    actions = [
++        "@rules_cc//cc/toolchains/actions:linkstamp_compile",
++        "@rules_cc//cc/toolchains/actions:cpp_compile",
++        "@rules_cc//cc/toolchains/actions:cpp_header_parsing",
++        "@rules_cc//cc/toolchains/actions:cpp_module_compile",
++        "@rules_cc//cc/toolchains/actions:cpp_module_codegen",
++        "@rules_cc//cc/toolchains/actions:clif_match",
++        "@rules_cc//cc/toolchains/actions:objcpp_compile",
++    ],
++    args = [
++        "-isystem",
++        "{macos_libcxx_headers_include_search_path}",
++    ],
++    format = {
++        "macos_libcxx_headers_include_search_path": "@macosx15.4.sdk//sysroot:libcxx_headers",
++    },
++    data = [
++        "@macosx15.4.sdk//sysroot:libcxx_headers",
++    ],
++    allowlist_include_directories = [
++        "@macosx15.4.sdk//sysroot:libcxx_headers",
++    ],
++)
++
++cc_args(
++    name = "macos_usr_include_search_paths",
++    actions = [
++        "@rules_cc//cc/toolchains/actions:c_compile",
++        "@rules_cc//cc/toolchains/actions:linkstamp_compile",
++        "@rules_cc//cc/toolchains/actions:cpp_compile",
++        "@rules_cc//cc/toolchains/actions:cpp_header_parsing",
++        "@rules_cc//cc/toolchains/actions:cpp_module_compile",
++        "@rules_cc//cc/toolchains/actions:cpp_module_codegen",
++        "@rules_cc//cc/toolchains/actions:clif_match",
++        "@rules_cc//cc/toolchains/actions:objcpp_compile",
++    ],
++    args = [
++        "-isystem",
++        "{macos_usr_include_search_path}",
++    ],
++    format = {
++        "macos_usr_include_search_path": "@macosx15.4.sdk//sysroot:usr_include",
++    },
++    data = [
++        "@macosx15.4.sdk//sysroot:usr_include",
++    ],
++    allowlist_include_directories = [
++        "@macosx15.4.sdk//sysroot:usr_include",
++    ],
++)
++
+ # TODO(cerisier): Extract those into proper semantic args list.
+ cc_args(
+     name = "default_link_flags",
+diff --git a/toolchain/cc_toolchain.bzl b/toolchain/cc_toolchain.bzl
+index 01851e25e..cd9d8e412 100644
+--- a/toolchain/cc_toolchain.bzl
++++ b/toolchain/cc_toolchain.bzl
+@@ -8,6 +8,7 @@ def cc_toolchain(name, tool_map, module_map = None):
+         all_of = [
+             "@rules_cc//cc/toolchains/args/layering_check:layering_check",
+             "@rules_cc//cc/toolchains/args/layering_check:use_module_maps",
++            "@toolchains_llvm_bootstrapped//toolchain/features:module_map_home_cwd",
+             "@toolchains_llvm_bootstrapped//toolchain/features:static_link_cpp_runtimes",
+             "@toolchains_llvm_bootstrapped//toolchain/features/runtime_library_search_directories:feature",
+             "@toolchains_llvm_bootstrapped//toolchain/features:archive_param_file",
+@@ -55,6 +56,7 @@ def cc_toolchain(name, tool_map, module_map = None):
+             ],
+             "@platforms//os:none": [],
+         }) + [
++            "@toolchains_llvm_bootstrapped//toolchain/features:module_map_home_cwd",
+             "@toolchains_llvm_bootstrapped//toolchain/features:prefer_pic_for_opt_binaries",
+             "@rules_cc//cc/toolchains/args/layering_check:module_maps",
+             # These are "enabled" but they only _actually_ get enabled when the underlying compilation mode is set.
+diff --git a/toolchain/features/BUILD.bazel b/toolchain/features/BUILD.bazel
+index 35bb1e835..b0198bf75 100644
+--- a/toolchain/features/BUILD.bazel
++++ b/toolchain/features/BUILD.bazel
+@@ -22,6 +22,14 @@ cc_feature(
+     feature_name = "prefer_pic_for_opt_binaries",
+ )
+ 
++cc_feature(
++    name = "module_map_home_cwd",
++    feature_name = "module_map_home_cwd",
++    args = [
++        "//toolchain/args:module_map_home_cwd",
++    ],
++)
++
+ cc_args(
+     name = "opt_link_flags",
+     actions = [
+diff --git a/toolchain/llvm/llvm.bzl b/toolchain/llvm/llvm.bzl
+index 35b562003..f5b6d7d03 100644
+--- a/toolchain/llvm/llvm.bzl
++++ b/toolchain/llvm/llvm.bzl
+@@ -38,6 +38,7 @@ def declare_llvm_targets(*, suffix = ""):
+         # Grab whichever version-specific dir is there.
+         path = "prebuilts/" + native.glob(["lib/clang/*"], exclude_directories = 0)[0] + "/include",
+         parent = "builtin_headers_for_header_parser_directory",
++        visibility = ["//visibility:public"],
+     )
+ 
+     native_binary(
+@@ -176,8 +177,10 @@ def declare_llvm_targets(*, suffix = ""):
+     include_path(
+         name = "macos_target_headers",
+         srcs = [
+-            ":builtin_headers",
+-            "@macosx15.4.sdk//sysroot",
++            ":builtin_headers_for_header_parser_subdirectory",
++            "@macosx15.4.sdk//sysroot:libcxx_headers_for_module_map",
++            "@macosx15.4.sdk//sysroot:usr_include_for_module_map",
++            "@macosx15.4.sdk//sysroot:sysroot_headers_for_module_map",
+         ],
+     )
+ 

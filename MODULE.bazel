@@ -6,7 +6,7 @@ single_version_override(
     module_name = "toolchains_llvm_bootstrapped",
     patch_strip = 1,
     patches = [
-        "//patches:toolchains_llvm_bootstrapped_resource_dir.patch",
+        "//patches:toolchains_llvm_bootstrapped_macos_toolchain.patch",
     ],
 )
 
@@ -159,21 +159,28 @@ use_repo(llvm, "llvm-project")
 crate.annotation(
     # Provide the hermetic SDK path so the build script doesn't try to invoke an unhermetic `xcrun --show-sdk-path`.
     build_script_data = [
+        "@llvm-project//clang:libclang.dylib",
+        "@toolchains_llvm_bootstrapped//:builtin_headers",
         "@macosx15.4.sdk//sysroot",
     ],
     build_script_env = {
         "BINDGEN_EXTRA_CLANG_ARGS": "-isystem $(location @toolchains_llvm_bootstrapped//:builtin_headers)",
+        "CLANG_PATH": "$(location @toolchains_llvm_bootstrapped//tools:clang)",
         "COREAUDIO_SDK_PATH": "$(location @macosx15.4.sdk//sysroot)",
-        "LIBCLANG_PATH": "$(location @codex//:clang)",
+        "LIBCLANG_PATH": "$(location @llvm-project//clang:libclang.dylib)",
     },
     build_script_tools = [
-        "@codex//:clang",
-        "@toolchains_llvm_bootstrapped//:builtin_headers",
+        "@toolchains_llvm_bootstrapped//tools:clang",
     ],
     crate = "coreaudio-sys",
 )
 
-inject_repo(crate, "codex", "toolchains_llvm_bootstrapped", "macosx15.4.sdk")
+inject_repo(
+    crate,
+    "llvm-project",
+    "macosx15.4.sdk",
+    "toolchains_llvm_bootstrapped",
+)
 
 # Fix readme inclusions
 crate.annotation(
