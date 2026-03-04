@@ -13,6 +13,9 @@ use crate::exec::StdoutStream;
 use crate::exec::execute_exec_env;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_policies;
+use crate::protocol::FileSystemAccessMode;
+use crate::protocol::FileSystemPath;
+use crate::protocol::FileSystemSandboxEntry;
 use crate::protocol::FileSystemSandboxKind;
 use crate::protocol::FileSystemSandboxPolicy;
 use crate::protocol::NetworkSandboxPolicy;
@@ -177,6 +180,40 @@ fn additional_permission_roots(
     )
 }
 
+fn merge_file_system_policy_with_additional_permissions(
+    file_system_policy: &FileSystemSandboxPolicy,
+    extra_reads: Vec<AbsolutePathBuf>,
+    extra_writes: Vec<AbsolutePathBuf>,
+) -> FileSystemSandboxPolicy {
+    match file_system_policy.kind {
+        FileSystemSandboxKind::Restricted => {
+            let mut merged_policy = file_system_policy.clone();
+            for path in extra_reads {
+                let entry = FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path },
+                    access: FileSystemAccessMode::Read,
+                };
+                if !merged_policy.entries.contains(&entry) {
+                    merged_policy.entries.push(entry);
+                }
+            }
+            for path in extra_writes {
+                let entry = FileSystemSandboxEntry {
+                    path: FileSystemPath::Path { path },
+                    access: FileSystemAccessMode::Write,
+                };
+                if !merged_policy.entries.contains(&entry) {
+                    merged_policy.entries.push(entry);
+                }
+            }
+            merged_policy
+        }
+        FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => {
+            file_system_policy.clone()
+        }
+    }
+}
+
 fn merge_read_only_access_with_additional_reads(
     read_only_access: &ReadOnlyAccess,
     extra_reads: Vec<AbsolutePathBuf>,
@@ -281,6 +318,28 @@ fn sandbox_policy_with_additional_permissions(
     Ok(policy)
 }
 
+pub(crate) fn should_require_platform_sandbox(
+    file_system_policy: &FileSystemSandboxPolicy,
+    network_policy: NetworkSandboxPolicy,
+    has_managed_network_requirements: bool,
+) -> bool {
+    if has_managed_network_requirements {
+        return true;
+    }
+
+    if !network_policy.is_enabled() {
+        return !matches!(
+            file_system_policy.kind,
+            FileSystemSandboxKind::ExternalSandbox
+        );
+    }
+
+    match file_system_policy.kind {
+        FileSystemSandboxKind::Restricted => !file_system_policy.has_full_disk_write_access(),
+        FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => false,
+    }
+}
+
 #[derive(Default)]
 pub struct SandboxManager;
 
@@ -307,22 +366,20 @@ impl SandboxManager {
                 )
                 .unwrap_or(SandboxType::None)
             }
-            SandboxablePreference::Auto => match file_system_policy.kind {
-                FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => {
-                    if has_managed_network_requirements {
-                        crate::safety::get_platform_sandbox(
-                            windows_sandbox_level != WindowsSandboxLevel::Disabled,
-                        )
-                        .unwrap_or(SandboxType::None)
-                    } else {
-                        SandboxType::None
-                    }
+            SandboxablePreference::Auto => {
+                if should_require_platform_sandbox(
+                    file_system_policy,
+                    network_policy,
+                    has_managed_network_requirements,
+                ) {
+                    crate::safety::get_platform_sandbox(
+                        windows_sandbox_level != WindowsSandboxLevel::Disabled,
+                    )
+                    .unwrap_or(SandboxType::None)
+                } else {
+                    SandboxType::None
                 }
-                _ => crate::safety::get_platform_sandbox(
-                    windows_sandbox_level != WindowsSandboxLevel::Disabled,
-                )
-                .unwrap_or(SandboxType::None),
-            },
+            }
         }
     }
 
@@ -354,13 +411,11 @@ impl SandboxManager {
             let file_system_sandbox_policy = if extra_reads.is_empty() && extra_writes.is_empty() {
                 file_system_policy.clone()
             } else {
-                match file_system_policy.kind {
-                    FileSystemSandboxKind::Restricted => {
-                        FileSystemSandboxPolicy::from(&effective_policy)
-                    }
-                    FileSystemSandboxKind::Unrestricted
-                    | FileSystemSandboxKind::ExternalSandbox => file_system_policy.clone(),
-                }
+                merge_file_system_policy_with_additional_permissions(
+                    file_system_policy,
+                    extra_reads,
+                    extra_writes,
+                )
             };
             let network_sandbox_policy = NetworkSandboxPolicy::from(&effective_policy);
             (
@@ -473,8 +528,10 @@ pub async fn execute_env(
 #[cfg(test)]
 mod tests {
     use super::SandboxManager;
+    use super::merge_file_system_policy_with_additional_permissions;
     use super::normalize_additional_permissions;
     use super::sandbox_policy_with_additional_permissions;
+    use super::should_require_platform_sandbox;
     use crate::exec::SandboxType;
     use crate::protocol::FileSystemAccessMode;
     use crate::protocol::FileSystemPath;
