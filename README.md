@@ -1,4 +1,4 @@
-<p align="center"><strong>Mac/Linux:</strong> <code>curl -fsSL https://chatgpt.com/codex/install.sh | sh</code><br /><strong>Windows:</strong> <code>powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"</code><br />or <code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
+<p align="center"><strong>Mac/Linux:</strong> <code>curl -fsSL https://chatgpt.com/codex/install.sh | sh</code><br /><strong>Windows:</strong> <code>powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"</code></p>
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
 <p align="center">
   <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
@@ -26,14 +26,8 @@ curl -fsSL https://chatgpt.com/codex/install.sh | sh
 powershell -c "irm https://chatgpt.com/codex/install.ps1|iex"
 ```
 
-If you prefer a package manager, you can also install with npm or Homebrew:
-
-```shell
-# Install using npm
-npm install -g @openai/codex
-# Install using Homebrew
-brew install --cask codex
-```
+> [!NOTE]
+> If you prefer a package manager, you can also install with `npm install -g @openai/codex` or `brew install --cask codex`.
 
 Then simply run `codex` to get started.
 
