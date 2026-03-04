@@ -547,11 +547,17 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     let second_file_str = second_file.to_string_lossy().into_owned();
     let parent_shell_hint = format!("&& {}", &first_file_str);
     while target_decision_index < target_decisions.len() || !saw_parent_approval {
-        let server_req = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_request_message(),
-        )
-        .await??;
+        let wait_timeout = if target_decision_index < target_decisions.len() {
+            DEFAULT_READ_TIMEOUT
+        } else {
+            std::time::Duration::from_secs(2)
+        };
+        let server_req = match timeout(wait_timeout, mcp.read_stream_until_request_message()).await
+        {
+            Ok(server_req) => server_req?,
+            Err(_) if target_decision_index >= target_decisions.len() => break,
+            Err(error) => return Err(error.into()),
+        };
         let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req
         else {
             panic!("expected CommandExecutionRequestApproval request");

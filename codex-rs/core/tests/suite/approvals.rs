@@ -653,14 +653,17 @@ async fn expect_patch_approval(
 }
 
 async fn wait_for_completion_without_approval(test: &TestCodex) {
-    let event = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
-        )
-    })
+    let event = wait_for_event_with_timeout(
+        &test.codex,
+        |event| {
+            matches!(
+                event,
+                EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
+            )
+        },
+        std::time::Duration::from_secs(10),
+    )
     .await;
-
     match event {
         EventMsg::TurnComplete(_) => {}
         EventMsg::ExecApprovalRequest(event) => {

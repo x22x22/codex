@@ -188,8 +188,9 @@ pub(crate) async fn apply_bespoke_event_handling(
     } = event;
     match msg {
         EventMsg::TurnStarted(payload) => {
-            // While not technically necessary as it was already done on TurnComplete, be extra cautios and abort any pending server requests.
-            outgoing.abort_pending_server_requests().await;
+            // Do not abort pending server requests here. In practice, approval requests can be
+            // emitted very close to turn-start handling and event ordering may vary by platform.
+            // Aborting on TurnStarted can race with those approval requests and drop callbacks.
             thread_watch_manager
                 .note_turn_started(&conversation_id.to_string())
                 .await;
@@ -213,6 +214,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             }
         }
         EventMsg::TurnComplete(_ev) => {
+            if should_ignore_turn_complete(&event_turn_id, &thread_state).await {
+                return;
+            }
             // All per-thread requests are bound to a turn, so abort them.
             outgoing.abort_pending_server_requests().await;
             let turn_failed = thread_state.lock().await.turn_summary.last_error.is_some();
@@ -1423,6 +1427,7 @@ pub(crate) async fn apply_bespoke_event_handling(
             outgoing.abort_pending_server_requests().await;
             let pending = {
                 let mut state = thread_state.lock().await;
+                state.interrupted_turn_ids.insert(event_turn_id.clone());
                 std::mem::take(&mut state.pending_interrupts)
             };
             if !pending.is_empty() {
@@ -1714,6 +1719,14 @@ async fn find_and_remove_turn_summary(
 ) -> TurnSummary {
     let mut state = thread_state.lock().await;
     std::mem::take(&mut state.turn_summary)
+}
+
+async fn should_ignore_turn_complete(
+    event_turn_id: &str,
+    thread_state: &Arc<Mutex<ThreadState>>,
+) -> bool {
+    let mut state = thread_state.lock().await;
+    state.interrupted_turn_ids.remove(event_turn_id)
 }
 
 async fn handle_turn_complete(
@@ -2490,6 +2503,20 @@ mod tests {
             other => bail!("unexpected message: {other:?}"),
         }
         assert!(rx.try_recv().is_err(), "no extra messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_should_ignore_turn_complete_for_interrupted_turn() -> Result<()> {
+        let thread_state = new_thread_state();
+        let turn_id = "interrupt_then_complete".to_string();
+        {
+            let mut state = thread_state.lock().await;
+            state.interrupted_turn_ids.insert(turn_id.clone());
+        }
+
+        assert!(should_ignore_turn_complete(&turn_id, &thread_state).await);
+        assert!(!should_ignore_turn_complete(&turn_id, &thread_state).await);
         Ok(())
     }
 

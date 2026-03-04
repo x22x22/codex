@@ -101,7 +101,7 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.current_dir(codex_home);
         cmd.env("CODEX_HOME", codex_home);
-        cmd.env("RUST_LOG", "info");
+        cmd.env("RUST_LOG", "warn");
         cmd.env_remove(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR);
 
         for (k, v) in env_overrides {
@@ -795,7 +795,6 @@ impl McpProcess {
     }
 
     async fn send_jsonrpc_message(&mut self, message: JSONRPCMessage) -> anyhow::Result<()> {
-        eprintln!("writing message to stdin: {message:?}");
         let Some(stdin) = self.stdin.as_mut() else {
             anyhow::bail!("mcp stdin closed");
         };
@@ -810,13 +809,10 @@ impl McpProcess {
         let mut line = String::new();
         self.stdout.read_line(&mut line).await?;
         let message = serde_json::from_str::<JSONRPCMessage>(&line)?;
-        eprintln!("read message from stdout: {message:?}");
         Ok(message)
     }
 
     pub async fn read_stream_until_request_message(&mut self) -> anyhow::Result<ServerRequest> {
-        eprintln!("in read_stream_until_request_message()");
-
         let message = self
             .read_stream_until_message(|message| matches!(message, JSONRPCMessage::Request(_)))
             .await?;
@@ -833,8 +829,6 @@ impl McpProcess {
         &mut self,
         request_id: RequestId,
     ) -> anyhow::Result<JSONRPCResponse> {
-        eprintln!("in read_stream_until_response_message({request_id:?})");
-
         let message = self
             .read_stream_until_message(|message| {
                 Self::message_request_id(message) == Some(&request_id)
@@ -867,8 +861,6 @@ impl McpProcess {
         &mut self,
         method: &str,
     ) -> anyhow::Result<JSONRPCNotification> {
-        eprintln!("in read_stream_until_notification_message({method})");
-
         let message = self
             .read_stream_until_message(|message| {
                 matches!(

@@ -1423,11 +1423,13 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             collaboration_mode: None,
         })
         .await?;
-    timeout(
+    let second_turn_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(second_turn)),
     )
     .await??;
+    let TurnStartResponse { turn, .. } = to_response::<TurnStartResponse>(second_turn_resp)?;
+    let second_turn_id = turn.id;
 
     let command_exec_item = timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
@@ -1440,7 +1442,10 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
                 .expect("item/started params");
             let item_started: ItemStartedNotification =
                 serde_json::from_value(params).expect("deserialize item/started notification");
-            if matches!(item_started.item, ThreadItem::CommandExecution { .. }) {
+            if item_started.turn_id == second_turn_id
+                && let ThreadItem::CommandExecution { id, .. } = &item_started.item
+                && id == "call-second"
+            {
                 return Ok::<ThreadItem, anyhow::Error>(item_started.item);
             }
         }

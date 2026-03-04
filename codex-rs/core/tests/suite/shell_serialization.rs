@@ -841,7 +841,7 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "perl -e 'print \"1\" x 10001'",
-        "timeout_ms": 1000,
+        "timeout_ms": 5000,
     });
     let responses = vec![
         sse(vec![

@@ -3,6 +3,7 @@
 use anyhow::Result;
 use app_test_support::McpProcess;
 use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -19,6 +20,7 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use core_test_support::responses;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -139,12 +141,19 @@ async fn turn_interrupt_resolves_pending_command_approval_request() -> Result<()
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory)?;
 
-    let server = create_mock_responses_server_sequence(vec![create_shell_command_sse_response(
-        shell_command.clone(),
-        Some(&working_directory),
-        Some(10_000),
-        "call_sleep_approval",
-    )?])
+    let no_op_response = responses::sse(vec![
+        responses::ev_response_created("resp-2"),
+        responses::ev_completed("resp-2"),
+    ]);
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        create_shell_command_sse_response(
+            shell_command.clone(),
+            Some(&working_directory),
+            Some(10_000),
+            "call_sleep_approval",
+        )?,
+        no_op_response,
+    ])
     .await;
     create_config_toml(&codex_home, &server.uri(), "untrusted")?;
 

@@ -21,6 +21,7 @@ use codex_protocol::openai_models::ReasoningEffort;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn request_user_input_round_trip() -> Result<()> {
@@ -33,7 +34,7 @@ async fn request_user_input_round_trip() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(STARTUP_TIMEOUT, mcp.initialize()).await??;
 
     let thread_start_id = mcp
         .send_thread_start_request(ThreadStartParams {

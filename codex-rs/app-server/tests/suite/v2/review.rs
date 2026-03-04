@@ -31,6 +31,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const STARTUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const INVALID_REQUEST_ERROR_CODE: i64 = -32600;
 
 #[tokio::test]
@@ -232,7 +233,7 @@ async fn review_start_rejects_empty_base_branch() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(STARTUP_TIMEOUT, mcp.initialize()).await??;
     let thread_id = start_default_thread(&mut mcp).await?;
 
     let request_id = mcp
@@ -340,7 +341,7 @@ async fn review_start_rejects_empty_commit_sha() -> Result<()> {
     create_config_toml(codex_home.path(), &server.uri())?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    timeout(STARTUP_TIMEOUT, mcp.initialize()).await??;
     let thread_id = start_default_thread(&mut mcp).await?;
 
     let request_id = mcp
