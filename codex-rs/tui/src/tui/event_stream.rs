@@ -26,6 +26,10 @@ use std::task::Context;
 use std::task::Poll;
 
 use crossterm::event::Event;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
+use crossterm::event::MouseEventKind;
 use tokio::sync::broadcast;
 use tokio::sync::watch;
 use tokio_stream::Stream;
@@ -233,7 +237,7 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
         }
     }
 
-    /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use (mouse events, etc.).
+    /// Map a crossterm event to a [`TuiEvent`], skipping events we don't use.
     fn map_crossterm_event(&mut self, event: Event) -> Option<TuiEvent> {
         match event {
             Event::Key(key_event) => {
@@ -255,6 +259,17 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 self.terminal_focused.store(false, Ordering::Relaxed);
                 None
             }
+            Event::Mouse(mouse_event) => match mouse_event.kind {
+                MouseEventKind::ScrollUp => Some(TuiEvent::Key(KeyEvent::new(
+                    KeyCode::Up,
+                    KeyModifiers::NONE,
+                ))),
+                MouseEventKind::ScrollDown => Some(TuiEvent::Key(KeyEvent::new(
+                    KeyCode::Down,
+                    KeyModifiers::NONE,
+                ))),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -297,6 +312,9 @@ mod tests {
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use crossterm::event::KeyModifiers;
+    use crossterm::event::MouseButton;
+    use crossterm::event::MouseEvent;
+    use crossterm::event::MouseEventKind;
     use pretty_assertions::assert_eq;
     use std::task::Context;
     use std::task::Poll;
@@ -507,5 +525,60 @@ mod tests {
             Some(TuiEvent::Key(key)) => assert_eq!(key, expected_key),
             other => panic!("expected key event, got {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn non_scroll_mouse_events_are_ignored() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        })));
+        let expected_key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        handle.send(Ok(Event::Key(expected_key)));
+
+        let event = stream.next().await;
+        assert_eq!(event, Some(TuiEvent::Key(expected_key)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn mouse_scroll_maps_to_up_down_keys() {
+        let (broker, handle, _draw_tx, draw_rx, terminal_focused) = setup();
+        let mut stream = make_stream(broker, draw_rx, terminal_focused);
+
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        })));
+        handle.send(Ok(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        })));
+
+        let first = stream.next().await;
+        let second = stream.next().await;
+
+        assert_eq!(
+            first,
+            Some(TuiEvent::Key(KeyEvent::new(
+                KeyCode::Up,
+                KeyModifiers::NONE
+            )))
+        );
+        assert_eq!(
+            second,
+            Some(TuiEvent::Key(KeyEvent::new(
+                KeyCode::Down,
+                KeyModifiers::NONE
+            )))
+        );
     }
 }
