@@ -68,6 +68,7 @@ fn extract_shell_script_preserves_login_flag() {
     assert_eq!(
         extract_shell_script(&["/bin/zsh".into(), "-lc".into(), "echo hi".into()]).unwrap(),
         ParsedShellCommand {
+            program: "/bin/zsh".to_string(),
             script: "echo hi".to_string(),
             login: true,
         }
@@ -75,6 +76,7 @@ fn extract_shell_script_preserves_login_flag() {
     assert_eq!(
         extract_shell_script(&["/bin/zsh".into(), "-c".into(), "echo hi".into()]).unwrap(),
         ParsedShellCommand {
+            program: "/bin/zsh".to_string(),
             script: "echo hi".to_string(),
             login: false,
         }
@@ -93,6 +95,7 @@ fn extract_shell_script_supports_wrapped_command_prefixes() {
         ])
         .unwrap(),
         ParsedShellCommand {
+            program: "/bin/zsh".to_string(),
             script: "echo hello".to_string(),
             login: true,
         }
@@ -109,6 +112,7 @@ fn extract_shell_script_supports_wrapped_command_prefixes() {
         ])
         .unwrap(),
         ParsedShellCommand {
+            program: "/bin/zsh".to_string(),
             script: "pwd".to_string(),
             login: false,
         }
