@@ -1992,7 +1992,7 @@ async fn external_exec_approval_handler_approves_without_emitting_prompt() -> Re
 
     let mut builder = test_codex().with_home(Arc::clone(&home)).with_config({
         move |config| {
-            config.features.enable(Feature::UnifiedExec);
+            let _ = config.features.enable(Feature::UnifiedExec);
             config.permissions.approval_policy = Constrained::allow_any(approval_policy);
             config.approval_handler = Some(ApprovalHandlerConfig {
                 command: vec![

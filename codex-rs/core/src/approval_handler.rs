@@ -346,7 +346,7 @@ mod tests {
                 decision,
             } => {
                 assert_eq!(id, event.effective_approval_id());
-                assert_eq!(turn_id, Some(event.turn_id.clone()));
+                assert_eq!(turn_id.as_deref(), Some(event.turn_id.as_str()));
                 decision
             }
             _ => unreachable!(),
