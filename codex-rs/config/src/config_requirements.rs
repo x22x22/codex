@@ -241,6 +241,18 @@ impl fmt::Display for WebSearchModeRequirement {
     }
 }
 
+#[derive(Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct FeatureRequirementsToml {
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, bool>,
+}
+
+impl FeatureRequirementsToml {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 /// Base config deserialized from system `requirements.toml` or MDM.
 #[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigRequirementsToml {
