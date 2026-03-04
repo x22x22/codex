@@ -760,9 +760,26 @@ impl ChatComposer {
         if self.voice_state.voice.is_some() {
             return false;
         }
+        let raw_char_count = pasted.chars().count();
+        let raw_cr_count = pasted.chars().filter(|ch| *ch == '\r').count();
+        let raw_lf_count = pasted.chars().filter(|ch| *ch == '\n').count();
+        let raw_preview: String = pasted.chars().take(120).collect();
         let pasted = pasted.replace("\r\n", "\n").replace('\r', "\n");
         let char_count = pasted.chars().count();
+        let normalized_lf_count = pasted.chars().filter(|ch| *ch == '\n').count();
+        let normalized_preview: String = pasted.chars().take(120).collect();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
+            tracing::error!(
+                raw_char_count,
+                raw_cr_count,
+                raw_lf_count,
+                normalized_char_count = char_count,
+                normalized_lf_count,
+                threshold = LARGE_PASTE_CHAR_THRESHOLD,
+                raw_preview = %raw_preview.escape_debug(),
+                normalized_preview = %normalized_preview.escape_debug(),
+                "composer handle_paste classified as large paste"
+            );
             let placeholder = self.next_large_paste_placeholder(char_count);
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
@@ -770,8 +787,28 @@ impl ChatComposer {
             && self.image_paste_enabled()
             && self.handle_paste_image_path(pasted.clone())
         {
+            tracing::error!(
+                raw_char_count,
+                raw_cr_count,
+                raw_lf_count,
+                normalized_char_count = char_count,
+                normalized_lf_count,
+                raw_preview = %raw_preview.escape_debug(),
+                normalized_preview = %normalized_preview.escape_debug(),
+                "composer handle_paste classified as image path paste"
+            );
             self.textarea.insert_str(" ");
         } else {
+            tracing::error!(
+                raw_char_count,
+                raw_cr_count,
+                raw_lf_count,
+                normalized_char_count = char_count,
+                normalized_lf_count,
+                raw_preview = %raw_preview.escape_debug(),
+                normalized_preview = %normalized_preview.escape_debug(),
+                "composer handle_paste classified as plain text paste"
+            );
             self.insert_str(&pasted);
         }
         self.paste_burst.clear_after_explicit_paste();
@@ -1558,6 +1595,10 @@ impl ChatComposer {
         } = input
         {
             if self.paste_burst.try_append_char_if_active(ch, now) {
+                tracing::error!(
+                    ch = %ch.escape_debug(),
+                    "non-ascii char appended to active paste burst buffer"
+                );
                 return (InputResult::None, true);
             }
             // Non-ASCII input often comes from IMEs and can arrive in quick bursts.
@@ -1566,15 +1607,31 @@ impl ChatComposer {
             // any existing burst buffer (including a pending first char from the ASCII path) so
             // we don't carry that transient state forward.
             if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+                let char_count = pasted.chars().count();
+                let preview: String = pasted.chars().take(120).collect();
+                tracing::error!(
+                    char_count,
+                    preview = %preview.escape_debug(),
+                    "flushed buffered paste before non-ascii input handling"
+                );
                 self.handle_paste(pasted);
             }
             if let Some(decision) = self.paste_burst.on_plain_char_no_hold(now) {
                 match decision {
                     CharDecision::BufferAppend => {
+                        tracing::error!(
+                            ch = %ch.escape_debug(),
+                            "non-ascii input appended to paste burst buffer"
+                        );
                         self.paste_burst.append_char_to_buffer(ch, now);
                         return (InputResult::None, true);
                     }
                     CharDecision::BeginBuffer { retro_chars } => {
+                        tracing::error!(
+                            ch = %ch.escape_debug(),
+                            retro_chars,
+                            "non-ascii input triggered paste burst BeginBuffer"
+                        );
                         // For non-ASCII we inserted prior chars immediately, so if this turns out
                         // to be paste-like we need to retroactively grab & remove the already-
                         // inserted prefix from the textarea before buffering the burst.
@@ -1601,6 +1658,13 @@ impl ChatComposer {
             }
         }
         if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+            let char_count = pasted.chars().count();
+            let preview: String = pasted.chars().take(120).collect();
+            tracing::error!(
+                char_count,
+                preview = %preview.escape_debug(),
+                "flushed buffered paste before default non-ascii input"
+            );
             self.handle_paste(pasted);
         }
         self.textarea.input(input);
@@ -2422,6 +2486,10 @@ impl ChatComposer {
             && !in_slash_context
             && self.paste_burst.append_newline_if_active(now)
         {
+            tracing::error!(
+                in_slash_context,
+                "paste burst active in submit path: intercepted Enter and appended newline"
+            );
             return (InputResult::None, true);
         }
 
@@ -2907,10 +2975,25 @@ impl ChatComposer {
     fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
         match self.paste_burst.flush_if_due(now) {
             FlushResult::Paste(pasted) => {
+                let char_count = pasted.chars().count();
+                let cr_count = pasted.chars().filter(|ch| *ch == '\r').count();
+                let lf_count = pasted.chars().filter(|ch| *ch == '\n').count();
+                let preview: String = pasted.chars().take(120).collect();
+                tracing::error!(
+                    char_count,
+                    cr_count,
+                    lf_count,
+                    preview = %preview.escape_debug(),
+                    "flushing buffered paste burst as explicit paste"
+                );
                 self.handle_paste(pasted);
                 true
             }
             FlushResult::Typed(ch) => {
+                tracing::error!(
+                    ch = %ch.escape_debug(),
+                    "flushing held first char from paste burst as typed input"
+                );
                 self.textarea.insert_str(ch.to_string().as_str());
                 self.sync_popups();
                 true
@@ -2962,6 +3045,9 @@ impl ChatComposer {
             && self.paste_burst.is_active()
             && self.paste_burst.append_newline_if_active(now)
         {
+            tracing::error!(
+                "paste burst active in input-basic path: intercepted Enter and appended newline"
+            );
             return (InputResult::None, true);
         }
 
@@ -2990,6 +3076,11 @@ impl ChatComposer {
                         return (InputResult::None, true);
                     }
                     CharDecision::BeginBuffer { retro_chars } => {
+                        tracing::error!(
+                            ch = %ch.escape_debug(),
+                            retro_chars,
+                            "paste burst entered BeginBuffer on ascii input"
+                        );
                         let cur = self.textarea.cursor();
                         let txt = self.textarea.text();
                         let safe_cur = Self::clamp_to_char_boundary(txt, cur);
@@ -3008,17 +3099,32 @@ impl ChatComposer {
                         // fall through to normal insertion below.
                     }
                     CharDecision::BeginBufferFromPending => {
+                        tracing::error!(
+                            ch = %ch.escape_debug(),
+                            "paste burst entered BeginBufferFromPending on ascii input"
+                        );
                         // First char was held; now append the current one.
                         self.paste_burst.append_char_to_buffer(ch, now);
                         return (InputResult::None, true);
                     }
                     CharDecision::RetainFirstChar => {
+                        tracing::error!(
+                            ch = %ch.escape_debug(),
+                            "paste burst retained first ascii char pending classification"
+                        );
                         // Keep the first fast char pending momentarily.
                         return (InputResult::None, true);
                     }
                 }
             }
             if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+                let char_count = pasted.chars().count();
+                let preview: String = pasted.chars().take(120).collect();
+                tracing::error!(
+                    char_count,
+                    preview = %preview.escape_debug(),
+                    "flushed buffered paste before modified char input"
+                );
                 self.handle_paste(pasted);
             }
         }
@@ -3032,6 +3138,13 @@ impl ChatComposer {
         if !matches!(input.code, KeyCode::Char(_) | KeyCode::Enter)
             && let Some(pasted) = self.paste_burst.flush_before_modified_input()
         {
+            let char_count = pasted.chars().count();
+            let preview: String = pasted.chars().take(120).collect();
+            tracing::error!(
+                char_count,
+                preview = %preview.escape_debug(),
+                "flushed buffered paste before non-char input"
+            );
             self.handle_paste(pasted);
         }
         // For non-char inputs (or after flushing), handle normally.

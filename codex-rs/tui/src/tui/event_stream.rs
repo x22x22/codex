@@ -237,6 +237,13 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
     fn map_crossterm_event(&mut self, event: Event) -> Option<TuiEvent> {
         match event {
             Event::Key(key_event) => {
+                tracing::error!(
+                    kind = ?key_event.kind,
+                    code = ?key_event.code,
+                    modifiers = ?key_event.modifiers,
+                    state = ?key_event.state,
+                    "received crossterm key event"
+                );
                 #[cfg(unix)]
                 if crate::tui::job_control::SUSPEND_KEY.is_press(key_event) {
                     let _ = self.suspend_context.suspend(&self.alt_screen_active);
@@ -245,7 +252,21 @@ impl<S: EventSource + Default + Unpin> TuiEventStream<S> {
                 Some(TuiEvent::Key(key_event))
             }
             Event::Resize(_, _) => Some(TuiEvent::Draw),
-            Event::Paste(pasted) => Some(TuiEvent::Paste(pasted)),
+            Event::Paste(pasted) => {
+                let char_count = pasted.chars().count();
+                let cr_count = pasted.chars().filter(|ch| *ch == '\r').count();
+                let lf_count = pasted.chars().filter(|ch| *ch == '\n').count();
+                let preview: String = pasted.chars().take(120).collect();
+                let escaped_preview = preview.escape_debug().to_string();
+                tracing::error!(
+                    char_count,
+                    cr_count,
+                    lf_count,
+                    preview = %escaped_preview,
+                    "received crossterm paste event"
+                );
+                Some(TuiEvent::Paste(pasted))
+            }
             Event::FocusGained => {
                 self.terminal_focused.store(true, Ordering::Relaxed);
                 crate::terminal_palette::requery_default_colors();
