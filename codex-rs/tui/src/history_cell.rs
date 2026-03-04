@@ -1256,7 +1256,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
             }
             if self.show_fast_status {
                 spans.push("  ".into());
-                spans.push(Span::styled("fast", self.model_style));
+                spans.push(Span::styled("fast", self.model_style.magenta().bold()));
             }
             spans.push("   ".dim());
             spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
