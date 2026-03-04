@@ -81,10 +81,11 @@ impl NetworkProxySpec {
 
     pub(crate) fn from_config_and_constraints(
         config: NetworkProxyConfig,
+        user_network: Option<&crate::config::permissions::NetworkToml>,
         requirements: Option<NetworkConstraints>,
     ) -> std::io::Result<Self> {
         let (config, constraints) = if let Some(requirements) = requirements {
-            Self::apply_requirements(config, &requirements)
+            Self::apply_requirements(config, user_network, &requirements)
         } else {
             (config, NetworkProxyConstraints::default())
         };
@@ -144,12 +145,17 @@ impl NetworkProxySpec {
 
     fn apply_requirements(
         mut config: NetworkProxyConfig,
+        user_network: Option<&crate::config::permissions::NetworkToml>,
         requirements: &NetworkConstraints,
     ) -> (NetworkProxyConfig, NetworkProxyConstraints) {
         let mut constraints = NetworkProxyConstraints::default();
 
         if let Some(enabled) = requirements.enabled {
-            if !enabled {
+            if enabled {
+                if user_network.and_then(|network| network.enabled).is_none() {
+                    config.network.enabled = true;
+                }
+            } else {
                 config.network.enabled = false;
             }
             constraints.enabled = Some(enabled);
@@ -185,9 +191,16 @@ impl NetworkProxySpec {
                 Some(dangerously_allow_non_loopback_admin);
         }
         if let Some(allowed_domains) = requirements.allowed_domains.clone() {
-            // Keep the user-configured allowlist if it is narrower. Managed
-            // requirements act as a subset constraint and are enforced by
-            // `validate_policy_against_constraints`.
+            // Seed the managed allowlist when the user left the field
+            // unspecified. If the user configured an allowlist, keep that
+            // narrower value and enforce the managed list as a subset
+            // constraint during validation.
+            if user_network
+                .and_then(|network| network.allowed_domains.as_ref())
+                .is_none()
+            {
+                config.network.allowed_domains = allowed_domains.clone();
+            }
             constraints.allowed_domains = Some(allowed_domains);
         }
         if let Some(denied_domains) = requirements.denied_domains.clone() {
@@ -257,7 +270,28 @@ mod tests {
             allow_local_binding: Some(true),
         };
 
-        let spec = NetworkProxySpec::from_config_and_constraints(user_config, Some(requirements))?;
+        let user_network = crate::config::permissions::NetworkToml {
+            enabled: Some(false),
+            proxy_url: None,
+            admin_url: None,
+            enable_socks5: None,
+            socks_url: None,
+            enable_socks5_udp: None,
+            allow_upstream_proxy: Some(false),
+            dangerously_allow_non_loopback_proxy: Some(false),
+            dangerously_allow_non_loopback_admin: Some(false),
+            mode: Some(NetworkMode::Limited),
+            allowed_domains: Some(vec!["api.openai.com".to_string()]),
+            denied_domains: Some(vec!["tracker.com".to_string(), "evil.com".to_string()]),
+            allow_unix_sockets: Some(vec!["/tmp/a.sock".to_string()]),
+            allow_local_binding: Some(false),
+        };
+
+        let spec = NetworkProxySpec::from_config_and_constraints(
+            user_config,
+            Some(&user_network),
+            Some(requirements),
+        )?;
 
         let mut expected_config = NetworkProxyConfig::default();
         expected_config.network.enabled = false;
@@ -321,7 +355,28 @@ mod tests {
             allow_local_binding: Some(false),
         };
 
-        let spec = NetworkProxySpec::from_config_and_constraints(user_config, Some(requirements))?;
+        let user_network = crate::config::permissions::NetworkToml {
+            enabled: Some(true),
+            proxy_url: None,
+            admin_url: None,
+            enable_socks5: None,
+            socks_url: None,
+            enable_socks5_udp: None,
+            allow_upstream_proxy: Some(true),
+            dangerously_allow_non_loopback_proxy: Some(true),
+            dangerously_allow_non_loopback_admin: Some(true),
+            mode: Some(NetworkMode::Full),
+            allowed_domains: None,
+            denied_domains: Some(vec!["tracker.com".to_string()]),
+            allow_unix_sockets: None,
+            allow_local_binding: Some(true),
+        };
+
+        let spec = NetworkProxySpec::from_config_and_constraints(
+            user_config,
+            Some(&user_network),
+            Some(requirements),
+        )?;
 
         let mut expected_config = NetworkProxyConfig::default();
         expected_config.network.enabled = false;
@@ -346,6 +401,76 @@ mod tests {
                 denied_domains: Some(vec!["evil.com".to_string()]),
                 allow_unix_sockets: None,
                 allow_local_binding: Some(false),
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn managed_requirements_enable_proxy_when_user_omits_network_enabled() -> std::io::Result<()> {
+        let user_config = NetworkProxyConfig::default();
+        let requirements = NetworkConstraints {
+            enabled: Some(true),
+            http_port: None,
+            socks_port: None,
+            allow_upstream_proxy: None,
+            dangerously_allow_non_loopback_proxy: None,
+            dangerously_allow_non_loopback_admin: None,
+            allowed_domains: None,
+            denied_domains: None,
+            allow_unix_sockets: None,
+            allow_local_binding: None,
+        };
+
+        let spec =
+            NetworkProxySpec::from_config_and_constraints(user_config, None, Some(requirements))?;
+
+        let mut expected_config = NetworkProxyConfig::default();
+        expected_config.network.enabled = true;
+
+        assert_eq!(spec.config, expected_config);
+        assert_eq!(
+            spec.constraints,
+            NetworkProxyConstraints {
+                enabled: Some(true),
+                ..NetworkProxyConstraints::default()
+            }
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn managed_requirements_seed_allowlist_when_user_omits_it() -> std::io::Result<()> {
+        let user_config = NetworkProxyConfig::default();
+        let requirements = NetworkConstraints {
+            enabled: Some(true),
+            http_port: None,
+            socks_port: None,
+            allow_upstream_proxy: None,
+            dangerously_allow_non_loopback_proxy: None,
+            dangerously_allow_non_loopback_admin: None,
+            allowed_domains: Some(vec!["*.openai.com".to_string()]),
+            denied_domains: None,
+            allow_unix_sockets: None,
+            allow_local_binding: None,
+        };
+
+        let spec =
+            NetworkProxySpec::from_config_and_constraints(user_config, None, Some(requirements))?;
+
+        let mut expected_config = NetworkProxyConfig::default();
+        expected_config.network.enabled = true;
+        expected_config.network.allowed_domains = vec!["*.openai.com".to_string()];
+
+        assert_eq!(spec.config, expected_config);
+        assert_eq!(
+            spec.constraints,
+            NetworkProxyConstraints {
+                enabled: Some(true),
+                allowed_domains: Some(vec!["*.openai.com".to_string()]),
+                ..NetworkProxyConstraints::default()
             }
         );
 
