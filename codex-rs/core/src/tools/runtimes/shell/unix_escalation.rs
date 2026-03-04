@@ -49,7 +49,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -107,9 +106,6 @@ pub(super) async fn try_run_zsh_fork(
         req.timeout_ms
             .unwrap_or(crate::exec::DEFAULT_EXEC_COMMAND_TIMEOUT_MS),
     );
-    let exec_policy = Arc::new(RwLock::new(
-        ctx.session.services.exec_policy.current().as_ref().clone(),
-    ));
     let command_executor = CoreShellCommandExecutor {
         command,
         cwd: sandbox_cwd,
@@ -154,7 +150,6 @@ pub(super) async fn try_run_zsh_fork(
     let stopwatch = Stopwatch::new(effective_timeout);
     let cancel_token = stopwatch.cancellation_token();
     let escalation_policy = CoreShellActionProvider {
-        policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
@@ -214,9 +209,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         return Ok(None);
     }
 
-    let exec_policy = Arc::new(RwLock::new(
-        ctx.session.services.exec_policy.current().as_ref().clone(),
-    ));
     let command_executor = CoreShellCommandExecutor {
         command: exec_request.command.clone(),
         cwd: exec_request.cwd.clone(),
@@ -249,7 +241,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
             )
         })?;
     let escalation_policy = CoreShellActionProvider {
-        policy: Arc::clone(&exec_policy),
         session: Arc::clone(&ctx.session),
         turn: Arc::clone(&ctx.turn),
         call_id: ctx.call_id.clone(),
@@ -277,7 +268,6 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
 }
 
 struct CoreShellActionProvider {
-    policy: Arc<RwLock<Policy>>,
     session: Arc<crate::codex::Session>,
     turn: Arc<crate::codex::TurnContext>,
     call_id: String,
@@ -597,18 +587,16 @@ impl EscalationPolicy for CoreShellActionProvider {
                 .await;
         }
 
-        let evaluation = {
-            let policy = self.policy.read().await;
-            evaluate_intercepted_exec_policy(
-                &policy,
-                program,
-                argv,
-                self.approval_policy,
-                &self.sandbox_policy,
-                self.sandbox_permissions,
-                ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
-            )
-        };
+        let policy = self.session.services.exec_policy.current();
+        let evaluation = evaluate_intercepted_exec_policy(
+            policy.as_ref(),
+            program,
+            argv,
+            self.approval_policy,
+            &self.sandbox_policy,
+            self.sandbox_permissions,
+            ENABLE_INTERCEPTED_EXEC_POLICY_SHELL_WRAPPER_PARSING,
+        );
         // When true, means the Evaluation was due to *.rules, not the
         // fallback function.
         let decision_driven_by_policy =
