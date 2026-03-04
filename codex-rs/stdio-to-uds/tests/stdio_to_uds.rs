@@ -35,9 +35,9 @@ fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
         let (mut connection, _) = listener
             .accept()
             .context("failed to accept test connection")?;
-        let mut received = Vec::new();
+        let mut received = vec![0_u8; b"request".len()];
         connection
-            .read_to_end(&mut received)
+            .read_exact(&mut received)
             .context("failed to read data from client")?;
         tx.send(received)
             .map_err(|_| anyhow::anyhow!("failed to send received bytes to test thread"))?;
