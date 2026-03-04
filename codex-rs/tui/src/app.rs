@@ -121,7 +121,7 @@ const TITLE_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "�
 /// Smooth-mode streaming drains one line per tick, so this interval controls
 /// perceived typing speed for non-backlogged output.
 const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
-const TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(32);
+const TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -730,7 +730,10 @@ fn decorate_title_context(
     }
 
     let frame = TITLE_SPINNER_FRAMES[tick as usize % TITLE_SPINNER_FRAMES.len()];
-    Some(frame.to_string())
+    match context {
+        Some(context) => Some(format!("{frame} - {context}")),
+        None => Some(frame.to_string()),
+    }
 }
 
 fn compute_title_context(
@@ -3812,12 +3815,13 @@ mod tests {
     fn decorate_title_context_adds_spinner_while_running() {
         assert_eq!(
             decorate_title_context(Some("Working".to_string()), true, 0),
-            Some("⠋".to_string())
+            Some("⠋ - Working".to_string())
         );
         assert_eq!(
             decorate_title_context(Some("Working".to_string()), true, 9),
-            Some("⠏".to_string())
+            Some("⠏ - Working".to_string())
         );
+        assert_eq!(decorate_title_context(None, true, 0), Some("⠋".to_string()));
     }
 
     #[test]

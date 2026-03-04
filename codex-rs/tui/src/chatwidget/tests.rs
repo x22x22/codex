@@ -1772,6 +1772,24 @@ async fn title_command_sets_manual_title_without_renaming_thread() {
     }
 }
 
+#[tokio::test]
+async fn empty_title_command_clears_manual_title() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.set_title_override(Some("manual title".to_string()));
+
+    chat.dispatch_command_with_args(SlashCommand::Title, String::new(), Vec::new());
+
+    assert_eq!(chat.title_override(), None);
+    assert_eq!(chat.thread_name(), None);
+
+    while let Ok(op) = op_rx.try_recv() {
+        assert!(
+            !matches!(op, Op::SetThreadName { .. }),
+            "unexpected rename op: {op:?}"
+        );
+    }
+}
+
 // ChatWidget may emit other `Op`s (e.g. history/logging updates) on the same channel; this helper
 // filters until we see a submission op.
 fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {

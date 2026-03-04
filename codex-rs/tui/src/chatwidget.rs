@@ -3943,14 +3943,11 @@ impl ChatWidget {
                     .send(AppEvent::CodexOp(Op::SetThreadName { name }));
                 self.bottom_pane.drain_pending_submission_state();
             }
-            SlashCommand::Title if !trimmed.is_empty() => {
-                let Some(name) = codex_core::util::normalize_thread_name(trimmed) else {
-                    self.add_error_message("Title cannot be empty.".to_string());
-                    return;
-                };
-                let cell = Self::title_confirmation_cell(&name);
+            SlashCommand::Title => {
+                let title = codex_core::util::normalize_thread_name(trimmed);
+                let cell = Self::title_confirmation_cell(title.as_deref());
                 self.add_boxed_history(Box::new(cell));
-                self.set_title_override(name);
+                self.set_title_override(title);
                 self.request_redraw();
             }
             SlashCommand::Plan if !trimmed.is_empty() => {
@@ -4051,18 +4048,13 @@ impl ChatWidget {
         let tx = self.app_event_tx.clone();
         let view = CustomPromptView::new(
             "Set title".to_string(),
-            "Type a title and press Enter".to_string(),
+            "Type a title and press Enter. Leave blank to clear it.".to_string(),
             None,
             Box::new(move |name: String| {
-                let Some(name) = codex_core::util::normalize_thread_name(&name) else {
-                    tx.send(AppEvent::InsertHistoryCell(Box::new(
-                        history_cell::new_error_event("Title cannot be empty.".to_string()),
-                    )));
-                    return;
-                };
-                let cell = Self::title_confirmation_cell(&name);
+                let title = codex_core::util::normalize_thread_name(&name);
+                let cell = Self::title_confirmation_cell(title.as_deref());
                 tx.send(AppEvent::InsertHistoryCell(Box::new(cell)));
-                tx.send(AppEvent::SetTitle(name));
+                tx.send(AppEvent::SetTitle(title));
             }),
         );
 
@@ -7345,10 +7337,16 @@ impl ChatWidget {
         PlainHistoryCell::new(vec![line.into()])
     }
 
-    fn title_confirmation_cell(name: &str) -> PlainHistoryCell {
-        PlainHistoryCell::new(vec![
-            vec!["• ".into(), "Title set to ".into(), name.to_string().cyan()].into(),
-        ])
+    fn title_confirmation_cell(title: Option<&str>) -> PlainHistoryCell {
+        let line = match title {
+            Some(title) => vec![
+                "• ".into(),
+                "Title set to ".into(),
+                title.to_string().cyan(),
+            ],
+            None => vec!["• ".into(), "Title cleared".into()],
+        };
+        PlainHistoryCell::new(vec![line.into()])
     }
 
     pub(crate) fn add_mcp_output(&mut self) {
@@ -8033,8 +8031,8 @@ impl ChatWidget {
         self.title_override.clone()
     }
 
-    pub(crate) fn set_title_override(&mut self, title: String) {
-        self.title_override = Some(title);
+    pub(crate) fn set_title_override(&mut self, title: Option<String>) {
+        self.title_override = title;
     }
 
     pub(crate) fn is_task_running(&self) -> bool {
