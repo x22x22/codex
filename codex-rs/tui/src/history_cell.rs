@@ -1255,8 +1255,8 @@ impl HistoryCell for SessionHeaderHistoryCell {
                 spans.push(Span::from(reasoning));
             }
             if self.show_fast_status {
-                spans.push("  ".into());
-                spans.push(Span::styled("fast", self.model_style.magenta().bold()));
+                spans.push("   ".into());
+                spans.push(Span::styled("fast", self.model_style.magenta()));
             }
             spans.push("   ".dim());
             spans.push(CHANGE_MODEL_HINT_COMMAND.cyan());
@@ -3300,7 +3300,7 @@ mod tests {
             .find(|line| line.contains("model:"))
             .expect("model line");
 
-        assert!(model_line.contains("gpt-4o high  fast"));
+        assert!(model_line.contains("gpt-4o high   fast"));
         assert!(model_line.contains("/model to change"));
     }
 
