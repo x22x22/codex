@@ -143,6 +143,23 @@ impl NetworkToml {
         self.apply_to_network_proxy_config(&mut config);
         config
     }
+
+    fn profile_has_unsupported_fields(&self) -> bool {
+        self.proxy_url.is_some()
+            || self.admin_url.is_some()
+            || self.enable_socks5.is_some()
+            || self.socks_url.is_some()
+            || self.enable_socks5_udp.is_some()
+            || self.allow_upstream_proxy.is_some()
+            || self.dangerously_allow_non_loopback_proxy.is_some()
+            || self.dangerously_allow_non_loopback_admin.is_some()
+            || self.dangerously_allow_all_unix_sockets.is_some()
+            || self.mode.is_some()
+            || self.allowed_domains.is_some()
+            || self.denied_domains.is_some()
+            || self.allow_unix_sockets.is_some()
+            || self.allow_local_binding.is_some()
+    }
 }
 
 pub(crate) fn network_proxy_config_from_network(
@@ -197,13 +214,36 @@ pub(crate) fn compile_permission_profile(
         compile_filesystem_permission(path, permission, &mut entries)?;
     }
 
+    let network_sandbox_policy =
+        compile_network_sandbox_policy(profile.network.as_ref(), profile_name)?;
+
     Ok((
         FileSystemSandboxPolicy::restricted(entries),
-        match profile.network.as_ref().and_then(|network| network.enabled) {
-            Some(true) => NetworkSandboxPolicy::Enabled,
-            _ => NetworkSandboxPolicy::Restricted,
-        },
+        network_sandbox_policy,
     ))
+}
+
+fn compile_network_sandbox_policy(
+    network: Option<&NetworkToml>,
+    profile_name: &str,
+) -> io::Result<NetworkSandboxPolicy> {
+    let Some(network) = network else {
+        return Ok(NetworkSandboxPolicy::Restricted);
+    };
+
+    if network.profile_has_unsupported_fields() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "permissions profile `{profile_name}` uses unsupported `[permissions.{profile_name}.network]` fields; only `enabled` is supported for now"
+            ),
+        ));
+    }
+
+    Ok(match network.enabled {
+        Some(true) => NetworkSandboxPolicy::Enabled,
+        _ => NetworkSandboxPolicy::Restricted,
+    })
 }
 
 fn compile_filesystem_permission(
