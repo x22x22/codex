@@ -141,6 +141,7 @@ pub(crate) struct MessageProcessor {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ConnectionSessionState {
     pub(crate) initialized: bool,
+    pub(crate) initialize_notifications_sent: bool,
     pub(crate) experimental_api_enabled: bool,
     pub(crate) opted_out_notification_methods: HashSet<String>,
     pub(crate) app_server_client_name: Option<String>,
@@ -457,9 +458,21 @@ impl MessageProcessor {
         .await;
     }
 
-    pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {
-        // Currently, we do not expect to receive any notifications from the
-        // client, so we just log them.
+    pub(crate) async fn process_notification(
+        &self,
+        notification: JSONRPCNotification,
+        session: &mut ConnectionSessionState,
+    ) {
+        if notification.method == "initialized" {
+            if session.initialized && !session.initialize_notifications_sent {
+                self.send_initialize_notifications().await;
+                session.initialize_notifications_sent = true;
+            }
+            return;
+        }
+
+        // Currently, we do not expect to receive any other notifications from
+        // the client, so we just log them.
         tracing::info!("<- notification: {:?}", notification);
     }
 

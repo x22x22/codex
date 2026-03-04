@@ -178,21 +178,49 @@ impl McpProcess {
         .await
     }
 
+    /// Sends `initialize` and returns the server response without sending the
+    /// follow-up client `initialized` notification. Tests use this to observe
+    /// notifications that must be deferred until the handshake is fully
+    /// completed.
+    pub async fn initialize_without_initialized_notification(
+        &mut self,
+    ) -> anyhow::Result<JSONRPCMessage> {
+        self.initialize_with_params(
+            InitializeParams {
+                client_info: ClientInfo {
+                    name: DEFAULT_CLIENT_NAME.to_string(),
+                    title: None,
+                    version: "0.1.0".to_string(),
+                },
+                capabilities: Some(InitializeCapabilities {
+                    experimental_api: true,
+                    ..Default::default()
+                }),
+            },
+            false,
+        )
+        .await
+    }
+
     pub async fn initialize_with_capabilities(
         &mut self,
         client_info: ClientInfo,
         capabilities: Option<InitializeCapabilities>,
     ) -> anyhow::Result<JSONRPCMessage> {
-        self.initialize_with_params(InitializeParams {
-            client_info,
-            capabilities,
-        })
+        self.initialize_with_params(
+            InitializeParams {
+                client_info,
+                capabilities,
+            },
+            true,
+        )
         .await
     }
 
     async fn initialize_with_params(
         &mut self,
         params: InitializeParams,
+        send_initialized_notification: bool,
     ) -> anyhow::Result<JSONRPCMessage> {
         let params = Some(serde_json::to_value(params)?);
         let request_id = self.send_request("initialize", params).await?;
@@ -207,9 +235,10 @@ impl McpProcess {
                     );
                 }
 
-                // Send notifications/initialized to ack the response.
-                self.send_notification(ClientNotification::Initialized)
-                    .await?;
+                if send_initialized_notification {
+                    self.send_notification(ClientNotification::Initialized)
+                        .await?;
+                }
 
                 Ok(JSONRPCMessage::Response(response))
             }

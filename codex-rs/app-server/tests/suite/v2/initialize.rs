@@ -4,6 +4,8 @@ use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::to_response;
 use codex_app_server_protocol::ClientInfo;
+use codex_app_server_protocol::ClientNotification;
+use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeResponse;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -183,6 +185,81 @@ async fn initialize_opt_out_notification_methods_filters_notifications() -> Resu
         thread_started.is_err(),
         "thread/started should be filtered by optOutNotificationMethods"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn initialize_defers_config_warning_until_initialized_notification() -> Result<()> {
+    let responses = Vec::new();
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml_with_extra(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        r#"
+[mcp_servers.figma]
+url = "https://mcp.figma.com/mcp"
+
+[mcp_servers.figma]
+url = "https://mcp.figma.com/mcp"
+"#,
+    )?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+
+    let message = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_without_initialized_notification(),
+    )
+    .await??;
+    let JSONRPCMessage::Response(response) = message else {
+        anyhow::bail!("expected initialize response, got {message:?}");
+    };
+    let _: InitializeResponse = to_response(response)?;
+
+    let early_warning = timeout(
+        std::time::Duration::from_millis(250),
+        mcp.read_stream_until_notification_message("configWarning"),
+    )
+    .await;
+    assert!(
+        early_warning.is_err(),
+        "configWarning should not be emitted before the client sends initialized"
+    );
+
+    mcp.send_notification(ClientNotification::Initialized)
+        .await?;
+
+    let warning = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("configWarning"),
+    )
+    .await??;
+    let payload = warning
+        .params
+        .expect("configWarning params should be present");
+    let warning: ConfigWarningNotification = serde_json::from_value(payload)?;
+
+    assert_eq!(warning.summary, "Invalid configuration; using defaults.");
+    assert!(
+        warning
+            .details
+            .as_deref()
+            .is_some_and(|details| details.contains("duplicate")),
+        "expected duplicate-table parse error, got {:?}",
+        warning.details
+    );
+    assert!(
+        warning
+            .path
+            .as_deref()
+            .is_some_and(|path| path.ends_with("config.toml"))
+    );
+    assert!(
+        warning.range.is_some(),
+        "config warning should include a text range"
+    );
+
     Ok(())
 }
 

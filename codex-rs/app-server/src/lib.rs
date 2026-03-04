@@ -691,7 +691,6 @@ pub async fn run_main_with_transport(
                                             warn!("dropping request from unknown connection: {connection_id:?}");
                                             continue;
                                         };
-                                        let was_initialized = connection_state.session.initialized;
                                         processor
                                             .process_request(
                                                 connection_id,
@@ -720,9 +719,6 @@ pub async fn run_main_with_transport(
                                                 connection_state.session.experimental_api_enabled,
                                                 std::sync::atomic::Ordering::Release,
                                             );
-                                        if !was_initialized && connection_state.session.initialized {
-                                            processor.send_initialize_notifications().await;
-                                        }
                                     }
                                     JSONRPCMessage::Response(response) => {
                                         if !connections.contains_key(&connection_id) {
@@ -732,11 +728,13 @@ pub async fn run_main_with_transport(
                                         processor.process_response(response).await;
                                     }
                                     JSONRPCMessage::Notification(notification) => {
-                                        if !connections.contains_key(&connection_id) {
+                                        let Some(connection_state) = connections.get_mut(&connection_id) else {
                                             warn!("dropping notification from unknown connection: {connection_id:?}");
                                             continue;
-                                        }
-                                        processor.process_notification(notification).await;
+                                        };
+                                        processor
+                                            .process_notification(notification, &mut connection_state.session)
+                                            .await;
                                     }
                                     JSONRPCMessage::Error(err) => {
                                         if !connections.contains_key(&connection_id) {
