@@ -8854,6 +8854,48 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn compute_hook_session_ref_falls_back_to_conversation_id_without_rollout() {
+        let (session, _turn_context) = make_session_and_context().await;
+
+        let session_ref = compute_hook_session_ref(&session).await;
+
+        assert_eq!(session_ref, session.conversation_id.to_string());
+    }
+
+    #[tokio::test]
+    async fn compute_hook_session_ref_prefers_rollout_path_when_available() {
+        let (session, _turn_context) = make_session_and_context().await;
+        let config = {
+            let state = session.state.lock().await;
+            Arc::clone(&state.session_configuration.original_config_do_not_use)
+        };
+        let recorder = RolloutRecorder::new(
+            config.as_ref(),
+            RolloutRecorderParams::new(
+                session.conversation_id,
+                None,
+                SessionSource::Exec,
+                BaseInstructions::default(),
+                Vec::new(),
+                EventPersistenceMode::Limited,
+            ),
+            None,
+            None,
+        )
+        .await
+        .expect("create rollout recorder");
+        let rollout_path = recorder.rollout_path().display().to_string();
+        {
+            let mut rollout = session.services.rollout.lock().await;
+            *rollout = Some(recorder);
+        }
+
+        let session_ref = compute_hook_session_ref(&session).await;
+
+        assert_eq!(session_ref, rollout_path);
+    }
+
     pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         dynamic_tools: Vec<DynamicToolSpec>,
     ) -> (

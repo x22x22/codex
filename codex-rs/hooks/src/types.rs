@@ -224,6 +224,7 @@ impl HookEvent {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     use chrono::TimeZone;
@@ -241,6 +242,27 @@ mod tests {
     use super::HookToolInput;
     use super::HookToolInputLocalShell;
     use super::HookToolKind;
+
+    fn sample_lifecycle_event(
+        previous_session_id: ThreadId,
+        subagent_id: ThreadId,
+    ) -> HookEventLifecycle {
+        let mut metadata = HashMap::new();
+        metadata.insert("phase".to_string(), "done".to_string());
+
+        HookEventLifecycle {
+            session_ref: "session-ref-1".to_string(),
+            previous_session_id: Some(previous_session_id),
+            prompt: Some("hello world".to_string()),
+            response_message: Some("done".to_string()),
+            tool_use_id: Some("toolu_123".to_string()),
+            tool_input: Some(HookToolInput::Function {
+                arguments: "{\"code\":\"cargo test\"}".to_string(),
+            }),
+            subagent_id: Some(subagent_id),
+            metadata: Some(metadata),
+        }
+    }
 
     #[test]
     fn hook_payload_serializes_stable_wire_shape() {
@@ -393,5 +415,195 @@ mod tests {
         });
 
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn all_lifecycle_payloads_serialize_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let previous_session_id = ThreadId::new();
+        let subagent_id = ThreadId::new();
+        let base_payload = |hook_event: HookEvent| HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: Some("codex-tui".to_string()),
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event,
+        };
+
+        let cases = vec![
+            (
+                "session_start",
+                base_payload(HookEvent::SessionStart {
+                    event: sample_lifecycle_event(previous_session_id, subagent_id),
+                }),
+                json!({
+                    "session_id": session_id.to_string(),
+                    "cwd": "tmp",
+                    "client": "codex-tui",
+                    "triggered_at": "2025-01-01T00:00:00Z",
+                    "hook_event": {
+                        "event_type": "session_start",
+                        "session_ref": "session-ref-1",
+                        "previous_session_id": previous_session_id.to_string(),
+                        "prompt": "hello world",
+                        "response_message": "done",
+                        "tool_use_id": "toolu_123",
+                        "tool_input": {
+                            "input_type": "function",
+                            "arguments": "{\"code\":\"cargo test\"}",
+                        },
+                        "subagent_id": subagent_id.to_string(),
+                        "metadata": {
+                            "phase": "done",
+                        },
+                    },
+                }),
+            ),
+            (
+                "turn_end",
+                base_payload(HookEvent::TurnEnd {
+                    event: HookEventLifecycle {
+                        previous_session_id: None,
+                        subagent_id: None,
+                        metadata: None,
+                        ..sample_lifecycle_event(previous_session_id, subagent_id)
+                    },
+                }),
+                json!({
+                    "session_id": session_id.to_string(),
+                    "cwd": "tmp",
+                    "client": "codex-tui",
+                    "triggered_at": "2025-01-01T00:00:00Z",
+                    "hook_event": {
+                        "event_type": "turn_end",
+                        "session_ref": "session-ref-1",
+                        "prompt": "hello world",
+                        "response_message": "done",
+                        "tool_use_id": "toolu_123",
+                        "tool_input": {
+                            "input_type": "function",
+                            "arguments": "{\"code\":\"cargo test\"}",
+                        },
+                    },
+                }),
+            ),
+            (
+                "compaction",
+                base_payload(HookEvent::Compaction {
+                    event: HookEventLifecycle {
+                        prompt: None,
+                        tool_input: None,
+                        subagent_id: None,
+                        ..sample_lifecycle_event(previous_session_id, subagent_id)
+                    },
+                }),
+                json!({
+                    "session_id": session_id.to_string(),
+                    "cwd": "tmp",
+                    "client": "codex-tui",
+                    "triggered_at": "2025-01-01T00:00:00Z",
+                    "hook_event": {
+                        "event_type": "compaction",
+                        "session_ref": "session-ref-1",
+                        "previous_session_id": previous_session_id.to_string(),
+                        "response_message": "done",
+                        "tool_use_id": "toolu_123",
+                        "metadata": {
+                            "phase": "done",
+                        },
+                    },
+                }),
+            ),
+            (
+                "session_end",
+                base_payload(HookEvent::SessionEnd {
+                    event: HookEventLifecycle {
+                        prompt: None,
+                        response_message: None,
+                        tool_use_id: None,
+                        tool_input: None,
+                        subagent_id: None,
+                        metadata: None,
+                        ..sample_lifecycle_event(previous_session_id, subagent_id)
+                    },
+                }),
+                json!({
+                    "session_id": session_id.to_string(),
+                    "cwd": "tmp",
+                    "client": "codex-tui",
+                    "triggered_at": "2025-01-01T00:00:00Z",
+                    "hook_event": {
+                        "event_type": "session_end",
+                        "session_ref": "session-ref-1",
+                        "previous_session_id": previous_session_id.to_string(),
+                    },
+                }),
+            ),
+            (
+                "subagent_start",
+                base_payload(HookEvent::SubagentStart {
+                    event: HookEventLifecycle {
+                        previous_session_id: None,
+                        response_message: None,
+                        subagent_id: None,
+                        metadata: None,
+                        ..sample_lifecycle_event(previous_session_id, subagent_id)
+                    },
+                }),
+                json!({
+                    "session_id": session_id.to_string(),
+                    "cwd": "tmp",
+                    "client": "codex-tui",
+                    "triggered_at": "2025-01-01T00:00:00Z",
+                    "hook_event": {
+                        "event_type": "subagent_start",
+                        "session_ref": "session-ref-1",
+                        "prompt": "hello world",
+                        "tool_use_id": "toolu_123",
+                        "tool_input": {
+                            "input_type": "function",
+                            "arguments": "{\"code\":\"cargo test\"}",
+                        },
+                    },
+                }),
+            ),
+            (
+                "subagent_end",
+                base_payload(HookEvent::SubagentEnd {
+                    event: HookEventLifecycle {
+                        previous_session_id: None,
+                        response_message: None,
+                        metadata: None,
+                        ..sample_lifecycle_event(previous_session_id, subagent_id)
+                    },
+                }),
+                json!({
+                    "session_id": session_id.to_string(),
+                    "cwd": "tmp",
+                    "client": "codex-tui",
+                    "triggered_at": "2025-01-01T00:00:00Z",
+                    "hook_event": {
+                        "event_type": "subagent_end",
+                        "session_ref": "session-ref-1",
+                        "prompt": "hello world",
+                        "tool_use_id": "toolu_123",
+                        "tool_input": {
+                            "input_type": "function",
+                            "arguments": "{\"code\":\"cargo test\"}",
+                        },
+                        "subagent_id": subagent_id.to_string(),
+                    },
+                }),
+            ),
+        ];
+
+        for (event_name, payload, expected) in cases {
+            assert_eq!(payload.hook_event.name(), event_name);
+            let actual = serde_json::to_value(payload).expect("serialize lifecycle payload");
+            assert_eq!(actual, expected, "lifecycle event {event_name}");
+        }
     }
 }

@@ -318,6 +318,21 @@ mod tests {
         }
     }
 
+    fn sample_lifecycle_event() -> HookEventLifecycle {
+        HookEventLifecycle {
+            session_ref: "session-ref".to_string(),
+            previous_session_id: None,
+            prompt: Some("hello".to_string()),
+            response_message: Some("done".to_string()),
+            tool_use_id: Some("toolu_123".to_string()),
+            tool_input: Some(HookToolInput::Custom {
+                input: "payload".to_string(),
+            }),
+            subagent_id: Some(ThreadId::new()),
+            metadata: None,
+        }
+    }
+
     #[test]
     fn command_from_argv_returns_none_for_empty_args() {
         assert!(command_from_argv(&[]).is_none());
@@ -389,6 +404,28 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn hooks_new_wires_all_lifecycle_commands() {
+        let hooks = Hooks::new(HooksConfig {
+            session_start_argv: Some(vec!["hooks-cli".to_string()]),
+            turn_start_argv: Some(vec!["hooks-cli".to_string()]),
+            turn_end_argv: Some(vec!["hooks-cli".to_string()]),
+            compaction_argv: Some(vec!["hooks-cli".to_string()]),
+            session_end_argv: Some(vec!["hooks-cli".to_string()]),
+            subagent_start_argv: Some(vec!["hooks-cli".to_string()]),
+            subagent_end_argv: Some(vec!["hooks-cli".to_string()]),
+            ..HooksConfig::default()
+        });
+
+        assert_eq!(hooks.session_start.len(), 1);
+        assert_eq!(hooks.turn_start.len(), 1);
+        assert_eq!(hooks.turn_end.len(), 1);
+        assert_eq!(hooks.compaction.len(), 1);
+        assert_eq!(hooks.session_end.len(), 1);
+        assert_eq!(hooks.subagent_start.len(), 1);
+        assert_eq!(hooks.subagent_end.len(), 1);
     }
 
     #[tokio::test]
@@ -493,6 +530,90 @@ mod tests {
         assert_eq!(outcomes[0].hook_name, "counting");
         assert!(matches!(outcomes[0].result, HookResult::Success));
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_routes_each_lifecycle_event_to_matching_hooks() {
+        let session_start_calls = Arc::new(AtomicUsize::new(0));
+        let turn_start_calls = Arc::new(AtomicUsize::new(0));
+        let turn_end_calls = Arc::new(AtomicUsize::new(0));
+        let compaction_calls = Arc::new(AtomicUsize::new(0));
+        let session_end_calls = Arc::new(AtomicUsize::new(0));
+        let subagent_start_calls = Arc::new(AtomicUsize::new(0));
+        let subagent_end_calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            session_start: vec![counting_success_hook(&session_start_calls, "session_start")],
+            turn_start: vec![counting_success_hook(&turn_start_calls, "turn_start")],
+            turn_end: vec![counting_success_hook(&turn_end_calls, "turn_end")],
+            compaction: vec![counting_success_hook(&compaction_calls, "compaction")],
+            session_end: vec![counting_success_hook(&session_end_calls, "session_end")],
+            subagent_start: vec![counting_success_hook(
+                &subagent_start_calls,
+                "subagent_start",
+            )],
+            subagent_end: vec![counting_success_hook(&subagent_end_calls, "subagent_end")],
+            ..Hooks::default()
+        };
+
+        let cases = vec![
+            (
+                "session_start",
+                lifecycle_payload(HookEvent::SessionStart {
+                    event: sample_lifecycle_event(),
+                }),
+                Arc::clone(&session_start_calls),
+            ),
+            (
+                "turn_start",
+                lifecycle_payload(HookEvent::TurnStart {
+                    event: sample_lifecycle_event(),
+                }),
+                Arc::clone(&turn_start_calls),
+            ),
+            (
+                "turn_end",
+                lifecycle_payload(HookEvent::TurnEnd {
+                    event: sample_lifecycle_event(),
+                }),
+                Arc::clone(&turn_end_calls),
+            ),
+            (
+                "compaction",
+                lifecycle_payload(HookEvent::Compaction {
+                    event: sample_lifecycle_event(),
+                }),
+                Arc::clone(&compaction_calls),
+            ),
+            (
+                "session_end",
+                lifecycle_payload(HookEvent::SessionEnd {
+                    event: sample_lifecycle_event(),
+                }),
+                Arc::clone(&session_end_calls),
+            ),
+            (
+                "subagent_start",
+                lifecycle_payload(HookEvent::SubagentStart {
+                    event: sample_lifecycle_event(),
+                }),
+                Arc::clone(&subagent_start_calls),
+            ),
+            (
+                "subagent_end",
+                lifecycle_payload(HookEvent::SubagentEnd {
+                    event: sample_lifecycle_event(),
+                }),
+                Arc::clone(&subagent_end_calls),
+            ),
+        ];
+
+        for (hook_name, payload, counter) in cases {
+            let outcomes = hooks.dispatch(payload).await;
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(outcomes[0].hook_name, hook_name);
+            assert!(matches!(outcomes[0].result, HookResult::Success));
+            assert_eq!(counter.load(Ordering::SeqCst), 1);
+        }
     }
 
     #[tokio::test]
