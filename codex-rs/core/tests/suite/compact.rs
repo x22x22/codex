@@ -1689,6 +1689,133 @@ async fn auto_compact_runs_after_resume_when_token_usage_is_over_limit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_compaction_replacement_history_preserves_reasoning_items() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let first_user = "REMOTE_REASONING_USER_ONE";
+    let second_user = "REMOTE_REASONING_USER_TWO";
+    let third_user = "REMOTE_REASONING_USER_THREE";
+    let remote_reasoning_summary = "REMOTE_COMPACT_REASONING";
+    let remote_summary = "REMOTE_COMPACT_SUMMARY";
+    let pre_last_reasoning_content = "a".repeat(2_400);
+    let post_last_reasoning_content = "b".repeat(4_000);
+
+    let first_turn = sse(vec![
+        ev_reasoning_item("pre-reasoning", &["pre"], &[&pre_last_reasoning_content]),
+        ev_completed_with_tokens("r1", 10),
+    ]);
+    let second_turn = sse(vec![
+        ev_reasoning_item("post-reasoning", &["post"], &[&post_last_reasoning_content]),
+        ev_completed_with_tokens("r2", 80),
+    ]);
+    let third_turn = sse(vec![
+        ev_assistant_message("m3", FINAL_REPLY),
+        ev_completed_with_tokens("r3", 1),
+    ]);
+
+    let request_log = mount_sse_sequence(&server, vec![first_turn, second_turn, third_turn]).await;
+
+    let compacted_history = vec![
+        codex_protocol::models::ResponseItem::Reasoning {
+            id: "remote-reasoning".to_string(),
+            summary: vec![
+                codex_protocol::models::ReasoningItemReasoningSummary::SummaryText {
+                    text: remote_reasoning_summary.to_string(),
+                },
+            ],
+            content: None,
+            encrypted_content: Some("ENCRYPTED_REMOTE_REASONING".to_string()),
+        },
+        codex_protocol::models::ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![codex_protocol::models::ContentItem::OutputText {
+                text: remote_summary.to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+        codex_protocol::models::ResponseItem::Compaction {
+            encrypted_content: "ENCRYPTED_COMPACTION_SUMMARY".to_string(),
+        },
+    ];
+    let compact_mock =
+        mount_compact_json_once(&server, serde_json::json!({ "output": compacted_history })).await;
+
+    let codex = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            set_test_compact_prompt(config);
+            config.model_auto_compact_token_limit = Some(300);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    for (idx, user) in [first_user, second_user, third_user]
+        .into_iter()
+        .enumerate()
+    {
+        codex
+            .submit(Op::UserInput {
+                items: vec![UserInput::Text {
+                    text: user.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                final_output_json_schema: None,
+            })
+            .await
+            .expect("submit user");
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+        if idx < 2 {
+            assert!(
+                compact_mock.requests().is_empty(),
+                "remote compaction should not run before the third user turn"
+            );
+        }
+    }
+
+    let compact_requests = compact_mock.requests();
+    assert_eq!(
+        compact_requests.len(),
+        1,
+        "expected a single remote compaction request"
+    );
+    assert_eq!(
+        compact_requests[0].path(),
+        "/v1/responses/compact",
+        "remote compaction should hit the compact endpoint"
+    );
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 3, "expected three user turns");
+
+    let second_request_body = requests[1].body_json().to_string();
+    assert!(
+        !body_contains_text(&second_request_body, remote_reasoning_summary),
+        "second turn should not include compacted remote reasoning yet"
+    );
+    assert!(
+        !body_contains_text(&second_request_body, remote_summary),
+        "second turn should not include compacted remote assistant history yet"
+    );
+
+    let third_request_body = requests[2].body_json().to_string();
+    assert!(
+        body_contains_text(&third_request_body, remote_reasoning_summary),
+        "third turn should preserve remote reasoning items in replacement history"
+    );
+    assert!(
+        body_contains_text(&third_request_body, remote_summary),
+        "third turn should preserve remote assistant summaries in replacement history"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pre_sampling_compact_runs_on_switch_to_smaller_context_model() {
     skip_if_no_network!();
 

@@ -184,6 +184,8 @@ pub(crate) async fn process_compacted_history(
 ///   keeping only real user messages as parsed by `parse_turn_item`.
 ///
 /// This intentionally keeps:
+/// - `reasoning` items because assistant hidden messages can require the
+///   immediately preceding reasoning item on the next request.
 /// - `assistant` messages (future remote compaction models may emit them)
 /// - `user`-role warnings and compaction-generated summary messages because
 ///   they parse as `TurnItem::UserMessage`.
@@ -197,10 +199,10 @@ fn should_keep_compacted_history_item(item: &ResponseItem) -> bool {
             )
         }
         ResponseItem::Message { role, .. } if role == "assistant" => true,
+        ResponseItem::Reasoning { .. } => true,
         ResponseItem::Message { .. } => false,
         ResponseItem::Compaction { .. } => true,
-        ResponseItem::Reasoning { .. }
-        | ResponseItem::LocalShellCall { .. }
+        ResponseItem::LocalShellCall { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCall { .. }
@@ -280,4 +282,41 @@ fn trim_function_call_history_to_fit_context_window(
     }
 
     deleted_items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_keep_compacted_history_item;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ReasoningItemReasoningSummary;
+    use codex_protocol::models::ResponseItem;
+
+    #[test]
+    fn preserves_reasoning_items_from_remote_compaction_output() {
+        let reasoning = ResponseItem::Reasoning {
+            id: "reasoning-1".to_string(),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "summary".to_string(),
+            }],
+            content: None,
+            encrypted_content: Some("encrypted".to_string()),
+        };
+
+        assert!(should_keep_compacted_history_item(&reasoning));
+    }
+
+    #[test]
+    fn preserves_assistant_messages_from_remote_compaction_output() {
+        let assistant = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "assistant summary".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        };
+
+        assert!(should_keep_compacted_history_item(&assistant));
+    }
 }
