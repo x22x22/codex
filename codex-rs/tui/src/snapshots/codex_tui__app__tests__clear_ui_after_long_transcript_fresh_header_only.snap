@@ -7,6 +7,6 @@ expression: rendered
 │ >_ OpenAI Codex (v<VERSION>)                │
 │                                             │
 │ model:     gpt-test high   /model to change │
-│ speed:     Standard        /fast to change  │
+│ speed:     standard        /fast to change  │
 │ directory: /tmp/project                     │
 ╰─────────────────────────────────────────────╯

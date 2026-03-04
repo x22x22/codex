@@ -1219,8 +1219,8 @@ impl SessionHeaderHistoryCell {
 
     fn speed_label(&self) -> &'static str {
         match self.service_tier {
-            Some(ServiceTier::Fast) => "Fast",
-            _ => "Standard",
+            Some(ServiceTier::Fast) => "fast",
+            _ => "standard",
         }
     }
 }
@@ -3327,7 +3327,7 @@ mod tests {
 
         assert!(model_line.contains("gpt-4o high"));
         assert!(model_line.contains("/model to change"));
-        assert!(speed_line.contains("Fast"));
+        assert!(speed_line.contains("fast"));
         assert!(speed_line.contains("/fast to change"));
         assert_eq!(model_line.find("/model"), speed_line.find("/fast"));
     }

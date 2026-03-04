@@ -7,7 +7,7 @@ expression: rendered
 │ >_ OpenAI Codex (v0.0.0)               │
 │                                        │
 │ model:     gpt-5      /model to change │
-│ speed:     Standard   /fast to change  │
+│ speed:     standard   /fast to change  │
 │ directory: /tmp/project                │
 ╰────────────────────────────────────────╯
 
