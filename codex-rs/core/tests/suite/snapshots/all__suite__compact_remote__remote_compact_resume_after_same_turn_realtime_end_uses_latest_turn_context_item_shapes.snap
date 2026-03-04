@@ -14,7 +14,7 @@ Scenario: A same-turn realtime-ended update is recorded before manual /compact. 
 03:message/user:USER_ONE
 04:function_call/exec_command
 05:function_call_output:<UNIFIED_EXEC_OUTPUT>
-06:message/developer:<realtime_conversation>\nRealtime conversation ended.\n\nYou are...
+06:message/developer:<realtime_conversation>\nRealtime conversation ended.\n\nSubsequ...
 
 ## Remote Post-Resume History Layout
 00:compaction:encrypted=true

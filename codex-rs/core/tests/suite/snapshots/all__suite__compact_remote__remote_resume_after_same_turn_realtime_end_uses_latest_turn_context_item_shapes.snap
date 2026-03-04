@@ -14,7 +14,7 @@ Scenario: A same-turn realtime-ended update is recorded before the turn complete
 03:message/user:USER_ONE
 04:function_call/exec_command
 05:function_call_output:<UNIFIED_EXEC_OUTPUT>
-06:message/developer:<realtime_conversation>\nRealtime conversation ended.\n\nYou are...
+06:message/developer:<realtime_conversation>\nRealtime conversation ended.\n\nSubsequ...
 
 ## Remote Post-Resume History Layout
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
@@ -25,7 +25,7 @@ Scenario: A same-turn realtime-ended update is recorded before the turn complete
 03:message/user:USER_ONE
 04:function_call/exec_command
 05:function_call_output:<UNIFIED_EXEC_OUTPUT>
-06:message/developer:<realtime_conversation>\nRealtime conversation ended.\n\nYou are...
+06:message/developer:<realtime_conversation>\nRealtime conversation ended.\n\nSubsequ...
 07:message/assistant:REMOTE_MID_TURN_REALTIME_ENDED_REPLY
 08:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD>>
 09:message/user:USER_TWO
