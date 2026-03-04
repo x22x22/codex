@@ -15,6 +15,7 @@ use tokio::process::Child;
 use tracing::warn;
 use url::Url;
 
+use crate::protocol::NetworkSandboxPolicy;
 use crate::protocol::SandboxPolicy;
 use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
 use crate::seatbelt_permissions::build_seatbelt_extensions;
@@ -51,7 +52,7 @@ pub async fn spawn_command_under_seatbelt(
         args,
         arg0,
         cwd: command_cwd,
-        sandbox_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::from(sandbox_policy),
         network,
         stdio_policy,
         env,

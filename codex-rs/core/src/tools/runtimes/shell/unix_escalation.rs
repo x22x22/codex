@@ -26,7 +26,9 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
+use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::RejectConfig;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
@@ -98,6 +100,8 @@ pub(super) async fn try_run_zsh_fork(
         windows_sandbox_level,
         sandbox_permissions,
         sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
         justification,
         arg0,
     } = sandbox_exec_request;
@@ -110,6 +114,8 @@ pub(super) async fn try_run_zsh_fork(
         command,
         cwd: sandbox_cwd,
         sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
         sandbox,
         env: sandbox_env,
         network: sandbox_network,
@@ -721,6 +727,8 @@ struct CoreShellCommandExecutor {
     command: Vec<String>,
     cwd: PathBuf,
     sandbox_policy: SandboxPolicy,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     sandbox: SandboxType,
     env: HashMap<String, String>,
     network: Option<codex_network_proxy::NetworkProxy>,
@@ -761,6 +769,8 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 windows_sandbox_level: self.windows_sandbox_level,
                 sandbox_permissions: self.sandbox_permissions,
                 sandbox_policy: self.sandbox_policy.clone(),
+                file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
+                network_sandbox_policy: self.network_sandbox_policy,
                 justification: self.justification.clone(),
                 arg0: self.arg0.clone(),
             },
@@ -805,6 +815,8 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 workdir,
                 env,
                 &self.sandbox_policy,
+                &self.file_system_sandbox_policy,
+                self.network_sandbox_policy,
                 None,
                 self.macos_seatbelt_profile_extensions.as_ref(),
             )?,
@@ -815,15 +827,23 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 workdir,
                 env,
                 &self.sandbox_policy,
+                &self.file_system_sandbox_policy,
+                self.network_sandbox_policy,
                 Some(permission_profile),
                 None,
             )?,
             EscalationExecution::Permissions(EscalationPermissions::Permissions(permissions)) => {
+                let file_system_sandbox_policy =
+                    FileSystemSandboxPolicy::from(&permissions.sandbox_policy);
+                let network_sandbox_policy =
+                    NetworkSandboxPolicy::from(&permissions.sandbox_policy);
                 self.prepare_sandboxed_exec(
                     command,
                     workdir,
                     env,
                     &permissions.sandbox_policy,
+                    &file_system_sandbox_policy,
+                    network_sandbox_policy,
                     None,
                     permissions.macos_seatbelt_profile_extensions.as_ref(),
                 )?
@@ -835,12 +855,15 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
 }
 
 impl CoreShellCommandExecutor {
+    #[allow(clippy::too_many_arguments)]
     fn prepare_sandboxed_exec(
         &self,
         command: Vec<String>,
         workdir: &AbsolutePathBuf,
         env: HashMap<String, String>,
         sandbox_policy: &SandboxPolicy,
+        file_system_sandbox_policy: &FileSystemSandboxPolicy,
+        network_sandbox_policy: NetworkSandboxPolicy,
         additional_permissions: Option<PermissionProfile>,
         #[cfg(target_os = "macos")] macos_seatbelt_profile_extensions: Option<
             &MacOsSeatbeltProfileExtensions,
@@ -854,7 +877,7 @@ impl CoreShellCommandExecutor {
             .ok_or_else(|| anyhow::anyhow!("prepared command must not be empty"))?;
         let sandbox_manager = crate::sandboxing::SandboxManager::new();
         let sandbox = sandbox_manager.select_initial(
-            sandbox_policy,
+            file_system_sandbox_policy,
             SandboxablePreference::Auto,
             self.windows_sandbox_level,
             self.network.is_some(),
@@ -876,6 +899,8 @@ impl CoreShellCommandExecutor {
                     justification: self.justification.clone(),
                 },
                 policy: sandbox_policy,
+                file_system_policy: file_system_sandbox_policy,
+                network_policy: network_sandbox_policy,
                 sandbox,
                 enforce_managed_network: self.network.is_some(),
                 network: self.network.as_ref(),
