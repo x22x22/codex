@@ -2761,7 +2761,7 @@ impl Session {
         })
     }
 
-    async fn current_active_turn_context(&self) -> Option<Arc<TurnContext>> {
+    pub(crate) async fn current_active_turn_context(&self) -> Option<Arc<TurnContext>> {
         let active = self.active_turn.lock().await;
         let turn = active.as_ref()?;
         turn.current_turn_context.clone().or_else(|| {
