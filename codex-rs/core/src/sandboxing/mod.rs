@@ -12,7 +12,7 @@ use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_env;
 use crate::landlock::allow_network_for_proxy;
-use crate::landlock::create_linux_sandbox_command_args;
+use crate::landlock::create_linux_sandbox_command_args_for_policies;
 use crate::protocol::FileSystemSandboxKind;
 use crate::protocol::FileSystemSandboxPolicy;
 use crate::protocol::NetworkSandboxPolicy;
@@ -411,9 +411,11 @@ impl SandboxManager {
                 let exe = codex_linux_sandbox_exe
                     .ok_or(SandboxTransformError::MissingLinuxSandboxExecutable)?;
                 let allow_proxy_network = allow_network_for_proxy(enforce_managed_network);
-                let mut args = create_linux_sandbox_command_args(
+                let mut args = create_linux_sandbox_command_args_for_policies(
                     command.clone(),
                     &effective_policy,
+                    &effective_file_system_policy,
+                    effective_network_policy,
                     sandbox_policy_cwd,
                     use_linux_sandbox_bwrap,
                     allow_proxy_network,
