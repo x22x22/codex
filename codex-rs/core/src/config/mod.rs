@@ -1,6 +1,8 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config::types::ApprovalHandlerConfig;
+use crate::config::types::ApprovalHandlerToml;
 use crate::config::types::AppsConfigToml;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
@@ -268,6 +270,10 @@ pub struct Config {
     ///
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
+
+    /// Optional external approval handler command that synchronously resolves
+    /// exec, patch, and MCP elicitation approvals over stdin/stdout.
+    pub approval_handler: Option<ApprovalHandlerConfig>,
 
     /// TUI notifications preference. When set, the TUI will send terminal notifications on
     /// approvals and turn completions when not focused.
@@ -1051,6 +1057,10 @@ pub struct ConfigToml {
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
+
+    /// Optional external command to synchronously resolve approvals over stdin/stdout.
+    #[serde(default)]
+    pub approval_handler: Option<ApprovalHandlerToml>,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -2110,6 +2120,12 @@ impl Config {
         } else {
             network.enabled().then_some(network)
         };
+        let approval_handler = cfg
+            .approval_handler
+            .map(ApprovalHandlerToml::try_into_config)
+            .transpose()
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?
+            .flatten();
 
         let config = Self {
             model,
@@ -2133,6 +2149,7 @@ impl Config {
             enforce_residency: enforce_residency.value,
             did_user_set_custom_approval_policy_or_sandbox_mode,
             notify: cfg.notify,
+            approval_handler,
             user_instructions,
             base_instructions,
             personality,
@@ -4914,6 +4931,7 @@ model_verbosity = "high"
                 did_user_set_custom_approval_policy_or_sandbox_mode: true,
                 user_instructions: None,
                 notify: None,
+                approval_handler: None,
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -5044,6 +5062,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             user_instructions: None,
             notify: None,
+            approval_handler: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -5172,6 +5191,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             user_instructions: None,
             notify: None,
+            approval_handler: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -5286,6 +5306,7 @@ model_verbosity = "high"
             did_user_set_custom_approval_policy_or_sandbox_mode: true,
             user_instructions: None,
             notify: None,
+            approval_handler: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
