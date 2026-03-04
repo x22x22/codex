@@ -2776,7 +2776,21 @@ impl Session {
         let Some(turn) = active.as_mut() else {
             return false;
         };
+        let previous_turn_metadata_state =
+            turn.current_turn_context
+                .as_ref()
+                .and_then(|previous_turn_context| {
+                    (!Arc::ptr_eq(
+                        &previous_turn_context.turn_metadata_state,
+                        &turn_context.turn_metadata_state,
+                    ))
+                    .then(|| Arc::clone(&previous_turn_context.turn_metadata_state))
+                });
         turn.current_turn_context = Some(turn_context);
+        drop(active);
+        if let Some(previous_turn_metadata_state) = previous_turn_metadata_state {
+            previous_turn_metadata_state.cancel_git_enrichment_task();
+        }
         true
     }
 
@@ -7089,6 +7103,12 @@ mod tests {
         }
     }
 
+    fn install_blocking_turn_metadata_task(turn_metadata_state: &TurnMetadataState) {
+        turn_metadata_state.replace_enrichment_task_for_test(tokio::spawn(async {
+            sleep(Duration::from_secs(60)).await;
+        }));
+    }
+
     #[test]
     fn assistant_message_stream_parsers_can_be_seeded_from_output_item_added_text() {
         let mut parsers = AssistantMessageStreamParsers::new(false);
@@ -9384,6 +9404,134 @@ mod tests {
         assert_eq!(updated.model_info.slug, next_model);
         assert_eq!(updated.collaboration_mode.model(), next_model);
         assert!(Arc::ptr_eq(&updated.tool_call_gate, &tc.tool_call_gate));
+    }
+
+    #[tokio::test]
+    async fn override_turn_context_cancels_superseded_turn_metadata_task() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        install_blocking_turn_metadata_task(&tc.turn_metadata_state);
+        let active_turn = crate::state::ActiveTurn {
+            current_turn_context: Some(Arc::clone(&tc)),
+            ..Default::default()
+        };
+        *sess.active_turn.lock().await = Some(active_turn);
+
+        let next_model = if tc.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+
+        handlers::override_turn_context(
+            sess.as_ref(),
+            "override".to_string(),
+            SessionSettingsUpdate {
+                collaboration_mode: Some(tc.collaboration_mode.with_updates(
+                    Some(next_model.to_string()),
+                    None,
+                    None,
+                )),
+                ..Default::default()
+            },
+        )
+        .await;
+
+        assert!(
+            !tc.turn_metadata_state.has_enrichment_task_for_test(),
+            "superseded turn metadata task should be canceled"
+        );
+    }
+
+    #[tokio::test]
+    async fn on_task_finished_cancels_refreshed_current_turn_context_metadata_task() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let session_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let refreshed_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &session_configuration)
+            .await;
+        install_blocking_turn_metadata_task(&refreshed_turn_context.turn_metadata_state);
+
+        *sess.active_turn.lock().await = Some(crate::state::ActiveTurn {
+            current_turn_context: Some(Arc::clone(&refreshed_turn_context)),
+            tasks: indexmap::IndexMap::from([(
+                tc.sub_id.clone(),
+                crate::state::RunningTask {
+                    done: Arc::new(tokio::sync::Notify::new()),
+                    kind: TaskKind::Regular,
+                    task: Arc::new(NeverEndingTask {
+                        kind: TaskKind::Regular,
+                        listen_to_cancellation_token: true,
+                    }),
+                    cancellation_token: CancellationToken::new(),
+                    handle: Arc::new(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+                        async {},
+                    ))),
+                    turn_context: Arc::clone(&tc),
+                    _timer: None,
+                },
+            )]),
+            ..Default::default()
+        });
+
+        sess.on_task_finished(Arc::clone(&tc), None).await;
+
+        assert!(
+            !refreshed_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "refreshed active turn metadata task should be canceled when the turn finishes"
+        );
+        assert!(
+            sess.active_turn.lock().await.is_none(),
+            "finished task should clear the active turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn abort_all_tasks_cancels_refreshed_current_turn_context_metadata_task() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+        let session_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let refreshed_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &session_configuration)
+            .await;
+        install_blocking_turn_metadata_task(&refreshed_turn_context.turn_metadata_state);
+        assert!(
+            sess.set_current_active_turn_context(Arc::clone(&refreshed_turn_context))
+                .await
+        );
+
+        sess.abort_all_tasks(TurnAbortReason::Interrupted).await;
+
+        assert!(
+            !refreshed_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "refreshed active turn metadata task should be canceled when the turn aborts"
+        );
+        assert!(
+            sess.active_turn.lock().await.is_none(),
+            "aborted task should clear the active turn"
+        );
     }
 
     #[tokio::test]

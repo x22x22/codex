@@ -214,9 +214,14 @@ impl Session {
         let mut should_clear_active_turn = false;
         let mut token_usage_at_turn_start = None;
         let mut turn_tool_calls = 0_u64;
+        let mut current_turn_metadata_state = None;
         if let Some(at) = active.as_mut()
             && at.remove_task(&turn_context.sub_id)
         {
+            current_turn_metadata_state = at
+                .current_turn_context
+                .take()
+                .map(|current_turn_context| Arc::clone(&current_turn_context.turn_metadata_state));
             let mut ts = at.turn_state.lock().await;
             pending_input = ts.take_pending_input();
             turn_tool_calls = ts.tool_calls;
@@ -227,6 +232,9 @@ impl Session {
             *active = None;
         }
         drop(active);
+        if let Some(current_turn_metadata_state) = current_turn_metadata_state {
+            current_turn_metadata_state.cancel_git_enrichment_task();
+        }
         if !pending_input.is_empty() {
             let pending_response_items = pending_input
                 .into_iter()
@@ -332,6 +340,11 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         match active.take() {
             Some(mut at) => {
+                if let Some(current_turn_context) = at.current_turn_context.take() {
+                    current_turn_context
+                        .turn_metadata_state
+                        .cancel_git_enrichment_task();
+                }
                 at.clear_pending().await;
 
                 at.drain_tasks()
