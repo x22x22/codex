@@ -13,6 +13,9 @@ use crate::exec::StdoutStream;
 use crate::exec::execute_exec_env;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args;
+use crate::protocol::FileSystemSandboxKind;
+use crate::protocol::FileSystemSandboxPolicy;
+use crate::protocol::NetworkSandboxPolicy;
 use crate::protocol::SandboxPolicy;
 #[cfg(target_os = "macos")]
 use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
@@ -29,6 +32,7 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
+use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::ReadOnlyAccess;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize;
@@ -60,6 +64,8 @@ pub struct ExecRequest {
     pub windows_sandbox_level: WindowsSandboxLevel,
     pub sandbox_permissions: SandboxPermissions,
     pub sandbox_policy: SandboxPolicy,
+    pub file_system_sandbox_policy: FileSystemSandboxPolicy,
+    pub network_sandbox_policy: NetworkSandboxPolicy,
     pub justification: Option<String>,
     pub arg0: Option<String>,
 }
@@ -70,6 +76,8 @@ pub struct ExecRequest {
 pub(crate) struct SandboxTransformRequest<'a> {
     pub spec: CommandSpec,
     pub policy: &'a SandboxPolicy,
+    pub file_system_policy: &'a FileSystemSandboxPolicy,
+    pub network_policy: NetworkSandboxPolicy,
     pub sandbox: SandboxType,
     pub enforce_managed_network: bool,
     // TODO(viyatb): Evaluate switching this to Option<Arc<NetworkProxy>>
@@ -212,9 +220,17 @@ fn sandbox_policy_with_additional_permissions(
     let (extra_reads, extra_writes) = additional_permission_roots(additional_permissions);
 
     let policy = match sandbox_policy {
-        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
-            sandbox_policy.clone()
-        }
+        SandboxPolicy::DangerFullAccess => SandboxPolicy::DangerFullAccess,
+        SandboxPolicy::ExternalSandbox { network_access } => SandboxPolicy::ExternalSandbox {
+            network_access: if merge_network_access(
+                network_access.is_enabled(),
+                additional_permissions,
+            ) {
+                NetworkAccess::Enabled
+            } else {
+                NetworkAccess::Restricted
+            },
+        },
         SandboxPolicy::WorkspaceWrite {
             writable_roots,
             read_only_access,
@@ -275,7 +291,7 @@ impl SandboxManager {
 
     pub(crate) fn select_initial(
         &self,
-        policy: &SandboxPolicy,
+        file_system_policy: &FileSystemSandboxPolicy,
         pref: SandboxablePreference,
         windows_sandbox_level: WindowsSandboxLevel,
         has_managed_network_requirements: bool,
@@ -290,8 +306,8 @@ impl SandboxManager {
                 )
                 .unwrap_or(SandboxType::None)
             }
-            SandboxablePreference::Auto => match policy {
-                SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+            SandboxablePreference::Auto => match file_system_policy.kind {
+                FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => {
                     if has_managed_network_requirements {
                         crate::safety::get_platform_sandbox(
                             windows_sandbox_level != WindowsSandboxLevel::Disabled,
@@ -316,6 +332,8 @@ impl SandboxManager {
         let SandboxTransformRequest {
             mut spec,
             policy,
+            file_system_policy,
+            network_policy,
             sandbox,
             enforce_managed_network,
             network,
@@ -326,14 +344,36 @@ impl SandboxManager {
             use_linux_sandbox_bwrap,
             windows_sandbox_level,
         } = request;
-        let effective_policy =
-            if let Some(additional_permissions) = spec.additional_permissions.take() {
-                sandbox_policy_with_additional_permissions(policy, &additional_permissions)?
+        let effective_policy = if let Some(additional_permissions) =
+            spec.additional_permissions.take()
+        {
+            let (extra_reads, extra_writes) = additional_permission_roots(&additional_permissions);
+            let effective_policy =
+                sandbox_policy_with_additional_permissions(policy, &additional_permissions)?;
+            let file_system_sandbox_policy = if extra_reads.is_empty() && extra_writes.is_empty() {
+                file_system_policy.clone()
             } else {
-                policy.clone()
+                match file_system_policy.kind {
+                    FileSystemSandboxKind::Restricted => {
+                        FileSystemSandboxPolicy::from(&effective_policy)
+                    }
+                    FileSystemSandboxKind::Unrestricted
+                    | FileSystemSandboxKind::ExternalSandbox => file_system_policy.clone(),
+                }
             };
+            let network_sandbox_policy = NetworkSandboxPolicy::from(&effective_policy);
+            (
+                effective_policy,
+                file_system_sandbox_policy,
+                network_sandbox_policy,
+            )
+        } else {
+            (policy.clone(), file_system_policy.clone(), network_policy)
+        };
+        let (effective_policy, effective_file_system_policy, effective_network_policy) =
+            effective_policy;
         let mut env = spec.env;
-        if !effective_policy.has_full_network_access() {
+        if !effective_network_policy.is_enabled() {
             env.insert(
                 CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR.to_string(),
                 "1".to_string(),
@@ -407,6 +447,8 @@ impl SandboxManager {
             windows_sandbox_level,
             sandbox_permissions: spec.sandbox_permissions,
             sandbox_policy: effective_policy,
+            file_system_sandbox_policy: effective_file_system_policy,
+            network_sandbox_policy: effective_network_policy,
             justification: spec.justification,
             arg0: arg0_override,
         })
@@ -421,8 +463,7 @@ pub async fn execute_env(
     env: ExecRequest,
     stdout_stream: Option<StdoutStream>,
 ) -> crate::error::Result<ExecToolCallOutput> {
-    let effective_policy = env.sandbox_policy.clone();
-    execute_exec_env(env, &effective_policy, stdout_stream).await
+    execute_exec_env(env, stdout_stream).await
 }
 
 #[cfg(test)]
@@ -431,6 +472,14 @@ mod tests {
     use super::normalize_additional_permissions;
     use super::sandbox_policy_with_additional_permissions;
     use crate::exec::SandboxType;
+    use crate::protocol::FileSystemAccessMode;
+    use crate::protocol::FileSystemPath;
+    use crate::protocol::FileSystemSandboxEntry;
+    use crate::protocol::FileSystemSandboxPolicy;
+    use crate::protocol::FileSystemSpecialPath;
+    use crate::protocol::FileSystemSpecialPathKind;
+    use crate::protocol::NetworkAccess;
+    use crate::protocol::NetworkSandboxPolicy;
     use crate::protocol::ReadOnlyAccess;
     use crate::protocol::SandboxPolicy;
     use crate::tools::sandboxing::SandboxablePreference;
@@ -441,13 +490,14 @@ mod tests {
     use codex_utils_absolute_path::AbsolutePathBuf;
     use dunce::canonicalize;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use tempfile::TempDir;
 
     #[test]
     fn danger_full_access_defaults_to_no_sandbox_without_network_requirements() {
         let manager = SandboxManager::new();
         let sandbox = manager.select_initial(
-            &SandboxPolicy::DangerFullAccess,
+            &FileSystemSandboxPolicy::unrestricted(),
             SandboxablePreference::Auto,
             WindowsSandboxLevel::Disabled,
             false,
@@ -460,12 +510,76 @@ mod tests {
         let manager = SandboxManager::new();
         let expected = crate::safety::get_platform_sandbox(false).unwrap_or(SandboxType::None);
         let sandbox = manager.select_initial(
-            &SandboxPolicy::DangerFullAccess,
+            &FileSystemSandboxPolicy::unrestricted(),
             SandboxablePreference::Auto,
             WindowsSandboxLevel::Disabled,
             true,
         );
         assert_eq!(sandbox, expected);
+    }
+
+    #[test]
+    fn restricted_file_system_uses_platform_sandbox_without_managed_network() {
+        let manager = SandboxManager::new();
+        let expected = crate::safety::get_platform_sandbox(false).unwrap_or(SandboxType::None);
+        let sandbox = manager.select_initial(
+            &FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath {
+                        kind: FileSystemSpecialPathKind::Root,
+                        subpath: None,
+                    },
+                },
+                access: FileSystemAccessMode::Read,
+            }]),
+            SandboxablePreference::Auto,
+            WindowsSandboxLevel::Disabled,
+            false,
+        );
+        assert_eq!(sandbox, expected);
+    }
+
+    #[test]
+    fn transform_preserves_unrestricted_file_system_policy_for_restricted_network() {
+        let manager = SandboxManager::new();
+        let cwd = std::env::current_dir().expect("current dir");
+        let exec_request = manager
+            .transform(super::SandboxTransformRequest {
+                spec: super::CommandSpec {
+                    program: "true".to_string(),
+                    args: Vec::new(),
+                    cwd: cwd.clone(),
+                    env: HashMap::new(),
+                    expiration: crate::exec::ExecExpiration::DefaultTimeout,
+                    sandbox_permissions: super::SandboxPermissions::UseDefault,
+                    additional_permissions: None,
+                    justification: None,
+                },
+                policy: &SandboxPolicy::ExternalSandbox {
+                    network_access: crate::protocol::NetworkAccess::Restricted,
+                },
+                file_system_policy: &FileSystemSandboxPolicy::unrestricted(),
+                network_policy: NetworkSandboxPolicy::Restricted,
+                sandbox: SandboxType::None,
+                enforce_managed_network: false,
+                network: None,
+                sandbox_policy_cwd: cwd.as_path(),
+                #[cfg(target_os = "macos")]
+                macos_seatbelt_profile_extensions: None,
+                codex_linux_sandbox_exe: None,
+                use_linux_sandbox_bwrap: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            })
+            .expect("transform");
+
+        assert_eq!(
+            exec_request.file_system_sandbox_policy,
+            FileSystemSandboxPolicy::unrestricted()
+        );
+        assert_eq!(
+            exec_request.network_sandbox_policy,
+            NetworkSandboxPolicy::Restricted
+        );
     }
 
     #[test]
@@ -539,6 +653,97 @@ mod tests {
                 },
                 network_access: true,
             }
+        );
+    }
+
+    #[test]
+    fn external_sandbox_additional_permissions_can_enable_network() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let path = AbsolutePathBuf::from_absolute_path(
+            canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+        )
+        .expect("absolute temp dir");
+        let policy = sandbox_policy_with_additional_permissions(
+            &SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Restricted,
+            },
+            &PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![path]),
+                    write: Some(Vec::new()),
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("policy");
+
+        assert_eq!(
+            policy,
+            SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled,
+            }
+        );
+    }
+
+    #[test]
+    fn transform_additional_permissions_enable_network_for_external_sandbox() {
+        let manager = SandboxManager::new();
+        let cwd = std::env::current_dir().expect("current dir");
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let path = AbsolutePathBuf::from_absolute_path(
+            canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+        )
+        .expect("absolute temp dir");
+        let exec_request = manager
+            .transform(super::SandboxTransformRequest {
+                spec: super::CommandSpec {
+                    program: "true".to_string(),
+                    args: Vec::new(),
+                    cwd: cwd.clone(),
+                    env: HashMap::new(),
+                    expiration: crate::exec::ExecExpiration::DefaultTimeout,
+                    sandbox_permissions: super::SandboxPermissions::WithAdditionalPermissions,
+                    additional_permissions: Some(PermissionProfile {
+                        network: Some(NetworkPermissions {
+                            enabled: Some(true),
+                        }),
+                        file_system: Some(FileSystemPermissions {
+                            read: Some(vec![path]),
+                            write: Some(Vec::new()),
+                        }),
+                        ..Default::default()
+                    }),
+                    justification: None,
+                },
+                policy: &SandboxPolicy::ExternalSandbox {
+                    network_access: NetworkAccess::Restricted,
+                },
+                file_system_policy: &FileSystemSandboxPolicy::unrestricted(),
+                network_policy: NetworkSandboxPolicy::Restricted,
+                sandbox: SandboxType::None,
+                enforce_managed_network: false,
+                network: None,
+                sandbox_policy_cwd: cwd.as_path(),
+                #[cfg(target_os = "macos")]
+                macos_seatbelt_profile_extensions: None,
+                codex_linux_sandbox_exe: None,
+                use_linux_sandbox_bwrap: false,
+                windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            })
+            .expect("transform");
+
+        assert_eq!(
+            exec_request.sandbox_policy,
+            SandboxPolicy::ExternalSandbox {
+                network_access: NetworkAccess::Enabled,
+            }
+        );
+        assert_eq!(
+            exec_request.network_sandbox_policy,
+            NetworkSandboxPolicy::Enabled
         );
     }
 }

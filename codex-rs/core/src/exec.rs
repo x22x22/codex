@@ -24,6 +24,9 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
+use crate::protocol::FileSystemSandboxKind;
+use crate::protocol::FileSystemSandboxPolicy;
+use crate::protocol::NetworkSandboxPolicy;
 use crate::protocol::SandboxPolicy;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::ExecRequest;
@@ -149,9 +152,12 @@ pub struct StdoutStream {
     pub tx_event: Sender<Event>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn process_exec_tool_call(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_linux_sandbox_bwrap: bool,
@@ -159,8 +165,8 @@ pub async fn process_exec_tool_call(
 ) -> Result<ExecToolCallOutput> {
     let windows_sandbox_level = params.windows_sandbox_level;
     let enforce_managed_network = params.network.is_some();
-    let sandbox_type = match &sandbox_policy {
-        SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
+    let sandbox_type = match file_system_sandbox_policy.kind {
+        FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => {
             if enforce_managed_network {
                 get_platform_sandbox(
                     windows_sandbox_level
@@ -215,6 +221,8 @@ pub async fn process_exec_tool_call(
         .transform(crate::sandboxing::SandboxTransformRequest {
             spec,
             policy: sandbox_policy,
+            file_system_policy: file_system_sandbox_policy,
+            network_policy: network_sandbox_policy,
             sandbox: sandbox_type,
             enforce_managed_network,
             network: network.as_ref(),
@@ -233,7 +241,6 @@ pub async fn process_exec_tool_call(
 
 pub(crate) async fn execute_exec_env(
     env: ExecRequest,
-    sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
     let ExecRequest {
@@ -245,7 +252,9 @@ pub(crate) async fn execute_exec_env(
         sandbox,
         windows_sandbox_level,
         sandbox_permissions,
-        sandbox_policy: _sandbox_policy_from_env,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
         justification,
         arg0,
     } = env;
@@ -263,7 +272,15 @@ pub(crate) async fn execute_exec_env(
     };
 
     let start = Instant::now();
-    let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream).await;
+    let raw_output_result = exec(
+        params,
+        sandbox,
+        &sandbox_policy,
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+        stdout_stream,
+    )
+    .await;
     let duration = start.elapsed();
     finalize_exec_result(raw_output_result, sandbox, duration)
 }
@@ -692,15 +709,16 @@ async fn exec(
     params: ExecParams,
     sandbox: SandboxType,
     sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
-    if sandbox == SandboxType::WindowsRestrictedToken
-        && !matches!(
-            sandbox_policy,
-            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
-        )
-    {
+    if should_use_windows_restricted_token_sandbox(
+        sandbox,
+        sandbox_policy,
+        file_system_sandbox_policy,
+    ) {
         return exec_windows_sandbox(params, sandbox_policy).await;
     }
     let ExecParams {
@@ -729,7 +747,7 @@ async fn exec(
         args: args.into(),
         arg0: arg0_ref,
         cwd,
-        sandbox_policy,
+        network_sandbox_policy,
         // The environment already has attempt-scoped proxy settings from
         // apply_to_env_for_attempt above. Passing network here would reapply
         // non-attempt proxy vars and drop attempt correlation metadata.
@@ -739,6 +757,20 @@ async fn exec(
     })
     .await?;
     consume_truncated_output(child, expiration, stdout_stream).await
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn should_use_windows_restricted_token_sandbox(
+    sandbox: SandboxType,
+    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+) -> bool {
+    sandbox == SandboxType::WindowsRestrictedToken
+        && file_system_sandbox_policy.kind == FileSystemSandboxKind::Restricted
+        && !matches!(
+            sandbox_policy,
+            SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. }
+        )
 }
 
 /// Consumes the output of a child process, truncating it so it is suitable for
@@ -1093,6 +1125,38 @@ mod tests {
         assert_eq!(aggregated.truncated_after_lines, None);
     }
 
+    #[test]
+    fn windows_restricted_token_skips_external_sandbox_policies() {
+        let policy = SandboxPolicy::ExternalSandbox {
+            network_access: codex_protocol::protocol::NetworkAccess::Restricted,
+        };
+        let file_system_policy = FileSystemSandboxPolicy::restricted(vec![]);
+
+        assert_eq!(
+            should_use_windows_restricted_token_sandbox(
+                SandboxType::WindowsRestrictedToken,
+                &policy,
+                &file_system_policy,
+            ),
+            false
+        );
+    }
+
+    #[test]
+    fn windows_restricted_token_runs_for_legacy_restricted_policies() {
+        let policy = SandboxPolicy::new_read_only_policy();
+        let file_system_policy = FileSystemSandboxPolicy::restricted(vec![]);
+
+        assert_eq!(
+            should_use_windows_restricted_token_sandbox(
+                SandboxType::WindowsRestrictedToken,
+                &policy,
+                &file_system_policy,
+            ),
+            true
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn sandbox_detection_flags_sigsys_exit_code() {
@@ -1135,6 +1199,8 @@ mod tests {
             params,
             SandboxType::None,
             &SandboxPolicy::new_read_only_policy(),
+            &FileSystemSandboxPolicy::from(&SandboxPolicy::new_read_only_policy()),
+            NetworkSandboxPolicy::Restricted,
             None,
         )
         .await?;
@@ -1190,6 +1256,8 @@ mod tests {
         let result = process_exec_tool_call(
             params,
             &SandboxPolicy::DangerFullAccess,
+            &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
+            NetworkSandboxPolicy::Enabled,
             cwd.as_path(),
             &None,
             false,

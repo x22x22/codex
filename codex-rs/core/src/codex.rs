@@ -222,10 +222,12 @@ use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
+use crate::protocol::FileSystemSandboxPolicy;
 use crate::protocol::McpServerRefreshConfig;
 use crate::protocol::ModelRerouteEvent;
 use crate::protocol::ModelRerouteReason;
 use crate::protocol::NetworkApprovalContext;
+use crate::protocol::NetworkSandboxPolicy;
 use crate::protocol::Op;
 use crate::protocol::PlanDeltaEvent;
 use crate::protocol::RateLimitSnapshot;
@@ -482,6 +484,8 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
+            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -676,6 +680,8 @@ pub(crate) struct TurnContext {
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
+    pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
+    pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
@@ -764,6 +770,8 @@ impl TurnContext {
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
             sandbox_policy: self.sandbox_policy.clone(),
+            file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: self.network_sandbox_policy,
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             shell_environment_policy: self.shell_environment_policy.clone(),
@@ -867,6 +875,8 @@ pub(crate) struct SessionConfiguration {
     approval_policy: Constrained<AskForApproval>,
     /// How to sandbox commands executed in the system
     sandbox_policy: Constrained<SandboxPolicy>,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     windows_sandbox_level: WindowsSandboxLevel,
 
     /// Working directory that should be treated as the *root* of the
@@ -933,6 +943,10 @@ impl SessionConfiguration {
         }
         if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
             next_configuration.sandbox_policy.set(sandbox_policy)?;
+            next_configuration.file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from(next_configuration.sandbox_policy.get());
+            next_configuration.network_sandbox_policy =
+                NetworkSandboxPolicy::from(next_configuration.sandbox_policy.get());
         }
         if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
@@ -1145,6 +1159,8 @@ impl Session {
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
+            file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: session_configuration.network_sandbox_policy,
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
@@ -4805,6 +4821,8 @@ async fn spawn_review_thread(
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
+        file_system_sandbox_policy: parent_turn_context.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: parent_turn_context.network_sandbox_policy,
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
@@ -7832,6 +7850,8 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
+            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -7927,6 +7947,8 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
+            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -8247,6 +8269,8 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
+            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -8306,6 +8330,8 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
+            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -8398,6 +8424,8 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
+            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -8647,6 +8675,8 @@ mod tests {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
+            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -10072,11 +10102,15 @@ mod tests {
 
         // Now retry the same command WITHOUT escalated permissions; should succeed.
         // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
-        Arc::get_mut(&mut turn_context)
-            .expect("unique turn context Arc")
+        let turn_context_mut = Arc::get_mut(&mut turn_context).expect("unique turn context Arc");
+        turn_context_mut
             .sandbox_policy
             .set(SandboxPolicy::DangerFullAccess)
             .expect("test setup should allow updating sandbox policy");
+        turn_context_mut.file_system_sandbox_policy =
+            FileSystemSandboxPolicy::from(turn_context_mut.sandbox_policy.get());
+        turn_context_mut.network_sandbox_policy =
+            NetworkSandboxPolicy::from(turn_context_mut.sandbox_policy.get());
 
         let resp2 = handler
             .handle(ToolInvocation {
