@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Show a macOS approval dialog via osascript/JXA with JSON input and output.
+"""Show a macOS approval dialog via PyObjC/AppKit with JSON input and output.
 
 The helper wraps the working NSAlert + accessory-view pattern we prototyped:
 - frontmost activation
@@ -26,10 +26,11 @@ import json
 import os
 import select
 import shlex
-import subprocess
 import sys
 import tempfile
 import textwrap
+import time
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -37,14 +38,15 @@ from typing import Any
 
 DEFAULT_WIDTH = 620
 DEFAULT_CODE_HEIGHT = 180
+DEFAULT_SHORTCUT_ENABLE_DELAY_MS = 1_750
+NATIVE_BUTTON_MIN_HEIGHT = 36
+NATIVE_BUTTON_VERTICAL_PADDING = 18
 BUTTON_WRAP_WIDTH = 72
 TITLE_WRAP_WIDTH = 52
 BODY_WRAP_WIDTH = 72
 BUTTON_VERTICAL_GAP = 4
 DEBUG_ENV = "CODEX_APPROVAL_DIALOG_DEBUG"
 DEBUG_DIR_ENV = "CODEX_APPROVAL_DIALOG_DEBUG_DIR"
-SIMPLE_DIALOG_ENV = "CODEX_APPROVAL_DIALOG_SIMPLE"
-OSASCRIPT_TIMEOUT_ENV = "CODEX_APPROVAL_DIALOG_OSASCRIPT_TIMEOUT_MS"
 REQUESTER_PID_ENV = "CODEX_APPROVAL_REQUESTER_PID"
 STDIN_TIMEOUT_ENV = "CODEX_APPROVAL_DIALOG_STDIN_TIMEOUT_MS"
 DEFAULT_STDIN_TIMEOUT_MS = 100
@@ -409,14 +411,7 @@ def _default_title(payload: dict[str, Any]) -> str:
     return "Would you like to run the following command?"
 
 
-def _default_message(payload: dict[str, Any]) -> str:
-    kind = payload["kind"]
-    if kind == "patch":
-        return "Codex needs your approval before continuing."
-    if kind == "network":
-        return "Codex needs your approval before continuing."
-    if kind == "elicitation":
-        return "Codex needs your approval before continuing."
+def _default_message(_payload: dict[str, Any]) -> str:
     return "Codex needs your approval before continuing."
 
 
@@ -443,10 +438,14 @@ def normalize_payload(raw: dict[str, Any]) -> dict[str, Any]:
     payload.setdefault("code_selectable", False)
     payload.setdefault("width", DEFAULT_WIDTH)
     payload.setdefault("code_height", DEFAULT_CODE_HEIGHT)
+    payload.setdefault("shortcut_enable_delay_ms", DEFAULT_SHORTCUT_ENABLE_DELAY_MS)
 
     code = payload.get("code")
     if code is not None and not isinstance(code, str):
         raise ValueError("`code` must be a string when present")
+    shortcut_enable_delay_ms = payload.get("shortcut_enable_delay_ms")
+    if not isinstance(shortcut_enable_delay_ms, int) or shortcut_enable_delay_ms < 0:
+        raise ValueError("`shortcut_enable_delay_ms` must be a non-negative integer")
 
     options = payload["options"]
     if not isinstance(options, list) or not options:
@@ -591,359 +590,6 @@ def format_thread_summary(payload: dict[str, Any]) -> str | None:
     return str(thread_id)
 
 
-def build_jxa(payload: dict[str, Any]) -> str:
-    payload_json = json.dumps(payload)
-    return f"""
-ObjC.import("AppKit");
-ObjC.import("Foundation");
-
-function nsstr(value) {{
-  return $(value);
-}}
-
-function makeLabel(text, width, font) {{
-  var field = $.NSTextField.alloc.initWithFrame($.NSMakeRect(0, 0, width, 22));
-  field.setStringValue(nsstr(text));
-  field.setEditable(false);
-  field.setSelectable(false);
-  field.setBezeled(false);
-  field.setBordered(false);
-  field.setDrawsBackground(false);
-  field.setLineBreakMode($.NSLineBreakByWordWrapping);
-  field.setUsesSingleLineMode(false);
-  field.setFont(font);
-  return field;
-}}
-
-function measureWrappedTextHeight(text, width, font) {{
-  var field = makeLabel(text, width, font);
-  field.setFrame($.NSMakeRect(0, 0, width, 1000000));
-  var cellSize = field.cell.cellSizeForBounds($.NSMakeRect(0, 0, width, 1000000));
-  return Math.ceil(cellSize.height);
-}}
-
-var payload = {payload_json};
-var app = Application.currentApplication();
-app.includeStandardAdditions = true;
-
-var nsApp = $.NSApplication.sharedApplication;
-nsApp.setActivationPolicy($.NSApplicationActivationPolicyRegular);
-$.NSRunningApplication.currentApplication.activateWithOptions(
-  $.NSApplicationActivateIgnoringOtherApps
-);
-nsApp.activateIgnoringOtherApps(true);
-delay(0.25);
-
-var margin = 18;
-var innerWidth = payload.width - (margin * 2);
-var titleFont = $.NSFont.boldSystemFontOfSize(16);
-var bodyFont = $.NSFont.systemFontOfSize(13);
-var buttonFont = $.NSFont.systemFontOfSize(13);
-var buttonHorizontalInset = 14;
-var buttonVerticalInset = 7;
-
-var titleHeight = Math.max(22, (payload.title_line_count || 1) * 20);
-var messageHeight = Math.max(18, (payload.message_line_count || 1) * 17);
-var detailsHeight = 0;
-for (var i = 0; i < payload.detail_rows.length; i++) {{
-  detailsHeight += Math.max(18, payload.detail_rows[i].line_count * 17) + 6;
-}}
-var shortcutsHeight = payload.show_shortcuts_hint
-  ? (Math.max(18, (payload.shortcuts_line_count || 1) * 17) + 8)
-  : 0;
-var codeHeight = payload.code ? (payload.code_height + 10) : 0;
-var buttonTextWidth = Math.max(80, innerWidth - (buttonHorizontalInset * 2));
-var buttonHeights = [];
-var buttonsBlockHeight = 0;
-for (var i = 0; i < payload.options.length; i++) {{
-  var label = payload.options[i].display_label || payload.options[i].label;
-  var textHeight = Math.max(18, measureWrappedTextHeight(label, buttonTextWidth, buttonFont));
-  var buttonHeight = Math.max(28, textHeight + (buttonVerticalInset * 2));
-  buttonHeights.push(buttonHeight);
-  buttonsBlockHeight += buttonHeight;
-  if (i > 0) {{
-    buttonsBlockHeight += {BUTTON_VERTICAL_GAP};
-  }}
-}}
-var contentHeight =
-  margin +
-  titleHeight +
-  8 +
-  messageHeight +
-  12 +
-  detailsHeight +
-  (payload.code ? codeHeight + 12 : 0) +
-  shortcutsHeight +
-  buttonsBlockHeight +
-  margin;
-
-var selection = null;
-var cancelIndex = payload.options.findIndex(function(option) {{
-  return Boolean(option.cancel);
-}});
-
-ObjC.registerSubclass({{
-  name: "CodexApprovalDialogController",
-  methods: {{
-    "buttonPressed:": {{
-      types: ["void", ["id"]],
-      implementation: function(sender) {{
-        selection = Number(sender.tag);
-        $.NSApp.stopModalWithCode(1000 + selection);
-        sender.window.orderOut(null);
-      }}
-    }}
-  }}
-}});
-
-var controller = $.CodexApprovalDialogController.alloc.init;
-
-var win = $.NSWindow.alloc.initWithContentRectStyleMaskBackingDefer(
-  $.NSMakeRect(0, 0, payload.width, contentHeight),
-  $.NSWindowStyleMaskTitled,
-  $.NSBackingStoreBuffered,
-  false
-);
-win.setTitle(nsstr(payload.window_title));
-win.setOpaque(true);
-win.setAlphaValue(1.0);
-win.setBackgroundColor($.NSColor.windowBackgroundColor);
-win.setTitlebarAppearsTransparent(false);
-win.setMovableByWindowBackground(false);
-win.setLevel($.NSModalPanelWindowLevel);
-var screen = $.NSScreen.mainScreen;
-if (screen) {{
-  var visibleFrame = screen.visibleFrame;
-  var originX = visibleFrame.origin.x + Math.max(0, (visibleFrame.size.width - payload.width) / 2);
-  var originY = visibleFrame.origin.y + Math.max(0, (visibleFrame.size.height - contentHeight) / 2);
-  win.setFrameOrigin($.NSMakePoint(originX, originY));
-}}
-
-var contentView = win.contentView;
-var y = contentHeight - margin;
-
-var titleField = makeLabel(payload.title_display || payload.title, innerWidth, titleFont);
-y -= titleHeight;
-titleField.setFrame($.NSMakeRect(margin, y, innerWidth, titleHeight));
-contentView.addSubview(titleField);
-y -= 8;
-
-var messageField = makeLabel(payload.message_display || payload.message, innerWidth, bodyFont);
-y -= messageHeight;
-messageField.setFrame($.NSMakeRect(margin, y, innerWidth, messageHeight));
-contentView.addSubview(messageField);
-y -= 12;
-
-for (var i = 0; i < payload.detail_rows.length; i++) {{
-  var rowHeight = Math.max(18, payload.detail_rows[i].line_count * 17);
-  var rowField = makeLabel(payload.detail_rows[i].text, innerWidth, bodyFont);
-  y -= rowHeight;
-  rowField.setFrame($.NSMakeRect(margin, y, innerWidth, rowHeight));
-  contentView.addSubview(rowField);
-  y -= 6;
-}}
-
-if (payload.code) {{
-  var scrollY = y - payload.code_height;
-  var textView = $.NSTextView.alloc.initWithFrame(
-    $.NSMakeRect(0, 0, innerWidth, payload.code_height)
-  );
-  textView.setEditable(false);
-  textView.setSelectable(Boolean(payload.code_selectable));
-  textView.setRichText(false);
-  textView.setImportsGraphics(false);
-  textView.setUsesFindBar(true);
-  textView.setFont($.NSFont.userFixedPitchFontOfSize(12));
-  textView.textContainer.setWidthTracksTextView(true);
-  textView.textContainer.setContainerSize($.NSMakeSize(innerWidth, 10000000));
-  textView.setHorizontallyResizable(false);
-  textView.setVerticallyResizable(true);
-  textView.setMaxSize($.NSMakeSize(innerWidth, 10000000));
-  textView.setString(nsstr(payload.code));
-
-  var scrollView = $.NSScrollView.alloc.initWithFrame(
-    $.NSMakeRect(margin, scrollY, innerWidth, payload.code_height)
-  );
-  scrollView.setBorderType($.NSBezelBorder);
-  scrollView.setHasVerticalScroller(true);
-  scrollView.setHasHorizontalScroller(false);
-  scrollView.setAutohidesScrollers(true);
-  scrollView.setDocumentView(textView);
-  contentView.addSubview(scrollView);
-  y = scrollY - 12;
-}}
-
-if (payload.show_shortcuts_hint) {{
-  var hintHeight = Math.max(18, (payload.shortcuts_line_count || 1) * 17);
-  var hintField = makeLabel(payload.shortcuts_display || payload.shortcuts_hint, innerWidth, bodyFont);
-  y -= hintHeight;
-  hintField.setFrame($.NSMakeRect(margin, y, innerWidth, hintHeight));
-  contentView.addSubview(hintField);
-  y -= 8;
-}}
-
-var defaultIndex = payload.options.findIndex(function(option) {{
-  return Boolean(option.default);
-}});
-var buttons = [];
-for (var i = 0; i < payload.options.length; i++) {{
-  var option = payload.options[i];
-  var buttonHeight = buttonHeights[i];
-  var labelText = option.display_label || option.label;
-  var labelHeight = Math.max(18, measureWrappedTextHeight(labelText, buttonTextWidth, buttonFont));
-  y -= buttonHeight;
-  var button = $.NSButton.alloc.initWithFrame($.NSMakeRect(margin, y, innerWidth, buttonHeight));
-  button.setTitle(nsstr(""));
-  button.setTag(i);
-  button.setTarget(controller);
-  button.setAction("buttonPressed:");
-  button.setBordered(false);
-  button.setWantsLayer(true);
-  button.layer.setCornerRadius(7);
-  if (i === defaultIndex) {{
-    button.layer.setBackgroundColor($.NSColor.controlAccentColor.CGColor);
-  }} else {{
-    button.layer.setBackgroundColor($.NSColor.controlColor.CGColor);
-    button.layer.setBorderWidth(1);
-    button.layer.setBorderColor($.NSColor.separatorColor.CGColor);
-  }}
-  button.setFont(buttonFont);
-  var buttonLabel = makeLabel(labelText, buttonTextWidth, buttonFont);
-  if (i === defaultIndex) {{
-    buttonLabel.setTextColor($.NSColor.alternateSelectedControlTextColor);
-  }}
-  buttonLabel.setFrame(
-    $.NSMakeRect(
-      buttonHorizontalInset,
-      Math.max(buttonVerticalInset, Math.floor((buttonHeight - labelHeight) / 2)),
-      buttonTextWidth,
-      labelHeight
-    )
-  );
-  button.addSubview(buttonLabel);
-  if (option.key) {{
-    button.setKeyEquivalent(nsstr(option.key));
-    button.setKeyEquivalentModifierMask(0);
-  }}
-  if (i === defaultIndex) {{
-    win.setDefaultButtonCell(button.cell);
-  }}
-  buttons.push(button);
-  contentView.addSubview(button);
-  if (i + 1 < payload.options.length) {{
-    y -= {BUTTON_VERTICAL_GAP};
-  }}
-}}
-
-for (var i = 0; i < payload.options.length; i++) {{
-  var option = payload.options[i];
-  if (option.key) {{
-    buttons[i].setKeyEquivalent(nsstr(option.key));
-    buttons[i].setKeyEquivalentModifierMask(0);
-  }}
-}}
-
-win.makeKeyAndOrderFront(null);
-$.NSRunningApplication.currentApplication.activateWithOptions(
-  $.NSApplicationActivateIgnoringOtherApps | $.NSApplicationActivateAllWindows
-);
-nsApp.activateIgnoringOtherApps(true);
-
-var response = $.NSApp.runModalForWindow(win);
-var responseIndex = selection;
-if (responseIndex === null || responseIndex < 0) {{
-  responseIndex = cancelIndex >= 0 ? cancelIndex : defaultIndex;
-}}
-var option = payload.options[responseIndex];
-var result = JSON.stringify({{
-  thread_id: payload.thread_id || null,
-  thread_label: payload.thread_label || null,
-  call_id: payload.call_id || null,
-  approval_id: payload.approval_id || null,
-  turn_id: payload.turn_id || null,
-  id: option.id,
-  label: option.label,
-  key: option.key || null,
-  decision: option.decision || null,
-  response_index: responseIndex,
-  response_code: response
-}}) + "\\n";
-$.NSFileHandle.fileHandleWithStandardOutput.writeData(
-  nsstr(result).dataUsingEncoding($.NSUTF8StringEncoding)
-);
-""".strip()
-
-
-def build_simple_jxa(payload: dict[str, Any]) -> str:
-    buttons = [option["label"] for option in payload["options"]]
-    default_button = next(
-        (option["label"] for option in payload["options"] if option.get("default")),
-        buttons[-1],
-    )
-    cancel_button = next(
-        (option["label"] for option in payload["options"] if option.get("cancel")),
-        None,
-    )
-
-    message_lines = [payload["message"]]
-    if payload.get("thread"):
-        message_lines.append(f"Thread: {payload['thread']}")
-    if payload.get("requester_pid"):
-        message_lines.append(f"Requester PID: {payload['requester_pid']}")
-    if payload.get("cwd"):
-        message_lines.append(f"Working dir: {payload['cwd']}")
-    if payload.get("reason"):
-        message_lines.append(f"Reason: {payload['reason']}")
-    if payload.get("permission_rule"):
-        message_lines.append(f"Permission rule: {payload['permission_rule']}")
-    if payload.get("host") and payload.get("kind") == "network":
-        message_lines.append(f"Host: {payload['host']}")
-    if payload.get("server_name") and payload.get("kind") == "elicitation":
-        message_lines.append(f"Server: {payload['server_name']}")
-    if payload.get("code"):
-        message_lines.append("")
-        message_lines.append(payload["code"])
-
-    payload_json = json.dumps(payload)
-    dialog_args = {
-        "withTitle": payload["title"],
-        "buttons": buttons,
-        "defaultButton": default_button,
-    }
-    if cancel_button is not None:
-        dialog_args["cancelButton"] = cancel_button
-    dialog_args_json = json.dumps(dialog_args)
-    message = "\n".join(message_lines)
-
-    return f"""
-var payload = {payload_json};
-var dialogArgs = {dialog_args_json};
-var app = Application.currentApplication();
-app.includeStandardAdditions = true;
-app.activate();
-
-var response = app.displayDialog({json.dumps(message)}, dialogArgs);
-var button = response.buttonReturned();
-var selected = null;
-for (var i = 0; i < payload.options.length; i++) {{
-  if (payload.options[i].label === button) {{
-    selected = payload.options[i];
-    selected.response_index = i;
-    selected.response_code = String(1000 + i);
-    break;
-  }}
-}}
-if (selected === null) {{
-  throw new Error("unknown dialog button returned: " + button);
-}}
-
-var result = JSON.stringify(selected) + "\\n";
-$.NSFileHandle.fileHandleWithStandardOutput.writeData(
-  $(result).dataUsingEncoding($.NSUTF8StringEncoding)
-);
-""".strip()
-
-
 def _debug_dir() -> Path | None:
     debug_dir = os.environ.get(DEBUG_DIR_ENV)
     debug_enabled = os.environ.get(DEBUG_ENV)
@@ -1019,79 +665,439 @@ def _read_stdin_text(debug_dir: Path | None) -> str:
     return b"".join(chunks).decode("utf-8")
 
 
+_APPKIT = None
+_FOUNDATION = None
+_OBJC = None
+_NATIVE_DIALOG_CONTROLLER = None
+
+
+def _ensure_pyobjc():
+    global _APPKIT, _FOUNDATION, _OBJC, _NATIVE_DIALOG_CONTROLLER
+
+    if _APPKIT is None:
+        try:
+            import AppKit as appkit
+            import Foundation as foundation
+            import objc as objc_module
+        except ImportError as exc:  # pragma: no cover - environment-specific
+            raise RuntimeError(
+                "PyObjC/AppKit is required to show the approval dialog"
+            ) from exc
+        _APPKIT = appkit
+        _FOUNDATION = foundation
+        _OBJC = objc_module
+
+    if _NATIVE_DIALOG_CONTROLLER is None:
+        AppKit = _APPKIT
+        Foundation = _FOUNDATION
+        objc = _OBJC
+
+        class NativeApprovalDialogController(Foundation.NSObject):
+            @objc.python_method
+            def configure(self, payload: dict[str, Any], debug_dir: Path | None) -> None:
+                self.payload = payload
+                self.debug_dir = debug_dir
+                self.window = None
+                self.event_monitor = None
+                self.enable_timer = None
+                self.buttons = []
+                self.selection_index = None
+                self.response_code = None
+                self.shortcut_keys = {
+                    str(option["key"]).lower()
+                    for option in payload["options"]
+                    if option.get("key")
+                }
+                delay_ms = payload.get("shortcut_enable_delay_ms", 0)
+                self.shortcut_enable_time = time.monotonic() + (delay_ms / 1000.0)
+                self.shortcut_delay_seconds = delay_ms / 1000.0
+
+            @objc.python_method
+            def log(self, message: str) -> None:
+                _append_debug_event(self.debug_dir, f"native_dialog:{message}")
+
+            @objc.python_method
+            def set_buttons_enabled(self, enabled: bool) -> None:
+                for button in self.buttons:
+                    button.setEnabled_(enabled)
+                    button.setAlphaValue_(1.0 if enabled else 0.55)
+                self.log(f"buttons:enabled={enabled}")
+
+            @objc.python_method
+            def handle_key_event(self, event):
+                if self.window is None:
+                    return event
+                event_window = event.window()
+                if event_window is not None and event_window != self.window:
+                    return event
+                chars = event.charactersIgnoringModifiers()
+                key = str(chars).lower() if chars is not None else ""
+                if key in {"\r", "\n"}:
+                    remaining = self.shortcut_enable_time - time.monotonic()
+                    if remaining > 0:
+                        self.log(f"eventMonitor:ignored return remaining={remaining:.3f}")
+                        return None
+                    default_index = next(
+                        (
+                            index
+                            for index, option in enumerate(self.payload["options"])
+                            if option.get("default")
+                        ),
+                        None,
+                    )
+                    if default_index is None:
+                        return event
+                    self.log(f"eventMonitor:allowed return default_index={default_index}")
+                    self.buttonPressed_(self.buttons[default_index])
+                    return None
+                if key not in self.shortcut_keys:
+                    return event
+                remaining = self.shortcut_enable_time - time.monotonic()
+                if remaining > 0:
+                    self.log(f"eventMonitor:ignored key={key} remaining={remaining:.3f}")
+                    return None
+                self.log(f"eventMonitor:allowed key={key}")
+                return event
+
+            @objc.python_method
+            def install_event_monitor(self) -> None:
+                self.log("eventMonitor:installing")
+                self.event_monitor = AppKit.NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
+                    AppKit.NSEventMaskKeyDown,
+                    self.handle_key_event,
+                )
+                self.log("eventMonitor:installed")
+
+            @objc.python_method
+            def remove_event_monitor(self) -> None:
+                if self.event_monitor is not None:
+                    AppKit.NSEvent.removeMonitor_(self.event_monitor)
+                    self.event_monitor = None
+                    self.log("eventMonitor:removed")
+
+            @objc.python_method
+            def install_enable_timer(self) -> None:
+                if self.shortcut_delay_seconds <= 0:
+                    self.set_buttons_enabled(True)
+                    return
+                self.set_buttons_enabled(False)
+                self.log(f"buttons:enable_timer_installing delay={self.shortcut_delay_seconds:.3f}")
+                self.enable_timer = Foundation.NSTimer.timerWithTimeInterval_target_selector_userInfo_repeats_(
+                    self.shortcut_delay_seconds,
+                    self,
+                    "enableButtonsFromTimer:",
+                    None,
+                    False,
+                )
+                run_loop = Foundation.NSRunLoop.currentRunLoop()
+                run_loop.addTimer_forMode_(self.enable_timer, AppKit.NSModalPanelRunLoopMode)
+                run_loop.addTimer_forMode_(self.enable_timer, Foundation.NSRunLoopCommonModes)
+                self.log("buttons:enable_timer_installed")
+
+            @objc.python_method
+            def remove_enable_timer(self) -> None:
+                if self.enable_timer is not None:
+                    self.enable_timer.invalidate()
+                    self.enable_timer = None
+                    self.log("buttons:enable_timer_removed")
+
+            def enableButtonsFromTimer_(self, _timer) -> None:
+                self.enable_timer = None
+                self.set_buttons_enabled(True)
+                self.log("buttons:enable_timer_fired")
+
+            @objc.IBAction
+            def buttonPressed_(self, sender) -> None:
+                self.selection_index = int(sender.tag())
+                self.response_code = 1000 + self.selection_index
+                self.log(f"buttonPressed index={self.selection_index}")
+                AppKit.NSApplication.sharedApplication().stopModalWithCode_(self.response_code)
+                if self.window is not None:
+                    self.window.orderOut_(None)
+
+        _NATIVE_DIALOG_CONTROLLER = NativeApprovalDialogController
+
+    return _APPKIT, _FOUNDATION, _OBJC, _NATIVE_DIALOG_CONTROLLER
+
+
+def _make_native_label(AppKit, text: str, width: float, height: float, font, *, selectable: bool = False):
+    field = AppKit.NSTextField.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, width, height))
+    field.setStringValue_(text)
+    field.setEditable_(False)
+    field.setSelectable_(selectable)
+    field.setBezeled_(False)
+    field.setBordered_(False)
+    field.setDrawsBackground_(False)
+    field.setLineBreakMode_(AppKit.NSLineBreakByWordWrapping)
+    field.setUsesSingleLineMode_(False)
+    field.setFont_(font)
+    return field
+
+
+def _native_dialog_heights(payload: dict[str, Any]) -> tuple[int, list[int]]:
+    title_height = max(22, payload.get("title_line_count", 1) * 20)
+    message_height = max(18, payload.get("message_line_count", 1) * 17)
+    details_height = sum(max(18, row["line_count"] * 17) + 6 for row in payload["detail_rows"])
+    shortcuts_height = (
+        max(18, payload.get("shortcuts_line_count", 1) * 17) + 8
+        if payload.get("show_shortcuts_hint")
+        else 0
+    )
+    code_height = payload["code_height"] + 10 if payload.get("code") else 0
+    button_heights = []
+    for option in payload["options"]:
+        text_height = max(18, option.get("display_line_count", 1) * 17)
+        button_heights.append(max(NATIVE_BUTTON_MIN_HEIGHT, text_height + NATIVE_BUTTON_VERTICAL_PADDING))
+    content_height = (
+        18
+        + title_height
+        + 8
+        + message_height
+        + 12
+        + details_height
+        + (code_height + 12 if payload.get("code") else 0)
+        + shortcuts_height
+        + sum(button_heights)
+        + max(0, len(button_heights) - 1) * BUTTON_VERTICAL_GAP
+        + 18
+    )
+    return content_height, button_heights
+
+
+def _build_native_window(payload: dict[str, Any], controller, AppKit):
+    content_height, button_heights = _native_dialog_heights(payload)
+    width = payload["width"]
+    inner_width = width - 36
+    title_font = AppKit.NSFont.boldSystemFontOfSize_(16)
+    body_font = AppKit.NSFont.systemFontOfSize_(13)
+    button_font = AppKit.NSFont.systemFontOfSize_(13)
+
+    window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+        AppKit.NSMakeRect(0, 0, width, content_height),
+        AppKit.NSWindowStyleMaskTitled,
+        AppKit.NSBackingStoreBuffered,
+        False,
+    )
+    window.setTitle_(payload["window_title"])
+    window.setOpaque_(True)
+    window.setAlphaValue_(1.0)
+    window.setBackgroundColor_(AppKit.NSColor.windowBackgroundColor())
+    window.setTitlebarAppearsTransparent_(False)
+    window.setMovableByWindowBackground_(False)
+    window.setLevel_(AppKit.NSModalPanelWindowLevel)
+    window.center()
+    window.setReleasedWhenClosed_(False)
+    controller.window = window
+
+    content_view = window.contentView()
+    y = content_height - 18
+
+    title_height = max(22, payload.get("title_line_count", 1) * 20)
+    title_field = _make_native_label(
+        AppKit,
+        payload.get("title_display", payload["title"]),
+        inner_width,
+        title_height,
+        title_font,
+    )
+    y -= title_height
+    title_field.setFrame_(AppKit.NSMakeRect(18, y, inner_width, title_height))
+    content_view.addSubview_(title_field)
+    y -= 8
+
+    message_height = max(18, payload.get("message_line_count", 1) * 17)
+    message_field = _make_native_label(
+        AppKit,
+        payload.get("message_display", payload["message"]),
+        inner_width,
+        message_height,
+        body_font,
+    )
+    y -= message_height
+    message_field.setFrame_(AppKit.NSMakeRect(18, y, inner_width, message_height))
+    content_view.addSubview_(message_field)
+    y -= 12
+
+    for row in payload["detail_rows"]:
+        row_height = max(18, row["line_count"] * 17)
+        row_field = _make_native_label(AppKit, row["text"], inner_width, row_height, body_font)
+        y -= row_height
+        row_field.setFrame_(AppKit.NSMakeRect(18, y, inner_width, row_height))
+        content_view.addSubview_(row_field)
+        y -= 6
+
+    if payload.get("code"):
+        scroll_y = y - payload["code_height"]
+        text_view = AppKit.NSTextView.alloc().initWithFrame_(
+            AppKit.NSMakeRect(0, 0, inner_width, payload["code_height"])
+        )
+        text_view.setEditable_(False)
+        text_view.setSelectable_(bool(payload.get("code_selectable")))
+        text_view.setRichText_(False)
+        text_view.setImportsGraphics_(False)
+        text_view.setUsesFindBar_(True)
+        text_view.setFont_(AppKit.NSFont.userFixedPitchFontOfSize_(12))
+        text_view.textContainer().setWidthTracksTextView_(True)
+        text_view.textContainer().setContainerSize_(AppKit.NSMakeSize(inner_width, 10_000_000))
+        text_view.setHorizontallyResizable_(False)
+        text_view.setVerticallyResizable_(True)
+        text_view.setMaxSize_(AppKit.NSMakeSize(inner_width, 10_000_000))
+        text_view.setString_(payload["code"])
+
+        scroll_view = AppKit.NSScrollView.alloc().initWithFrame_(
+            AppKit.NSMakeRect(18, scroll_y, inner_width, payload["code_height"])
+        )
+        scroll_view.setBorderType_(AppKit.NSBezelBorder)
+        scroll_view.setHasVerticalScroller_(True)
+        scroll_view.setHasHorizontalScroller_(False)
+        scroll_view.setAutohidesScrollers_(True)
+        scroll_view.setDocumentView_(text_view)
+        content_view.addSubview_(scroll_view)
+        y = scroll_y - 12
+
+    if payload.get("show_shortcuts_hint"):
+        hint_height = max(18, payload.get("shortcuts_line_count", 1) * 17)
+        hint_field = _make_native_label(
+            AppKit,
+            payload.get("shortcuts_display", payload["shortcuts_hint"]),
+            inner_width,
+            hint_height,
+            body_font,
+        )
+        y -= hint_height
+        hint_field.setFrame_(AppKit.NSMakeRect(18, y, inner_width, hint_height))
+        content_view.addSubview_(hint_field)
+        y -= 8
+
+    default_index = next(
+        (index for index, option in enumerate(payload["options"]) if option.get("default")),
+        -1,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=_OBJC.ObjCPointerWarning)
+        accent_color = AppKit.NSColor.controlAccentColor().CGColor()
+        control_color = AppKit.NSColor.controlColor().CGColor()
+        separator_color = AppKit.NSColor.separatorColor().CGColor()
+    buttons = []
+    for index, option in enumerate(payload["options"]):
+        button_height = button_heights[index]
+        label_height = max(18, option.get("display_line_count", 1) * 17)
+        y -= button_height
+        button = AppKit.NSButton.alloc().initWithFrame_(
+            AppKit.NSMakeRect(18, y, inner_width, button_height)
+        )
+        button.setTitle_("")
+        button.setTag_(index)
+        button.setTarget_(controller)
+        button.setAction_("buttonPressed:")
+        button.setBordered_(False)
+        button.setWantsLayer_(True)
+        button.layer().setCornerRadius_(7)
+        if index == default_index:
+            button.layer().setBackgroundColor_(accent_color)
+        else:
+            button.layer().setBackgroundColor_(control_color)
+            button.layer().setBorderWidth_(1)
+            button.layer().setBorderColor_(separator_color)
+        button.setFont_(button_font)
+        if option.get("key"):
+            button.setKeyEquivalent_(option["key"])
+            button.setKeyEquivalentModifierMask_(0)
+
+        button_label = _make_native_label(
+            AppKit,
+            option.get("display_label", option["label"]),
+            inner_width - 28,
+            label_height,
+            button_font,
+        )
+        if index == default_index:
+            button_label.setTextColor_(AppKit.NSColor.alternateSelectedControlTextColor())
+        label_y = max(9, int(round((button_height - label_height) / 2)))
+        button_label.setFrame_(AppKit.NSMakeRect(14, label_y, inner_width - 28, label_height))
+        button.addSubview_(button_label)
+
+        content_view.addSubview_(button)
+        buttons.append(button)
+        if index + 1 < len(payload["options"]):
+            y -= BUTTON_VERTICAL_GAP
+
+    controller.buttons = buttons
+    controller.log(f"buttons:created count={len(buttons)}")
+    return window
+
+
+def _run_native_dialog(payload: dict[str, Any], debug_dir: Path | None) -> dict[str, Any]:
+    AppKit, _, _, Controller = _ensure_pyobjc()
+    controller = Controller.alloc().init()
+    controller.configure(payload, debug_dir)
+    _write_debug_file(debug_dir, "dialog-mode.txt", "pyobjc\n")
+    _write_debug_file(debug_dir, "normalized-payload.json", json.dumps(payload, indent=2))
+
+    app = AppKit.NSApplication.sharedApplication()
+    app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyRegular)
+    AppKit.NSRunningApplication.currentApplication().activateWithOptions_(
+        AppKit.NSApplicationActivateIgnoringOtherApps
+    )
+    app.activateIgnoringOtherApps_(True)
+    window = _build_native_window(payload, controller, AppKit)
+    window.makeKeyAndOrderFront_(None)
+    AppKit.NSRunningApplication.currentApplication().activateWithOptions_(
+        AppKit.NSApplicationActivateIgnoringOtherApps | AppKit.NSApplicationActivateAllWindows
+    )
+    app.activateIgnoringOtherApps_(True)
+    controller.log("window:visible")
+    controller.log(
+        "shortcuts:guard_active_until_monotonic="
+        f"{controller.shortcut_enable_time:.6f}"
+    )
+    controller.install_event_monitor()
+    controller.install_enable_timer()
+    response = None
+    try:
+        response = app.runModalForWindow_(window)
+        controller.log(f"runModal:return response={response}")
+    finally:
+        controller.remove_enable_timer()
+        controller.remove_event_monitor()
+
+    response_index = controller.selection_index
+    if response_index is None or response_index < 0:
+        response_index = next(
+            (index for index, option in enumerate(payload["options"]) if option.get("cancel")),
+            next(
+                (index for index, option in enumerate(payload["options"]) if option.get("default")),
+                0,
+            ),
+        )
+
+    option = payload["options"][response_index]
+    response_code = controller.response_code if controller.response_code is not None else response
+    controller.log(f"selection:final index={response_index} id={option['id']}")
+    return {
+        "thread_id": payload.get("thread_id"),
+        "thread_label": payload.get("thread_label"),
+        "call_id": payload.get("call_id"),
+        "approval_id": payload.get("approval_id"),
+        "turn_id": payload.get("turn_id"),
+        "id": option["id"],
+        "label": option["label"],
+        "key": option.get("key"),
+        "decision": option.get("decision"),
+        "response_index": response_index,
+        "response_code": None if response_code is None else str(response_code),
+    }
+
+
 def run_dialog(payload: dict[str, Any], debug_dir: Path | None) -> dict[str, Any]:
     _append_debug_event(debug_dir, "run_dialog:start")
-    raw_mode = "simple" if os.environ.get(SIMPLE_DIALOG_ENV) else "nsalert"
-    script = build_simple_jxa(payload) if raw_mode == "simple" else build_jxa(payload)
-    _write_debug_file(debug_dir, "normalized-payload.json", json.dumps(payload, indent=2))
-    _write_debug_file(debug_dir, "dialog-mode.txt", raw_mode + "\n")
-    _append_debug_event(debug_dir, f"run_dialog:mode={raw_mode}")
-    temp_path: Path | None = None
+    _write_debug_file(debug_dir, "run-status.txt", "starting\n")
     try:
-        if debug_dir is not None:
-            temp_path = debug_dir / "dialog.js"
-            temp_path.write_text(script, encoding="utf-8")
-        else:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".js", prefix="codex_approval_", delete=False
-            ) as temp_file:
-                temp_file.write(script)
-                temp_path = Path(temp_file.name)
-
-        command = ["osascript", "-l", "JavaScript", str(temp_path)]
-        _write_debug_file(debug_dir, "osascript-command.txt", " ".join(command) + "\n")
-        _write_debug_file(debug_dir, "run-status.txt", "starting\n")
-        _append_debug_event(debug_dir, f"run_dialog:command={' '.join(command)}")
-
-        timeout_ms = os.environ.get(OSASCRIPT_TIMEOUT_ENV)
-        timeout = None
-        if timeout_ms:
-            timeout = max(int(timeout_ms), 1) / 1000.0
-        _append_debug_event(debug_dir, f"run_dialog:timeout={timeout!r}")
-
-        try:
-            _append_debug_event(debug_dir, "run_dialog:subprocess_run:start")
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                check=False,
-                text=True,
-                timeout=timeout,
-            )
-            _append_debug_event(
-                debug_dir,
-                f"run_dialog:subprocess_run:done returncode={completed.returncode}",
-            )
-        except subprocess.TimeoutExpired as exc:
-            _write_debug_file(
-                debug_dir,
-                "osascript-timeout.txt",
-                f"timeout_seconds={exc.timeout}\nstdout={exc.stdout or ''}\nstderr={exc.stderr or ''}\n",
-            )
-            _append_debug_event(debug_dir, f"run_dialog:timeout_expired seconds={exc.timeout}")
-            raise RuntimeError(f"osascript timed out after {exc.timeout} seconds") from exc
+        selection = _run_native_dialog(payload, debug_dir)
     finally:
-        if temp_path is not None and debug_dir is None:
-            temp_path.unlink(missing_ok=True)
-
-    _write_debug_file(debug_dir, "osascript-stdout.txt", completed.stdout)
-    _write_debug_file(debug_dir, "osascript-stderr.txt", completed.stderr)
-    _write_debug_file(debug_dir, "osascript-returncode.txt", f"{completed.returncode}\n")
-    _write_debug_file(debug_dir, "run-status.txt", "completed\n")
+        _write_debug_file(debug_dir, "run-status.txt", "completed\n")
     _append_debug_event(debug_dir, "run_dialog:completed")
-
-    if completed.returncode != 0:
-        stderr = completed.stderr.strip()
-        stdout = completed.stdout.strip()
-        _append_debug_event(debug_dir, "run_dialog:error:nonzero_return")
-        raise RuntimeError(stderr or stdout or "osascript failed")
-
-    stdout = completed.stdout.strip()
-    if not stdout:
-        _append_debug_event(debug_dir, "run_dialog:error:no_stdout")
-        raise RuntimeError("osascript returned no output")
-    _append_debug_event(debug_dir, "run_dialog:parsing_stdout_json")
-    return json.loads(stdout)
+    return selection
 
 
 def build_protocol_output(payload: dict[str, Any], selection: dict[str, Any]) -> dict[str, Any]:
@@ -1156,6 +1162,7 @@ def build_test_payload() -> dict[str, Any]:
         "protocol_output_type": "exec_approval",
         "approval_id": "test-approval-id",
         "turn_id": "test-turn-id",
+        "shortcut_enable_delay_ms": DEFAULT_SHORTCUT_ENABLE_DELAY_MS,
         "options": [
             {
                 "id": "approved",
@@ -1200,11 +1207,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", help="Path to the JSON request payload")
     parser.add_argument(
-        "--print-jxa",
-        action="store_true",
-        help="Print the generated JXA script and exit without running it",
-    )
-    parser.add_argument(
         "--normalize-only",
         action="store_true",
         help="Print the normalized request JSON and exit without running it",
@@ -1220,6 +1222,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     debug_dir = _debug_dir()
+    if debug_dir is None and args.test:
+        debug_dir = Path(tempfile.gettempdir()) / "codex-approval-dialog" / "test"
+        debug_dir.mkdir(parents=True, exist_ok=True)
     try:
         _append_debug_event(debug_dir, "main:start")
         raw = load_input(args.input, test_mode=args.test, debug_dir=debug_dir)
@@ -1234,12 +1239,6 @@ def main() -> int:
         if args.normalize_only:
             _append_debug_event(debug_dir, "main:normalize_only")
             json.dump(payload, sys.stdout, indent=2)
-            sys.stdout.write("\n")
-            return 0
-        if args.print_jxa:
-            _append_debug_event(debug_dir, "main:print_jxa")
-            jxa = build_simple_jxa(payload) if os.environ.get(SIMPLE_DIALOG_ENV) else build_jxa(payload)
-            sys.stdout.write(jxa)
             sys.stdout.write("\n")
             return 0
         _append_debug_event(debug_dir, "main:run_dialog")
