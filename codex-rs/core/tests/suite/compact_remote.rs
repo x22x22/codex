@@ -1995,7 +1995,7 @@ async fn snapshot_request_shape_remote_mid_turn_realtime_end() -> Result<()> {
     let server = wiremock::MockServer::start().await;
     let realtime_server = start_remote_realtime_server().await;
     let mut builder = remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
-        config.features.enable(Feature::RequestPermissions);
+        let _ = config.features.enable(Feature::RequestPermissions);
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.permissions.sandbox_policy =
             Constrained::allow_any(SandboxPolicy::new_read_only_policy());
@@ -2097,7 +2097,7 @@ async fn snapshot_request_shape_remote_resume_after_same_turn_realtime_end_uses_
     let server = wiremock::MockServer::start().await;
     let realtime_server = start_remote_realtime_server().await;
     let mut builder = remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
-        config.features.enable(Feature::RequestPermissions);
+        let _ = config.features.enable(Feature::RequestPermissions);
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.permissions.sandbox_policy =
             Constrained::allow_any(SandboxPolicy::new_read_only_policy());
@@ -2179,7 +2179,7 @@ async fn snapshot_request_shape_remote_resume_after_same_turn_realtime_end_uses_
 
     let mut resume_builder =
         remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
-            config.features.enable(Feature::RequestPermissions);
+            let _ = config.features.enable(Feature::RequestPermissions);
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.permissions.sandbox_policy =
                 Constrained::allow_any(SandboxPolicy::new_read_only_policy());
@@ -2236,7 +2236,7 @@ async fn snapshot_request_shape_remote_compact_resume_after_same_turn_realtime_e
     let server = wiremock::MockServer::start().await;
     let realtime_server = start_remote_realtime_server().await;
     let mut builder = remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
-        config.features.enable(Feature::RequestPermissions);
+        let _ = config.features.enable(Feature::RequestPermissions);
         config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
         config.permissions.sandbox_policy =
             Constrained::allow_any(SandboxPolicy::new_read_only_policy());
@@ -2329,7 +2329,7 @@ async fn snapshot_request_shape_remote_compact_resume_after_same_turn_realtime_e
 
     let mut resume_builder =
         remote_realtime_test_codex_builder(&realtime_server).with_config(|config| {
-            config.features.enable(Feature::RequestPermissions);
+            let _ = config.features.enable(Feature::RequestPermissions);
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.permissions.sandbox_policy =
                 Constrained::allow_any(SandboxPolicy::new_read_only_policy());
