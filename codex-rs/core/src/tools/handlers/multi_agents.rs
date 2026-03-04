@@ -9,7 +9,7 @@ use crate::agent::AgentStatus;
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::codex::compute_hook_session_ref;
+use crate::codex::compute_hook_transcript_path;
 use crate::codex::dispatch_nonfatal_lifecycle_hook;
 use crate::config::Config;
 use crate::error::CodexErr;
@@ -162,20 +162,20 @@ mod spawn {
                 .into(),
             )
             .await;
-        let hook_session_ref = compute_hook_session_ref(session.as_ref()).await;
+        let transcript_path = compute_hook_transcript_path(session.as_ref()).await;
         dispatch_nonfatal_lifecycle_hook(
             session.as_ref(),
             HookPayload {
                 session_id: session.conversation_id,
+                transcript_path: transcript_path.clone(),
                 cwd: turn.cwd.clone(),
                 client: turn.app_server_client_name.clone(),
                 triggered_at: chrono::Utc::now(),
                 hook_event: HookEvent::SubagentStart {
                     event: HookEventLifecycle {
-                        session_ref: hook_session_ref.clone(),
                         previous_session_id: None,
                         prompt: prompt_for_hook.clone(),
-                        response_message: None,
+                        last_assistant_message: None,
                         tool_use_id: Some(call_id.clone()),
                         tool_input: Some(HookToolInput::Function {
                             arguments: arguments.clone(),
@@ -248,15 +248,15 @@ mod spawn {
             session.as_ref(),
             HookPayload {
                 session_id: session.conversation_id,
+                transcript_path,
                 cwd: turn.cwd.clone(),
                 client: turn.app_server_client_name.clone(),
                 triggered_at: chrono::Utc::now(),
-                hook_event: HookEvent::SubagentEnd {
+                hook_event: HookEvent::SubagentStop {
                     event: HookEventLifecycle {
-                        session_ref: hook_session_ref,
                         previous_session_id: None,
                         prompt: prompt_for_hook,
-                        response_message: None,
+                        last_assistant_message: None,
                         tool_use_id: Some(call_id.clone()),
                         tool_input: Some(HookToolInput::Function {
                             arguments: arguments.clone(),

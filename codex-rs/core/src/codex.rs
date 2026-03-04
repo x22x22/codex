@@ -1587,20 +1587,20 @@ impl Session {
         for event in events {
             sess.send_event_raw(event).await;
         }
-        let hook_session_ref = compute_hook_session_ref(sess.as_ref()).await;
+        let transcript_path = compute_hook_transcript_path(sess.as_ref()).await;
         dispatch_nonfatal_lifecycle_hook(
             sess.as_ref(),
             HookPayload {
                 session_id: conversation_id,
+                transcript_path,
                 cwd: session_configuration.cwd.clone(),
-                client: None,
+                client: session_configuration.app_server_client_name.clone(),
                 triggered_at: chrono::Utc::now(),
                 hook_event: HookEvent::SessionStart {
                     event: HookEventLifecycle {
-                        session_ref: hook_session_ref,
                         previous_session_id: None,
                         prompt: None,
-                        response_message: None,
+                        last_assistant_message: None,
                         tool_use_id: None,
                         tool_input: None,
                         subagent_id: None,
@@ -4642,13 +4642,11 @@ mod handlers {
 
         // Gracefully flush and shutdown rollout recorder on session end so tests
         // that inspect the rollout file do not race with the background writer.
-        let hook_session_ref = {
-            let rollout = sess.services.rollout.lock().await;
-            rollout
-                .as_ref()
-                .map(|recorder| recorder.rollout_path().display().to_string())
-                .unwrap_or_else(|| sess.conversation_id.to_string())
+        let client = {
+            let state = sess.state.lock().await;
+            state.session_configuration.app_server_client_name.clone()
         };
+        let transcript_path = super::compute_hook_transcript_path(sess.as_ref()).await;
         let recorder_opt = {
             let mut guard = sess.services.rollout.lock().await;
             guard.take()
@@ -4670,15 +4668,15 @@ mod handlers {
             sess.as_ref(),
             codex_hooks::HookPayload {
                 session_id: sess.conversation_id,
+                transcript_path,
                 cwd,
-                client: None,
+                client,
                 triggered_at: chrono::Utc::now(),
                 hook_event: codex_hooks::HookEvent::SessionEnd {
                     event: codex_hooks::HookEventLifecycle {
-                        session_ref: hook_session_ref,
                         previous_session_id: None,
                         prompt: None,
-                        response_message: None,
+                        last_assistant_message: None,
                         tool_use_id: None,
                         tool_input: None,
                         subagent_id: None,
@@ -4925,21 +4923,22 @@ fn hooks_config_from_config(config: &Config) -> HooksConfig {
     HooksConfig {
         legacy_notify_argv: config.notify.clone(),
         session_start_argv: config.hooks.session_start.clone(),
-        turn_start_argv: config.hooks.turn_start.clone(),
-        turn_end_argv: config.hooks.turn_end.clone(),
-        compaction_argv: config.hooks.compaction.clone(),
+        user_prompt_submit_argv: config.hooks.user_prompt_submit.clone(),
+        pre_tool_use_argv: config.hooks.pre_tool_use.clone(),
+        post_tool_use_argv: config.hooks.post_tool_use.clone(),
+        stop_argv: config.hooks.stop.clone(),
+        pre_compact_argv: config.hooks.pre_compact.clone(),
         session_end_argv: config.hooks.session_end.clone(),
         subagent_start_argv: config.hooks.subagent_start.clone(),
-        subagent_end_argv: config.hooks.subagent_end.clone(),
+        subagent_stop_argv: config.hooks.subagent_stop.clone(),
     }
 }
 
-pub(crate) async fn compute_hook_session_ref(session: &Session) -> String {
+pub(crate) async fn compute_hook_transcript_path(session: &Session) -> Option<String> {
     let rollout = session.services.rollout.lock().await;
     rollout
         .as_ref()
         .map(|recorder| recorder.rollout_path().display().to_string())
-        .unwrap_or_else(|| session.conversation_id.to_string())
 }
 
 pub(crate) async fn dispatch_nonfatal_lifecycle_hook(session: &Session, hook_payload: HookPayload) {
@@ -5011,20 +5010,20 @@ pub(crate) async fn run_turn(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let hook_session_ref = compute_hook_session_ref(sess.as_ref()).await;
+    let transcript_path = compute_hook_transcript_path(sess.as_ref()).await;
     dispatch_nonfatal_lifecycle_hook(
         sess.as_ref(),
         HookPayload {
             session_id: sess.conversation_id,
+            transcript_path,
             cwd: turn_context.cwd.clone(),
             client: turn_context.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
-            hook_event: HookEvent::TurnStart {
+            hook_event: HookEvent::UserPromptSubmit {
                 event: HookEventLifecycle {
-                    session_ref: hook_session_ref,
                     previous_session_id: None,
                     prompt: (!prompt.is_empty()).then_some(prompt),
-                    response_message: None,
+                    last_assistant_message: None,
                     tool_use_id: None,
                     tool_input: None,
                     subagent_id: None,
@@ -5285,22 +5284,23 @@ pub(crate) async fn run_turn(
                 }
 
                 if !needs_follow_up {
+                    let last_assistant_message = sampling_request_last_agent_message.clone();
                     last_agent_message = sampling_request_last_agent_message;
                     let turn_end_prompt = sampling_request_input_messages.last().cloned();
-                    let hook_session_ref = compute_hook_session_ref(sess.as_ref()).await;
+                    let transcript_path = compute_hook_transcript_path(sess.as_ref()).await;
                     dispatch_nonfatal_lifecycle_hook(
                         sess.as_ref(),
                         HookPayload {
                             session_id: sess.conversation_id,
+                            transcript_path,
                             cwd: turn_context.cwd.clone(),
                             client: turn_context.app_server_client_name.clone(),
                             triggered_at: chrono::Utc::now(),
-                            hook_event: HookEvent::TurnEnd {
+                            hook_event: HookEvent::Stop {
                                 event: HookEventLifecycle {
-                                    session_ref: hook_session_ref,
                                     previous_session_id: None,
                                     prompt: turn_end_prompt,
-                                    response_message: None,
+                                    last_assistant_message,
                                     tool_use_id: None,
                                     tool_input: None,
                                     subagent_id: None,
@@ -5310,10 +5310,12 @@ pub(crate) async fn run_turn(
                         },
                     )
                     .await;
+                    let transcript_path = compute_hook_transcript_path(sess.as_ref()).await;
                     let hook_outcomes = sess
                         .hooks()
                         .dispatch(HookPayload {
                             session_id: sess.conversation_id,
+                            transcript_path,
                             cwd: turn_context.cwd.clone(),
                             client: turn_context.app_server_client_name.clone(),
                             triggered_at: chrono::Utc::now(),
@@ -5493,20 +5495,20 @@ async fn run_auto_compact(
         )
         .await?;
     }
-    let hook_session_ref = compute_hook_session_ref(sess.as_ref()).await;
+    let transcript_path = compute_hook_transcript_path(sess.as_ref()).await;
     dispatch_nonfatal_lifecycle_hook(
         sess.as_ref(),
         HookPayload {
             session_id: sess.conversation_id,
+            transcript_path,
             cwd: turn_context.cwd.clone(),
             client: turn_context.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
-            hook_event: HookEvent::Compaction {
+            hook_event: HookEvent::PreCompact {
                 event: HookEventLifecycle {
-                    session_ref: hook_session_ref,
                     previous_session_id: None,
                     prompt: Some(turn_context.compact_prompt().to_string()),
-                    response_message: None,
+                    last_assistant_message: None,
                     tool_use_id: None,
                     tool_input: None,
                     subagent_id: None,
@@ -8855,16 +8857,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compute_hook_session_ref_falls_back_to_conversation_id_without_rollout() {
+    async fn compute_hook_transcript_path_is_none_without_rollout() {
         let (session, _turn_context) = make_session_and_context().await;
 
-        let session_ref = compute_hook_session_ref(&session).await;
+        let transcript_path = compute_hook_transcript_path(&session).await;
 
-        assert_eq!(session_ref, session.conversation_id.to_string());
+        assert_eq!(transcript_path, None);
     }
 
     #[tokio::test]
-    async fn compute_hook_session_ref_prefers_rollout_path_when_available() {
+    async fn compute_hook_transcript_path_prefers_rollout_path_when_available() {
         let (session, _turn_context) = make_session_and_context().await;
         let config = {
             let state = session.state.lock().await;
@@ -8891,9 +8893,9 @@ mod tests {
             *rollout = Some(recorder);
         }
 
-        let session_ref = compute_hook_session_ref(&session).await;
+        let transcript_path = compute_hook_transcript_path(&session).await;
 
-        assert_eq!(session_ref, rollout_path);
+        assert_eq!(transcript_path, Some(rollout_path));
     }
 
     pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(

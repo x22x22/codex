@@ -1,6 +1,7 @@
 use std::process::Stdio;
 use std::sync::Arc;
 
+use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::types::Hook;
@@ -13,25 +14,28 @@ use crate::types::HookResult;
 pub struct HooksConfig {
     pub legacy_notify_argv: Option<Vec<String>>,
     pub session_start_argv: Option<Vec<String>>,
-    pub turn_start_argv: Option<Vec<String>>,
-    pub turn_end_argv: Option<Vec<String>>,
-    pub compaction_argv: Option<Vec<String>>,
+    pub user_prompt_submit_argv: Option<Vec<String>>,
+    pub pre_tool_use_argv: Option<Vec<String>>,
+    pub post_tool_use_argv: Option<Vec<String>>,
+    pub stop_argv: Option<Vec<String>>,
+    pub pre_compact_argv: Option<Vec<String>>,
     pub session_end_argv: Option<Vec<String>>,
     pub subagent_start_argv: Option<Vec<String>>,
-    pub subagent_end_argv: Option<Vec<String>>,
+    pub subagent_stop_argv: Option<Vec<String>>,
 }
 
 #[derive(Clone)]
 pub struct Hooks {
     after_agent: Vec<Hook>,
-    after_tool_use: Vec<Hook>,
+    pre_tool_use: Vec<Hook>,
+    post_tool_use: Vec<Hook>,
     session_start: Vec<Hook>,
-    turn_start: Vec<Hook>,
-    turn_end: Vec<Hook>,
-    compaction: Vec<Hook>,
+    user_prompt_submit: Vec<Hook>,
+    stop: Vec<Hook>,
+    pre_compact: Vec<Hook>,
     session_end: Vec<Hook>,
     subagent_start: Vec<Hook>,
-    subagent_end: Vec<Hook>,
+    subagent_stop: Vec<Hook>,
 }
 
 impl Default for Hooks {
@@ -57,22 +61,34 @@ impl Hooks {
             .map(|argv| command_hook("session_start", argv))
             .into_iter()
             .collect();
-        let turn_start = config
-            .turn_start_argv
+        let user_prompt_submit = config
+            .user_prompt_submit_argv
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
-            .map(|argv| command_hook("turn_start", argv))
+            .map(|argv| command_hook("user_prompt_submit", argv))
             .into_iter()
             .collect();
-        let turn_end = config
-            .turn_end_argv
+        let pre_tool_use = config
+            .pre_tool_use_argv
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
-            .map(|argv| command_hook("turn_end", argv))
+            .map(|argv| command_hook("pre_tool_use", argv))
             .into_iter()
             .collect();
-        let compaction = config
-            .compaction_argv
+        let post_tool_use = config
+            .post_tool_use_argv
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
-            .map(|argv| command_hook("compaction", argv))
+            .map(|argv| command_hook("post_tool_use", argv))
+            .into_iter()
+            .collect();
+        let stop = config
+            .stop_argv
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| command_hook("stop", argv))
+            .into_iter()
+            .collect();
+        let pre_compact = config
+            .pre_compact_argv
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| command_hook("pre_compact", argv))
             .into_iter()
             .collect();
         let session_end = config
@@ -87,36 +103,38 @@ impl Hooks {
             .map(|argv| command_hook("subagent_start", argv))
             .into_iter()
             .collect();
-        let subagent_end = config
-            .subagent_end_argv
+        let subagent_stop = config
+            .subagent_stop_argv
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
-            .map(|argv| command_hook("subagent_end", argv))
+            .map(|argv| command_hook("subagent_stop", argv))
             .into_iter()
             .collect();
         Self {
             after_agent,
-            after_tool_use: Vec::new(),
+            pre_tool_use,
+            post_tool_use,
             session_start,
-            turn_start,
-            turn_end,
-            compaction,
+            user_prompt_submit,
+            stop,
+            pre_compact,
             session_end,
             subagent_start,
-            subagent_end,
+            subagent_stop,
         }
     }
 
     fn hooks_for_event(&self, hook_event: &HookEvent) -> &[Hook] {
         match hook_event {
             HookEvent::AfterAgent { .. } => &self.after_agent,
-            HookEvent::AfterToolUse { .. } => &self.after_tool_use,
+            HookEvent::PreToolUse { .. } => &self.pre_tool_use,
+            HookEvent::PostToolUse { .. } => &self.post_tool_use,
             HookEvent::SessionStart { .. } => &self.session_start,
-            HookEvent::TurnStart { .. } => &self.turn_start,
-            HookEvent::TurnEnd { .. } => &self.turn_end,
-            HookEvent::Compaction { .. } => &self.compaction,
+            HookEvent::UserPromptSubmit { .. } => &self.user_prompt_submit,
+            HookEvent::Stop { .. } => &self.stop,
+            HookEvent::PreCompact { .. } => &self.pre_compact,
             HookEvent::SessionEnd { .. } => &self.session_end,
             HookEvent::SubagentStart { .. } => &self.subagent_start,
-            HookEvent::SubagentEnd { .. } => &self.subagent_end,
+            HookEvent::SubagentStop { .. } => &self.subagent_stop,
         }
     }
 
@@ -162,13 +180,40 @@ fn command_hook(name: &str, argv: Vec<String>) -> Hook {
                     Ok(payload_json) => payload_json,
                     Err(err) => return HookResult::FailedContinue(err.into()),
                 };
-                command.arg(payload_json);
                 command
-                    .stdin(Stdio::null())
+                    .stdin(Stdio::piped())
                     .stdout(Stdio::null())
-                    .stderr(Stdio::null());
-                match command.spawn() {
-                    Ok(_) => HookResult::Success,
+                    .stderr(Stdio::piped());
+                let mut child = match command.spawn() {
+                    Ok(child) => child,
+                    Err(err) => return HookResult::FailedContinue(err.into()),
+                };
+
+                if let Some(mut stdin) = child.stdin.take()
+                    && let Err(err) = stdin.write_all(payload_json.as_bytes()).await
+                {
+                    return HookResult::FailedContinue(Box::new(err));
+                }
+
+                match child.wait_with_output().await {
+                    Ok(output) if output.status.success() => HookResult::Success,
+                    Ok(output) => {
+                        let code = output.status.code();
+                        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                        let message = if stderr.is_empty() {
+                            match code {
+                                Some(code) => format!("hook exited with status code {code}"),
+                                None => "hook terminated without a status code".to_string(),
+                            }
+                        } else {
+                            stderr
+                        };
+                        if code == Some(2) && payload.hook_event.aborts_on_exit_code_two() {
+                            HookResult::FailedAbort(std::io::Error::other(message).into())
+                        } else {
+                            HookResult::FailedContinue(std::io::Error::other(message).into())
+                        }
+                    }
                     Err(err) => HookResult::FailedContinue(err.into()),
                 }
             })
@@ -197,8 +242,9 @@ mod tests {
 
     use super::*;
     use crate::types::HookEventAfterAgent;
-    use crate::types::HookEventAfterToolUse;
     use crate::types::HookEventLifecycle;
+    use crate::types::HookEventPostToolUse;
+    use crate::types::HookEventPreToolUse;
     use crate::types::HookResult;
     use crate::types::HookToolInput;
     use crate::types::HookToolKind;
@@ -209,6 +255,7 @@ mod tests {
     fn hook_payload(label: &str) -> HookPayload {
         HookPayload {
             session_id: ThreadId::new(),
+            transcript_path: None,
             cwd: PathBuf::from(CWD),
             client: None,
             triggered_at: Utc
@@ -278,14 +325,15 @@ mod tests {
     fn after_tool_use_payload(label: &str) -> HookPayload {
         HookPayload {
             session_id: ThreadId::new(),
+            transcript_path: None,
             cwd: PathBuf::from(CWD),
             client: None,
             triggered_at: Utc
                 .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
                 .single()
                 .expect("valid timestamp"),
-            hook_event: HookEvent::AfterToolUse {
-                event: HookEventAfterToolUse {
+            hook_event: HookEvent::PostToolUse {
+                event: HookEventPostToolUse {
                     turn_id: format!("turn-{label}"),
                     call_id: format!("call-{label}"),
                     tool_name: "apply_patch".to_string(),
@@ -308,6 +356,7 @@ mod tests {
     fn lifecycle_payload(event: HookEvent) -> HookPayload {
         HookPayload {
             session_id: ThreadId::new(),
+            transcript_path: Some("/tmp/rollout.jsonl".to_string()),
             cwd: PathBuf::from(CWD),
             client: Some("codex-tui".to_string()),
             triggered_at: Utc
@@ -320,10 +369,9 @@ mod tests {
 
     fn sample_lifecycle_event() -> HookEventLifecycle {
         HookEventLifecycle {
-            session_ref: "session-ref".to_string(),
             previous_session_id: None,
             prompt: Some("hello".to_string()),
-            response_message: Some("done".to_string()),
+            last_assistant_message: Some("done".to_string()),
             tool_use_id: Some("toolu_123".to_string()),
             tool_input: Some(HookToolInput::Custom {
                 input: "payload".to_string(),
@@ -410,22 +458,26 @@ mod tests {
     fn hooks_new_wires_all_lifecycle_commands() {
         let hooks = Hooks::new(HooksConfig {
             session_start_argv: Some(vec!["hooks-cli".to_string()]),
-            turn_start_argv: Some(vec!["hooks-cli".to_string()]),
-            turn_end_argv: Some(vec!["hooks-cli".to_string()]),
-            compaction_argv: Some(vec!["hooks-cli".to_string()]),
+            user_prompt_submit_argv: Some(vec!["hooks-cli".to_string()]),
+            pre_tool_use_argv: Some(vec!["hooks-cli".to_string()]),
+            post_tool_use_argv: Some(vec!["hooks-cli".to_string()]),
+            stop_argv: Some(vec!["hooks-cli".to_string()]),
+            pre_compact_argv: Some(vec!["hooks-cli".to_string()]),
             session_end_argv: Some(vec!["hooks-cli".to_string()]),
             subagent_start_argv: Some(vec!["hooks-cli".to_string()]),
-            subagent_end_argv: Some(vec!["hooks-cli".to_string()]),
+            subagent_stop_argv: Some(vec!["hooks-cli".to_string()]),
             ..HooksConfig::default()
         });
 
         assert_eq!(hooks.session_start.len(), 1);
-        assert_eq!(hooks.turn_start.len(), 1);
-        assert_eq!(hooks.turn_end.len(), 1);
-        assert_eq!(hooks.compaction.len(), 1);
+        assert_eq!(hooks.user_prompt_submit.len(), 1);
+        assert_eq!(hooks.pre_tool_use.len(), 1);
+        assert_eq!(hooks.post_tool_use.len(), 1);
+        assert_eq!(hooks.stop.len(), 1);
+        assert_eq!(hooks.pre_compact.len(), 1);
         assert_eq!(hooks.session_end.len(), 1);
         assert_eq!(hooks.subagent_start.len(), 1);
-        assert_eq!(hooks.subagent_end.len(), 1);
+        assert_eq!(hooks.subagent_stop.len(), 1);
     }
 
     #[tokio::test]
@@ -493,7 +545,7 @@ mod tests {
     async fn dispatch_executes_after_tool_use_hooks() {
         let calls = Arc::new(AtomicUsize::new(0));
         let hooks = Hooks {
-            after_tool_use: vec![counting_success_hook(&calls, "counting")],
+            post_tool_use: vec![counting_success_hook(&calls, "counting")],
             ..Hooks::default()
         };
 
@@ -515,10 +567,9 @@ mod tests {
         let outcomes = hooks
             .dispatch(lifecycle_payload(HookEvent::SessionStart {
                 event: HookEventLifecycle {
-                    session_ref: "session-ref".to_string(),
                     previous_session_id: None,
                     prompt: None,
-                    response_message: None,
+                    last_assistant_message: None,
                     tool_use_id: None,
                     tool_input: None,
                     subagent_id: None,
@@ -536,22 +587,29 @@ mod tests {
     async fn dispatch_routes_each_lifecycle_event_to_matching_hooks() {
         let session_start_calls = Arc::new(AtomicUsize::new(0));
         let turn_start_calls = Arc::new(AtomicUsize::new(0));
-        let turn_end_calls = Arc::new(AtomicUsize::new(0));
-        let compaction_calls = Arc::new(AtomicUsize::new(0));
+        let pre_tool_use_calls = Arc::new(AtomicUsize::new(0));
+        let post_tool_use_calls = Arc::new(AtomicUsize::new(0));
+        let stop_calls = Arc::new(AtomicUsize::new(0));
+        let pre_compact_calls = Arc::new(AtomicUsize::new(0));
         let session_end_calls = Arc::new(AtomicUsize::new(0));
         let subagent_start_calls = Arc::new(AtomicUsize::new(0));
-        let subagent_end_calls = Arc::new(AtomicUsize::new(0));
+        let subagent_stop_calls = Arc::new(AtomicUsize::new(0));
         let hooks = Hooks {
             session_start: vec![counting_success_hook(&session_start_calls, "session_start")],
-            turn_start: vec![counting_success_hook(&turn_start_calls, "turn_start")],
-            turn_end: vec![counting_success_hook(&turn_end_calls, "turn_end")],
-            compaction: vec![counting_success_hook(&compaction_calls, "compaction")],
+            user_prompt_submit: vec![counting_success_hook(
+                &turn_start_calls,
+                "user_prompt_submit",
+            )],
+            pre_tool_use: vec![counting_success_hook(&pre_tool_use_calls, "pre_tool_use")],
+            post_tool_use: vec![counting_success_hook(&post_tool_use_calls, "post_tool_use")],
+            stop: vec![counting_success_hook(&stop_calls, "stop")],
+            pre_compact: vec![counting_success_hook(&pre_compact_calls, "pre_compact")],
             session_end: vec![counting_success_hook(&session_end_calls, "session_end")],
             subagent_start: vec![counting_success_hook(
                 &subagent_start_calls,
                 "subagent_start",
             )],
-            subagent_end: vec![counting_success_hook(&subagent_end_calls, "subagent_end")],
+            subagent_stop: vec![counting_success_hook(&subagent_stop_calls, "subagent_stop")],
             ..Hooks::default()
         };
 
@@ -564,25 +622,48 @@ mod tests {
                 Arc::clone(&session_start_calls),
             ),
             (
-                "turn_start",
-                lifecycle_payload(HookEvent::TurnStart {
+                "user_prompt_submit",
+                lifecycle_payload(HookEvent::UserPromptSubmit {
                     event: sample_lifecycle_event(),
                 }),
                 Arc::clone(&turn_start_calls),
             ),
             (
-                "turn_end",
-                lifecycle_payload(HookEvent::TurnEnd {
-                    event: sample_lifecycle_event(),
+                "pre_tool_use",
+                lifecycle_payload(HookEvent::PreToolUse {
+                    event: HookEventPreToolUse {
+                        turn_id: "turn-pre".to_string(),
+                        call_id: "call-pre".to_string(),
+                        tool_name: "apply_patch".to_string(),
+                        tool_kind: HookToolKind::Custom,
+                        tool_input: HookToolInput::Custom {
+                            input: "*** Begin Patch".to_string(),
+                        },
+                        mutating: Some(true),
+                        sandbox: Some("none".to_string()),
+                        sandbox_policy: Some("danger-full-access".to_string()),
+                    },
                 }),
-                Arc::clone(&turn_end_calls),
+                Arc::clone(&pre_tool_use_calls),
             ),
             (
-                "compaction",
-                lifecycle_payload(HookEvent::Compaction {
+                "post_tool_use",
+                after_tool_use_payload("post"),
+                Arc::clone(&post_tool_use_calls),
+            ),
+            (
+                "stop",
+                lifecycle_payload(HookEvent::Stop {
                     event: sample_lifecycle_event(),
                 }),
-                Arc::clone(&compaction_calls),
+                Arc::clone(&stop_calls),
+            ),
+            (
+                "pre_compact",
+                lifecycle_payload(HookEvent::PreCompact {
+                    event: sample_lifecycle_event(),
+                }),
+                Arc::clone(&pre_compact_calls),
             ),
             (
                 "session_end",
@@ -599,11 +680,11 @@ mod tests {
                 Arc::clone(&subagent_start_calls),
             ),
             (
-                "subagent_end",
-                lifecycle_payload(HookEvent::SubagentEnd {
+                "subagent_stop",
+                lifecycle_payload(HookEvent::SubagentStop {
                     event: sample_lifecycle_event(),
                 }),
-                Arc::clone(&subagent_end_calls),
+                Arc::clone(&subagent_stop_calls),
             ),
         ];
 
@@ -640,10 +721,10 @@ mod tests {
     async fn dispatch_returns_after_tool_use_failure_outcome() {
         let calls = Arc::new(AtomicUsize::new(0));
         let hooks = Hooks {
-            after_tool_use: vec![failing_continue_hook(
+            post_tool_use: vec![failing_continue_hook(
                 &calls,
                 "failing",
-                "after_tool_use hook failed",
+                "post_tool_use hook failed",
             )],
             ..Hooks::default()
         };
@@ -657,38 +738,78 @@ mod tests {
 
     #[cfg(not(windows))]
     #[tokio::test]
-    async fn hook_executes_program_with_payload_argument_unix() -> Result<()> {
+    async fn pre_tool_use_exit_code_two_aborts_operation() {
+        let hooks = Hooks::new(HooksConfig {
+            pre_tool_use_argv: Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "exit 2".to_string(),
+            ]),
+            ..HooksConfig::default()
+        });
+
+        let outcomes = hooks
+            .dispatch(lifecycle_payload(HookEvent::PreToolUse {
+                event: HookEventPreToolUse {
+                    turn_id: "turn-pre".to_string(),
+                    call_id: "call-pre".to_string(),
+                    tool_name: "apply_patch".to_string(),
+                    tool_kind: HookToolKind::Custom,
+                    tool_input: HookToolInput::Custom {
+                        input: "*** Begin Patch".to_string(),
+                    },
+                    mutating: Some(true),
+                    sandbox: Some("none".to_string()),
+                    sandbox_policy: Some("danger-full-access".to_string()),
+                },
+            }))
+            .await;
+
+        assert_eq!(outcomes.len(), 1);
+        assert!(matches!(outcomes[0].result, HookResult::FailedAbort(_)));
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn post_tool_use_exit_code_two_continues_operation() {
+        let hooks = Hooks::new(HooksConfig {
+            post_tool_use_argv: Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "exit 2".to_string(),
+            ]),
+            ..HooksConfig::default()
+        });
+
+        let outcomes = hooks
+            .dispatch(after_tool_use_payload("post-exit-two"))
+            .await;
+
+        assert_eq!(outcomes.len(), 1);
+        assert!(matches!(outcomes[0].result, HookResult::FailedContinue(_)));
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn hook_executes_program_with_payload_on_stdin_unix() -> Result<()> {
         let temp_dir = tempdir()?;
         let payload_path = temp_dir.path().join("payload.json");
         let payload_path_arg = payload_path.to_string_lossy().into_owned();
-        let hook = Hook {
-            name: "write_payload".to_string(),
-            func: Arc::new(move |payload: &HookPayload| {
-                let payload_path_arg = payload_path_arg.clone();
-                Box::pin(async move {
-                    let json = to_string(payload).expect("serialize hook payload");
-                    let mut command = command_from_argv(&[
-                        "/bin/sh".to_string(),
-                        "-c".to_string(),
-                        "printf '%s' \"$2\" > \"$1\"".to_string(),
-                        "sh".to_string(),
-                        payload_path_arg,
-                        json,
-                    ])
-                    .expect("build command");
-                    command.status().await.expect("run hook command");
-                    HookResult::Success
-                })
-            }),
-        };
-
-        let payload = hook_payload("4");
+        let payload = lifecycle_payload(HookEvent::SessionStart {
+            event: sample_lifecycle_event(),
+        });
         let expected = to_string(&payload)?;
 
-        let hooks = Hooks {
-            after_agent: vec![hook],
-            ..Hooks::default()
-        };
+        let hooks = Hooks::new(HooksConfig {
+            session_start_argv: Some(vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "cat > \"$1\"".to_string(),
+                "sh".to_string(),
+                payload_path_arg,
+            ]),
+            ..HooksConfig::default()
+        });
         let outcomes = hooks.dispatch(payload).await;
         assert_eq!(outcomes.len(), 1);
         assert!(matches!(outcomes[0].result, HookResult::Success));
@@ -711,45 +832,34 @@ mod tests {
 
     #[cfg(windows)]
     #[tokio::test]
-    async fn hook_executes_program_with_payload_argument_windows() -> Result<()> {
+    async fn hook_executes_program_with_payload_on_stdin_windows() -> Result<()> {
         let temp_dir = tempdir()?;
         let payload_path = temp_dir.path().join("payload.json");
         let payload_path_arg = payload_path.to_string_lossy().into_owned();
         let script_path = temp_dir.path().join("write_payload.ps1");
-        fs::write(&script_path, "[IO.File]::WriteAllText($args[0], $args[1])")?;
+        fs::write(
+            &script_path,
+            "$inputData = [Console]::In.ReadToEnd(); [IO.File]::WriteAllText($args[0], $inputData)",
+        )?;
         let script_path_arg = script_path.to_string_lossy().into_owned();
-        let hook = Hook {
-            name: "write_payload".to_string(),
-            func: Arc::new(move |payload: &HookPayload| {
-                let payload_path_arg = payload_path_arg.clone();
-                let script_path_arg = script_path_arg.clone();
-                Box::pin(async move {
-                    let json = to_string(payload).expect("serialize hook payload");
-                    let mut command = command_from_argv(&[
-                        "powershell.exe".to_string(),
-                        "-NoLogo".to_string(),
-                        "-NoProfile".to_string(),
-                        "-ExecutionPolicy".to_string(),
-                        "Bypass".to_string(),
-                        "-File".to_string(),
-                        script_path_arg,
-                        payload_path_arg,
-                        json,
-                    ])
-                    .expect("build command");
-                    command.status().await.expect("run hook command");
-                    HookResult::Success
-                })
-            }),
-        };
-
-        let payload = hook_payload("4");
+        let payload = lifecycle_payload(HookEvent::SessionStart {
+            event: sample_lifecycle_event(),
+        });
         let expected = to_string(&payload)?;
 
-        let hooks = Hooks {
-            after_agent: vec![hook],
-            ..Hooks::default()
-        };
+        let hooks = Hooks::new(HooksConfig {
+            session_start_argv: Some(vec![
+                "powershell.exe".to_string(),
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-ExecutionPolicy".to_string(),
+                "Bypass".to_string(),
+                "-File".to_string(),
+                script_path_arg,
+                payload_path_arg,
+            ]),
+            ..HooksConfig::default()
+        });
         let outcomes = hooks.dispatch(payload).await;
         assert_eq!(outcomes.len(), 1);
         assert!(matches!(outcomes[0].result, HookResult::Success));

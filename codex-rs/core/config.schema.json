@@ -638,7 +638,19 @@
       "additionalProperties": false,
       "description": "Lifecycle hook command config deserialized from `[hooks]` in config.toml.",
       "properties": {
-        "compaction": {
+        "post_tool_use": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pre_compact": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pre_tool_use": {
           "items": {
             "type": "string"
           },
@@ -656,7 +668,7 @@
           },
           "type": "array"
         },
-        "subagent_end": {
+        "stop": {
           "items": {
             "type": "string"
           },
@@ -668,13 +680,13 @@
           },
           "type": "array"
         },
-        "turn_end": {
+        "subagent_stop": {
           "items": {
             "type": "string"
           },
           "type": "array"
         },
-        "turn_start": {
+        "user_prompt_submit": {
           "items": {
             "type": "string"
           },
@@ -1966,13 +1978,15 @@
         }
       ],
       "default": {
-        "compaction": null,
+        "post_tool_use": null,
+        "pre_compact": null,
+        "pre_tool_use": null,
         "session_end": null,
         "session_start": null,
-        "subagent_end": null,
+        "stop": null,
         "subagent_start": null,
-        "turn_end": null,
-        "turn_start": null
+        "subagent_stop": null,
+        "user_prompt_submit": null
       },
       "description": "Optional external hook commands keyed by lifecycle event."
     },

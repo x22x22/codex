@@ -33,15 +33,26 @@ Codex can run command hooks for lifecycle events via `[hooks]` in `~/.codex/conf
 ```toml
 [hooks]
 session_start = ["my-hook", "session_start"]
-turn_start = ["my-hook", "turn_start"]
-turn_end = ["my-hook", "turn_end"]
-compaction = ["my-hook", "compaction"]
+user_prompt_submit = ["my-hook", "user_prompt_submit"]
+pre_tool_use = ["my-hook", "pre_tool_use"]
+post_tool_use = ["my-hook", "post_tool_use"]
+stop = ["my-hook", "stop"]
+pre_compact = ["my-hook", "pre_compact"]
 session_end = ["my-hook", "session_end"]
 subagent_start = ["my-hook", "subagent_start"]
-subagent_end = ["my-hook", "subagent_end"]
+subagent_stop = ["my-hook", "subagent_stop"]
 ```
 
-Each command receives one extra final argv argument with JSON describing the hook payload.
+Each command receives JSON on stdin describing the hook payload.
+
+To align with the Claude-compatible event naming, the hook names are:
+
+- `turn_start` becomes `user_prompt_submit`
+- `turn_end` becomes `stop`
+- `compaction` becomes `pre_compact`
+- `subagent_end` becomes `subagent_stop`
+
+These older names never landed on `main`, so they are not accepted as aliases.
 
 ## JSON Schema
 
