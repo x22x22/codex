@@ -307,11 +307,27 @@ impl ExecPolicyManager {
         })?;
 
         let mut updated_policy = self.current().as_ref().clone();
-        updated_policy.add_prefix_rule_with_justification(
-            &prefix,
-            Decision::Allow,
-            Some(THREAD_PERSISTED_JUSTIFICATION.to_string()),
-        )?;
+        let has_existing_exact_allow_prefix = updated_policy
+            .check(&prefix, &|_| Decision::Allow)
+            .matched_rules
+            .iter()
+            .any(|rule_match| {
+                matches!(
+                    rule_match,
+                    RuleMatch::PrefixRuleMatch {
+                        matched_prefix,
+                        decision: Decision::Allow,
+                        ..
+                    } if matched_prefix == &prefix
+                )
+            });
+        if !has_existing_exact_allow_prefix {
+            updated_policy.add_prefix_rule_with_justification(
+                &prefix,
+                Decision::Allow,
+                Some(THREAD_PERSISTED_JUSTIFICATION.to_string()),
+            )?;
+        }
         self.policy.store(Arc::new(updated_policy));
         Ok(())
     }
@@ -1879,6 +1895,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 matched_rules: vec![RuleMatch::PrefixRuleMatch {
                     matched_prefix: vec!["echo".to_string(), "hello".to_string()],
                     decision: Decision::Allow,
+                    resolved_program: None,
                     justification: Some(THREAD_PERSISTED_JUSTIFICATION.to_string()),
                 }],
             }
@@ -1891,6 +1908,53 @@ prefix_rule(pattern=["git"], decision="prompt")
             r#"prefix_rule(pattern=["echo", "hello"], decision="allow", justification="persisted during thread")
 "#
         );
+    }
+
+    #[tokio::test]
+    async fn append_execpolicy_amendment_preserves_existing_justification_when_deduped() {
+        let codex_home = tempdir().expect("create temp dir");
+        let prefix = vec!["echo".to_string(), "hello".to_string()];
+        let policy_src = r#"prefix_rule(pattern=["echo", "hello"], decision="allow")"#;
+        let mut parser = PolicyParser::new();
+        parser
+            .parse("test.rules", policy_src)
+            .expect("parse policy");
+        let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+
+        let policy_path = default_policy_path(codex_home.path());
+        fs::create_dir_all(
+            policy_path
+                .parent()
+                .expect("policy path should have parent"),
+        )
+        .expect("create policy dir");
+        fs::write(&policy_path, format!("{policy_src}\n")).expect("seed policy file");
+
+        manager
+            .append_amendment_and_update(codex_home.path(), &ExecPolicyAmendment::from(prefix))
+            .await
+            .expect("update policy");
+        let updated_policy = manager.current();
+
+        let evaluation = updated_policy.check(
+            &["echo".to_string(), "hello".to_string(), "world".to_string()],
+            &|_| Decision::Allow,
+        );
+        assert_eq!(
+            evaluation,
+            Evaluation {
+                decision: Decision::Allow,
+                matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                    matched_prefix: vec!["echo".to_string(), "hello".to_string()],
+                    decision: Decision::Allow,
+                    resolved_program: None,
+                    justification: None,
+                }],
+            }
+        );
+
+        let contents = fs::read_to_string(policy_path).expect("policy file should exist");
+        assert_eq!(contents, format!("{policy_src}\n"));
     }
 
     #[tokio::test]
