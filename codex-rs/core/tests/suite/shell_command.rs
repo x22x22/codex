@@ -253,7 +253,7 @@ async fn unicode_output(login: bool) -> anyhow::Result<()> {
 
     let harness = shell_command_harness_with(|builder| {
         builder.with_model("gpt-5.2").with_config(|config| {
-            config.features.enable(Feature::PowershellUtf8);
+            let _ = config.features.enable(Feature::PowershellUtf8);
         })
     })
     .await?;
@@ -283,7 +283,7 @@ async fn unicode_output_with_newlines(login: bool) -> anyhow::Result<()> {
 
     let harness = shell_command_harness_with(|builder| {
         builder.with_model("gpt-5.2").with_config(|config| {
-            config.features.enable(Feature::PowershellUtf8);
+            let _ = config.features.enable(Feature::PowershellUtf8);
         })
     })
     .await?;

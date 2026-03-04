@@ -176,7 +176,7 @@ async fn process_sse_emits_failed_event_on_parse_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -217,7 +217,7 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -278,7 +278,7 @@ async fn process_sse_failed_event_records_response_error_message() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -337,7 +337,7 @@ async fn process_sse_failed_event_logs_parse_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -383,7 +383,7 @@ async fn process_sse_failed_event_logs_missing_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -438,7 +438,7 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -559,7 +559,7 @@ async fn handle_responses_span_records_response_kind_and_tool_name() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -625,7 +625,7 @@ async fn record_responses_sets_span_fields_for_response_events() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(|config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -706,7 +706,7 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -776,7 +776,7 @@ async fn handle_response_item_records_tool_result_for_function_call() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -856,7 +856,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await
@@ -920,7 +920,7 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
 
     let TestCodex { codex, .. } = test_codex()
         .with_config(move |config| {
-            config.features.disable(Feature::GhostCommit);
+            let _ = config.features.disable(Feature::GhostCommit);
         })
         .build(&server)
         .await

@@ -674,7 +674,7 @@ async fn apply_patch_cli_verification_failure_has_no_side_effects(
 
     let harness = apply_patch_harness_with(|builder| {
         builder.with_config(|config| {
-            config.features.enable(Feature::ApplyPatchFreeform);
+            let _ = config.features.enable(Feature::ApplyPatchFreeform);
         })
     })
     .await?;

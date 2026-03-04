@@ -1481,15 +1481,15 @@ async fn websocket_harness_with_options(
     let mut config = load_default_config_for_test(&codex_home).await;
     config.model = Some(MODEL.to_string());
     if websocket_enabled {
-        config.features.enable(Feature::ResponsesWebsockets);
+        let _ = config.features.enable(Feature::ResponsesWebsockets);
     } else {
-        config.features.disable(Feature::ResponsesWebsockets);
+        let _ = config.features.disable(Feature::ResponsesWebsockets);
     }
     if runtime_metrics_enabled {
-        config.features.enable(Feature::RuntimeMetrics);
+        let _ = config.features.enable(Feature::RuntimeMetrics);
     }
     if websocket_v2_enabled {
-        config.features.enable(Feature::ResponsesWebsocketsV2);
+        let _ = config.features.enable(Feature::ResponsesWebsocketsV2);
     }
     let config = Arc::new(config);
     let mut model_info = codex_core::test_support::construct_model_info_offline(MODEL, &config);

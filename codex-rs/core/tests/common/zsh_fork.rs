@@ -24,8 +24,8 @@ impl ZshForkRuntime {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
     ) {
-        config.features.enable(Feature::ShellTool);
-        config.features.enable(Feature::ShellZshFork);
+        let _ = config.features.enable(Feature::ShellTool);
+        let _ = config.features.enable(Feature::ShellZshFork);
         config.zsh_path = Some(self.zsh_path.clone());
         config.main_execve_wrapper_exe = Some(self.main_execve_wrapper_exe.clone());
         config.permissions.allow_login_shell = false;

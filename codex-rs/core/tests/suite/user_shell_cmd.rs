@@ -250,7 +250,7 @@ async fn user_shell_command_history_is_persisted_and_shared_with_model() -> anyh
     let server = responses::start_mock_server().await;
     // Disable it to ease command matching.
     let mut builder = core_test_support::test_codex::test_codex().with_config(move |config| {
-        config.features.disable(Feature::ShellSnapshot);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
 

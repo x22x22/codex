@@ -45,7 +45,7 @@ async fn websocket_fallback_switches_to_http_on_upgrade_required_connect() -> Re
         move |config| {
             config.model_provider.base_url = Some(base_url);
             config.model_provider.wire_api = codex_core::WireApi::Responses;
-            config.features.enable(Feature::ResponsesWebsockets);
+            let _ = config.features.enable(Feature::ResponsesWebsockets);
             // If we don't treat 426 specially, the sampling loop would retry the WebSocket
             // handshake before switching to the HTTP transport.
             config.model_provider.stream_max_retries = Some(2);
@@ -91,7 +91,7 @@ async fn websocket_fallback_switches_to_http_after_retries_exhausted() -> Result
         move |config| {
             config.model_provider.base_url = Some(base_url);
             config.model_provider.wire_api = codex_core::WireApi::Responses;
-            config.features.enable(Feature::ResponsesWebsockets);
+            let _ = config.features.enable(Feature::ResponsesWebsockets);
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
         }
@@ -136,7 +136,7 @@ async fn websocket_fallback_hides_first_websocket_retry_stream_error() -> Result
         move |config| {
             config.model_provider.base_url = Some(base_url);
             config.model_provider.wire_api = codex_core::WireApi::Responses;
-            config.features.enable(Feature::ResponsesWebsockets);
+            let _ = config.features.enable(Feature::ResponsesWebsockets);
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
         }
@@ -211,7 +211,7 @@ async fn websocket_fallback_is_sticky_across_turns() -> Result<()> {
         move |config| {
             config.model_provider.base_url = Some(base_url);
             config.model_provider.wire_api = codex_core::WireApi::Responses;
-            config.features.enable(Feature::ResponsesWebsockets);
+            let _ = config.features.enable(Feature::ResponsesWebsockets);
             config.model_provider.stream_max_retries = Some(2);
             config.model_provider.request_max_retries = Some(0);
         }

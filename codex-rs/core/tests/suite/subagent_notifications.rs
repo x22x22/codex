@@ -141,7 +141,7 @@ async fn setup_turn_one_with_spawned_child(
     .await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Collab);
+        let _ = config.features.enable(Feature::Collab);
     });
     let test = builder.build(server).await?;
     test.submit_turn(TURN_1_PROMPT).await?;
@@ -252,7 +252,7 @@ async fn spawned_child_receives_forked_parent_context() -> Result<()> {
     .await;
 
     let mut builder = test_codex().with_config(|config| {
-        config.features.enable(Feature::Collab);
+        let _ = config.features.enable(Feature::Collab);
     });
     let test = builder.build(&server).await?;
 
