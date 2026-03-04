@@ -115,11 +115,13 @@ use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
 const THREAD_EVENT_CHANNEL_CAPACITY: usize = 32768;
+const TITLE_SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Baseline cadence for periodic stream commit animation ticks.
 ///
 /// Smooth-mode streaming drains one line per tick, so this interval controls
 /// perceived typing speed for non-backlogged output.
 const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
+const TITLE_SPINNER_INTERVAL: Duration = Duration::from_millis(32);
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -718,12 +720,39 @@ fn normalize_harness_overrides_for_cwd(
     Ok(overrides)
 }
 
-fn normalize_title_context(title_override: Option<String>) -> Option<String> {
-    title_override
+fn decorate_title_context(
+    context: Option<String>,
+    task_running: bool,
+    tick: u128,
+) -> Option<String> {
+    if !task_running {
+        return context;
+    }
+
+    let frame = TITLE_SPINNER_FRAMES[tick as usize % TITLE_SPINNER_FRAMES.len()];
+    Some(frame.to_string())
+}
+
+fn compute_title_context(
+    title_override: Option<String>,
+    task_running: bool,
+    tick: u128,
+) -> Option<String> {
+    let context = title_override
         .as_deref()
         .map(str::trim)
         .filter(|name| !name.is_empty())
-        .map(ToString::to_string)
+        .map(ToString::to_string);
+
+    decorate_title_context(context, task_running, tick)
+}
+
+fn title_animation_tick() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        / TITLE_SPINNER_INTERVAL.as_millis()
 }
 
 impl App {
@@ -1755,8 +1784,17 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
         };
-        let title_context = normalize_title_context(app.chat_widget.title_override());
+        let task_running = app.chat_widget.is_task_running();
+        let title_context = compute_title_context(
+            app.chat_widget.title_override(),
+            task_running,
+            title_animation_tick(),
+        );
         tui.set_title_context(title_context.as_deref())?;
+        if task_running {
+            tui.frame_requester()
+                .schedule_frame_in(TITLE_SPINNER_INTERVAL);
+        }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -1856,8 +1894,17 @@ impl App {
                     AppRunControl::Continue
                 }
             };
-            let title_context = normalize_title_context(app.chat_widget.title_override());
+            let task_running = app.chat_widget.is_task_running();
+            let title_context = compute_title_context(
+                app.chat_widget.title_override(),
+                task_running,
+                title_animation_tick(),
+            );
             tui.set_title_context(title_context.as_deref())?;
+            if task_running {
+                tui.frame_requester()
+                    .schedule_frame_in(TITLE_SPINNER_INTERVAL);
+            }
             if App::should_stop_waiting_for_initial_session(
                 waiting_for_initial_session_configured,
                 app.primary_thread_id,
@@ -3750,10 +3797,35 @@ mod tests {
     }
 
     #[test]
-    fn normalize_title_context_uses_manual_title_when_present() {
+    fn decorate_title_context_leaves_idle_titles_plain() {
         assert_eq!(
-            normalize_title_context(Some("Named thread".to_string())),
+            decorate_title_context(Some("Named thread".to_string()), false, 3),
             Some("Named thread".to_string())
+        );
+    }
+
+    #[test]
+    fn decorate_title_context_adds_spinner_while_running() {
+        assert_eq!(
+            decorate_title_context(Some("Working".to_string()), true, 0),
+            Some("⠋".to_string())
+        );
+        assert_eq!(
+            decorate_title_context(Some("Working".to_string()), true, 9),
+            Some("⠏".to_string())
+        );
+    }
+
+    #[test]
+    fn title_context_defaults_to_none_without_manual_title() {
+        assert_eq!(compute_title_context(None, false, 0), None);
+    }
+
+    #[test]
+    fn title_context_prefers_manual_title_when_idle() {
+        assert_eq!(
+            compute_title_context(Some("manual title".to_string()), false, 0),
+            Some("manual title".to_string())
         );
     }
 

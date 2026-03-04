@@ -8037,6 +8037,10 @@ impl ChatWidget {
         self.title_override = Some(title);
     }
 
+    pub(crate) fn is_task_running(&self) -> bool {
+        self.bottom_pane.is_task_running()
+    }
+
     /// Returns the current thread's precomputed rollout path.
     ///
     /// For fresh non-ephemeral threads this path may exist before the file is
