@@ -22,6 +22,8 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecCommandStatus;
+use crate::protocol::FileSystemSandboxPolicy;
+use crate::protocol::NetworkSandboxPolicy;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::TurnStartedEvent;
 use crate::sandboxing::ExecRequest;
@@ -163,6 +165,8 @@ pub(crate) async fn execute_user_shell_command(
         windows_sandbox_level: turn_context.windows_sandbox_level,
         sandbox_permissions: SandboxPermissions::UseDefault,
         sandbox_policy: sandbox_policy.clone(),
+        file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
+        network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
         justification: None,
         arg0: None,
     };
@@ -173,7 +177,7 @@ pub(crate) async fn execute_user_shell_command(
         tx_event: session.get_tx_event(),
     });
 
-    let exec_result = execute_exec_env(exec_env, &sandbox_policy, stdout_stream)
+    let exec_result = execute_exec_env(exec_env, stdout_stream)
         .or_cancel(&cancellation_token)
         .await;
 

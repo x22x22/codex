@@ -1506,9 +1506,19 @@ impl CodexMessageProcessor {
         };
 
         let requested_policy = params.sandbox_policy.map(|policy| policy.to_core());
-        let effective_policy = match requested_policy {
+        let (
+            effective_policy,
+            effective_file_system_sandbox_policy,
+            effective_network_sandbox_policy,
+        ) = match requested_policy {
             Some(policy) => match self.config.permissions.sandbox_policy.can_set(&policy) {
-                Ok(()) => policy,
+                Ok(()) => {
+                    let file_system_sandbox_policy =
+                        codex_protocol::protocol::FileSystemSandboxPolicy::from(&policy);
+                    let network_sandbox_policy =
+                        codex_protocol::protocol::NetworkSandboxPolicy::from(&policy);
+                    (policy, file_system_sandbox_policy, network_sandbox_policy)
+                }
                 Err(err) => {
                     let error = JSONRPCErrorError {
                         code: INVALID_REQUEST_ERROR_CODE,
@@ -1519,7 +1529,11 @@ impl CodexMessageProcessor {
                     return;
                 }
             },
-            None => self.config.permissions.sandbox_policy.get().clone(),
+            None => (
+                self.config.permissions.sandbox_policy.get().clone(),
+                self.config.permissions.file_system_sandbox_policy.clone(),
+                self.config.permissions.network_sandbox_policy,
+            ),
         };
 
         let codex_linux_sandbox_exe = self.arg0_paths.codex_linux_sandbox_exe.clone();
@@ -1534,6 +1548,8 @@ impl CodexMessageProcessor {
             match codex_core::exec::process_exec_tool_call(
                 exec_params,
                 &effective_policy,
+                &effective_file_system_sandbox_policy,
+                effective_network_sandbox_policy,
                 sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
                 use_linux_sandbox_bwrap,
