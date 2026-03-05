@@ -1154,6 +1154,14 @@ fn insert_into_namespace(
         .or_insert_with(|| Value::Object(Map::new()));
     match entry {
         Value::Object(map) => {
+            if let Some(existing) = map.get(&name) {
+                if existing != &schema {
+                    return Err(anyhow!(
+                        "conflicting schema definition for {namespace}/{name}"
+                    ));
+                }
+                return Ok(());
+            }
             map.insert(name, schema);
             Ok(())
         }
