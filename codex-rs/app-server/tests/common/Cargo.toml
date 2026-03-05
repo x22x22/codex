@@ -9,7 +9,7 @@ path = "lib.rs"
 
 [[bin]]
 name = "codex-app-server-test-notify-capture"
-path = "notify_capture.rs"
+path = "src/bin/notify_capture.rs"
 
 [dependencies]
 anyhow = { workspace = true }
