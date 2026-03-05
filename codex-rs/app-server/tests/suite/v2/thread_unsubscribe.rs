@@ -168,6 +168,18 @@ async fn thread_unsubscribe_during_turn_interrupts_turn_and_emits_thread_closed(
     };
     assert_eq!(payload.thread_id, thread_id);
 
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let requests = server
+        .received_requests()
+        .await
+        .context("failed to fetch received requests")?;
+    assert_eq!(
+        requests.len(),
+        1,
+        "unsubscribe should not trigger a follow-up responses request"
+    );
+
     Ok(())
 }
 

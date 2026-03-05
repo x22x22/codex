@@ -239,3 +239,63 @@ async fn interrupt_persists_turn_aborted_marker_in_next_request() {
         "expected <turn_aborted> marker in follow-up request"
     );
 }
+
+/// Interrupting a turn while a tool-produced follow-up is pending must not
+/// start another model request before the session reports TurnAborted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn interrupt_does_not_issue_follow_up_request() {
+    let command = "sleep 60";
+    let call_id = "call-no-follow-up";
+
+    let args = json!({
+        "command": command,
+        "timeout_ms": 60_000
+    })
+    .to_string();
+    let first_body = sse(vec![
+        ev_response_created("resp-no-follow-up"),
+        ev_function_call(call_id, "shell_command", &args),
+        ev_completed("resp-no-follow-up"),
+    ]);
+
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_once(&server, first_body).await;
+
+    let fixture = test_codex()
+        .with_model("gpt-5.1")
+        .build(&server)
+        .await
+        .unwrap();
+    let codex = Arc::clone(&fixture.codex);
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "start interrupt follow-up guard".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExecCommandBegin(_))).await;
+
+    tokio::time::sleep(Duration::from_secs_f32(0.1)).await;
+    codex.submit(Op::Interrupt).await.unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnAborted(_))).await;
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let requests = response_mock.requests();
+    assert_eq!(
+        requests.len(),
+        1,
+        "interrupt should not issue a follow-up responses request"
+    );
+    assert!(
+        response_mock.saw_function_call(call_id),
+        "expected initial function call to be recorded"
+    );
+}

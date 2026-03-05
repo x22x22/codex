@@ -6583,6 +6583,16 @@ async fn try_run_sampling_request(
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
 
+    if cancellation_token.is_cancelled()
+        && outcome.as_ref().is_ok_and(|result| result.needs_follow_up)
+    {
+        debug!(
+            turn_id = %turn_context.sub_id,
+            "turn cancelled after tool drain; suppressing follow-up request"
+        );
+        return Err(CodexErr::TurnAborted);
+    }
+
     if should_emit_turn_diff {
         let unified_diff = {
             let mut tracker = turn_diff_tracker.lock().await;
