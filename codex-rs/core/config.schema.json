@@ -443,6 +443,9 @@
             "steer": {
               "type": "boolean"
             },
+            "tool_call_mcp_elicitation": {
+              "type": "boolean"
+            },
             "undo": {
               "type": "boolean"
             },
@@ -1832,6 +1835,9 @@
           "type": "boolean"
         },
         "steer": {
+          "type": "boolean"
+        },
+        "tool_call_mcp_elicitation": {
           "type": "boolean"
         },
         "undo": {

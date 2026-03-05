@@ -1,6 +1,8 @@
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_app_server_protocol::McpServerElicitationRequest;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
 use tracing::error;
 
 use crate::analytics_client::AppInvocation;
@@ -10,6 +12,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::types::AppToolApproval;
 use crate::connectors;
+use crate::features::Feature;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
@@ -24,12 +27,16 @@ use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::request_user_input::RequestUserInputAnswer;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
+use codex_rmcp_client::ElicitationAction;
+use codex_rmcp_client::ElicitationResponse;
 use rmcp::model::ToolAnnotations;
 use serde::Serialize;
+use serde_json::json;
 use std::sync::Arc;
 
 /// Handles the specified tool call dispatches the appropriate
@@ -402,6 +409,34 @@ async fn maybe_request_mcp_tool_approval(
         annotations,
         approval_key.is_some(),
     );
+    if turn_context
+        .config
+        .features
+        .enabled(Feature::ToolCallMcpElicitation)
+    {
+        let request_id = rmcp::model::RequestId::String(
+            format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}").into(),
+        );
+        let params = build_mcp_tool_approval_elicitation_request(
+            sess,
+            turn_context,
+            server,
+            question.clone(),
+        );
+        let decision = parse_mcp_tool_approval_elicitation_response(
+            sess.request_mcp_server_elicitation(turn_context, request_id, params)
+                .await,
+            &question_id,
+        );
+        let decision = normalize_approval_decision_for_mode(decision, approval_mode);
+        if matches!(decision, McpToolApprovalDecision::AcceptAndRemember)
+            && let Some(key) = approval_key
+        {
+            remember_mcp_tool_approval(sess, key).await;
+        }
+        return Some(decision);
+    }
+
     let args = RequestUserInputArgs {
         questions: vec![question],
     };
@@ -542,6 +577,126 @@ fn build_mcp_tool_approval_question(
         is_secret: false,
         options: Some(options),
     }
+}
+
+fn build_mcp_tool_approval_elicitation_request(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+    question: RequestUserInputQuestion,
+) -> McpServerElicitationRequestParams {
+    let requested_schema =
+        request_user_input_questions_to_elicitation_schema(std::slice::from_ref(&question));
+    let message = if question.header.trim().is_empty() {
+        question.question
+    } else {
+        format!(
+            "{header}\n\n{prompt}",
+            header = question.header,
+            prompt = question.question
+        )
+    };
+
+    McpServerElicitationRequestParams {
+        thread_id: sess.conversation_id.to_string(),
+        turn_id: Some(turn_context.sub_id.clone()),
+        server_name: server.to_string(),
+        request: McpServerElicitationRequest::Form {
+            message,
+            requested_schema,
+        },
+    }
+}
+
+fn request_user_input_questions_to_elicitation_schema(
+    questions: &[RequestUserInputQuestion],
+) -> serde_json::Value {
+    let questions_metadata = match serde_json::to_value(questions) {
+        Ok(value) => value,
+        Err(_) => serde_json::Value::Null,
+    };
+    let properties = questions
+        .iter()
+        .map(|question| {
+            let mut property = json!({
+                "title": question.header,
+                "description": question.question,
+            });
+            if let Some(options) = question.options.as_ref() {
+                property["type"] = json!("string");
+                property["enum"] = json!(
+                    options
+                        .iter()
+                        .map(|option| option.label.clone())
+                        .collect::<Vec<_>>()
+                );
+                property["x-codex-options"] = json!(options);
+            } else {
+                property["type"] = json!("string");
+            }
+            if question.is_secret {
+                property["writeOnly"] = json!(true);
+            }
+            (question.id.clone(), property)
+        })
+        .collect::<serde_json::Map<_, _>>();
+
+    json!({
+        "type": "object",
+        "properties": properties,
+        "required": questions
+            .iter()
+            .map(|question| question.id.clone())
+            .collect::<Vec<_>>(),
+        "additionalProperties": false,
+        "x-codex-request-user-input": {
+            "questions": questions_metadata,
+        },
+    })
+}
+
+fn parse_mcp_tool_approval_elicitation_response(
+    response: Option<ElicitationResponse>,
+    question_id: &str,
+) -> McpToolApprovalDecision {
+    let Some(response) = response else {
+        return McpToolApprovalDecision::Cancel;
+    };
+    match response.action {
+        ElicitationAction::Accept => parse_mcp_tool_approval_response(
+            request_user_input_response_from_elicitation_content(response.content),
+            question_id,
+        ),
+        ElicitationAction::Decline => McpToolApprovalDecision::Decline,
+        ElicitationAction::Cancel => McpToolApprovalDecision::Cancel,
+    }
+}
+
+fn request_user_input_response_from_elicitation_content(
+    content: Option<serde_json::Value>,
+) -> Option<RequestUserInputResponse> {
+    let Some(content) = content else {
+        return Some(RequestUserInputResponse {
+            answers: std::collections::HashMap::new(),
+        });
+    };
+    let content = content.as_object()?;
+    let answers = content
+        .iter()
+        .filter_map(|(question_id, value)| {
+            let answers = match value {
+                serde_json::Value::String(answer) => vec![answer.clone()],
+                serde_json::Value::Array(values) => values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(ToString::to_string))
+                    .collect(),
+                _ => return None,
+            };
+            Some((question_id.clone(), RequestUserInputAnswer { answers }))
+        })
+        .collect();
+
+    Some(RequestUserInputResponse { answers })
 }
 
 fn parse_mcp_tool_approval_response(
@@ -779,5 +934,113 @@ mod tests {
             .expect("unsanitized result");
 
         assert_eq!(got, original);
+    }
+
+    #[test]
+    fn elicitation_schema_reuses_request_user_input_question_shape() {
+        let schema =
+            request_user_input_questions_to_elicitation_schema(&[RequestUserInputQuestion {
+                id: "approval".to_string(),
+                header: "Approve app tool call?".to_string(),
+                question: "Allow this action?".to_string(),
+                is_other: false,
+                is_secret: false,
+                options: Some(vec![
+                    RequestUserInputQuestionOption {
+                        label: MCP_TOOL_APPROVAL_ACCEPT.to_string(),
+                        description: "Run the tool and continue.".to_string(),
+                    },
+                    RequestUserInputQuestionOption {
+                        label: MCP_TOOL_APPROVAL_DECLINE.to_string(),
+                        description: "Decline this tool call and continue.".to_string(),
+                    },
+                ]),
+            }]);
+
+        assert_eq!(
+            schema,
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "approval": {
+                        "title": "Approve app tool call?",
+                        "description": "Allow this action?",
+                        "type": "string",
+                        "enum": [
+                            MCP_TOOL_APPROVAL_ACCEPT,
+                            MCP_TOOL_APPROVAL_DECLINE,
+                        ],
+                        "x-codex-options": [
+                            {
+                                "label": MCP_TOOL_APPROVAL_ACCEPT,
+                                "description": "Run the tool and continue.",
+                            },
+                            {
+                                "label": MCP_TOOL_APPROVAL_DECLINE,
+                                "description": "Decline this tool call and continue.",
+                            },
+                        ],
+                    },
+                },
+                "required": ["approval"],
+                "additionalProperties": false,
+                "x-codex-request-user-input": {
+                    "questions": [{
+                        "id": "approval",
+                        "header": "Approve app tool call?",
+                        "question": "Allow this action?",
+                        "isOther": false,
+                        "isSecret": false,
+                        "options": [
+                            {
+                                "label": MCP_TOOL_APPROVAL_ACCEPT,
+                                "description": "Run the tool and continue.",
+                            },
+                            {
+                                "label": MCP_TOOL_APPROVAL_DECLINE,
+                                "description": "Decline this tool call and continue.",
+                            },
+                        ],
+                    }],
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn accepted_elicitation_content_converts_to_request_user_input_response() {
+        let response =
+            request_user_input_response_from_elicitation_content(Some(serde_json::json!(
+                {
+                    "approval": MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER,
+                }
+            )));
+
+        assert_eq!(
+            response,
+            Some(RequestUserInputResponse {
+                answers: std::collections::HashMap::from([(
+                    "approval".to_string(),
+                    RequestUserInputAnswer {
+                        answers: vec![MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER.to_string()],
+                    },
+                )]),
+            })
+        );
+    }
+
+    #[test]
+    fn declined_elicitation_response_stays_decline() {
+        let response = parse_mcp_tool_approval_elicitation_response(
+            Some(ElicitationResponse {
+                action: ElicitationAction::Decline,
+                content: Some(serde_json::json!({
+                    "approval": MCP_TOOL_APPROVAL_ACCEPT,
+                })),
+            }),
+            "approval",
+        );
+
+        assert_eq!(response, McpToolApprovalDecision::Decline);
     }
 }
