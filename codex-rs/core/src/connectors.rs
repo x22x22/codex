@@ -31,6 +31,7 @@ use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::plugins::AppConnectorId;
+use crate::plugins::PluginCapabilityIndex;
 use crate::token_data::TokenData;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
@@ -162,6 +163,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         sandbox_state,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth.as_ref()),
+        PluginCapabilityIndex::default(),
     )
     .await;
 

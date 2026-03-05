@@ -17,7 +17,6 @@ use crate::config_loader::ConfigLayerStack;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
-use crate::mcp_connection_manager::ToolInfo;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -25,7 +24,6 @@ use serde::Deserialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 use serde_json::json;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -97,7 +95,6 @@ impl PluginCapabilitySummary {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginCapabilityIndex {
     plugins: Vec<PluginCapabilitySummary>,
-    plugin_index_by_config_name: HashMap<String, usize>,
     plugin_indexes_by_connector_id: HashMap<AppConnectorId, Vec<usize>>,
     plugin_indexes_by_mcp_server_name: HashMap<String, Vec<usize>>,
 }
@@ -112,9 +109,6 @@ impl PluginCapabilityIndex {
             };
 
             let plugin_index = capability_index.plugins.len();
-            capability_index
-                .plugin_index_by_config_name
-                .insert(summary.config_name.clone(), plugin_index);
 
             for connector_id in &summary.app_connector_ids {
                 capability_index
@@ -142,12 +136,6 @@ impl PluginCapabilityIndex {
         &self.plugins
     }
 
-    pub fn plugin_for_config_name(&self, config_name: &str) -> Option<&PluginCapabilitySummary> {
-        self.plugin_index_by_config_name
-            .get(config_name)
-            .map(|plugin_index| &self.plugins[*plugin_index])
-    }
-
     pub fn plugins_for_connector_id(
         &self,
         connector_id: &AppConnectorId,
@@ -168,66 +156,6 @@ impl PluginCapabilityIndex {
             .map(|plugin_index| &self.plugins[*plugin_index])
             .collect()
     }
-}
-
-pub(crate) fn annotate_tools_with_plugin_sources(
-    mut tools: HashMap<String, ToolInfo>,
-    capability_index: &PluginCapabilityIndex,
-) -> HashMap<String, ToolInfo> {
-    for tool in tools.values_mut() {
-        // Recover plugin provenance from the app connector or MCP server and
-        // append it to the shared description text used by both prompt tools
-        // and search_tool_bm25 indexing.
-        let mut plugin_names = match tool.connector_id.as_ref() {
-            Some(connector_id) => capability_index
-                .plugins_for_connector_id(&AppConnectorId(connector_id.clone()))
-                .into_iter()
-                .map(|plugin| plugin.display_name.as_str())
-                .collect::<Vec<_>>(),
-            None => capability_index
-                .plugins_for_mcp_server_name(tool.server_name.as_str())
-                .into_iter()
-                .map(|plugin| plugin.display_name.as_str())
-                .collect::<Vec<_>>(),
-        };
-
-        if plugin_names.is_empty() {
-            continue;
-        }
-
-        plugin_names.sort_unstable();
-        plugin_names.dedup();
-
-        let plugin_source_note = if plugin_names.len() == 1 {
-            format!("This tool is part of plugin `{}`.", plugin_names[0])
-        } else {
-            format!(
-                "This tool is part of plugins {}.",
-                plugin_names
-                    .into_iter()
-                    .map(|plugin_name| format!("`{plugin_name}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-
-        let description = tool
-            .tool
-            .description
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or("");
-        let annotated_description = if description.is_empty() {
-            plugin_source_note
-        } else if matches!(description.chars().last(), Some('.' | '!' | '?')) {
-            format!("{description} {plugin_source_note}")
-        } else {
-            format!("{description}. {plugin_source_note}")
-        };
-        tool.tool.description = Some(Cow::Owned(annotated_description));
-    }
-
-    tools
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1112,8 +1040,11 @@ mod tests {
         assert_eq!(
             outcome
                 .capability_index()
-                .plugin_for_config_name("empty@test"),
-            None
+                .plugins()
+                .iter()
+                .map(|plugin| plugin.config_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["skills@test", "alpha@test", "beta@test"]
         );
     }
 

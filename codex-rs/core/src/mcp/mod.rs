@@ -217,7 +217,12 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         config.cli_auth_credentials_store_mode,
     );
     let auth = auth_manager.auth().await;
-    let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.clone()));
+    let plugin_capability_index = plugins_manager
+        .plugins_for_config(config)
+        .capability_index()
+        .clone();
+    let mcp_manager = McpManager::new(plugins_manager);
     let mcp_servers = mcp_manager.effective_servers(config, auth.as_ref());
     if mcp_servers.is_empty() {
         return McpListToolsResponseEvent {
@@ -251,6 +256,7 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         sandbox_state,
         config.codex_home.clone(),
         codex_apps_tools_cache_key(auth.as_ref()),
+        plugin_capability_index,
     )
     .await;
 

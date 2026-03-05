@@ -206,7 +206,6 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginCapabilitySummary;
 use crate::plugins::PluginsManager;
-use crate::plugins::annotate_tools_with_plugin_sources;
 use crate::plugins::render_explicit_plugin_instructions;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
@@ -1528,7 +1527,7 @@ impl Session {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager,
-            plugins_manager,
+            plugins_manager: Arc::clone(&plugins_manager),
             mcp_manager,
             file_watcher,
             agent_control,
@@ -1613,6 +1612,10 @@ impl Session {
             .map(|(name, _)| name.clone())
             .collect();
         required_mcp_servers.sort();
+        let plugin_capability_index = plugins_manager
+            .plugins_for_config(config.as_ref())
+            .capability_index()
+            .clone();
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
             cancel_guard.cancel();
@@ -1627,6 +1630,7 @@ impl Session {
             sandbox_state,
             config.codex_home.clone(),
             codex_apps_tools_cache_key(auth),
+            plugin_capability_index,
         )
         .await;
         {
@@ -3572,6 +3576,12 @@ impl Session {
     ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
+        let plugin_capability_index = self
+            .services
+            .plugins_manager
+            .plugins_for_config(config.as_ref())
+            .capability_index()
+            .clone();
         let mcp_servers = with_codex_apps_mcp(
             mcp_servers,
             self.features.enabled(Feature::Apps),
@@ -3599,6 +3609,7 @@ impl Session {
             sandbox_state,
             config.codex_home.clone(),
             codex_apps_tools_cache_key(auth.as_ref()),
+            plugin_capability_index,
         )
         .await;
         {
@@ -5699,10 +5710,6 @@ async fn built_tools(
         .services
         .plugins_manager
         .plugins_for_config(&turn_context.config);
-    // Annotate tool descriptions at runtime so prompt-visible tools and
-    // search_tool_bm25 share the same plugin provenance without mutating the
-    // cached MCP tool inventory.
-    mcp_tools = annotate_tools_with_plugin_sources(mcp_tools, loaded_plugins.capability_index());
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
