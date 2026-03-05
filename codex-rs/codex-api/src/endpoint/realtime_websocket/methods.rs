@@ -1,27 +1,12 @@
-use crate::endpoint::realtime_websocket::protocol::ConversationItem;
-use crate::endpoint::realtime_websocket::protocol::ConversationItemContent;
-use crate::endpoint::realtime_websocket::protocol::RealtimeApiMode;
-use crate::endpoint::realtime_websocket::protocol::RealtimeAudioFrame;
-use crate::endpoint::realtime_websocket::protocol::RealtimeEvent;
-use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
-use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioFormat;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioInputV1;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioInputV2;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioOutputFormat;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioOutputV1;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioOutputV2;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioV1;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioV2;
-use crate::endpoint::realtime_websocket::protocol::SessionTool;
-use crate::endpoint::realtime_websocket::protocol::SessionToolParameters;
-use crate::endpoint::realtime_websocket::protocol::SessionToolProperties;
-use crate::endpoint::realtime_websocket::protocol::SessionToolProperty;
-use crate::endpoint::realtime_websocket::protocol::SessionTurnDetection;
-use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
-use crate::endpoint::realtime_websocket::protocol::SessionUpdateSessionV1;
-use crate::endpoint::realtime_websocket::protocol::SessionUpdateSessionV2;
-use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
+use crate::endpoint::realtime_websocket::mode_v1;
+use crate::endpoint::realtime_websocket::mode_v2;
+use crate::endpoint::realtime_websocket::protocol_v1;
+use crate::endpoint::realtime_websocket::protocol_v2;
+use crate::endpoint::realtime_websocket::types::RealtimeApiMode;
+use crate::endpoint::realtime_websocket::types::RealtimeAudioFrame;
+use crate::endpoint::realtime_websocket::types::RealtimeEvent;
+use crate::endpoint::realtime_websocket::types::RealtimeOutboundMessage;
+use crate::endpoint::realtime_websocket::types::RealtimeSessionConfig;
 use crate::error::ApiError;
 use crate::provider::Provider;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
@@ -29,7 +14,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::HeaderValue;
-use serde_json::json;
+use http::header::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -294,17 +279,11 @@ impl RealtimeWebsocketWriter {
     }
 
     pub async fn send_conversation_item_create(&self, text: String) -> Result<(), ApiError> {
-        let kind = match self.mode {
-            RealtimeApiMode::V1 => "text".to_string(),
-            RealtimeApiMode::V2 => "input_text".to_string(),
+        let message = match self.mode {
+            RealtimeApiMode::V1 => mode_v1::conversation_item_create(text),
+            RealtimeApiMode::V2 => mode_v2::conversation_item_create(text),
         };
-        self.send_json(RealtimeOutboundMessage::ConversationItemCreate {
-            item: ConversationItem::Message {
-                role: "user".to_string(),
-                content: vec![ConversationItemContent { kind, text }],
-            },
-        })
-        .await
+        self.send_json(message).await
     }
 
     pub async fn send_conversation_handoff_append(
@@ -312,27 +291,11 @@ impl RealtimeWebsocketWriter {
         handoff_id: String,
         output_text: String,
     ) -> Result<(), ApiError> {
-        match self.mode {
-            RealtimeApiMode::V1 => {
-                self.send_json(RealtimeOutboundMessage::ConversationHandoffAppend {
-                    handoff_id,
-                    output_text,
-                })
-                .await
-            }
-            RealtimeApiMode::V2 => {
-                self.send_json(RealtimeOutboundMessage::ConversationItemCreate {
-                    item: ConversationItem::Message {
-                        role: "assistant".to_string(),
-                        content: vec![ConversationItemContent {
-                            kind: "output_text".to_string(),
-                            text: output_text,
-                        }],
-                    },
-                })
-                .await
-            }
-        }
+        let message = match self.mode {
+            RealtimeApiMode::V1 => mode_v1::handoff_append(handoff_id, output_text),
+            RealtimeApiMode::V2 => mode_v2::handoff_append(output_text),
+        };
+        self.send_json(message).await
     }
 
     pub async fn send_function_call_output(
@@ -343,14 +306,8 @@ impl RealtimeWebsocketWriter {
         match self.mode {
             RealtimeApiMode::V1 => Ok(()),
             RealtimeApiMode::V2 => {
-                let output = json!({
-                    "content": output_text,
-                })
-                .to_string();
-                self.send_json(RealtimeOutboundMessage::ConversationItemCreate {
-                    item: ConversationItem::FunctionCallOutput { call_id, output },
-                })
-                .await
+                self.send_json(mode_v2::function_call_output(call_id, output_text))
+                    .await
             }
         }
     }
@@ -366,69 +323,11 @@ impl RealtimeWebsocketWriter {
     }
 
     pub async fn send_session_update(&self, instructions: String) -> Result<(), ApiError> {
-        let session = match self.mode {
-            RealtimeApiMode::V1 => SessionUpdateSession::V1(SessionUpdateSessionV1 {
-                kind: "quicksilver".to_string(),
-                instructions,
-                audio: SessionAudioV1 {
-                    input: SessionAudioInputV1 {
-                        format: SessionAudioFormat {
-                            kind: "audio/pcm".to_string(),
-                            rate: 24_000,
-                        },
-                    },
-                    output: SessionAudioOutputV1 {
-                        voice: "mundo".to_string(),
-                    },
-                },
-            }),
-            RealtimeApiMode::V2 => SessionUpdateSession::V2(SessionUpdateSessionV2 {
-                kind: "realtime".to_string(),
-                instructions,
-                output_modalities: vec!["audio".to_string()],
-                audio: SessionAudioV2 {
-                    input: SessionAudioInputV2 {
-                        format: SessionAudioFormat {
-                            kind: "audio/pcm".to_string(),
-                            rate: 24_000,
-                        },
-                        turn_detection: SessionTurnDetection {
-                            kind: "semantic_vad".to_string(),
-                            interrupt_response: false,
-                            create_response: true,
-                        },
-                    },
-                    output: SessionAudioOutputV2 {
-                        format: SessionAudioOutputFormat {
-                            kind: "audio/pcm".to_string(),
-                            rate: 24_000,
-                        },
-                        voice: "marin".to_string(),
-                    },
-                },
-                tools: vec![SessionTool {
-                    kind: "function".to_string(),
-                    name: "codex".to_string(),
-                    description:
-                        "Delegate a request to Codex and return the final result to the user."
-                            .to_string(),
-                    parameters: SessionToolParameters {
-                        kind: "object".to_string(),
-                        properties: SessionToolProperties {
-                            prompt: SessionToolProperty {
-                                kind: "string".to_string(),
-                                description: "The user request to delegate to Codex.".to_string(),
-                            },
-                        },
-                        required: vec!["prompt".to_string()],
-                    },
-                }],
-                tool_choice: "auto".to_string(),
-            }),
+        let message = match self.mode {
+            RealtimeApiMode::V1 => mode_v1::session_update(instructions),
+            RealtimeApiMode::V2 => mode_v2::session_update(instructions),
         };
-
-        self.send_json(RealtimeOutboundMessage::SessionUpdate { session })
-            .await
+        self.send_json(message).await
     }
 
     pub async fn close(&self) -> Result<(), ApiError> {
@@ -519,6 +418,13 @@ impl RealtimeWebsocketEvents {
     }
 }
 
+fn parse_realtime_event(payload: &str, mode: RealtimeApiMode) -> Option<RealtimeEvent> {
+    match mode {
+        RealtimeApiMode::V1 => protocol_v1::parse_realtime_event(payload),
+        RealtimeApiMode::V2 => protocol_v2::parse_realtime_event(payload),
+    }
+}
+
 pub struct RealtimeWebsocketClient {
     provider: Provider,
 }
@@ -588,7 +494,7 @@ fn merge_request_headers(
     let mut headers = provider_headers.clone();
     headers.extend(extra_headers);
     for (name, value) in &default_headers {
-        if let http::header::Entry::Vacant(entry) = headers.entry(name) {
+        if let Entry::Vacant(entry) = headers.entry(name) {
             entry.insert(value.clone());
         }
     }
@@ -639,24 +545,9 @@ fn websocket_url_from_api_url(
         }
     }
 
-    {
-        let mut query = url.query_pairs_mut();
-        if mode == RealtimeApiMode::V1 {
-            query.append_pair("intent", "quicksilver");
-        }
-        if let Some(model) = model {
-            query.append_pair("model", model);
-        }
-        if let Some(query_params) = query_params {
-            for (key, value) in query_params {
-                if (key == "model" && model.is_some())
-                    || (key == "intent" && mode == RealtimeApiMode::V1)
-                {
-                    continue;
-                }
-                query.append_pair(key, value);
-            }
-        }
+    match mode {
+        RealtimeApiMode::V1 => mode_v1::append_query_params(&mut url, query_params, model),
+        RealtimeApiMode::V2 => mode_v2::append_query_params(&mut url, query_params, model),
     }
 
     Ok(url)
@@ -691,8 +582,8 @@ fn normalize_realtime_path(url: &mut Url) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::endpoint::realtime_websocket::protocol::RealtimeHandoffMessage;
-    use crate::endpoint::realtime_websocket::protocol::RealtimeHandoffRequested;
+    use crate::endpoint::realtime_websocket::types::RealtimeHandoffMessage;
+    use crate::endpoint::realtime_websocket::types::RealtimeHandoffRequested;
     use http::HeaderValue;
     use pretty_assertions::assert_eq;
     use serde_json::Value;
