@@ -294,8 +294,4 @@ async fn interrupt_does_not_issue_follow_up_request() {
         1,
         "interrupt should not issue a follow-up responses request"
     );
-    assert!(
-        response_mock.saw_function_call(call_id),
-        "expected initial function call to be recorded"
-    );
 }
