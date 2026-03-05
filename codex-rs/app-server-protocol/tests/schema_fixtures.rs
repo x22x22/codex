@@ -4,15 +4,41 @@ use codex_app_server_protocol::read_schema_fixture_tree;
 use codex_app_server_protocol::write_schema_fixtures;
 use similar::TextDiff;
 use std::path::Path;
+use std::time::Instant;
 
 #[test]
 fn schema_fixtures_match_generated() -> Result<()> {
+    let start = Instant::now();
     let schema_root = schema_root()?;
+    eprintln!(
+        "[schema_fixtures] resolved schema root in {:?}: {}",
+        start.elapsed(),
+        schema_root.display()
+    );
+
+    let fixture_read_start = Instant::now();
     let fixture_tree = read_tree(&schema_root)?;
+    eprintln!(
+        "[schema_fixtures] read {} vendored files in {:?}",
+        fixture_tree.len(),
+        fixture_read_start.elapsed()
+    );
 
     let temp_dir = tempfile::tempdir().context("create temp dir")?;
+    let generate_start = Instant::now();
     write_schema_fixtures(temp_dir.path(), None).context("generate schema fixtures")?;
+    eprintln!(
+        "[schema_fixtures] generated schema fixtures in {:?}",
+        generate_start.elapsed()
+    );
+
+    let generated_read_start = Instant::now();
     let generated_tree = read_tree(temp_dir.path())?;
+    eprintln!(
+        "[schema_fixtures] read {} generated files in {:?}",
+        generated_tree.len(),
+        generated_read_start.elapsed()
+    );
 
     let fixture_paths = fixture_tree
         .keys()
@@ -59,6 +85,12 @@ Run `just write-app-server-schema` to overwrite with your changes.\n\n{diff}",
             path.display()
         );
     }
+
+    eprintln!(
+        "[schema_fixtures] compared {} files in {:?}",
+        fixture_tree.len(),
+        start.elapsed()
+    );
 
     Ok(())
 }
