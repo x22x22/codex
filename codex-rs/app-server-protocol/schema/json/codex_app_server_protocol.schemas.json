@@ -48,7 +48,7 @@
             "null"
           ]
         },
-        "chromiumMachPortRendezvous": {
+        "chromium": {
           "type": [
             "boolean",
             "null"
@@ -5144,7 +5144,7 @@
             "null"
           ]
         },
-        "chromium_mach_port_rendezvous": {
+        "chromium": {
           "type": [
             "boolean",
             "null"

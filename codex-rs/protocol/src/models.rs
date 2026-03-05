@@ -73,7 +73,7 @@ pub struct MacOsPermissions {
     pub automations: Option<MacOsAutomationValue>,
     pub accessibility: Option<bool>,
     pub calendar: Option<bool>,
-    pub chromium_mach_port_rendezvous: Option<bool>,
+    pub chromium: Option<bool>,
 }
 
 impl MacOsPermissions {
@@ -82,7 +82,7 @@ impl MacOsPermissions {
             && self.automations.is_none()
             && self.accessibility.is_none()
             && self.calendar.is_none()
-            && self.chromium_mach_port_rendezvous.is_none()
+            && self.chromium.is_none()
     }
 }
 

@@ -7252,7 +7252,7 @@
             "null"
           ]
         },
-        "chromium_mach_port_rendezvous": {
+        "chromium": {
           "type": [
             "boolean",
             "null"

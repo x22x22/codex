@@ -1471,7 +1471,7 @@ permissions:
       - "com.apple.Notes"
     accessibility: true
     calendar: true
-    chromium_mach_port_rendezvous: true
+    chromium: true
 "#,
         );
 
@@ -1496,7 +1496,7 @@ permissions:
                     )),
                     accessibility: Some(true),
                     calendar: Some(true),
-                    chromium_mach_port_rendezvous: Some(true),
+                    chromium: Some(true),
                 }),
                 ..Default::default()
             })
@@ -1520,7 +1520,7 @@ permissions:
       - "com.apple.Notes"
     accessibility: true
     calendar: true
-    chromium_mach_port_rendezvous: true
+    chromium: true
 "#,
         );
 
@@ -1545,7 +1545,7 @@ permissions:
                     )),
                     accessibility: Some(true),
                     calendar: Some(true),
-                    chromium_mach_port_rendezvous: Some(true),
+                    chromium: Some(true),
                 }),
                 ..Default::default()
             })
