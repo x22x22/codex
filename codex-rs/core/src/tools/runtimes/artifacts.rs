@@ -86,15 +86,6 @@ impl Approvable<ArtifactExecRequest> for ArtifactRuntime {
                 return ReviewDecision::Denied;
             }
 
-            if retry_reason.is_some()
-                && matches!(
-                    escalation_approval_requirement,
-                    ExecApprovalRequirement::Skip { .. }
-                )
-            {
-                return ReviewDecision::Approved;
-            }
-
             with_cached_approval(
                 &session.services,
                 "artifacts",
@@ -175,13 +166,16 @@ impl ToolRuntime<ArtifactExecRequest, ExecToolCallOutput> for ArtifactRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codex::make_session_and_context;
+    use crate::codex::make_session_and_context_with_rx;
+    use crate::protocol::EventMsg;
     use crate::tools::sandboxing::SandboxOverride;
     use pretty_assertions::assert_eq;
+    use tokio::time::Duration;
 
     #[tokio::test]
-    async fn auto_approves_retry_when_exec_policy_already_allows_launcher() {
-        let (session, turn) = make_session_and_context().await;
+    async fn retry_with_skip_requirement_requests_approval() {
+        let (session, turn, rx_event) = make_session_and_context_with_rx().await;
+        *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
         let mut runtime = ArtifactRuntime;
         let req = ArtifactExecRequest {
             command: vec![
@@ -206,8 +200,25 @@ mod tests {
             },
         };
 
-        let decision = runtime
-            .start_approval_async(
+        let session_for_response = session.clone();
+        let approval_watcher = async move {
+            loop {
+                let event = tokio::time::timeout(Duration::from_secs(2), rx_event.recv())
+                    .await
+                    .expect("wait for approval event")
+                    .expect("receive approval event");
+                if let EventMsg::ExecApprovalRequest(request) = event.msg {
+                    assert_eq!(request.call_id, "call_artifact");
+                    session_for_response
+                        .notify_approval(&request.call_id, ReviewDecision::Approved)
+                        .await;
+                    return;
+                }
+            }
+        };
+
+        let decision = tokio::join!(
+            runtime.start_approval_async(
                 &req,
                 ApprovalCtx {
                     session: &session,
@@ -216,8 +227,10 @@ mod tests {
                     retry_reason: Some("command failed; retry without sandbox?".to_string()),
                     network_approval_context: None,
                 },
-            )
-            .await;
+            ),
+            approval_watcher,
+        )
+        .0;
 
         assert_eq!(decision, ReviewDecision::Approved);
     }
