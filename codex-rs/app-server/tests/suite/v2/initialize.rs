@@ -194,6 +194,7 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
     let notify_file = codex_home.path().join("notify.json");
+    let notify_log = codex_home.path().join("notify.log");
     let notify_capture = cargo_bin("codex-app-server-test-notify-capture")?;
     let notify_capture = notify_capture
         .to_str()
@@ -201,14 +202,18 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     let notify_file_str = notify_file
         .to_str()
         .expect("notify file path should be valid UTF-8");
+    let notify_log_str = notify_log
+        .to_str()
+        .expect("notify log path should be valid UTF-8");
     create_config_toml_with_extra(
         codex_home.path(),
         &server.uri(),
         "never",
         &format!(
-            "notify = [{}, {}]",
+            "notify = [{}, {}, {}]",
             toml_basic_string(notify_capture),
-            toml_basic_string(notify_file_str)
+            toml_basic_string(notify_file_str),
+            toml_basic_string(notify_log_str)
         ),
     )?;
 
@@ -256,27 +261,43 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     )
     .await??;
 
-    let payload = wait_for_json_file(&notify_file).await?;
+    let payload = wait_for_json_file(&notify_file, &notify_log).await?;
     assert_eq!(payload["client"], "xcode");
 
     Ok(())
 }
 
-async fn wait_for_json_file(path: &Path) -> Result<Value> {
+async fn wait_for_json_file(path: &Path, log_path: &Path) -> Result<Value> {
     let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_contents = None;
     loop {
         match tokio::fs::read_to_string(path).await {
             Ok(contents) => {
                 if let Ok(payload) = serde_json::from_str(&contents) {
                     return Ok(payload);
                 }
+                last_contents = Some(contents);
             }
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(err) => return Err(err.into()),
         }
 
         if Instant::now() >= deadline {
-            anyhow::bail!("timed out waiting for valid JSON in {}", path.display());
+            let helper_log = match tokio::fs::read_to_string(log_path).await {
+                Ok(contents) => contents,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    "<missing helper log>".to_string()
+                }
+                Err(err) => format!("<failed to read helper log: {err}>"),
+            };
+            let last_contents =
+                last_contents.unwrap_or_else(|| "<missing notify file>".to_string());
+            anyhow::bail!(
+                "timed out waiting for valid JSON in {}. helper log: {} last contents: {}",
+                path.display(),
+                helper_log.trim_end(),
+                last_contents.trim_end()
+            );
         }
 
         sleep(Duration::from_millis(25)).await;
