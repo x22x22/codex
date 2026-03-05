@@ -295,10 +295,10 @@ sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
 
+{extra}
+
 [features]
 shell_snapshot = false
-
-{extra}
 
 [model_providers.mock_provider]
 name = "Mock provider for test"
