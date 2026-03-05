@@ -40,7 +40,7 @@ async fn wait_for_responses_request_count_to_stabilize(
     settle_duration: std::time::Duration,
 ) -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, async {
-        let mut stable_since = None;
+        let mut stable_since: Option<tokio::time::Instant> = None;
         loop {
             let requests = server
                 .received_requests()
