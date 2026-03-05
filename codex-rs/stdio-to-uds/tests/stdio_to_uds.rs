@@ -1,5 +1,6 @@
 use std::io::ErrorKind;
 use std::io::Read;
+use std::io::Write;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
