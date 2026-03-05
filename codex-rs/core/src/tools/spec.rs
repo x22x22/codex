@@ -96,6 +96,7 @@ impl ToolsConfig {
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
         let include_agent_jobs = include_collab_tools && features.enabled(Feature::Sqlite);
         let request_permission_enabled = features.enabled(Feature::RequestPermissions);
+        let include_web_search_image_support = features.enabled(Feature::WebSearchImageSupport);
         let shell_command_backend =
             if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
                 ShellCommandBackendConfig::ZshFork
@@ -143,7 +144,7 @@ impl ToolsConfig {
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
-            web_search_image_support: features.enabled(Feature::WebSearchImageSupport),
+            web_search_image_support: include_web_search_image_support,
             image_gen_tool: include_image_gen_tool,
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,

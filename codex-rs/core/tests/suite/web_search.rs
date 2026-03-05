@@ -238,7 +238,10 @@ async fn web_search_image_support_feature_sets_content_types() {
     let mut builder = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
-            config.features.enable(Feature::WebSearchImageSupport);
+            config
+                .features
+                .enable(Feature::WebSearchImageSupport)
+                .expect("test feature should satisfy constraints");
             config
                 .web_search_mode
                 .set(WebSearchMode::Cached)
