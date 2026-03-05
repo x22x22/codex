@@ -1909,15 +1909,16 @@ async fn realtime_feature_gate_uses_dual_read_feature_flags() {
 async fn disabling_realtime_v2_resets_live_realtime_session() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.set_feature_enabled(Feature::RealtimeV2, true);
-    chat.realtime_conversation.phase = super::realtime::RealtimeConversationPhase::Active;
+    chat.start_realtime_conversation();
+
+    assert!(matches!(
+        op_rx.try_recv(),
+        Ok(Op::RealtimeConversationStart(_))
+    ));
 
     chat.set_feature_enabled(Feature::RealtimeV2, false);
 
     assert!(!chat.realtime_conversation.is_live());
-    assert!(matches!(
-        chat.realtime_conversation.phase,
-        super::realtime::RealtimeConversationPhase::Inactive
-    ));
     assert!(matches!(
         op_rx.try_recv(),
         Ok(Op::RealtimeConversationClose)
