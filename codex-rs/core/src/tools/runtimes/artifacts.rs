@@ -7,11 +7,13 @@ use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use crate::tools::sandboxing::SandboxAttempt;
+use crate::tools::sandboxing::SandboxOverride;
 use crate::tools::sandboxing::Sandboxable;
 use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
+use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
@@ -132,12 +134,16 @@ impl Approvable<ArtifactExecRequest> for ArtifactRuntime {
 
     fn exec_approval_requirement(
         &self,
-        _req: &ArtifactExecRequest,
+        req: &ArtifactExecRequest,
     ) -> Option<ExecApprovalRequirement> {
-        Some(ExecApprovalRequirement::Skip {
-            bypass_sandbox: false,
-            proposed_execpolicy_amendment: None,
-        })
+        Some(req.escalation_approval_requirement.clone())
+    }
+
+    fn sandbox_mode_for_first_attempt(&self, req: &ArtifactExecRequest) -> SandboxOverride {
+        sandbox_override_for_first_attempt(
+            SandboxPermissions::UseDefault,
+            &req.escalation_approval_requirement,
+        )
     }
 }
 
@@ -170,6 +176,7 @@ impl ToolRuntime<ArtifactExecRequest, ExecToolCallOutput> for ArtifactRuntime {
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::tools::sandboxing::SandboxOverride;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
@@ -266,6 +273,71 @@ mod tests {
         assert_ne!(
             runtime.approval_keys(&req_one),
             runtime.approval_keys(&req_two)
+        );
+    }
+
+    #[test]
+    fn exec_approval_requirement_uses_request_requirement() {
+        let runtime = ArtifactRuntime;
+        let req = ArtifactExecRequest {
+            command: vec![
+                "/path/to/node".to_string(),
+                "/path/to/launcher.mjs".to_string(),
+                "/tmp/source.mjs".to_string(),
+            ],
+            cwd: PathBuf::from("/tmp"),
+            timeout_ms: Some(5_000),
+            env: HashMap::new(),
+            approval_key: ArtifactApprovalKey {
+                command_prefix: vec![
+                    "/path/to/node".to_string(),
+                    "/path/to/launcher.mjs".to_string(),
+                ],
+                cwd: PathBuf::from("/tmp"),
+                staged_script: PathBuf::from("/tmp/source.mjs"),
+            },
+            escalation_approval_requirement: ExecApprovalRequirement::Forbidden {
+                reason: "blocked by policy".to_string(),
+            },
+        };
+
+        assert_eq!(
+            runtime.exec_approval_requirement(&req),
+            Some(ExecApprovalRequirement::Forbidden {
+                reason: "blocked by policy".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn sandbox_mode_for_first_attempt_honors_bypass_sandbox_requirement() {
+        let runtime = ArtifactRuntime;
+        let req = ArtifactExecRequest {
+            command: vec![
+                "/path/to/node".to_string(),
+                "/path/to/launcher.mjs".to_string(),
+                "/tmp/source.mjs".to_string(),
+            ],
+            cwd: PathBuf::from("/tmp"),
+            timeout_ms: Some(5_000),
+            env: HashMap::new(),
+            approval_key: ArtifactApprovalKey {
+                command_prefix: vec![
+                    "/path/to/node".to_string(),
+                    "/path/to/launcher.mjs".to_string(),
+                ],
+                cwd: PathBuf::from("/tmp"),
+                staged_script: PathBuf::from("/tmp/source.mjs"),
+            },
+            escalation_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: true,
+                proposed_execpolicy_amendment: None,
+            },
+        };
+
+        assert_eq!(
+            runtime.sandbox_mode_for_first_attempt(&req),
+            SandboxOverride::BypassSandboxFirstAttempt
         );
     }
 }
