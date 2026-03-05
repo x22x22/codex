@@ -209,6 +209,10 @@ fn personality_item_metadata(personality: Option<Personality>) -> Option<UserMes
     }
 }
 
+// POC limitation: `prompt_with_ide_context` is heuristic. We only detect it when
+// IDE context survives into `UserInput` markers (text elements, skills, mentions).
+// If upstream clients flatten IDE context into plain text, this will be classified as
+// a regular prompt until richer source tagging is wired through.
 fn is_ide_context_user_input(input: &[UserInput]) -> bool {
     input.iter().any(|entry| match entry {
         UserInput::Text { text_elements, .. } => !text_elements.is_empty(),
