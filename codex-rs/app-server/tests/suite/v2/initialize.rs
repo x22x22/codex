@@ -14,12 +14,13 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use core_test_support::fs_wait;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio::time::Instant;
+use tokio::time::sleep;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -259,12 +260,31 @@ payload_path.write_text(sys.argv[-1], encoding="utf-8")
     )
     .await??;
 
-    fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
-    let payload_raw = tokio::fs::read_to_string(&notify_file).await?;
-    let payload: Value = serde_json::from_str(&payload_raw)?;
+    let payload = wait_for_json_file(&notify_file).await?;
     assert_eq!(payload["client"], "xcode");
 
     Ok(())
+}
+
+async fn wait_for_json_file(path: &Path) -> Result<Value> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match tokio::fs::read_to_string(path).await {
+            Ok(contents) => {
+                if let Ok(payload) = serde_json::from_str(&contents) {
+                    return Ok(payload);
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+
+        if Instant::now() >= deadline {
+            anyhow::bail!("timed out waiting for valid JSON in {}", path.display());
+        }
+
+        sleep(Duration::from_millis(25)).await;
+    }
 }
 
 // Helper to create a config.toml pointing at the mock model server.
