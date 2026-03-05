@@ -125,6 +125,7 @@ impl ToolHandler for SearchToolBm25Handler {
         );
         let mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, &connectors);
         let mcp_tools = connectors::filter_codex_apps_tools_by_policy(mcp_tools, &turn.config);
+
         let mut entries: Vec<ToolEntry> = mcp_tools
             .into_iter()
             .map(|(name, info)| ToolEntry::new(name, info))
