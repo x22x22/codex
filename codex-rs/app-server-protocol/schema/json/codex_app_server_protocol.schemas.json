@@ -48,6 +48,12 @@
             "null"
           ]
         },
+        "chromiumMachPortRendezvous": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "preferences": {
           "anyOf": [
             {
@@ -5133,6 +5139,12 @@
           ]
         },
         "calendar": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "chromium_mach_port_rendezvous": {
           "type": [
             "boolean",
             "null"

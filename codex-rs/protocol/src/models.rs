@@ -73,6 +73,7 @@ pub struct MacOsPermissions {
     pub automations: Option<MacOsAutomationValue>,
     pub accessibility: Option<bool>,
     pub calendar: Option<bool>,
+    pub chromium_mach_port_rendezvous: Option<bool>,
 }
 
 impl MacOsPermissions {
@@ -81,6 +82,7 @@ impl MacOsPermissions {
             && self.automations.is_none()
             && self.accessibility.is_none()
             && self.calendar.is_none()
+            && self.chromium_mach_port_rendezvous.is_none()
     }
 }
 
@@ -133,6 +135,7 @@ pub struct MacOsSeatbeltProfileExtensions {
     pub macos_automation: MacOsAutomationPermission,
     pub macos_accessibility: bool,
     pub macos_calendar: bool,
+    pub macos_chromium_mach_port_rendezvous: bool,
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

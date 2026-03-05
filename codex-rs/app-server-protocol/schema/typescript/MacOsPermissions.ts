@@ -4,4 +4,4 @@
 import type { MacOsAutomationValue } from "./MacOsAutomationValue";
 import type { MacOsPreferencesValue } from "./MacOsPreferencesValue";
 
-export type MacOsPermissions = { preferences: MacOsPreferencesValue | null, automations: MacOsAutomationValue | null, accessibility: boolean | null, calendar: boolean | null, };
+export type MacOsPermissions = { preferences: MacOsPreferencesValue | null, automations: MacOsAutomationValue | null, accessibility: boolean | null, calendar: boolean | null, chromium_mach_port_rendezvous: boolean | null, };

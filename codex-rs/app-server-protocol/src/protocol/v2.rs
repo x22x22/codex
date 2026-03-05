@@ -840,6 +840,7 @@ pub struct AdditionalMacOsPermissions {
     pub automations: Option<CoreMacOsAutomationValue>,
     pub accessibility: Option<bool>,
     pub calendar: Option<bool>,
+    pub chromium_mach_port_rendezvous: Option<bool>,
 }
 
 impl From<CoreMacOsPermissions> for AdditionalMacOsPermissions {
@@ -849,6 +850,7 @@ impl From<CoreMacOsPermissions> for AdditionalMacOsPermissions {
             automations: value.automations,
             accessibility: value.accessibility,
             calendar: value.calendar,
+            chromium_mach_port_rendezvous: value.chromium_mach_port_rendezvous,
         }
     }
 }

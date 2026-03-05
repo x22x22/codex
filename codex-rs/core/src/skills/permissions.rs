@@ -149,6 +149,9 @@ fn build_macos_seatbelt_profile_extensions(
             .accessibility
             .unwrap_or(defaults.macos_accessibility),
         macos_calendar: permissions.calendar.unwrap_or(defaults.macos_calendar),
+        macos_chromium_mach_port_rendezvous: permissions
+            .chromium_mach_port_rendezvous
+            .unwrap_or(defaults.macos_chromium_mach_port_rendezvous),
     };
     Some(extensions)
 }
@@ -414,6 +417,7 @@ mod tests {
                 ])),
                 accessibility: Some(true),
                 calendar: Some(true),
+                chromium_mach_port_rendezvous: Some(true),
             }),
             ..Default::default()
         }))
@@ -431,6 +435,7 @@ mod tests {
                         ],),
                     macos_accessibility: true,
                     macos_calendar: true,
+                    macos_chromium_mach_port_rendezvous: true,
                 }
             )
         );

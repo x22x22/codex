@@ -7252,6 +7252,12 @@
             "null"
           ]
         },
+        "chromium_mach_port_rendezvous": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "preferences": {
           "anyOf": [
             {

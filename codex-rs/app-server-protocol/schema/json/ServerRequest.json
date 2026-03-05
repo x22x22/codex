@@ -52,6 +52,12 @@
             "null"
           ]
         },
+        "chromiumMachPortRendezvous": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "preferences": {
           "anyOf": [
             {
