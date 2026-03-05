@@ -4,7 +4,6 @@ use app_test_support::create_apply_patch_sse_response;
 use app_test_support::create_fake_rollout_with_text_elements;
 use app_test_support::create_final_assistant_message_sse_response;
 use app_test_support::create_mock_responses_server_repeating_assistant;
-use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_mock_responses_server_sequence_unchecked;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::rollout_path;
