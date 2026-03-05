@@ -624,6 +624,7 @@ pub(crate) struct Session {
     tx_event: Sender<Event>,
     agent_status: watch::Sender<AgentStatus>,
     state: Mutex<SessionState>,
+    session_configuration_update_lock: Mutex<()>,
     /// The set of enabled features should be invariant for the lifetime of the
     /// session.
     features: ManagedFeatures,
@@ -1599,6 +1600,7 @@ impl Session {
             tx_event: tx_event.clone(),
             agent_status,
             state: Mutex::new(state),
+            session_configuration_update_lock: Mutex::new(()),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
@@ -2112,6 +2114,8 @@ impl Session {
         &self,
         updates: SessionSettingsUpdate,
     ) -> ConstraintResult<()> {
+        let _session_configuration_update_guard =
+            self.session_configuration_update_lock.lock().await;
         let (
             session_configuration,
             previous_cwd,
@@ -8844,6 +8848,7 @@ mod tests {
             tx_event,
             agent_status: agent_status_tx,
             state: Mutex::new(state),
+            session_configuration_update_lock: Mutex::new(()),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
@@ -9253,6 +9258,7 @@ mod tests {
             tx_event,
             agent_status: agent_status_tx,
             state: Mutex::new(state),
+            session_configuration_update_lock: Mutex::new(()),
             features: config.features.clone(),
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
@@ -9415,6 +9421,52 @@ mod tests {
         assert_eq!(updated.model_info.slug, next_model);
         assert_eq!(updated.collaboration_mode.model(), next_model);
         assert!(Arc::ptr_eq(&updated.tool_call_gate, &tc.tool_call_gate));
+    }
+
+    #[tokio::test]
+    async fn update_settings_waits_for_session_configuration_update_lock() {
+        let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
+        let initial_approval_policy = {
+            let state = sess.state.lock().await;
+            state.session_configuration.approval_policy.value()
+        };
+        let updated_approval_policy = match initial_approval_policy {
+            AskForApproval::OnFailure => AskForApproval::Never,
+            _ => AskForApproval::OnFailure,
+        };
+
+        let session_configuration_update_guard =
+            sess.session_configuration_update_lock.lock().await;
+        let update_task = {
+            let sess = Arc::clone(&sess);
+            tokio::spawn(async move {
+                sess.update_settings(SessionSettingsUpdate {
+                    approval_policy: Some(updated_approval_policy),
+                    ..Default::default()
+                })
+                .await
+                .expect("settings update should succeed");
+            })
+        };
+
+        tokio::task::yield_now().await;
+        sleep(Duration::from_millis(50)).await;
+        let approval_policy_while_guard_held = {
+            let state = sess.state.lock().await;
+            state.session_configuration.approval_policy.value()
+        };
+        assert_eq!(approval_policy_while_guard_held, initial_approval_policy);
+
+        drop(session_configuration_update_guard);
+        update_task
+            .await
+            .expect("settings update task should finish");
+
+        let final_approval_policy = {
+            let state = sess.state.lock().await;
+            state.session_configuration.approval_policy.value()
+        };
+        assert_eq!(final_approval_policy, updated_approval_policy);
     }
 
     #[tokio::test]
