@@ -2418,7 +2418,7 @@ impl Session {
             Arc::new(next_turn_context.with_realtime_active(realtime_active))
         };
         let _ = self
-            .set_current_active_turn_context(next_turn_context)
+            .set_current_active_turn_context(Some(&current_turn_context), next_turn_context)
             .await;
     }
 
@@ -2434,7 +2434,7 @@ impl Session {
         let next_turn_context =
             Arc::new(current_turn_context.with_realtime_active(realtime_active));
         let _ = self
-            .set_current_active_turn_context(next_turn_context)
+            .set_current_active_turn_context(Some(&current_turn_context), next_turn_context)
             .await;
     }
 
@@ -2774,13 +2774,29 @@ impl Session {
         })
     }
 
-    async fn set_current_active_turn_context(&self, turn_context: Arc<TurnContext>) -> bool {
+    async fn set_current_active_turn_context(
+        &self,
+        expected_current_turn_context: Option<&Arc<TurnContext>>,
+        turn_context: Arc<TurnContext>,
+    ) -> bool {
         let mut active = self.active_turn.lock().await;
         let Some(turn) = active.as_mut() else {
             return false;
         };
         if !turn.tasks.contains_key(&turn_context.sub_id) {
             return false;
+        }
+        if let Some(expected_current_turn_context) = expected_current_turn_context {
+            let Some(current_turn_context) = turn.current_turn_context.clone().or_else(|| {
+                turn.tasks
+                    .first()
+                    .map(|(_, task)| Arc::clone(&task.turn_context))
+            }) else {
+                return false;
+            };
+            if !Arc::ptr_eq(&current_turn_context, expected_current_turn_context) {
+                return false;
+            }
         }
         let previous_turn_metadata_state =
             turn.current_turn_context
@@ -9515,7 +9531,7 @@ mod tests {
             .await;
 
         assert!(
-            sess.set_current_active_turn_context(Arc::clone(&refreshed_turn_context))
+            sess.set_current_active_turn_context(None, Arc::clone(&refreshed_turn_context))
                 .await
         );
         assert!(
@@ -9621,7 +9637,7 @@ mod tests {
 
         assert!(
             !sess
-                .set_current_active_turn_context(Arc::clone(&stale_turn_context))
+                .set_current_active_turn_context(None, Arc::clone(&stale_turn_context))
                 .await
         );
 
@@ -9639,6 +9655,76 @@ mod tests {
                 .turn_metadata_state
                 .has_enrichment_task_for_test(),
             "stale refresh should not spawn git enrichment"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_current_active_turn_context_rejects_older_same_turn_refresh() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+
+        let mut older_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let mut newer_configuration = older_configuration.clone();
+        let older_model = if tc.model_info.slug == "gpt-5.1" {
+            "gpt-5"
+        } else {
+            "gpt-5.1"
+        };
+        let newer_model = if older_model == "gpt-5" {
+            "gpt-5.1"
+        } else {
+            "gpt-5"
+        };
+        older_configuration.collaboration_mode = older_configuration
+            .collaboration_mode
+            .with_updates(Some(older_model.to_string()), None, None);
+        newer_configuration.collaboration_mode = newer_configuration
+            .collaboration_mode
+            .with_updates(Some(newer_model.to_string()), None, None);
+
+        let older_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &older_configuration)
+            .await;
+        let newer_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &newer_configuration)
+            .await;
+
+        assert!(
+            sess.set_current_active_turn_context(Some(&tc), Arc::clone(&newer_turn_context))
+                .await
+        );
+        assert!(
+            !sess
+                .set_current_active_turn_context(Some(&tc), Arc::clone(&older_turn_context))
+                .await
+        );
+
+        let active_turn_context = sess
+            .current_active_turn_context()
+            .await
+            .expect("newer turn context should remain installed");
+        assert_eq!(active_turn_context.sub_id, tc.sub_id);
+        assert_eq!(active_turn_context.model_info.slug, newer_model);
+        assert!(
+            !older_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "rejected stale same-turn refresh should not spawn git enrichment"
         );
     }
 
@@ -9716,7 +9802,7 @@ mod tests {
             .await;
         install_blocking_turn_metadata_task(&refreshed_turn_context.turn_metadata_state);
         assert!(
-            sess.set_current_active_turn_context(Arc::clone(&refreshed_turn_context))
+            sess.set_current_active_turn_context(None, Arc::clone(&refreshed_turn_context))
                 .await
         );
 
