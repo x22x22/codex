@@ -2353,7 +2353,6 @@ impl Session {
                 .features
                 .enabled(Feature::UseLinuxSandboxBwrap),
         ));
-        turn_metadata_state.spawn_git_enrichment_task();
 
         Arc::new(TurnContext {
             sub_id: current_turn_context.sub_id.clone(),
@@ -2786,6 +2785,7 @@ impl Session {
                     ))
                     .then(|| Arc::clone(&previous_turn_context.turn_metadata_state))
                 });
+        turn_context.turn_metadata_state.spawn_git_enrichment_task();
         turn.current_turn_context = Some(turn_context);
         drop(active);
         if let Some(previous_turn_metadata_state) = previous_turn_metadata_state {
@@ -9404,6 +9404,54 @@ mod tests {
         assert_eq!(updated.model_info.slug, next_model);
         assert_eq!(updated.collaboration_mode.model(), next_model);
         assert!(Arc::ptr_eq(&updated.tool_call_gate, &tc.tool_call_gate));
+    }
+
+    #[tokio::test]
+    async fn build_updated_turn_context_does_not_spawn_metadata_task_before_install() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let session_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+
+        let refreshed_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &session_configuration)
+            .await;
+
+        assert!(
+            !refreshed_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "refreshed context should not spawn git enrichment until installation succeeds"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_current_active_turn_context_spawns_metadata_task_on_success() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let session_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let refreshed_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &session_configuration)
+            .await;
+        let active_turn = crate::state::ActiveTurn {
+            current_turn_context: Some(Arc::clone(&tc)),
+            ..Default::default()
+        };
+        *sess.active_turn.lock().await = Some(active_turn);
+
+        assert!(
+            sess.set_current_active_turn_context(Arc::clone(&refreshed_turn_context))
+                .await
+        );
+        assert!(
+            refreshed_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "successful installation should start git enrichment for the refreshed context"
+        );
     }
 
     #[tokio::test]
