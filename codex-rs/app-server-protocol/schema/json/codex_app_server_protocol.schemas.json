@@ -1774,12 +1774,6 @@
       "title": "DynamicToolCallResponse",
       "type": "object"
     },
-    "EscalationStatus": {
-      "enum": [
-        "approved",
-        "rejected"
-      ],
-      "type": "string"
     "ElicitationRequest": {
       "oneOf": [
         {
@@ -1829,6 +1823,13 @@
           "type": "object"
         }
       ]
+    },
+    "EscalationStatus": {
+      "enum": [
+        "approved",
+        "rejected"
+      ],
+      "type": "string"
     },
     "EventMsg": {
       "$schema": "http://json-schema.org/draft-07/schema#",

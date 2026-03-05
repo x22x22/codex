@@ -544,12 +544,6 @@
         }
       ]
     },
-    "EscalationStatus": {
-      "enum": [
-        "approved",
-        "rejected"
-      ],
-      "type": "string"
     "ElicitationRequest": {
       "oneOf": [
         {
@@ -599,6 +593,13 @@
           "type": "object"
         }
       ]
+    },
+    "EscalationStatus": {
+      "enum": [
+        "approved",
+        "rejected"
+      ],
+      "type": "string"
     },
     "EventMsg": {
       "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
