@@ -236,6 +236,15 @@ pub(crate) async fn execute_exec_env(
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
+    execute_exec_env_after_spawn(env, sandbox_policy, stdout_stream, Box::new(|| {})).await
+}
+
+pub(crate) async fn execute_exec_env_after_spawn(
+    env: ExecRequest,
+    sandbox_policy: &SandboxPolicy,
+    stdout_stream: Option<StdoutStream>,
+    after_spawn: Box<dyn FnOnce() + Send>,
+) -> Result<ExecToolCallOutput> {
     let ExecRequest {
         command,
         cwd,
@@ -263,7 +272,7 @@ pub(crate) async fn execute_exec_env(
     };
 
     let start = Instant::now();
-    let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream).await;
+    let raw_output_result = exec(params, sandbox, sandbox_policy, stdout_stream, after_spawn).await;
     let duration = start.elapsed();
     finalize_exec_result(raw_output_result, sandbox, duration)
 }
@@ -693,6 +702,7 @@ async fn exec(
     sandbox: SandboxType,
     sandbox_policy: &SandboxPolicy,
     stdout_stream: Option<StdoutStream>,
+    after_spawn: Box<dyn FnOnce() + Send>,
 ) -> Result<RawExecToolCallOutput> {
     #[cfg(target_os = "windows")]
     if sandbox == SandboxType::WindowsRestrictedToken
@@ -738,6 +748,7 @@ async fn exec(
         env,
     })
     .await?;
+    after_spawn();
     consume_truncated_output(child, expiration, stdout_stream).await
 }
 
@@ -1136,6 +1147,7 @@ mod tests {
             SandboxType::None,
             &SandboxPolicy::new_read_only_policy(),
             None,
+            Box::new(|| {}),
         )
         .await?;
         assert!(output.timed_out);
