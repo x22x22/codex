@@ -7,4 +7,5 @@ pub use methods::RealtimeWebsocketClient;
 pub use methods::RealtimeWebsocketConnection;
 pub use methods::RealtimeWebsocketEvents;
 pub use methods::RealtimeWebsocketWriter;
+pub use protocol::RealtimeApiMode;
 pub use protocol::RealtimeSessionConfig;

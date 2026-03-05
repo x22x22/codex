@@ -5,10 +5,12 @@ use crate::codex::Session;
 use crate::default_client::default_headers;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::features::RealtimeVoiceMode;
 use async_channel::Receiver;
 use async_channel::Sender;
 use async_channel::TrySendError;
 use codex_api::Provider as ApiProvider;
+use codex_api::RealtimeApiMode;
 use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
 use codex_api::RealtimeSessionConfig;
@@ -54,6 +56,7 @@ struct RealtimeHandoffState {
     output_tx: Sender<HandoffOutput>,
     active_handoff: Arc<Mutex<Option<String>>>,
     last_output_text: Arc<Mutex<Option<String>>>,
+    mode: RealtimeApiMode,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -69,11 +72,12 @@ enum HandoffOutput {
 }
 
 impl RealtimeHandoffState {
-    fn new(output_tx: Sender<HandoffOutput>) -> Self {
+    fn new(output_tx: Sender<HandoffOutput>, mode: RealtimeApiMode) -> Self {
         Self {
             output_tx,
             active_handoff: Arc::new(Mutex::new(None)),
             last_output_text: Arc::new(Mutex::new(None)),
+            mode,
         }
     }
 
@@ -94,6 +98,9 @@ impl RealtimeHandoffState {
     }
 
     async fn send_final_output(&self) -> CodexResult<()> {
+        if self.mode == RealtimeApiMode::V1 {
+            return Ok(());
+        }
         let Some(call_id) = self.active_handoff.lock().await.clone() else {
             return Ok(());
         };
@@ -116,6 +123,7 @@ struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
     user_text_tx: Sender<String>,
     handoff: RealtimeHandoffState,
+    mode: RealtimeApiMode,
     task: JoinHandle<()>,
     realtime_active: Arc<AtomicBool>,
 }
@@ -141,6 +149,7 @@ impl RealtimeConversationManager {
         extra_headers: Option<HeaderMap>,
         prompt: String,
         model: Option<String>,
+        mode: RealtimeApiMode,
         session_id: Option<String>,
     ) -> CodexResult<(Receiver<RealtimeEvent>, Arc<AtomicBool>)> {
         let previous_state = {
@@ -157,6 +166,7 @@ impl RealtimeConversationManager {
             instructions: prompt,
             model,
             session_id,
+            mode,
         };
         let client = RealtimeWebsocketClient::new(api_provider);
         let connection = client
@@ -180,7 +190,7 @@ impl RealtimeConversationManager {
             async_channel::bounded::<RealtimeEvent>(OUTPUT_EVENTS_QUEUE_CAPACITY);
 
         let realtime_active = Arc::new(AtomicBool::new(true));
-        let handoff = RealtimeHandoffState::new(handoff_output_tx);
+        let handoff = RealtimeHandoffState::new(handoff_output_tx, mode);
         let task = spawn_realtime_input_task(
             writer,
             events,
@@ -196,6 +206,7 @@ impl RealtimeConversationManager {
             audio_tx,
             user_text_tx,
             handoff,
+            mode,
             task,
             realtime_active: Arc::clone(&realtime_active),
         });
@@ -321,7 +332,20 @@ pub(crate) async fn handle_start(
         .experimental_realtime_ws_backend_prompt
         .clone()
         .unwrap_or(params.prompt);
-    let model = Some(DEFAULT_REALTIME_MODEL.to_string());
+    let mode = config
+        .features
+        .realtime_voice_mode()
+        .unwrap_or(RealtimeVoiceMode::V2);
+    let (realtime_api_mode, model) = match mode {
+        RealtimeVoiceMode::V1 => (
+            RealtimeApiMode::V1,
+            config.experimental_realtime_ws_model.clone(),
+        ),
+        RealtimeVoiceMode::V2 => (
+            RealtimeApiMode::V2,
+            Some(DEFAULT_REALTIME_MODEL.to_string()),
+        ),
+    };
 
     let requested_session_id = params
         .session_id
@@ -336,6 +360,7 @@ pub(crate) async fn handle_start(
             extra_headers,
             prompt,
             model,
+            realtime_api_mode,
             requested_session_id.clone(),
         )
         .await
@@ -644,6 +669,7 @@ mod tests {
     use super::RealtimeHandoffState;
     use super::realtime_text_from_handoff_request;
     use async_channel::bounded;
+    use codex_api::RealtimeApiMode;
     use codex_protocol::protocol::RealtimeHandoffMessage;
     use codex_protocol::protocol::RealtimeHandoffRequested;
     use pretty_assertions::assert_eq;
@@ -699,7 +725,7 @@ mod tests {
     #[tokio::test]
     async fn clears_active_handoff_explicitly() {
         let (tx, _rx) = bounded(1);
-        let state = RealtimeHandoffState::new(tx);
+        let state = RealtimeHandoffState::new(tx, RealtimeApiMode::V2);
 
         *state.active_handoff.lock().await = Some("handoff_1".to_string());
         assert_eq!(
@@ -714,7 +740,7 @@ mod tests {
     #[tokio::test]
     async fn sends_multiple_handoff_outputs_until_cleared() {
         let (tx, rx) = bounded(4);
-        let state = RealtimeHandoffState::new(tx);
+        let state = RealtimeHandoffState::new(tx, RealtimeApiMode::V2);
 
         state
             .send_output("ignored".to_string())
@@ -758,7 +784,7 @@ mod tests {
     #[tokio::test]
     async fn sends_final_tool_call_output_for_active_handoff() {
         let (tx, rx) = bounded(4);
-        let state = RealtimeHandoffState::new(tx);
+        let state = RealtimeHandoffState::new(tx, RealtimeApiMode::V2);
         *state.active_handoff.lock().await = Some("handoff_2".to_string());
 
         state
@@ -776,5 +802,21 @@ mod tests {
                 output_text: "final text".to_string(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn does_not_send_final_tool_call_output_in_v1_mode() {
+        let (tx, rx) = bounded(4);
+        let state = RealtimeHandoffState::new(tx, RealtimeApiMode::V1);
+        *state.active_handoff.lock().await = Some("handoff_3".to_string());
+
+        state
+            .send_output("legacy final text".to_string())
+            .await
+            .expect("send");
+        let _ = rx.recv().await.expect("recv text update");
+
+        state.send_final_output().await.expect("send final output");
+        assert!(rx.is_empty());
     }
 }
