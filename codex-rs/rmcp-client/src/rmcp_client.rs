@@ -14,8 +14,8 @@ use futures::StreamExt;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use oauth2::TokenResponse;
-use reqwest::header::AUTHORIZATION;
 use reqwest::header::ACCEPT;
+use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use reqwest::header::WWW_AUTHENTICATE;
@@ -842,19 +842,18 @@ impl RmcpClient {
                 let default_headers =
                     build_default_headers(http_headers.clone(), env_http_headers.clone())?;
 
-                let initial_oauth_tokens = if bearer_token.is_none()
-                    && !default_headers.contains_key(AUTHORIZATION)
-                {
-                    match load_oauth_tokens(server_name, url, *store_mode) {
-                        Ok(tokens) => tokens,
-                        Err(err) => {
-                            warn!("failed to read tokens for server `{server_name}`: {err}");
-                            None
+                let initial_oauth_tokens =
+                    if bearer_token.is_none() && !default_headers.contains_key(AUTHORIZATION) {
+                        match load_oauth_tokens(server_name, url, *store_mode) {
+                            Ok(tokens) => tokens,
+                            Err(err) => {
+                                warn!("failed to read tokens for server `{server_name}`: {err}");
+                                None
+                            }
                         }
-                    }
-                } else {
-                    None
-                };
+                    } else {
+                        None
+                    };
 
                 if let Some(initial_tokens) = initial_oauth_tokens.clone() {
                     match create_oauth_transport_and_runtime(
