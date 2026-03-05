@@ -3659,8 +3659,7 @@ impl ChatWidget {
                     else {
                         return;
                     };
-                    let should_submit_now =
-                        self.is_session_configured() && !self.is_plan_streaming_in_tui();
+                    let should_submit_now = self.is_session_configured();
                     if should_submit_now {
                         // Submitted is emitted when user submits.
                         // Reset any reasoning header only when we are actually submitting a turn.
