@@ -36,6 +36,8 @@ use std::collections::HashMap;
 
 const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
+const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
     Classic,
@@ -49,6 +51,7 @@ pub(crate) struct ToolsConfig {
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
+    pub web_search_image_support: bool,
     pub image_gen_tool: bool,
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
@@ -140,6 +143,7 @@ impl ToolsConfig {
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
+            web_search_image_support: features.enabled(Feature::WebSearchImageSupport),
             image_gen_tool: include_image_gen_tool,
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
@@ -165,6 +169,15 @@ impl ToolsConfig {
         self.allow_login_shell = allow_login_shell;
         self
     }
+}
+
+fn web_search_content_types(web_search_image_support: bool) -> Option<Vec<String>> {
+    web_search_image_support.then(|| {
+        WEB_SEARCH_CONTENT_TYPES
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+    })
 }
 
 fn supports_image_generation(model_info: &ModelInfo) -> bool {
@@ -1881,11 +1894,13 @@ pub(crate) fn build_specs(
         Some(WebSearchMode::Cached) => {
             builder.push_spec(ToolSpec::WebSearch {
                 external_web_access: Some(false),
+                search_content_types: web_search_content_types(config.web_search_image_support),
             });
         }
         Some(WebSearchMode::Live) => {
             builder.push_spec(ToolSpec::WebSearch {
                 external_web_access: Some(true),
+                search_content_types: web_search_content_types(config.web_search_image_support),
             });
         }
         Some(WebSearchMode::Disabled) | None => {}
@@ -2172,6 +2187,7 @@ mod tests {
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
+                search_content_types: None,
             },
             create_view_image_tool(),
         ] {
@@ -2486,6 +2502,7 @@ mod tests {
             tool.spec,
             ToolSpec::WebSearch {
                 external_web_access: Some(false),
+                search_content_types: None,
             }
         );
     }
@@ -2510,6 +2527,38 @@ mod tests {
             tool.spec,
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
+                search_content_types: None,
+            }
+        );
+    }
+
+    #[test]
+    fn web_search_image_support_sets_search_content_types_when_web_search_enabled() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::WebSearchImageSupport);
+
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+        let tool = find_tool(&tools, "web_search");
+        assert_eq!(
+            tool.spec,
+            ToolSpec::WebSearch {
+                external_web_access: Some(false),
+                search_content_types: Some(
+                    WEB_SEARCH_CONTENT_TYPES
+                        .into_iter()
+                        .map(str::to_string)
+                        .collect(),
+                ),
             }
         );
     }
