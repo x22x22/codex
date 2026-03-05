@@ -146,7 +146,7 @@ impl CodexThread {
     }
 
     pub fn realtime_voice_mode(&self) -> Option<RealtimeVoiceMode> {
-        self.codex.features().realtime_voice_mode()
+        self.codex.session.features().realtime_voice_mode()
     }
 
     pub fn realtime_voice_enabled(&self) -> bool {
