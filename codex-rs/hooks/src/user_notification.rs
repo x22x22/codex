@@ -62,14 +62,19 @@ pub fn notify_hook(argv: Vec<String>) -> Hook {
                     command.arg(notify_payload);
                 }
 
-                // Backwards-compat: match legacy notify behavior (argv + JSON arg, fire-and-forget).
+                // Preserve the legacy argv + JSON payload shape, but wait for completion so
+                // after-agent hooks finish their side effects before the turn is marked done.
                 command
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null());
 
-                match command.spawn() {
-                    Ok(_) => HookResult::Success,
+                match command.status().await {
+                    Ok(status) if status.success() => HookResult::Success,
+                    Ok(status) => HookResult::FailedContinue(
+                        std::io::Error::other(format!("legacy notify exited with status {status}"))
+                            .into(),
+                    ),
                     Err(err) => HookResult::FailedContinue(err.into()),
                 }
             })
