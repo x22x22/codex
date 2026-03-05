@@ -574,6 +574,10 @@ mod tests {
             TaskKind::Regular
         }
 
+        fn span_name(&self) -> &'static str {
+            "network_approval_test_noop_task"
+        }
+
         async fn run(
             self: Arc<Self>,
             _session: Arc<SessionTaskContext>,
