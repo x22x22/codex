@@ -292,6 +292,17 @@ async fn prepare_artifact_build(
         cwd: turn.cwd.clone(),
         staged_script: source_path.clone(),
     };
+    let initial_approval_requirement = session
+        .services
+        .exec_policy
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: turn.approval_policy.value(),
+            sandbox_policy: turn.sandbox_policy.get(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
     let escalation_approval_requirement = session
         .services
         .exec_policy
@@ -303,23 +314,10 @@ async fn prepare_artifact_build(
             prefix_rule: None,
         })
         .await;
-    let escalation_approval_requirement = match escalation_approval_requirement {
-        crate::tools::sandboxing::ExecApprovalRequirement::Skip { bypass_sandbox, .. } => {
-            crate::tools::sandboxing::ExecApprovalRequirement::Skip {
-                bypass_sandbox,
-                proposed_execpolicy_amendment: None,
-            }
-        }
-        crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval { reason, .. } => {
-            crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
-                reason,
-                proposed_execpolicy_amendment: None,
-            }
-        }
-        crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { reason } => {
-            crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { reason }
-        }
-    };
+    let initial_approval_requirement =
+        clear_proposed_execpolicy_amendment(initial_approval_requirement);
+    let escalation_approval_requirement =
+        clear_proposed_execpolicy_amendment(escalation_approval_requirement);
 
     let env = build_artifact_env(
         &installed_runtime,
@@ -335,10 +333,33 @@ async fn prepare_artifact_build(
             timeout_ms: Some(timeout_ms),
             env,
             approval_key,
+            initial_approval_requirement,
             escalation_approval_requirement,
         },
         _source_dir: source_dir,
     })
+}
+
+fn clear_proposed_execpolicy_amendment(
+    requirement: crate::tools::sandboxing::ExecApprovalRequirement,
+) -> crate::tools::sandboxing::ExecApprovalRequirement {
+    match requirement {
+        crate::tools::sandboxing::ExecApprovalRequirement::Skip { bypass_sandbox, .. } => {
+            crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+                bypass_sandbox,
+                proposed_execpolicy_amendment: None,
+            }
+        }
+        crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval { reason, .. } => {
+            crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+                reason,
+                proposed_execpolicy_amendment: None,
+            }
+        }
+        crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { reason } => {
+            crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { reason }
+        }
+    }
 }
 
 async fn ensure_artifact_build_launcher(codex_home: &Path) -> Result<PathBuf, FunctionCallError> {
@@ -525,7 +546,10 @@ fn format_artifact_stderr(output: &ExecToolCallOutput) -> String {
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::config::Constrained;
     use crate::exec::StreamOutput;
+    use crate::protocol::AskForApproval;
+    use crate::protocol::SandboxPolicy;
     use codex_artifacts::RuntimeEntrypoints;
     use codex_artifacts::RuntimePathEntry;
     use pretty_assertions::assert_eq;
@@ -787,7 +811,9 @@ mod tests {
 
     #[tokio::test]
     async fn prepare_artifact_build_uses_script_specific_approval_key_without_execpolicy_rule() {
-        let (session, turn) = make_session_and_context().await;
+        let (session, mut turn) = make_session_and_context().await;
+        turn.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        turn.sandbox_policy = Constrained::allow_any(SandboxPolicy::new_read_only_policy());
         let runtime = codex_artifacts::InstalledArtifactRuntime::new(
             PathBuf::from("/runtime"),
             PINNED_ARTIFACT_RUNTIME_VERSION.to_string(),
@@ -843,6 +869,20 @@ mod tests {
                 .escalation_approval_requirement
                 .proposed_execpolicy_amendment()
                 .is_none()
+        );
+        assert_eq!(
+            prepared.request.initial_approval_requirement,
+            crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            }
+        );
+        assert_eq!(
+            prepared.request.escalation_approval_requirement,
+            crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+                reason: None,
+                proposed_execpolicy_amendment: None,
+            }
         );
     }
 }

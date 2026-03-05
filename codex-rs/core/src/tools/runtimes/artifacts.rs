@@ -36,6 +36,7 @@ pub(crate) struct ArtifactExecRequest {
     pub(crate) timeout_ms: Option<u64>,
     pub(crate) env: HashMap<String, String>,
     pub(crate) approval_key: ArtifactApprovalKey,
+    pub(crate) initial_approval_requirement: ExecApprovalRequirement,
     pub(crate) escalation_approval_requirement: ExecApprovalRequirement,
 }
 
@@ -77,10 +78,14 @@ impl Approvable<ArtifactExecRequest> for ArtifactRuntime {
         let command = req.command.clone();
         let cwd = req.cwd.clone();
         let approval_keys = self.approval_keys(req);
-        let escalation_approval_requirement = req.escalation_approval_requirement.clone();
+        let approval_requirement = if retry_reason.is_some() {
+            req.escalation_approval_requirement.clone()
+        } else {
+            req.initial_approval_requirement.clone()
+        };
         Box::pin(async move {
             if matches!(
-                escalation_approval_requirement,
+                approval_requirement,
                 ExecApprovalRequirement::Forbidden { .. }
             ) {
                 return ReviewDecision::Denied;
@@ -100,7 +105,7 @@ impl Approvable<ArtifactExecRequest> for ArtifactRuntime {
                             cwd,
                             retry_reason,
                             None,
-                            escalation_approval_requirement
+                            approval_requirement
                                 .proposed_execpolicy_amendment()
                                 .cloned(),
                             None,
@@ -127,13 +132,13 @@ impl Approvable<ArtifactExecRequest> for ArtifactRuntime {
         &self,
         req: &ArtifactExecRequest,
     ) -> Option<ExecApprovalRequirement> {
-        Some(req.escalation_approval_requirement.clone())
+        Some(req.initial_approval_requirement.clone())
     }
 
     fn sandbox_mode_for_first_attempt(&self, req: &ArtifactExecRequest) -> SandboxOverride {
         sandbox_override_for_first_attempt(
             SandboxPermissions::UseDefault,
-            &req.escalation_approval_requirement,
+            &req.initial_approval_requirement,
         )
     }
 }
@@ -193,6 +198,10 @@ mod tests {
                 ],
                 cwd: PathBuf::from("/tmp"),
                 staged_script: PathBuf::from("/tmp/source.mjs"),
+            },
+            initial_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
             },
             escalation_approval_requirement: ExecApprovalRequirement::Skip {
                 bypass_sandbox: false,
@@ -255,6 +264,10 @@ mod tests {
                 cwd: PathBuf::from("/tmp"),
                 staged_script: PathBuf::from("/tmp/source-one.mjs"),
             },
+            initial_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
             escalation_approval_requirement: ExecApprovalRequirement::Skip {
                 bypass_sandbox: false,
                 proposed_execpolicy_amendment: None,
@@ -277,6 +290,10 @@ mod tests {
                 cwd: PathBuf::from("/tmp"),
                 staged_script: PathBuf::from("/tmp/source-two.mjs"),
             },
+            initial_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
             escalation_approval_requirement: ExecApprovalRequirement::Skip {
                 bypass_sandbox: false,
                 proposed_execpolicy_amendment: None,
@@ -290,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn exec_approval_requirement_uses_request_requirement() {
+    fn exec_approval_requirement_uses_initial_requirement() {
         let runtime = ArtifactRuntime;
         let req = ArtifactExecRequest {
             command: vec![
@@ -309,21 +326,24 @@ mod tests {
                 cwd: PathBuf::from("/tmp"),
                 staged_script: PathBuf::from("/tmp/source.mjs"),
             },
+            initial_approval_requirement: ExecApprovalRequirement::Forbidden {
+                reason: "blocked before first attempt".to_string(),
+            },
             escalation_approval_requirement: ExecApprovalRequirement::Forbidden {
-                reason: "blocked by policy".to_string(),
+                reason: "blocked on retry".to_string(),
             },
         };
 
         assert_eq!(
             runtime.exec_approval_requirement(&req),
             Some(ExecApprovalRequirement::Forbidden {
-                reason: "blocked by policy".to_string(),
+                reason: "blocked before first attempt".to_string(),
             })
         );
     }
 
     #[test]
-    fn sandbox_mode_for_first_attempt_honors_bypass_sandbox_requirement() {
+    fn sandbox_mode_for_first_attempt_uses_initial_requirement() {
         let runtime = ArtifactRuntime;
         let req = ArtifactExecRequest {
             command: vec![
@@ -341,6 +361,10 @@ mod tests {
                 ],
                 cwd: PathBuf::from("/tmp"),
                 staged_script: PathBuf::from("/tmp/source.mjs"),
+            },
+            initial_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
             },
             escalation_approval_requirement: ExecApprovalRequirement::Skip {
                 bypass_sandbox: true,
@@ -350,7 +374,7 @@ mod tests {
 
         assert_eq!(
             runtime.sandbox_mode_for_first_attempt(&req),
-            SandboxOverride::BypassSandboxFirstAttempt
+            SandboxOverride::NoOverride
         );
     }
 }
