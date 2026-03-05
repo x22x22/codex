@@ -24,6 +24,7 @@ use std::path::PathBuf;
 pub(crate) struct ArtifactApprovalKey {
     pub(crate) command_prefix: Vec<String>,
     pub(crate) cwd: PathBuf,
+    pub(crate) staged_script: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -190,6 +191,7 @@ mod tests {
                     "/path/to/launcher.mjs".to_string(),
                 ],
                 cwd: PathBuf::from("/tmp"),
+                staged_script: PathBuf::from("/tmp/source.mjs"),
             },
             escalation_approval_requirement: ExecApprovalRequirement::Skip {
                 bypass_sandbox: false,
@@ -211,5 +213,59 @@ mod tests {
             .await;
 
         assert_eq!(decision, ReviewDecision::Approved);
+    }
+
+    #[test]
+    fn approval_keys_differ_for_different_staged_scripts() {
+        let runtime = ArtifactRuntime;
+        let req_one = ArtifactExecRequest {
+            command: vec![
+                "/path/to/node".to_string(),
+                "/path/to/launcher.mjs".to_string(),
+                "/tmp/source-one.mjs".to_string(),
+            ],
+            cwd: PathBuf::from("/tmp"),
+            timeout_ms: Some(5_000),
+            env: HashMap::new(),
+            approval_key: ArtifactApprovalKey {
+                command_prefix: vec![
+                    "/path/to/node".to_string(),
+                    "/path/to/launcher.mjs".to_string(),
+                ],
+                cwd: PathBuf::from("/tmp"),
+                staged_script: PathBuf::from("/tmp/source-one.mjs"),
+            },
+            escalation_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+        };
+        let req_two = ArtifactExecRequest {
+            command: vec![
+                "/path/to/node".to_string(),
+                "/path/to/launcher.mjs".to_string(),
+                "/tmp/source-two.mjs".to_string(),
+            ],
+            cwd: PathBuf::from("/tmp"),
+            timeout_ms: Some(5_000),
+            env: HashMap::new(),
+            approval_key: ArtifactApprovalKey {
+                command_prefix: vec![
+                    "/path/to/node".to_string(),
+                    "/path/to/launcher.mjs".to_string(),
+                ],
+                cwd: PathBuf::from("/tmp"),
+                staged_script: PathBuf::from("/tmp/source-two.mjs"),
+            },
+            escalation_approval_requirement: ExecApprovalRequirement::Skip {
+                bypass_sandbox: false,
+                proposed_execpolicy_amendment: None,
+            },
+        };
+
+        assert_ne!(
+            runtime.approval_keys(&req_one),
+            runtime.approval_keys(&req_two)
+        );
     }
 }

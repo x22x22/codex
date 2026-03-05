@@ -62,6 +62,10 @@ console.log([
 ## Workflow
 
 - Model the workbook structure first: sheets, headers, and key formulas.
+- Do not begin by checking whether the local artifacts runtime package or cache exists. Assume the `artifacts` tool is ready and start authoring immediately; only investigate runtime installation or packaging if the tool fails before your workbook code runs.
+- If the first `artifacts` run fails before your workbook code executes, treat it as runtime setup failure.
+- Ask for approval to install Node or the required artifact runtime, explaining that a JavaScript runtime is required to build spreadsheet artifacts.
+- After approval, install it and retry once. Do not loop on the same failed script.
 - Use formulas instead of copying computed values when the sheet should remain editable.
 - Recalculate before exporting or reading formula results.
 - End the script with a final `console.log(...)` summary that names every file the run touched, using a compact user-facing format with one path per line.

@@ -128,6 +128,9 @@ for (const slide of presentation.slides.items) {
 
 - Start with the smallest script that creates or imports the deck.
 - Do not begin by checking whether the local artifacts runtime package or cache exists. Assume the `artifacts` tool is ready and start authoring immediately; only investigate runtime installation or packaging if the tool fails before your slide code runs.
+- If the first `artifacts` run fails before your slide code executes, treat it as runtime setup failure.
+- Ask for approval to install Node or the required artifact runtime, explaining that a JavaScript runtime is required to build presentation artifacts.
+- After approval, install it and retry once. Do not loop on the same failed script.
 - If the API surface is unclear, do a tiny probe first: create one slide, add one shape, set `text` or `textStyle`, export one PNG, and inspect the result before scaling up to the full deck.
 - Save the `.pptx` after meaningful milestones so the user can inspect output.
 - After saving a `.pptx`, verify the on-disk file type before assuming export succeeded. If it is actually an image blob, keep the PNG previews and rebuild a valid deck from them.

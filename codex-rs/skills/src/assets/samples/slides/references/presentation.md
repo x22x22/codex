@@ -14,7 +14,8 @@ const presentation = Presentation.create({
 - `await PresentationFile.importPptx(await FileBlob.load("deck.pptx"))` imports an existing deck.
 - `await PresentationFile.exportPptx(presentation)` exports the deck as a saveable blob.
 - Do not assume that saving the blob always yields a real PowerPoint container. On March 5, 2026 a fresh export path returned PNG bytes while keeping the `.pptx` extension.
-- When using this skill operationally, start by authoring with these APIs rather than checking local runtime package directories first. Runtime or package-cache inspection is a fallback for cases where the `artifacts` tool itself fails before deck code executes.
+- When using this skill operationally, start by authoring with these APIs rather than checking local runtime package directories first.
+- If the first `artifacts` run fails before deck code executes, ask for approval to install Node or the required artifact runtime, then retry once.
 
 ## Slides
 

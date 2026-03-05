@@ -290,6 +290,7 @@ async fn prepare_artifact_build(
     let approval_key = ArtifactApprovalKey {
         command_prefix: artifact_prefix_rule(&command),
         cwd: turn.cwd.clone(),
+        staged_script: source_path.clone(),
     };
     let escalation_approval_requirement = session
         .services
@@ -299,9 +300,26 @@ async fn prepare_artifact_build(
             approval_policy: turn.approval_policy.value(),
             sandbox_policy: turn.sandbox_policy.get(),
             sandbox_permissions: SandboxPermissions::RequireEscalated,
-            prefix_rule: Some(approval_key.command_prefix.clone()),
+            prefix_rule: None,
         })
         .await;
+    let escalation_approval_requirement = match escalation_approval_requirement {
+        crate::tools::sandboxing::ExecApprovalRequirement::Skip { bypass_sandbox, .. } => {
+            crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+                bypass_sandbox,
+                proposed_execpolicy_amendment: None,
+            }
+        }
+        crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval { reason, .. } => {
+            crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+                reason,
+                proposed_execpolicy_amendment: None,
+            }
+        }
+        crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { reason } => {
+            crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { reason }
+        }
+    };
 
     let env = build_artifact_env(
         &installed_runtime,
@@ -506,9 +524,11 @@ fn format_artifact_stderr(output: &ExecToolCallOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::make_session_and_context;
     use crate::exec::StreamOutput;
     use codex_artifacts::RuntimeEntrypoints;
     use codex_artifacts::RuntimePathEntry;
+    use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
     #[test]
@@ -763,5 +783,66 @@ mod tests {
             std::fs::read_to_string(&launcher_path).expect("read artifact launcher source");
         assert!(launcher_source.contains("globalThis.artifacts = artifactTool;"));
         assert!(launcher_source.contains("await import(pathToFileURL(sourcePath).href);"));
+    }
+
+    #[tokio::test]
+    async fn prepare_artifact_build_uses_script_specific_approval_key_without_execpolicy_rule() {
+        let (session, turn) = make_session_and_context().await;
+        let runtime = codex_artifacts::InstalledArtifactRuntime::new(
+            PathBuf::from("/runtime"),
+            PINNED_ARTIFACT_RUNTIME_VERSION.to_string(),
+            codex_artifacts::ArtifactRuntimePlatform::detect_current().expect("detect platform"),
+            codex_artifacts::ExtractedRuntimeManifest {
+                schema_version: 1,
+                runtime_version: PINNED_ARTIFACT_RUNTIME_VERSION.to_string(),
+                node: RuntimePathEntry {
+                    relative_path: "node/bin/node".to_string(),
+                },
+                entrypoints: RuntimeEntrypoints {
+                    build_js: RuntimePathEntry {
+                        relative_path: "artifact-tool/dist/artifact_tool.mjs".to_string(),
+                    },
+                    render_cli: RuntimePathEntry {
+                        relative_path: "granola-render/dist/render_cli.mjs".to_string(),
+                    },
+                },
+            },
+            PathBuf::from("/runtime/node/bin/node"),
+            PathBuf::from("/runtime/artifact-tool/dist/artifact_tool.mjs"),
+            PathBuf::from("/runtime/granola-render/dist/render_cli.mjs"),
+        );
+
+        let prepared = prepare_artifact_build(
+            &session,
+            &turn,
+            runtime,
+            "console.log('ok');".to_string(),
+            5_000,
+        )
+        .await
+        .expect("prepare artifact build");
+
+        assert_eq!(
+            prepared.request.approval_key.command_prefix,
+            vec![
+                prepared.request.command[0].clone(),
+                turn.config
+                    .codex_home
+                    .join(ARTIFACT_BUILD_LAUNCHER_RELATIVE)
+                    .display()
+                    .to_string(),
+            ]
+        );
+        assert_eq!(
+            prepared.request.approval_key.staged_script,
+            PathBuf::from(&prepared.request.command[2])
+        );
+        assert!(
+            prepared
+                .request
+                .escalation_approval_requirement
+                .proposed_execpolicy_amendment()
+                .is_none()
+        );
     }
 }
