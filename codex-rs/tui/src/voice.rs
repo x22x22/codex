@@ -497,12 +497,7 @@ impl RealtimeAudioPlayer {
         let output_channels = config.channels();
         let prebuffer_samples = output_prebuffer_samples(output_sample_rate, output_channels);
         let queue = Arc::new(Mutex::new(OutputAudioQueue::default()));
-        let stream = build_output_stream(
-            &device,
-            &config,
-            Arc::clone(&queue),
-            prebuffer_samples,
-        )?;
+        let stream = build_output_stream(&device, &config, Arc::clone(&queue), prebuffer_samples)?;
         stream
             .play()
             .map_err(|e| format!("failed to start output stream: {e}"))?;
@@ -566,9 +561,7 @@ fn build_output_stream(
         cpal::SampleFormat::F32 => device
             .build_output_stream(
                 &config_any,
-                move |output: &mut [f32], _| {
-                    fill_output_f32(output, &queue, prebuffer_samples)
-                },
+                move |output: &mut [f32], _| fill_output_f32(output, &queue, prebuffer_samples),
                 move |err| error!("audio output error: {err}"),
                 None,
             )
@@ -576,9 +569,7 @@ fn build_output_stream(
         cpal::SampleFormat::I16 => device
             .build_output_stream(
                 &config_any,
-                move |output: &mut [i16], _| {
-                    fill_output_i16(output, &queue, prebuffer_samples)
-                },
+                move |output: &mut [i16], _| fill_output_i16(output, &queue, prebuffer_samples),
                 move |err| error!("audio output error: {err}"),
                 None,
             )
@@ -586,9 +577,7 @@ fn build_output_stream(
         cpal::SampleFormat::U16 => device
             .build_output_stream(
                 &config_any,
-                move |output: &mut [u16], _| {
-                    fill_output_u16(output, &queue, prebuffer_samples)
-                },
+                move |output: &mut [u16], _| fill_output_u16(output, &queue, prebuffer_samples),
                 move |err| error!("audio output error: {err}"),
                 None,
             )
@@ -609,10 +598,7 @@ fn output_prebuffer_samples(sample_rate: u32, channels: u16) -> usize {
     ((samples_per_second as u64) * 120 / 1_000) as usize
 }
 
-fn should_output_silence(
-    queue: &mut OutputAudioQueue,
-    min_buffer_samples: usize,
-) -> bool {
+fn should_output_silence(queue: &mut OutputAudioQueue, min_buffer_samples: usize) -> bool {
     if !queue.primed {
         if queue.samples.len() < min_buffer_samples {
             return true;
