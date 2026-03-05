@@ -42,10 +42,17 @@ pub enum ShellCommandBackendConfig {
     ZshFork,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum UnifiedExecBackendConfig {
+    Direct,
+    ZshFork,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     shell_command_backend: ShellCommandBackendConfig,
+    pub unified_exec_backend: UnifiedExecBackendConfig,
     pub allow_login_shell: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -99,11 +106,15 @@ impl ToolsConfig {
             } else {
                 ShellCommandBackendConfig::Classic
             };
+        let unified_exec_backend =
+            if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
+                UnifiedExecBackendConfig::ZshFork
+            } else {
+                UnifiedExecBackendConfig::Direct
+            };
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
-        } else if features.enabled(Feature::ShellZshFork) {
-            ConfigShellToolType::ShellCommand
         } else if features.enabled(Feature::UnifiedExec) {
             // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
             if codex_utils_pty::conpty_supported() {
@@ -111,6 +122,8 @@ impl ToolsConfig {
             } else {
                 ConfigShellToolType::ShellCommand
             }
+        } else if features.enabled(Feature::ShellZshFork) {
+            ConfigShellToolType::ShellCommand
         } else {
             model_info.shell_type
         };
@@ -137,6 +150,7 @@ impl ToolsConfig {
         Self {
             shell_type,
             shell_command_backend,
+            unified_exec_backend,
             allow_login_shell: true,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -2751,7 +2765,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
+    fn shell_zsh_fork_uses_unified_exec_when_enabled() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
@@ -2765,10 +2779,14 @@ mod tests {
             session_source: SessionSource::Cli,
         });
 
-        assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
+        assert_eq!(tools_config.shell_type, ConfigShellToolType::UnifiedExec);
         assert_eq!(
             tools_config.shell_command_backend,
             ShellCommandBackendConfig::ZshFork
+        );
+        assert_eq!(
+            tools_config.unified_exec_backend,
+            UnifiedExecBackendConfig::ZshFork
         );
     }
 
