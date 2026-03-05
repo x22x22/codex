@@ -80,8 +80,7 @@ use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::connectors::is_connector_id_allowed;
-use crate::plugins::AppConnectorId;
-use crate::plugins::PluginCapabilityIndex;
+use crate::plugins::ToolPluginProvenance;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -344,7 +343,7 @@ struct ManagedClient {
     tool_timeout: Option<Duration>,
     server_supports_sandbox_state_capability: bool,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
-    plugin_capability_index: Arc<PluginCapabilityIndex>,
+    tool_plugin_provenance: Arc<ToolPluginProvenance>,
 }
 
 impl ManagedClient {
@@ -363,7 +362,7 @@ impl ManagedClient {
             );
             return annotate_tools_with_plugin_sources(
                 filter_tools(tools, &self.tool_filter),
-                self.plugin_capability_index.as_ref(),
+                self.tool_plugin_provenance.as_ref(),
             );
         }
 
@@ -414,7 +413,7 @@ impl AsyncManagedClient {
         tx_event: Sender<Event>,
         elicitation_requests: ElicitationRequestManager,
         codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
-        plugin_capability_index: Arc<PluginCapabilityIndex>,
+        tool_plugin_provenance: Arc<ToolPluginProvenance>,
     ) -> Self {
         let tool_filter = ToolFilter::from_config(&config);
         let startup_snapshot = load_startup_cached_codex_apps_tools_snapshot(
@@ -424,13 +423,13 @@ impl AsyncManagedClient {
         .map(|tools| {
             annotate_tools_with_plugin_sources(
                 filter_tools(tools, &tool_filter),
-                plugin_capability_index.as_ref(),
+                tool_plugin_provenance.as_ref(),
             )
         });
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
-        let startup_plugin_capability_index = Arc::clone(&plugin_capability_index);
+        let startup_tool_plugin_provenance = Arc::clone(&tool_plugin_provenance);
         let fut = async move {
             let outcome = async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
@@ -451,7 +450,7 @@ impl AsyncManagedClient {
                         tx_event,
                         elicitation_requests,
                         codex_apps_tools_cache_context,
-                        plugin_capability_index: startup_plugin_capability_index,
+                        tool_plugin_provenance: startup_tool_plugin_provenance,
                     },
                 )
                 .or_cancel(&cancel_token)
@@ -572,14 +571,14 @@ impl McpConnectionManager {
         initial_sandbox_state: SandboxState,
         codex_home: PathBuf,
         codex_apps_tools_cache_key: CodexAppsToolsCacheKey,
-        plugin_capability_index: PluginCapabilityIndex,
+        tool_plugin_provenance: ToolPluginProvenance,
     ) -> (Self, CancellationToken) {
         let cancel_token = CancellationToken::new();
         let mut clients = HashMap::new();
         let mut server_origins = HashMap::new();
         let mut join_set = JoinSet::new();
         let elicitation_requests = ElicitationRequestManager::new(approval_policy.value());
-        let plugin_capability_index = Arc::new(plugin_capability_index);
+        let tool_plugin_provenance = Arc::new(tool_plugin_provenance);
         let mcp_servers = mcp_servers.clone();
         for (server_name, cfg) in mcp_servers.into_iter().filter(|(_, cfg)| cfg.enabled) {
             if let Some(origin) = transport_origin(&cfg.transport) {
@@ -610,7 +609,7 @@ impl McpConnectionManager {
                 tx_event.clone(),
                 elicitation_requests.clone(),
                 codex_apps_tools_cache_context,
-                Arc::clone(&plugin_capability_index),
+                Arc::clone(&tool_plugin_provenance),
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
@@ -1160,28 +1159,20 @@ pub(crate) fn filter_mcp_tools_by_name(
 
 fn annotate_tools_with_plugin_sources(
     mut tools: Vec<ToolInfo>,
-    capability_index: &PluginCapabilityIndex,
+    tool_plugin_provenance: &ToolPluginProvenance,
 ) -> Vec<ToolInfo> {
     for tool in &mut tools {
-        let mut plugin_names = match tool.connector_id.as_ref() {
-            Some(connector_id) => capability_index
-                .plugins_for_connector_id(&AppConnectorId(connector_id.clone()))
-                .into_iter()
-                .map(|plugin| plugin.display_name.as_str())
-                .collect::<Vec<_>>(),
-            None => capability_index
-                .plugins_for_mcp_server_name(tool.server_name.as_str())
-                .into_iter()
-                .map(|plugin| plugin.display_name.as_str())
-                .collect::<Vec<_>>(),
+        let plugin_names = match tool.connector_id.as_deref() {
+            Some(connector_id) => {
+                tool_plugin_provenance.plugin_display_names_for_connector_id(connector_id)
+            }
+            None => tool_plugin_provenance
+                .plugin_display_names_for_mcp_server_name(tool.server_name.as_str()),
         };
 
         if plugin_names.is_empty() {
             continue;
         }
-
-        plugin_names.sort_unstable();
-        plugin_names.dedup();
 
         let plugin_source_note = if plugin_names.len() == 1 {
             format!("This tool is part of plugin `{}`.", plugin_names[0])
@@ -1189,7 +1180,7 @@ fn annotate_tools_with_plugin_sources(
             format!(
                 "This tool is part of plugins {}.",
                 plugin_names
-                    .into_iter()
+                    .iter()
                     .map(|plugin_name| format!("`{plugin_name}`"))
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -1313,7 +1304,7 @@ async fn start_server_task(
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
-        plugin_capability_index,
+        tool_plugin_provenance,
     } = params;
     let elicitation = elicitation_capability_for_server(&server_name);
     let params = InitializeRequestParams {
@@ -1368,7 +1359,7 @@ async fn start_server_task(
     }
     let tools = annotate_tools_with_plugin_sources(
         filter_tools(tools, &tool_filter),
-        plugin_capability_index.as_ref(),
+        tool_plugin_provenance.as_ref(),
     );
 
     let server_supports_sandbox_state_capability = initialize_result
@@ -1385,7 +1376,7 @@ async fn start_server_task(
         tool_filter,
         server_supports_sandbox_state_capability,
         codex_apps_tools_cache_context,
-        plugin_capability_index,
+        tool_plugin_provenance,
     };
 
     Ok(managed)
@@ -1398,7 +1389,7 @@ struct StartServerTaskParams {
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
-    plugin_capability_index: Arc<PluginCapabilityIndex>,
+    tool_plugin_provenance: Arc<ToolPluginProvenance>,
 }
 
 async fn make_rmcp_client(

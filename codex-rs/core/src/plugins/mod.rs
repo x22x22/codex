@@ -11,6 +11,7 @@ pub use manager::PluginInstallError;
 pub use manager::PluginInstallRequest;
 pub use manager::PluginLoadOutcome;
 pub use manager::PluginsManager;
+pub use manager::ToolPluginProvenance;
 pub(crate) use manager::plugin_namespace_for_skill_path;
 pub(crate) use manifest::load_plugin_manifest;
 pub(crate) use manifest::plugin_manifest_name;

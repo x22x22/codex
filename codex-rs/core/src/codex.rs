@@ -1612,9 +1612,9 @@ impl Session {
             .map(|(name, _)| name.clone())
             .collect();
         required_mcp_servers.sort();
-        let plugin_capability_index = plugins_manager
+        let tool_plugin_provenance = plugins_manager
             .plugins_for_config(config.as_ref())
-            .capability_index()
+            .tool_plugin_provenance()
             .clone();
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
@@ -1630,7 +1630,7 @@ impl Session {
             sandbox_state,
             config.codex_home.clone(),
             codex_apps_tools_cache_key(auth),
-            plugin_capability_index,
+            tool_plugin_provenance,
         )
         .await;
         {
@@ -3576,11 +3576,11 @@ impl Session {
     ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
-        let plugin_capability_index = self
+        let tool_plugin_provenance = self
             .services
             .plugins_manager
             .plugins_for_config(config.as_ref())
-            .capability_index()
+            .tool_plugin_provenance()
             .clone();
         let mcp_servers = with_codex_apps_mcp(
             mcp_servers,
@@ -3609,7 +3609,7 @@ impl Session {
             sandbox_state,
             config.codex_home.clone(),
             codex_apps_tools_cache_key(auth.as_ref()),
-            plugin_capability_index,
+            tool_plugin_provenance,
         )
         .await;
         {
@@ -4943,7 +4943,7 @@ pub(crate) async fn run_turn(
     // Plain-text @plugin mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
-        collect_explicit_plugin_mentions(&input, loaded_plugins.capability_index().plugins());
+        collect_explicit_plugin_mentions(&input, loaded_plugins.capability_summaries());
     let mcp_tools =
         if turn_context.config.features.enabled(Feature::Apps) || !mentioned_plugins.is_empty() {
             // Plugin mentions need raw MCP/app inventory even when app tools
