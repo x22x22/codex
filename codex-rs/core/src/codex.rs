@@ -2186,11 +2186,12 @@ impl Session {
                 &per_turn_config,
             )
             .await;
+        // Reuse the session's resolved config for turn-time skills so plugin-backed
+        // skill/plugin availability stays aligned with the session-start view.
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_cwd(&session_configuration.cwd, false)
-                .await,
+                .skills_for_config(&per_turn_config),
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
