@@ -198,9 +198,7 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
 import sys
 
 payload_path = Path(__file__).with_name("notify.json")
-tmp_path = payload_path.with_suffix(".json.tmp")
-tmp_path.write_text(sys.argv[-1], encoding="utf-8")
-tmp_path.replace(payload_path)
+payload_path.write_text(sys.argv[-1], encoding="utf-8")
 "#,
     )?;
     let notify_file = codex_home.path().join("notify.json");
