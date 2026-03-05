@@ -1338,10 +1338,34 @@ mod tests {
             .get_thread(child_thread_id)
             .await
             .expect("child thread should exist");
+        let mut status_rx = harness
+            .control
+            .subscribe_status(child_thread_id)
+            .await
+            .expect("status subscription should succeed");
         let _ = child_thread
             .submit(Op::Shutdown {})
             .await
             .expect("child shutdown should submit");
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let status = status_rx.borrow().clone();
+                if is_final(&status) {
+                    break;
+                }
+                if status_rx.changed().await.is_err() {
+                    let latest = harness.control.get_status(child_thread_id).await;
+                    assert_eq!(
+                        is_final(&latest),
+                        true,
+                        "child status stream closed before a final status was observable"
+                    );
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("child should reach a final status");
 
         assert_eq!(wait_for_subagent_notification(&parent_thread).await, true);
     }

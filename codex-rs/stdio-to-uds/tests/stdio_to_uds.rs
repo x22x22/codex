@@ -1,6 +1,5 @@
 use std::io::ErrorKind;
 use std::io::Read;
-use std::io::Write;
 use std::process::Command;
 use std::process::Stdio;
 use std::sync::mpsc;
@@ -22,6 +21,9 @@ use uds_windows::UnixListener;
 fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
     let dir = tempfile::TempDir::new().context("failed to create temp dir")?;
     let socket_path = dir.path().join("socket");
+    let request = b"request";
+    let request_path = dir.path().join("request.txt");
+    std::fs::write(&request_path, request).context("failed to write child stdin fixture")?;
     let listener = match UnixListener::bind(&socket_path) {
         Ok(listener) => listener,
         Err(err) if err.kind() == ErrorKind::PermissionDenied => {
@@ -41,9 +43,9 @@ fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
             .accept()
             .context("failed to accept test connection")?;
         let _ = event_tx.send("accepted connection".to_string());
-        let mut received = Vec::new();
+        let mut received = vec![0; request.len()];
         connection
-            .read_to_end(&mut received)
+            .read_exact(&mut received)
             .context("failed to read data from client")?;
         let _ = event_tx.send(format!("read {} bytes", received.len()));
         tx.send(received)
@@ -55,18 +57,14 @@ fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
         Ok(())
     });
 
+    let stdin = std::fs::File::open(&request_path).context("failed to open child stdin fixture")?;
     let mut child = Command::new(codex_utils_cargo_bin::cargo_bin("codex-stdio-to-uds")?)
         .arg(&socket_path)
-        .stdin(Stdio::piped())
+        .stdin(Stdio::from(stdin))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .context("failed to spawn codex-stdio-to-uds")?;
-    let mut child_stdin = child.stdin.take().context("missing child stdin")?;
-    child_stdin
-        .write_all(b"request")
-        .context("failed to write request to child stdin")?;
-    drop(child_stdin);
 
     let mut child_stdout = child.stdout.take().context("missing child stdout")?;
     let mut child_stderr = child.stderr.take().context("missing child stderr")?;
@@ -130,7 +128,7 @@ fn pipes_stdin_and_stdout_through_socket() -> anyhow::Result<()> {
     let received = rx
         .recv_timeout(Duration::from_secs(1))
         .context("server did not receive data in time")?;
-    assert_eq!(received, b"request");
+    assert_eq!(received, request);
 
     let server_result = server_thread
         .join()
