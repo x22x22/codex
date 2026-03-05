@@ -40,6 +40,18 @@ pub(crate) enum TaskKind {
     Compact,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PendingInputSource {
+    Queued,
+    Steering,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PendingInputItem {
+    pub(crate) input: ResponseInputItem,
+    pub(crate) source: PendingInputSource,
+}
+
 pub(crate) struct RunningTask {
     pub(crate) done: Arc<Notify>,
     pub(crate) kind: TaskKind,
@@ -73,7 +85,7 @@ pub(crate) struct TurnState {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
-    pending_input: Vec<ResponseInputItem>,
+    pending_input: Vec<PendingInputItem>,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
 }
@@ -131,11 +143,15 @@ impl TurnState {
         self.pending_dynamic_tools.remove(key)
     }
 
-    pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {
-        self.pending_input.push(input);
+    pub(crate) fn push_pending_input(
+        &mut self,
+        input: ResponseInputItem,
+        source: PendingInputSource,
+    ) {
+        self.pending_input.push(PendingInputItem { input, source });
     }
 
-    pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
+    pub(crate) fn take_pending_input(&mut self) -> Vec<PendingInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
         } else {
