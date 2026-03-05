@@ -295,6 +295,9 @@ sandbox_mode = "read-only"
 
 model_provider = "mock_provider"
 
+[features]
+shell_snapshot = false
+
 {extra}
 
 [model_providers.mock_provider]
