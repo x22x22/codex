@@ -103,7 +103,7 @@ pub(crate) fn build_seatbelt_extensions(
         clauses.push("(allow mach-lookup (global-name \"com.apple.CalendarAgent\"))".to_string());
     }
 
-    if extensions.macos_chromium_mach_port_rendezvous {
+    if extensions.macos_chromium {
         clauses.push(
             "(allow mach-register\n  (global-name-prefix \"org.chromium.Chromium.MachPortRendezvousServer.\"))"
                 .to_string(),
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn chromium_rendezvous_emits_scoped_mach_rules() {
         let policy = build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions {
-            macos_chromium_mach_port_rendezvous: true,
+            macos_chromium: true,
             ..Default::default()
         });
         assert!(policy.policy.contains("(allow mach-register"));

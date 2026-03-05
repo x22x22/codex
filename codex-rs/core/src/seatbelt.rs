@@ -571,7 +571,7 @@ mod tests {
                 ]),
                 macos_accessibility: true,
                 macos_calendar: true,
-                macos_chromium_mach_port_rendezvous: true,
+                macos_chromium: true,
             }),
         );
         let policy = &args[1];

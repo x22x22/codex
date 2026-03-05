@@ -135,7 +135,7 @@ pub struct MacOsSeatbeltProfileExtensions {
     pub macos_automation: MacOsAutomationPermission,
     pub macos_accessibility: bool,
     pub macos_calendar: bool,
-    pub macos_chromium_mach_port_rendezvous: bool,
+    pub macos_chromium: bool,
 }
 
 #[derive(Debug, Clone, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS)]

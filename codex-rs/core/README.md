@@ -37,7 +37,7 @@ Seatbelt also supports macOS permission-profile extensions layered on top of
   enables `com.apple.axserver` mach lookup.
 - `macos_calendar = true`:
   enables `com.apple.CalendarAgent` mach lookup.
-- `macos_chromium_mach_port_rendezvous = true`:
+- `macos_chromium = true`:
   enables scoped Chromium Mach rendezvous `mach-register` and `mach-lookup`
   permissions for `org.chromium.Chromium.MachPortRendezvousServer.*`.
 
