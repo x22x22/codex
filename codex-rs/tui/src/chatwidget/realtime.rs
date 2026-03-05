@@ -304,7 +304,7 @@ impl ChatWidget {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn start_realtime_local_audio(&mut self) {
         if self.realtime_conversation.capture_stop_flag.is_some() {
             return;
