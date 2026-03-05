@@ -66,7 +66,9 @@ async fn wait_for_responses_request_count(
 ) -> Result<()> {
     timeout(DEFAULT_READ_TIMEOUT, async {
         loop {
-            let requests = server.received_requests().await?;
+            let Some(requests) = server.received_requests().await else {
+                anyhow::bail!("wiremock did not record requests");
+            };
             let responses_request_count = requests
                 .iter()
                 .filter(|request| {
