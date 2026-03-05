@@ -2775,6 +2775,9 @@ impl Session {
         let Some(turn) = active.as_mut() else {
             return false;
         };
+        if !turn.tasks.contains_key(&turn_context.sub_id) {
+            return false;
+        }
         let previous_turn_metadata_state =
             turn.current_turn_context
                 .as_ref()
@@ -9368,11 +9371,19 @@ mod tests {
     #[tokio::test]
     async fn override_turn_context_updates_active_turn_context() {
         let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-        let active_turn = crate::state::ActiveTurn {
-            current_turn_context: Some(Arc::clone(&tc)),
-            ..Default::default()
-        };
-        *sess.active_turn.lock().await = Some(active_turn);
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
 
         let next_model = if tc.model_info.slug == "gpt-5.1" {
             "gpt-5"
@@ -9429,18 +9440,27 @@ mod tests {
     #[tokio::test]
     async fn set_current_active_turn_context_spawns_metadata_task_on_success() {
         let (sess, tc, _rx) = make_session_and_context_with_rx().await;
-        let session_configuration = {
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+        let mut session_configuration = {
             let state = sess.state.lock().await;
             state.session_configuration.clone()
         };
+        session_configuration.cwd = std::env::current_dir().expect("current dir");
         let refreshed_turn_context = sess
             .build_updated_turn_context(tc.as_ref(), &session_configuration)
             .await;
-        let active_turn = crate::state::ActiveTurn {
-            current_turn_context: Some(Arc::clone(&tc)),
-            ..Default::default()
-        };
-        *sess.active_turn.lock().await = Some(active_turn);
 
         assert!(
             sess.set_current_active_turn_context(Arc::clone(&refreshed_turn_context))
@@ -9457,12 +9477,20 @@ mod tests {
     #[tokio::test]
     async fn override_turn_context_cancels_superseded_turn_metadata_task() {
         let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
         install_blocking_turn_metadata_task(&tc.turn_metadata_state);
-        let active_turn = crate::state::ActiveTurn {
-            current_turn_context: Some(Arc::clone(&tc)),
-            ..Default::default()
-        };
-        *sess.active_turn.lock().await = Some(active_turn);
 
         let next_model = if tc.model_info.slug == "gpt-5.1" {
             "gpt-5"
@@ -9487,6 +9515,78 @@ mod tests {
         assert!(
             !tc.turn_metadata_state.has_enrichment_task_for_test(),
             "superseded turn metadata task should be canceled"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_current_active_turn_context_rejects_stale_turn_refresh() {
+        let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+        let input = vec![UserInput::Text {
+            text: "hello".to_string(),
+            text_elements: Vec::new(),
+        }];
+        sess.spawn_task(
+            Arc::clone(&tc),
+            input,
+            NeverEndingTask {
+                kind: TaskKind::Regular,
+                listen_to_cancellation_token: true,
+            },
+        )
+        .await;
+        let session_configuration = {
+            let state = sess.state.lock().await;
+            state.session_configuration.clone()
+        };
+        let stale_turn_context = sess
+            .build_updated_turn_context(tc.as_ref(), &session_configuration)
+            .await;
+        let replacement_turn_context = sess
+            .new_default_turn_with_sub_id("replacement".into())
+            .await;
+
+        *sess.active_turn.lock().await = Some(crate::state::ActiveTurn {
+            current_turn_context: Some(Arc::clone(&replacement_turn_context)),
+            tasks: indexmap::IndexMap::from([(
+                replacement_turn_context.sub_id.clone(),
+                crate::state::RunningTask {
+                    done: Arc::new(tokio::sync::Notify::new()),
+                    kind: TaskKind::Regular,
+                    task: Arc::new(NeverEndingTask {
+                        kind: TaskKind::Regular,
+                        listen_to_cancellation_token: true,
+                    }),
+                    cancellation_token: CancellationToken::new(),
+                    handle: Arc::new(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
+                        async {},
+                    ))),
+                    turn_context: Arc::clone(&replacement_turn_context),
+                    _timer: None,
+                },
+            )]),
+            ..Default::default()
+        });
+
+        assert!(
+            !sess
+                .set_current_active_turn_context(Arc::clone(&stale_turn_context))
+                .await
+        );
+
+        let active_turn_context = sess
+            .current_active_turn_context()
+            .await
+            .expect("replacement turn context should remain installed");
+        assert_eq!(active_turn_context.sub_id, replacement_turn_context.sub_id);
+        assert_eq!(
+            active_turn_context.model_info.slug,
+            replacement_turn_context.model_info.slug
+        );
+        assert!(
+            !stale_turn_context
+                .turn_metadata_state
+                .has_enrichment_task_for_test(),
+            "stale refresh should not spawn git enrichment"
         );
     }
 
