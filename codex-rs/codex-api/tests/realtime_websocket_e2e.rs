@@ -96,6 +96,18 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
             Value::from(24_000)
         );
         assert_eq!(
+            first_json["session"]["audio"]["input"]["turn_detection"]["type"],
+            Value::String("semantic_vad".to_string())
+        );
+        assert_eq!(
+            first_json["session"]["audio"]["input"]["turn_detection"]["interrupt_response"],
+            Value::Bool(false)
+        );
+        assert_eq!(
+            first_json["session"]["audio"]["input"]["turn_detection"]["create_response"],
+            Value::Bool(true)
+        );
+        assert_eq!(
             first_json["session"]["tool_choice"],
             Value::String("auto".to_string())
         );

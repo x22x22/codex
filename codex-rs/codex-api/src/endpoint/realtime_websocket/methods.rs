@@ -9,6 +9,7 @@ use crate::endpoint::realtime_websocket::protocol::SessionAudioFormat;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioInput;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioOutput;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioOutputFormat;
+use crate::endpoint::realtime_websocket::protocol::SessionTurnDetection;
 use crate::endpoint::realtime_websocket::protocol::SessionTool;
 use crate::endpoint::realtime_websocket::protocol::SessionToolParameters;
 use crate::endpoint::realtime_websocket::protocol::SessionToolProperties;
@@ -342,6 +343,11 @@ impl RealtimeWebsocketWriter {
                         format: SessionAudioFormat {
                             kind: "audio/pcm".to_string(),
                             rate: 24_000,
+                        },
+                        turn_detection: SessionTurnDetection {
+                            kind: "semantic_vad".to_string(),
+                            interrupt_response: false,
+                            create_response: true,
                         },
                     },
                     output: SessionAudioOutput {
@@ -898,6 +904,18 @@ mod tests {
             assert_eq!(
                 first_json["session"]["audio"]["input"]["format"]["rate"],
                 Value::from(24_000)
+            );
+            assert_eq!(
+                first_json["session"]["audio"]["input"]["turn_detection"]["type"],
+                Value::String("semantic_vad".to_string())
+            );
+            assert_eq!(
+                first_json["session"]["audio"]["input"]["turn_detection"]["interrupt_response"],
+                Value::Bool(false)
+            );
+            assert_eq!(
+                first_json["session"]["audio"]["input"]["turn_detection"]["create_response"],
+                Value::Bool(true)
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["format"]["type"],

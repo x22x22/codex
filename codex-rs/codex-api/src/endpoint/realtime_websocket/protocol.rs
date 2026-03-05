@@ -48,6 +48,7 @@ pub(super) struct SessionAudio {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionAudioInput {
     pub(super) format: SessionAudioFormat,
+    pub(super) turn_detection: SessionTurnDetection,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +56,14 @@ pub(super) struct SessionAudioFormat {
     #[serde(rename = "type")]
     pub(super) kind: String,
     pub(super) rate: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionTurnDetection {
+    #[serde(rename = "type")]
+    pub(super) kind: String,
+    pub(super) interrupt_response: bool,
+    pub(super) create_response: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
