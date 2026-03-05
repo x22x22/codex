@@ -67,6 +67,7 @@ pub(super) struct SessionAudioOutput {
 pub(super) struct SessionAudioOutputFormat {
     #[serde(rename = "type")]
     pub(super) kind: String,
+    pub(super) rate: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]

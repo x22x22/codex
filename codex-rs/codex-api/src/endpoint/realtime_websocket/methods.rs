@@ -347,6 +347,7 @@ impl RealtimeWebsocketWriter {
                     output: SessionAudioOutput {
                         format: SessionAudioOutputFormat {
                             kind: "audio/pcm".to_string(),
+                            rate: 24_000,
                         },
                         voice: "marin".to_string(),
                     },
@@ -901,6 +902,10 @@ mod tests {
             assert_eq!(
                 first_json["session"]["audio"]["output"]["format"]["type"],
                 Value::String("audio/pcm".to_string())
+            );
+            assert_eq!(
+                first_json["session"]["audio"]["output"]["format"]["rate"],
+                Value::from(24_000)
             );
             assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
