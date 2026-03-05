@@ -398,10 +398,10 @@
             "prevent_idle_sleep": {
               "type": "boolean"
             },
-            "realtime_v2": {
+            "realtime_conversation": {
               "type": "boolean"
             },
-            "realtime_conversation": {
+            "realtime_v2": {
               "type": "boolean"
             },
             "remote_models": {
@@ -1792,10 +1792,10 @@
         "prevent_idle_sleep": {
           "type": "boolean"
         },
-        "realtime_v2": {
+        "realtime_conversation": {
           "type": "boolean"
         },
-        "realtime_conversation": {
+        "realtime_v2": {
           "type": "boolean"
         },
         "remote_models": {

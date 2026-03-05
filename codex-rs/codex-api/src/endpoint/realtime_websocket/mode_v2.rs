@@ -106,6 +106,10 @@ pub(super) fn append_query_params(
     query_params: Option<&HashMap<String, String>>,
     model: Option<&str>,
 ) {
+    if model.is_none() && query_params.is_none_or(HashMap::is_empty) {
+        return;
+    }
+
     let mut query = url.query_pairs_mut();
     if let Some(model) = model {
         query.append_pair("model", model);
