@@ -1070,7 +1070,7 @@ mod tests {
             request: v2::McpServerElicitationRequest::Form {
                 meta: None,
                 message: "Allow this request?".to_string(),
-                requested_schema: Some(requested_schema),
+                requested_schema,
             },
         };
         let request = ServerRequest::McpServerElicitationRequest {

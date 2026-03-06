@@ -102,8 +102,7 @@ export type { McpElicitationBooleanSchema } from "./McpElicitationBooleanSchema"
 export type { McpElicitationBooleanType } from "./McpElicitationBooleanType";
 export type { McpElicitationConstOption } from "./McpElicitationConstOption";
 export type { McpElicitationEnumSchema } from "./McpElicitationEnumSchema";
-export type { McpElicitationIntegerSchema } from "./McpElicitationIntegerSchema";
-export type { McpElicitationIntegerType } from "./McpElicitationIntegerType";
+export type { McpElicitationLegacyTitledEnumSchema } from "./McpElicitationLegacyTitledEnumSchema";
 export type { McpElicitationMultiSelectEnumSchema } from "./McpElicitationMultiSelectEnumSchema";
 export type { McpElicitationNumberSchema } from "./McpElicitationNumberSchema";
 export type { McpElicitationNumberType } from "./McpElicitationNumberType";

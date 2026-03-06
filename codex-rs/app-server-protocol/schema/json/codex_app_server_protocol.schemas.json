@@ -5305,7 +5305,7 @@
       "type": "string"
     },
     "McpElicitationBooleanSchema": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "default": {
           "type": [
@@ -5341,6 +5341,7 @@
       "type": "string"
     },
     "McpElicitationConstOption": {
+      "additionalProperties": false,
       "properties": {
         "const": {
           "type": "string"
@@ -5362,29 +5363,39 @@
         },
         {
           "$ref": "#/definitions/McpElicitationMultiSelectEnumSchema"
+        },
+        {
+          "$ref": "#/definitions/McpElicitationLegacyTitledEnumSchema"
         }
       ]
     },
-    "McpElicitationIntegerSchema": {
-      "additionalProperties": true,
+    "McpElicitationLegacyTitledEnumSchema": {
+      "additionalProperties": false,
       "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": [
             "string",
             "null"
           ]
         },
-        "maximum": {
-          "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+        "enum": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
-        "minimum": {
-          "format": "int64",
+        "enumNames": {
+          "items": {
+            "type": "string"
+          },
           "type": [
-            "integer",
+            "array",
             "null"
           ]
         },
@@ -5395,19 +5406,14 @@
           ]
         },
         "type": {
-          "$ref": "#/definitions/McpElicitationIntegerType"
+          "$ref": "#/definitions/McpElicitationStringType"
         }
       },
       "required": [
+        "enum",
         "type"
       ],
       "type": "object"
-    },
-    "McpElicitationIntegerType": {
-      "enum": [
-        "integer"
-      ],
-      "type": "string"
     },
     "McpElicitationMultiSelectEnumSchema": {
       "anyOf": [
@@ -5420,8 +5426,15 @@
       ]
     },
     "McpElicitationNumberSchema": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
+        "default": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "description": {
           "type": [
             "string",
@@ -5459,7 +5472,8 @@
     },
     "McpElicitationNumberType": {
       "enum": [
-        "number"
+        "number",
+        "integer"
       ],
       "type": "string"
     },
@@ -5481,24 +5495,15 @@
           "$ref": "#/definitions/McpElicitationNumberSchema"
         },
         {
-          "$ref": "#/definitions/McpElicitationIntegerSchema"
-        },
-        {
           "$ref": "#/definitions/McpElicitationBooleanSchema"
         }
       ]
     },
     "McpElicitationSchema": {
-      "additionalProperties": true,
-      "description": "Typed form schema for MCP `elicitation/create` requests.\n\nThis mirrors the `requestedSchema` shape from the MCP `ElicitRequestFormParams` schema while preserving extension keywords such as Codex-specific `x-codex-*` metadata.",
+      "additionalProperties": false,
+      "description": "Typed form schema for MCP `elicitation/create` requests.\n\nThis matches the `requestedSchema` shape from the MCP 2025-11-25 `ElicitRequestFormParams` schema.",
       "properties": {
         "$schema": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "description": {
           "type": [
             "string",
             "null"
@@ -5516,12 +5521,6 @@
           },
           "type": [
             "array",
-            "null"
-          ]
-        },
-        "title": {
-          "type": [
-            "string",
             "null"
           ]
         },
@@ -5555,8 +5554,14 @@
       "type": "string"
     },
     "McpElicitationStringSchema": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
+        "default": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "description": {
           "type": [
             "string",
@@ -5611,6 +5616,7 @@
       "type": "string"
     },
     "McpElicitationTitledEnumItems": {
+      "additionalProperties": false,
       "properties": {
         "anyOf": {
           "items": {
@@ -5625,7 +5631,7 @@
       "type": "object"
     },
     "McpElicitationTitledMultiSelectEnumSchema": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "default": {
           "items": {
@@ -5678,7 +5684,7 @@
       "type": "object"
     },
     "McpElicitationTitledSingleSelectEnumSchema": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "default": {
           "type": [
@@ -5715,6 +5721,7 @@
       "type": "object"
     },
     "McpElicitationUntitledEnumItems": {
+      "additionalProperties": false,
       "properties": {
         "enum": {
           "items": {
@@ -5733,7 +5740,7 @@
       "type": "object"
     },
     "McpElicitationUntitledMultiSelectEnumSchema": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "default": {
           "items": {
@@ -5786,7 +5793,7 @@
       "type": "object"
     },
     "McpElicitationUntitledSingleSelectEnumSchema": {
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "default": {
           "type": [
@@ -5866,19 +5873,13 @@
               "type": "string"
             },
             "requestedSchema": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/McpElicitationSchema"
-                },
-                {
-                  "type": "null"
-                }
-              ]
+              "$ref": "#/definitions/McpElicitationSchema"
             }
           },
           "required": [
             "message",
-            "mode"
+            "mode",
+            "requestedSchema"
           ],
           "type": "object"
         },

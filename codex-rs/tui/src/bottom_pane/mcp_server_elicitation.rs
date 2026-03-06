@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -12,7 +11,6 @@ use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::RequestId as McpRequestId;
 use codex_protocol::protocol::Op;
-use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::TextElement;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -53,6 +51,8 @@ const APPROVAL_ACCEPT_ONCE_VALUE: &str = "accept";
 const APPROVAL_ACCEPT_SESSION_VALUE: &str = "accept_session";
 const APPROVAL_DECLINE_VALUE: &str = "decline";
 const APPROVAL_CANCEL_VALUE: &str = "cancel";
+const APPROVAL_META_KIND_KEY: &str = "codex_approval_kind";
+const APPROVAL_META_KIND_MCP_TOOL_CALL: &str = "mcp_tool_call";
 const APPROVAL_PERSIST_KEY: &str = "persist";
 const APPROVAL_PERSIST_SESSION_VALUE: &str = "session";
 
@@ -133,12 +133,6 @@ struct McpServerElicitationAnswerState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct CodexOptionMetadata {
-    label: String,
-    description: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FooterTip {
     text: String,
     highlight: bool,
@@ -174,7 +168,22 @@ impl McpServerElicitationFormRequest {
             return None;
         };
 
-        let (response_mode, fields) = if requested_schema.is_null() {
+        let is_tool_approval = meta
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|meta| meta.get(APPROVAL_META_KIND_KEY))
+            .and_then(Value::as_str)
+            == Some(APPROVAL_META_KIND_MCP_TOOL_CALL);
+        let is_empty_object_schema = requested_schema.as_object().is_some_and(|schema| {
+            schema.get("type").and_then(Value::as_str) == Some("object")
+                && schema
+                    .get("properties")
+                    .and_then(Value::as_object)
+                    .is_some_and(|properties| properties.is_empty())
+        });
+
+        let (response_mode, fields) =
+            if requested_schema.is_null() || (is_tool_approval && is_empty_object_schema) {
             let mut options = vec![McpServerElicitationOption {
                 label: "Approve Once".to_string(),
                 description: Some("Run the tool and continue.".to_string()),
@@ -279,39 +288,54 @@ fn parse_field(
                 label,
                 prompt,
                 required,
-                input: McpServerElicitationFieldInput::Text {
-                    secret: schema
-                        .additional
-                        .get("writeOnly")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                },
+                input: McpServerElicitationFieldInput::Text { secret: false },
             })
         }
         McpElicitationPrimitiveSchema::Boolean(schema) => {
             let label = schema.title.unwrap_or_else(|| id.to_string());
             let prompt = schema.description.unwrap_or_else(|| label.clone());
             let default_idx = schema.default.map(|value| if value { 0 } else { 1 });
-            let metadata = codex_option_metadata(&schema.additional);
             let options = [true, false]
                 .into_iter()
-                .enumerate()
-                .map(|(idx, value)| {
-                    let metadata = metadata.get(idx);
+                .map(|value| {
+                    let label = if value { "True" } else { "False" }.to_string();
                     McpServerElicitationOption {
-                        label: metadata.map_or_else(
-                            || {
-                                if value {
-                                    "True".to_string()
-                                } else {
-                                    "False".to_string()
-                                }
-                            },
-                            |entry| entry.label.clone(),
-                        ),
-                        description: metadata.map(|entry| entry.description.clone()),
+                        label,
+                        description: None,
                         value: Value::Bool(value),
                     }
+                })
+                .collect();
+            Some(McpServerElicitationField {
+                id: id.to_string(),
+                label,
+                prompt,
+                required,
+                input: McpServerElicitationFieldInput::Select {
+                    options,
+                    default_idx,
+                },
+            })
+        }
+        McpElicitationPrimitiveSchema::Enum(McpElicitationEnumSchema::Legacy(schema)) => {
+            let label = schema.title.unwrap_or_else(|| id.to_string());
+            let prompt = schema.description.unwrap_or_else(|| label.clone());
+            let default_idx = schema
+                .default
+                .as_ref()
+                .and_then(|value| schema.enum_.iter().position(|entry| entry == value));
+            let enum_names = schema.enum_names.unwrap_or_default();
+            let options = schema
+                .enum_
+                .into_iter()
+                .enumerate()
+                .map(|(idx, value)| McpServerElicitationOption {
+                    label: enum_names
+                        .get(idx)
+                        .cloned()
+                        .unwrap_or_else(|| value.clone()),
+                    description: None,
+                    value: Value::String(value),
                 })
                 .collect();
             Some(McpServerElicitationField {
@@ -329,7 +353,6 @@ fn parse_field(
             parse_single_select_field(id, schema, required)
         }
         McpElicitationPrimitiveSchema::Number(_)
-        | McpElicitationPrimitiveSchema::Integer(_)
         | McpElicitationPrimitiveSchema::Enum(McpElicitationEnumSchema::MultiSelect(_)) => None,
     }
 }
@@ -343,7 +366,6 @@ fn parse_single_select_field(
         McpElicitationSingleSelectEnumSchema::Untitled(schema) => {
             let label = schema.title.unwrap_or_else(|| id.to_string());
             let prompt = schema.description.unwrap_or_else(|| label.clone());
-            let metadata = codex_option_metadata(&schema.additional);
             let default_idx = schema
                 .default
                 .as_ref()
@@ -351,14 +373,10 @@ fn parse_single_select_field(
             let options = schema
                 .enum_
                 .into_iter()
-                .enumerate()
-                .map(|(idx, value)| {
-                    let metadata = metadata.get(idx);
-                    McpServerElicitationOption {
-                        label: metadata.map_or_else(|| value.clone(), |entry| entry.label.clone()),
-                        description: metadata.map(|entry| entry.description.clone()),
-                        value: Value::String(value),
-                    }
+                .map(|value| McpServerElicitationOption {
+                    label: value.clone(),
+                    description: None,
+                    value: Value::String(value),
                 })
                 .collect();
             Some(McpServerElicitationField {
@@ -402,23 +420,6 @@ fn parse_single_select_field(
             })
         }
     }
-}
-
-fn codex_option_metadata(additional: &HashMap<String, Value>) -> Vec<CodexOptionMetadata> {
-    additional
-        .get("x-codex-options")
-        .cloned()
-        .and_then(|value| serde_json::from_value::<Vec<RequestUserInputQuestionOption>>(value).ok())
-        .map(|options| {
-            options
-                .into_iter()
-                .map(|option| CodexOptionMetadata {
-                    label: option.label,
-                    description: option.description,
-                })
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 pub(crate) struct McpServerElicitationOverlay {
@@ -1406,6 +1407,27 @@ mod tests {
         }
     }
 
+    fn empty_object_schema() -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+        })
+    }
+
+    fn tool_approval_meta(include_session_persist: bool) -> Option<Value> {
+        let mut meta = serde_json::Map::from_iter([(
+            APPROVAL_META_KIND_KEY.to_string(),
+            Value::String(APPROVAL_META_KIND_MCP_TOOL_CALL.to_string()),
+        )]);
+        if include_session_persist {
+            meta.insert(
+                APPROVAL_PERSIST_KEY.to_string(),
+                Value::String(APPROVAL_PERSIST_SESSION_VALUE.to_string()),
+            );
+        }
+        Some(Value::Object(meta))
+    }
+
     fn snapshot_buffer(buf: &Buffer) -> String {
         let mut lines = Vec::new();
         for y in 0..buf.area().height {
@@ -1552,6 +1574,69 @@ mod tests {
     }
 
     #[test]
+    fn empty_tool_approval_schema_uses_approval_actions() {
+        let thread_id = ThreadId::default();
+        let request = McpServerElicitationFormRequest::from_event(
+            thread_id,
+            form_request(
+                "Allow this request?",
+                empty_object_schema(),
+                tool_approval_meta(false),
+            ),
+        )
+        .expect("expected approval fallback");
+
+        assert_eq!(
+            request,
+            McpServerElicitationFormRequest {
+                thread_id,
+                server_name: "server-1".to_string(),
+                request_id: McpRequestId::String("request-1".to_string()),
+                message: "Allow this request?".to_string(),
+                response_mode: McpServerElicitationResponseMode::ApprovalAction,
+                fields: vec![McpServerElicitationField {
+                    id: APPROVAL_FIELD_ID.to_string(),
+                    label: String::new(),
+                    prompt: String::new(),
+                    required: true,
+                    input: McpServerElicitationFieldInput::Select {
+                        options: vec![
+                            McpServerElicitationOption {
+                                label: "Approve Once".to_string(),
+                                description: Some("Run the tool and continue.".to_string()),
+                                value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
+                            },
+                            McpServerElicitationOption {
+                                label: "Deny".to_string(),
+                                description: Some(
+                                    "Decline this tool call and continue.".to_string(),
+                                ),
+                                value: Value::String(APPROVAL_DECLINE_VALUE.to_string()),
+                            },
+                            McpServerElicitationOption {
+                                label: "Cancel".to_string(),
+                                description: Some("Cancel this tool call".to_string()),
+                                value: Value::String(APPROVAL_CANCEL_VALUE.to_string()),
+                            },
+                        ],
+                        default_idx: Some(0),
+                    },
+                }],
+            }
+        );
+    }
+
+    #[test]
+    fn empty_unmarked_schema_falls_back() {
+        let request = McpServerElicitationFormRequest::from_event(
+            ThreadId::default(),
+            form_request("Empty form", empty_object_schema(), None),
+        );
+
+        assert_eq!(request, None);
+    }
+
+    #[test]
     fn submit_sends_accept_with_typed_content() {
         let (tx, mut rx) = test_sender();
         let thread_id = ThreadId::default();
@@ -1603,17 +1688,15 @@ mod tests {
     }
 
     #[test]
-    fn missing_schema_session_choice_sets_persist_meta() {
+    fn empty_tool_approval_schema_session_choice_sets_persist_meta() {
         let (tx, mut rx) = test_sender();
         let thread_id = ThreadId::default();
         let request = McpServerElicitationFormRequest::from_event(
             thread_id,
             form_request(
                 "Allow this request?",
-                Value::Null,
-                Some(serde_json::json!({
-                    APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_SESSION_VALUE,
-                })),
+                empty_object_schema(),
+                tool_approval_meta(true),
             ),
         )
         .expect("expected approval fallback");
@@ -1796,11 +1879,15 @@ mod tests {
     }
 
     #[test]
-    fn approval_form_without_schema_snapshot() {
+    fn approval_form_tool_approval_snapshot() {
         let (tx, _rx) = test_sender();
         let request = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
-            form_request("Allow this request?", Value::Null, None),
+            form_request(
+                "Allow this request?",
+                empty_object_schema(),
+                tool_approval_meta(false),
+            ),
         )
         .expect("expected approval fallback");
         let overlay = McpServerElicitationOverlay::new(request, tx, true, false, false);
@@ -1812,16 +1899,14 @@ mod tests {
     }
 
     #[test]
-    fn approval_form_with_session_persist_snapshot() {
+    fn approval_form_tool_approval_with_session_persist_snapshot() {
         let (tx, _rx) = test_sender();
         let request = McpServerElicitationFormRequest::from_event(
             ThreadId::default(),
             form_request(
                 "Allow this request?",
-                Value::Null,
-                Some(serde_json::json!({
-                    APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_SESSION_VALUE,
-                })),
+                empty_object_schema(),
+                tool_approval_meta(true),
             ),
         )
         .expect("expected approval fallback");

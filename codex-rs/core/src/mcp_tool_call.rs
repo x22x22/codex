@@ -1,6 +1,9 @@
+use std::collections::BTreeMap;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_app_server_protocol::McpElicitationObjectType;
+use codex_app_server_protocol::McpElicitationSchema;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use tracing::error;
@@ -351,6 +354,8 @@ const MCP_TOOL_APPROVAL_ACCEPT: &str = "Approve Once";
 const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Approve this Session";
 const MCP_TOOL_APPROVAL_DECLINE: &str = "Deny";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
+const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
+const MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL: &str = "mcp_tool_call";
 const MCP_TOOL_APPROVAL_PERSIST_KEY: &str = "persist";
 const MCP_TOOL_APPROVAL_PERSIST_SESSION: &str = "session";
 const MCP_TOOL_APPROVAL_SOURCE_KEY: &str = "source";
@@ -648,7 +653,12 @@ fn build_mcp_tool_approval_elicitation_request(
                 allow_session_persist,
             ),
             message,
-            requested_schema: None,
+            requested_schema: McpElicitationSchema {
+                schema_uri: None,
+                type_: McpElicitationObjectType::Object,
+                properties: BTreeMap::new(),
+                required: None,
+            },
         },
     }
 }
@@ -660,6 +670,10 @@ fn build_mcp_tool_approval_elicitation_meta(
     allow_session_persist: bool,
 ) -> Option<serde_json::Value> {
     let mut meta = serde_json::Map::new();
+    meta.insert(
+        MCP_TOOL_APPROVAL_KIND_KEY.to_string(),
+        serde_json::Value::String(MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL.to_string()),
+    );
     if allow_session_persist {
         meta.insert(
             MCP_TOOL_APPROVAL_PERSIST_KEY.to_string(),
@@ -1054,6 +1068,16 @@ mod tests {
     }
 
     #[test]
+    fn approval_elicitation_meta_marks_tool_approvals() {
+        assert_eq!(
+            build_mcp_tool_approval_elicitation_meta("custom_server", None, None, false),
+            Some(serde_json::json!({
+                MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
+            }))
+        );
+    }
+
+    #[test]
     fn approval_elicitation_meta_keeps_session_persist_behavior() {
         assert_eq!(
             build_mcp_tool_approval_elicitation_meta(
@@ -1069,6 +1093,7 @@ mod tests {
                 true,
             ),
             Some(serde_json::json!({
+                MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
                 MCP_TOOL_APPROVAL_PERSIST_KEY: MCP_TOOL_APPROVAL_PERSIST_SESSION,
                 MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: "Run Action",
                 MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: "Runs the selected action.",
@@ -1097,6 +1122,7 @@ mod tests {
                 false,
             ),
             Some(serde_json::json!({
+                MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
                 MCP_TOOL_APPROVAL_SOURCE_KEY: MCP_TOOL_APPROVAL_SOURCE_CONNECTOR,
                 MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY: "calendar",
                 MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY: "Calendar",
@@ -1128,6 +1154,7 @@ mod tests {
                 true,
             ),
             Some(serde_json::json!({
+                MCP_TOOL_APPROVAL_KIND_KEY: MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL,
                 MCP_TOOL_APPROVAL_PERSIST_KEY: MCP_TOOL_APPROVAL_PERSIST_SESSION,
                 MCP_TOOL_APPROVAL_SOURCE_KEY: MCP_TOOL_APPROVAL_SOURCE_CONNECTOR,
                 MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY: "calendar",
