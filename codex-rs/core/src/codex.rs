@@ -2840,17 +2840,22 @@ impl Session {
 
         let request = match params.request {
             McpServerElicitationRequest::Form {
+                meta,
                 message,
                 requested_schema,
             } => codex_protocol::approvals::ElicitationRequest::Form {
+                meta,
                 message,
-                requested_schema,
+                requested_schema: serde_json::to_value(requested_schema)
+                    .expect("typed MCP elicitation schema should serialize"),
             },
             McpServerElicitationRequest::Url {
+                meta,
                 message,
                 url,
                 elicitation_id,
             } => codex_protocol::approvals::ElicitationRequest::Url {
+                meta,
                 message,
                 url,
                 elicitation_id,
@@ -2865,6 +2870,7 @@ impl Session {
             }
         };
         let event = EventMsg::ElicitationRequest(ElicitationRequestEvent {
+            turn_id: params.turn_id,
             server_name,
             id,
             request,
@@ -3953,6 +3959,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     request_id,
                     decision,
                     content,
+                    meta,
                 } => {
                     handlers::resolve_elicitation(
                         &sess,
@@ -3960,6 +3967,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                         request_id,
                         decision,
                         content,
+                        meta,
                     )
                     .await;
                     false
@@ -4185,6 +4193,7 @@ mod handlers {
         request_id: ProtocolRequestId,
         decision: codex_protocol::approvals::ElicitationAction,
         content: Option<Value>,
+        meta: Option<Value>,
     ) {
         let action = match decision {
             codex_protocol::approvals::ElicitationAction::Accept => ElicitationAction::Accept,
@@ -4196,7 +4205,11 @@ mod handlers {
             ElicitationAction::Accept => Some(content.unwrap_or_else(|| serde_json::json!({}))),
             ElicitationAction::Decline | ElicitationAction::Cancel => None,
         };
-        let response = ElicitationResponse { action, content };
+        let response = ElicitationResponse {
+            action,
+            content,
+            meta,
+        };
         let request_id = match request_id {
             ProtocolRequestId::String(value) => {
                 rmcp::model::NumberOrString::String(std::sync::Arc::from(value))

@@ -281,6 +281,7 @@ impl ApprovalOverlay {
                 request_id: request_id.clone(),
                 decision,
                 content: None,
+                meta: None,
             },
         });
     }

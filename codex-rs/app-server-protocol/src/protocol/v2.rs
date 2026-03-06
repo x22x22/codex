@@ -4142,6 +4142,341 @@ pub struct McpServerElicitationRequestParams {
     // association.
 }
 
+/// Typed form schema for MCP `elicitation/create` requests.
+///
+/// This mirrors the `requestedSchema` shape from the MCP `ElicitRequestFormParams` schema while
+/// preserving extension keywords such as Codex-specific `x-codex-*` metadata.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationSchema {
+    #[serde(rename = "$schema", skip_serializing_if = "Option::is_none")]
+    #[ts(optional, rename = "$schema")]
+    pub schema_uri: Option<String>,
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub type_: McpElicitationObjectType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    pub properties: BTreeMap<String, McpElicitationPrimitiveSchema>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub required: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum McpElicitationObjectType {
+    Object,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(untagged)]
+#[ts(export_to = "v2/")]
+pub enum McpElicitationPrimitiveSchema {
+    Enum(McpElicitationEnumSchema),
+    String(McpElicitationStringSchema),
+    Number(McpElicitationNumberSchema),
+    Integer(McpElicitationIntegerSchema),
+    Boolean(McpElicitationBooleanSchema),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationStringSchema {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub type_: McpElicitationStringType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub min_length: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_length: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub format: Option<McpElicitationStringFormat>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum McpElicitationStringType {
+    String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "kebab-case")]
+#[ts(rename_all = "kebab-case", export_to = "v2/")]
+pub enum McpElicitationStringFormat {
+    Email,
+    Uri,
+    Date,
+    DateTime,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationNumberSchema {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub type_: McpElicitationNumberType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub minimum: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub maximum: Option<f64>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum McpElicitationNumberType {
+    Number,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationIntegerSchema {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub type_: McpElicitationIntegerType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub minimum: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub maximum: Option<i64>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum McpElicitationIntegerType {
+    Integer,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationBooleanSchema {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub type_: McpElicitationBooleanType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<bool>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum McpElicitationBooleanType {
+    Boolean,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(untagged)]
+#[ts(export_to = "v2/")]
+pub enum McpElicitationEnumSchema {
+    SingleSelect(McpElicitationSingleSelectEnumSchema),
+    MultiSelect(McpElicitationMultiSelectEnumSchema),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(untagged)]
+#[ts(export_to = "v2/")]
+pub enum McpElicitationSingleSelectEnumSchema {
+    Untitled(McpElicitationUntitledSingleSelectEnumSchema),
+    Titled(McpElicitationTitledSingleSelectEnumSchema),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationUntitledSingleSelectEnumSchema {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub type_: McpElicitationStringType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(rename = "enum")]
+    #[ts(rename = "enum")]
+    pub enum_: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<String>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationTitledSingleSelectEnumSchema {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub type_: McpElicitationStringType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(rename = "oneOf")]
+    #[ts(rename = "oneOf")]
+    pub one_of: Vec<McpElicitationConstOption>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<String>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(untagged)]
+#[ts(export_to = "v2/")]
+pub enum McpElicitationMultiSelectEnumSchema {
+    Untitled(McpElicitationUntitledMultiSelectEnumSchema),
+    Titled(McpElicitationTitledMultiSelectEnumSchema),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationUntitledMultiSelectEnumSchema {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub type_: McpElicitationArrayType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub min_items: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_items: Option<u64>,
+    pub items: McpElicitationUntitledEnumItems,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<Vec<String>>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationTitledMultiSelectEnumSchema {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub type_: McpElicitationArrayType,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub min_items: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub max_items: Option<u64>,
+    pub items: McpElicitationTitledEnumItems,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub default: Option<Vec<String>>,
+    #[serde(default, flatten)]
+    pub additional: HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+pub enum McpElicitationArrayType {
+    Array,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationUntitledEnumItems {
+    #[serde(rename = "type")]
+    #[ts(rename = "type")]
+    pub type_: McpElicitationStringType,
+    #[serde(rename = "enum")]
+    #[ts(rename = "enum")]
+    pub enum_: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationTitledEnumItems {
+    #[serde(rename = "anyOf", alias = "oneOf")]
+    #[ts(rename = "anyOf")]
+    pub any_of: Vec<McpElicitationConstOption>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub struct McpElicitationConstOption {
+    #[serde(rename = "const")]
+    #[ts(rename = "const")]
+    pub const_: String,
+    pub title: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(tag = "mode", rename_all = "camelCase")]
 #[ts(tag = "mode")]
@@ -4150,37 +4485,49 @@ pub enum McpServerElicitationRequest {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Form {
+        #[serde(rename = "_meta")]
+        #[ts(rename = "_meta")]
+        meta: Option<JsonValue>,
         message: String,
-        requested_schema: JsonValue,
+        requested_schema: Option<McpElicitationSchema>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Url {
+        #[serde(rename = "_meta")]
+        #[ts(rename = "_meta")]
+        meta: Option<JsonValue>,
         message: String,
         url: String,
         elicitation_id: String,
     },
 }
 
-impl From<CoreElicitationRequest> for McpServerElicitationRequest {
-    fn from(value: CoreElicitationRequest) -> Self {
+impl TryFrom<CoreElicitationRequest> for McpServerElicitationRequest {
+    type Error = serde_json::Error;
+
+    fn try_from(value: CoreElicitationRequest) -> Result<Self, Self::Error> {
         match value {
             CoreElicitationRequest::Form {
+                meta,
                 message,
                 requested_schema,
-            } => Self::Form {
+            } => Ok(Self::Form {
+                meta,
                 message,
-                requested_schema,
-            },
+                requested_schema: serde_json::from_value(requested_schema)?,
+            }),
             CoreElicitationRequest::Url {
+                meta,
                 message,
                 url,
                 elicitation_id,
-            } => Self::Url {
+            } => Ok(Self::Url {
+                meta,
                 message,
                 url,
                 elicitation_id,
-            },
+            }),
         }
     }
 }
@@ -4194,6 +4541,10 @@ pub struct McpServerElicitationRequestResponse {
     ///
     /// This is nullable because decline/cancel responses have no content.
     pub content: Option<JsonValue>,
+    /// Optional client metadata for form-mode action handling.
+    #[serde(rename = "_meta")]
+    #[ts(rename = "_meta")]
+    pub meta: Option<JsonValue>,
 }
 
 impl From<McpServerElicitationRequestResponse> for rmcp::model::CreateElicitationResult {
@@ -4210,6 +4561,7 @@ impl From<rmcp::model::CreateElicitationResult> for McpServerElicitationRequestR
         Self {
             action: value.action.into(),
             content: value.content,
+            meta: None,
         }
     }
 }
@@ -4567,6 +4919,7 @@ mod tests {
                 content: Some(json!({
                     "confirmed": true,
                 })),
+                meta: None,
             }
         );
         assert_eq!(
@@ -4577,15 +4930,18 @@ mod tests {
 
     #[test]
     fn mcp_server_elicitation_request_from_core_url_request() {
-        let request = McpServerElicitationRequest::from(CoreElicitationRequest::Url {
+        let request = McpServerElicitationRequest::try_from(CoreElicitationRequest::Url {
+            meta: None,
             message: "Finish sign-in".to_string(),
             url: "https://example.com/complete".to_string(),
             elicitation_id: "elicitation-123".to_string(),
-        });
+        })
+        .expect("URL request should convert");
 
         assert_eq!(
             request,
             McpServerElicitationRequest::Url {
+                meta: None,
                 message: "Finish sign-in".to_string(),
                 url: "https://example.com/complete".to_string(),
                 elicitation_id: "elicitation-123".to_string(),
@@ -4594,10 +4950,90 @@ mod tests {
     }
 
     #[test]
+    fn mcp_server_elicitation_request_from_core_form_request() {
+        let request = McpServerElicitationRequest::try_from(CoreElicitationRequest::Form {
+            meta: None,
+            message: "Allow this request?".to_string(),
+            requested_schema: json!({
+                "type": "object",
+                "properties": {
+                    "confirmed": {
+                        "type": "boolean",
+                    }
+                },
+                "required": ["confirmed"],
+            }),
+        })
+        .expect("form request should convert");
+
+        let expected_schema: McpElicitationSchema = serde_json::from_value(json!({
+            "type": "object",
+            "properties": {
+                "confirmed": {
+                    "type": "boolean",
+                }
+            },
+            "required": ["confirmed"],
+        }))
+        .expect("expected schema should deserialize");
+
+        assert_eq!(
+            request,
+            McpServerElicitationRequest::Form {
+                meta: None,
+                message: "Allow this request?".to_string(),
+                requested_schema: Some(expected_schema),
+            }
+        );
+    }
+
+    #[test]
+    fn mcp_server_elicitation_request_accepts_null_core_form_schema() {
+        let request = McpServerElicitationRequest::try_from(CoreElicitationRequest::Form {
+            meta: Some(json!({
+                "persist": "session",
+            })),
+            message: "Allow this request?".to_string(),
+            requested_schema: JsonValue::Null,
+        })
+        .expect("null form schema should convert");
+
+        assert_eq!(
+            request,
+            McpServerElicitationRequest::Form {
+                meta: Some(json!({
+                    "persist": "session",
+                })),
+                message: "Allow this request?".to_string(),
+                requested_schema: None,
+            }
+        );
+    }
+
+    #[test]
+    fn mcp_server_elicitation_request_rejects_invalid_core_form_schema() {
+        let result = McpServerElicitationRequest::try_from(CoreElicitationRequest::Form {
+            meta: None,
+            message: "Allow this request?".to_string(),
+            requested_schema: json!({
+                "type": "object",
+                "properties": {
+                    "confirmed": {
+                        "type": "object",
+                    }
+                },
+            }),
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn mcp_server_elicitation_response_serializes_nullable_content() {
         let response = McpServerElicitationRequestResponse {
             action: McpServerElicitationAction::Decline,
             content: None,
+            meta: None,
         };
 
         assert_eq!(
@@ -4605,6 +5041,7 @@ mod tests {
             json!({
                 "action": "decline",
                 "content": null,
+                "_meta": null,
             })
         );
     }
