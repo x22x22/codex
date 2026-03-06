@@ -699,6 +699,28 @@ allow_local_binding = true
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn load_requirements_toml_ignores_disabled_legacy_network_table() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let requirements_file = tmp.path().join("requirements.toml");
+    tokio::fs::write(
+        &requirements_file,
+        r#"
+[experimental_network]
+enabled = false
+allow_local_binding = true
+"#,
+    )
+    .await?;
+
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+    load_requirements_toml(&mut config_requirements_toml, &requirements_file).await?;
+
+    assert_eq!(config_requirements_toml.network, None);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn cloud_requirements_are_not_overwritten_by_system_requirements() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     let requirements_file = tmp.path().join("requirements.toml");

@@ -2522,8 +2522,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::collections::HashMap;
     use std::time::Duration;
-    use tempfile::tempdir;
     use tempfile::TempDir;
+    use tempfile::tempdir;
 
     fn stdio_mcp(command: &str) -> McpServerConfig {
         McpServerConfig {

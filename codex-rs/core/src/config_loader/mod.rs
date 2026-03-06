@@ -390,13 +390,36 @@ fn parse_requirements_toml_with_legacy_network_enabled_compat(
     contents: &str,
 ) -> Result<ConfigRequirementsToml, toml::de::Error> {
     let mut raw_requirements: TomlValue = toml::from_str(contents)?;
-    if let Some(network_table) = raw_requirements
+    let should_remove_network_table = raw_requirements
         .as_table_mut()
         .and_then(|table| table.get_mut("experimental_network"))
         .and_then(TomlValue::as_table_mut)
-        && network_table.remove("enabled").is_some()
+        .and_then(|network_table| network_table.remove("enabled"))
+        .map(|enabled| match enabled {
+            TomlValue::Boolean(false) => {
+                tracing::warn!(
+                    "Ignoring disabled legacy experimental_network table in requirements input"
+                );
+                true
+            }
+            TomlValue::Boolean(true) => {
+                tracing::warn!(
+                    "Ignoring legacy experimental_network.enabled in requirements input"
+                );
+                false
+            }
+            value => {
+                tracing::warn!(
+                    ?value,
+                    "Ignoring malformed legacy experimental_network.enabled in requirements input"
+                );
+                false
+            }
+        })
+        .unwrap_or(false);
+    if should_remove_network_table && let Some(requirements_table) = raw_requirements.as_table_mut()
     {
-        tracing::warn!("Ignoring legacy experimental_network.enabled in requirements input");
+        requirements_table.remove("experimental_network");
     }
     raw_requirements.try_into()
 }
