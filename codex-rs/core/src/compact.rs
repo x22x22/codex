@@ -93,19 +93,13 @@ async fn run_compact_task_inner(
     input: Vec<UserInput>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    let has_synthetic_compact_prompt = matches!(
-        input.as_slice(),
-        [UserInput::Text {
-            text,
-            text_elements,
-        }] if text == turn_context.compact_prompt() && text_elements.is_empty()
-    );
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
 
     let mut history = sess.clone_history().await;
+    let persisted_history_items = history.raw_items().to_vec();
     history.record_items(
         &[initial_input_for_turn.into()],
         turn_context.truncation_policy,
@@ -195,24 +189,15 @@ async fn run_compact_task_inner(
         }
     }
 
-    let compaction_history_items = history.raw_items();
     let summary_suffix = {
         let history_snapshot = sess.clone_history().await;
         get_last_assistant_message_from_turn(history_snapshot.raw_items()).unwrap_or_default()
     };
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
-    let mut user_messages = collect_user_messages(compaction_history_items);
-    if has_synthetic_compact_prompt
-        && user_messages
-            .last()
-            .is_some_and(|message| message == turn_context.compact_prompt())
-    {
-        // Local inline compaction appends one synthetic user prompt for the compaction model call.
-        // Rebuild from the local prompt history so we can drop only that trailing synthetic input
-        // and preserve earlier real user messages, including ones whose text matches the prompt.
-        user_messages.pop();
-    }
-
+    // Build replacement history from persisted session history, not the retry-local
+    // prompt buffer. Retries may trim oldest prompt items to fit context limits, but
+    // replacement history must preserve prior real user messages and ghost snapshots.
+    let user_messages = collect_user_messages(&persisted_history_items);
     let mut new_history = build_compacted_history(Vec::new(), &user_messages, &summary_text);
 
     if matches!(
@@ -223,7 +208,7 @@ async fn run_compact_task_inner(
         new_history =
             insert_initial_context_before_last_real_user_or_summary(new_history, initial_context);
     }
-    let ghost_snapshots: Vec<ResponseItem> = compaction_history_items
+    let ghost_snapshots: Vec<ResponseItem> = persisted_history_items
         .iter()
         .filter(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
         .cloned()
