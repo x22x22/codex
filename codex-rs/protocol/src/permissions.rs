@@ -124,6 +124,25 @@ impl Default for FileSystemSandboxPolicy {
 }
 
 impl FileSystemSandboxPolicy {
+    fn has_root_access(&self, predicate: impl Fn(FileSystemAccessMode) -> bool) -> bool {
+        matches!(self.kind, FileSystemSandboxKind::Restricted)
+            && self.entries.iter().any(|entry| {
+                matches!(
+                    &entry.path,
+                    FileSystemPath::Special { value }
+                        if value.kind == FileSystemSpecialPathKind::Root && predicate(entry.access)
+                )
+            })
+    }
+
+    fn has_explicit_deny_entries(&self) -> bool {
+        matches!(self.kind, FileSystemSandboxKind::Restricted)
+            && self
+                .entries
+                .iter()
+                .any(|entry| entry.access == FileSystemAccessMode::None)
+    }
+
     pub fn unrestricted() -> Self {
         Self {
             kind: FileSystemSandboxKind::Unrestricted,
@@ -149,13 +168,10 @@ impl FileSystemSandboxPolicy {
     pub fn has_full_disk_read_access(&self) -> bool {
         match self.kind {
             FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => true,
-            FileSystemSandboxKind::Restricted => self.entries.iter().any(|entry| {
-                matches!(
-                    &entry.path,
-                    FileSystemPath::Special { value }
-                        if value.kind == FileSystemSpecialPathKind::Root && entry.access.can_read()
-                )
-            }),
+            FileSystemSandboxKind::Restricted => {
+                self.has_root_access(FileSystemAccessMode::can_read)
+                    && !self.has_explicit_deny_entries()
+            }
         }
     }
 
@@ -163,14 +179,10 @@ impl FileSystemSandboxPolicy {
     pub fn has_full_disk_write_access(&self) -> bool {
         match self.kind {
             FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => true,
-            FileSystemSandboxKind::Restricted => self.entries.iter().any(|entry| {
-                matches!(
-                    &entry.path,
-                    FileSystemPath::Special { value }
-                        if value.kind == FileSystemSpecialPathKind::Root
-                            && entry.access.can_write()
-                )
-            }),
+            FileSystemSandboxKind::Restricted => {
+                self.has_root_access(FileSystemAccessMode::can_write)
+                    && !self.has_explicit_deny_entries()
+            }
         }
     }
 
@@ -195,11 +207,24 @@ impl FileSystemSandboxPolicy {
         }
 
         let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        let mut readable_roots = Vec::new();
+        if self.has_root_access(FileSystemAccessMode::can_read)
+            && let Some(cwd_absolute) = cwd_absolute.as_ref()
+        {
+            readable_roots.push(absolute_root_path_for_cwd(cwd_absolute));
+        }
+
         dedup_absolute_paths(
-            self.entries
-                .iter()
-                .filter(|entry| entry.access.can_read())
-                .filter_map(|entry| resolve_file_system_path(&entry.path, cwd_absolute.as_ref()))
+            readable_roots
+                .into_iter()
+                .chain(
+                    self.entries
+                        .iter()
+                        .filter(|entry| entry.access.can_read())
+                        .filter_map(|entry| {
+                            resolve_file_system_path(&entry.path, cwd_absolute.as_ref())
+                        }),
+                )
                 .collect(),
         )
     }
@@ -213,11 +238,24 @@ impl FileSystemSandboxPolicy {
 
         let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
         let unreadable_roots = self.get_unreadable_roots_with_cwd(cwd);
+        let mut writable_roots = Vec::new();
+        if self.has_root_access(FileSystemAccessMode::can_write)
+            && let Some(cwd_absolute) = cwd_absolute.as_ref()
+        {
+            writable_roots.push(absolute_root_path_for_cwd(cwd_absolute));
+        }
+
         dedup_absolute_paths(
-            self.entries
-                .iter()
-                .filter(|entry| entry.access.can_write())
-                .filter_map(|entry| resolve_file_system_path(&entry.path, cwd_absolute.as_ref()))
+            writable_roots
+                .into_iter()
+                .chain(
+                    self.entries
+                        .iter()
+                        .filter(|entry| entry.access.can_write())
+                        .filter_map(|entry| {
+                            resolve_file_system_path(&entry.path, cwd_absolute.as_ref())
+                        }),
+                )
                 .collect(),
         )
         .into_iter()
@@ -555,6 +593,16 @@ fn resolve_file_system_path(
         FileSystemPath::Path { path } => Some(path.clone()),
         FileSystemPath::Special { value } => resolve_file_system_special_path(value, cwd),
     }
+}
+
+fn absolute_root_path_for_cwd(cwd: &AbsolutePathBuf) -> AbsolutePathBuf {
+    let root = cwd
+        .as_path()
+        .ancestors()
+        .last()
+        .unwrap_or_else(|| panic!("cwd must have a filesystem root"));
+    AbsolutePathBuf::from_absolute_path(root)
+        .unwrap_or_else(|err| panic!("cwd root must be an absolute path: {err}"))
 }
 
 fn resolve_file_system_special_path(
