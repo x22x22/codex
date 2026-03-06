@@ -280,18 +280,17 @@ mod send_input {
         } else {
             None
         };
-        if args.interrupt {
-            if let Err(err) = session
+        if args.interrupt
+            && let Err(err) = session
                 .services
                 .agent_control
                 .interrupt_agent(receiver_thread_id)
                 .await
-            {
-                if let Some(follow_up) = interrupt_follow_up.as_mut() {
-                    follow_up.cancel();
-                }
-                return Err(collab_agent_error(receiver_thread_id, err));
+        {
+            if let Some(follow_up) = interrupt_follow_up.as_mut() {
+                follow_up.cancel();
             }
+            return Err(collab_agent_error(receiver_thread_id, err));
         }
         session
             .send_event(
