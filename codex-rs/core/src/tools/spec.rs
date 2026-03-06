@@ -98,7 +98,8 @@ impl ToolsConfig {
         let include_default_mode_request_user_input =
             include_request_user_input && features.enabled(Feature::DefaultModeRequestUserInput);
         let include_search_tool = features.enabled(Feature::Apps);
-        let include_artifact_tools = features.enabled(Feature::Artifact);
+        let include_artifact_tools =
+            features.enabled(Feature::Artifact) && codex_artifacts::can_manage_artifact_runtime();
         let include_image_gen_tool =
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
         let include_agent_jobs = include_collab_tools && features.enabled(Feature::Sqlite);
@@ -1405,7 +1406,7 @@ JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
 
     ToolSpec::Freeform(FreeformTool {
         name: "artifacts".to_string(),
-        description: "Runs raw JavaScript against the preinstalled Codex @oai/artifact-tool runtime for creating presentations or spreadsheets. This is plain JavaScript executed by Node with top-level await, not TypeScript: do not use type annotations, `interface`, `type`, or `import type`. Author code the same way you would for `import { Presentation, Workbook, PresentationFile, SpreadsheetFile, FileBlob, ... } from \"@oai/artifact-tool\"`, but omit that import line because the package surface is already preloaded. Named exports are available directly on `globalThis`, and the full module is available as `globalThis.artifactTool` (also aliased as `globalThis.artifacts` and `globalThis.codexArtifacts`). Node built-ins such as `node:fs/promises` may still be imported when needed for saving preview bytes. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-artifacts: timeout_ms=15000` or `// codex-artifact-tool: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
+        description: "Runs raw JavaScript against the preinstalled Codex @oai/artifact-tool runtime for creating presentations or spreadsheets. This is plain JavaScript executed by a local Node-compatible runtime with top-level await, not TypeScript: do not use type annotations, `interface`, `type`, or `import type`. Author code the same way you would for `import { Presentation, Workbook, PresentationFile, SpreadsheetFile, FileBlob, ... } from \"@oai/artifact-tool\"`, but omit that import line because the package surface is already preloaded. Named exports are available directly on `globalThis`, and the full module is available as `globalThis.artifactTool` (also aliased as `globalThis.artifacts` and `globalThis.codexArtifacts`). Node built-ins such as `node:fs/promises` may still be imported when needed for saving preview bytes. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-artifacts: timeout_ms=15000` or `// codex-artifact-tool: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
             .to_string(),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
@@ -2249,7 +2250,9 @@ mod tests {
 
     #[test]
     fn test_build_specs_artifact_tool_enabled() {
-        let config = test_config();
+        let mut config = test_config();
+        let runtime_root = tempfile::TempDir::new().expect("create temp codex home");
+        config.codex_home = runtime_root.path().to_path_buf();
         let model_info =
             ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
         let mut features = Features::with_defaults();
@@ -2466,6 +2469,7 @@ mod tests {
         web_search_mode: Option<WebSearchMode>,
         expected_tools: &[&str],
     ) {
+        let _config = test_config();
         let model_info = model_info_from_models_json(model_slug);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
@@ -2862,6 +2866,7 @@ mod tests {
 
     #[test]
     fn test_test_model_info_includes_sync_tool() {
+        let _config = test_config();
         let mut model_info = model_info_from_models_json("gpt-5-codex");
         model_info.experimental_supported_tools = vec![
             "test_sync_tool".to_string(),
@@ -3071,6 +3076,7 @@ mod tests {
                         ),
                         connector_id: Some("calendar".to_string()),
                         connector_name: Some("Calendar".to_string()),
+                        plugin_display_names: Vec::new(),
                     },
                 ),
                 (
@@ -3081,6 +3087,7 @@ mod tests {
                         tool: mcp_tool("echo", "Echo", serde_json::json!({"type": "object"})),
                         connector_id: None,
                         connector_name: None,
+                        plugin_display_names: Vec::new(),
                     },
                 ),
             ])),

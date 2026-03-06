@@ -64,6 +64,7 @@ use codex_hooks::HooksConfig;
 use codex_network_proxy::NetworkProxy;
 use codex_network_proxy::NetworkProxyAuditMetadata;
 use codex_network_proxy::normalize_host;
+use codex_otel::current_span_trace_id;
 use codex_otel::current_span_w3c_trace_context;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::ThreadId;
@@ -202,9 +203,11 @@ use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
 use crate::mentions::collect_explicit_app_ids;
+use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
+use crate::plugins::build_plugin_injections;
 use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
@@ -511,7 +514,7 @@ impl Codex {
             session_source_clone,
             skills_manager,
             plugins_manager,
-            mcp_manager,
+            mcp_manager.clone(),
             file_watcher,
             agent_control,
         )
@@ -652,6 +655,7 @@ impl TurnSkillsContext {
 #[derive(Debug)]
 pub(crate) struct TurnContext {
     pub(crate) sub_id: String,
+    pub(crate) trace_id: Option<String>,
     pub(crate) realtime_active: bool,
     pub(crate) config: Arc<Config>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
@@ -740,6 +744,7 @@ impl TurnContext {
 
         Self {
             sub_id: self.sub_id.clone(),
+            trace_id: self.trace_id.clone(),
             realtime_active: self.realtime_active,
             config: Arc::new(config),
             auth_manager: self.auth_manager.clone(),
@@ -795,6 +800,7 @@ impl TurnContext {
     pub(crate) fn to_turn_context_item(&self) -> TurnContextItem {
         TurnContextItem {
             turn_id: Some(self.sub_id.clone()),
+            trace_id: self.trace_id.clone(),
             cwd: self.cwd.clone(),
             current_date: self.current_date.clone(),
             timezone: self.timezone.clone(),
@@ -1124,6 +1130,7 @@ impl Session {
         let (current_date, timezone) = local_time_context();
         TurnContext {
             sub_id,
+            trace_id: current_span_trace_id(),
             realtime_active: false,
             config: per_turn_config.clone(),
             auth_manager: auth_manager_for_context,
@@ -1525,8 +1532,8 @@ impl Session {
             tool_approvals: Mutex::new(ApprovalStore::default()),
             execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager,
-            plugins_manager,
-            mcp_manager,
+            plugins_manager: Arc::clone(&plugins_manager),
+            mcp_manager: Arc::clone(&mcp_manager),
             file_watcher,
             agent_control,
             network_proxy,
@@ -1610,6 +1617,7 @@ impl Session {
             .map(|(name, _)| name.clone())
             .collect();
         required_mcp_servers.sort();
+        let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
             cancel_guard.cancel();
@@ -1624,6 +1632,7 @@ impl Session {
             sandbox_state,
             config.codex_home.clone(),
             codex_apps_tools_cache_key(auth),
+            tool_plugin_provenance,
         )
         .await;
         {
@@ -3569,6 +3578,10 @@ impl Session {
     ) {
         let auth = self.services.auth_manager.auth().await;
         let config = self.get_config().await;
+        let tool_plugin_provenance = self
+            .services
+            .mcp_manager
+            .tool_plugin_provenance(config.as_ref());
         let mcp_servers = with_codex_apps_mcp(
             mcp_servers,
             self.features.enabled(Feature::Apps),
@@ -3596,6 +3609,7 @@ impl Session {
             sandbox_state,
             config.codex_home.clone(),
             codex_apps_tools_cache_key(auth.as_ref()),
+            tool_plugin_provenance,
         )
         .await;
         {
@@ -3869,8 +3883,16 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     server_name,
                     request_id,
                     decision,
+                    content,
                 } => {
-                    handlers::resolve_elicitation(&sess, server_name, request_id, decision).await;
+                    handlers::resolve_elicitation(
+                        &sess,
+                        server_name,
+                        request_id,
+                        decision,
+                        content,
+                    )
+                    .await;
                     false
                 }
                 Op::Shutdown => handlers::shutdown(&sess, sub.id.clone()).await,
@@ -3958,6 +3980,7 @@ mod handlers {
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
+    use serde_json::Value;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::info;
@@ -4092,16 +4115,16 @@ mod handlers {
         server_name: String,
         request_id: ProtocolRequestId,
         decision: codex_protocol::approvals::ElicitationAction,
+        content: Option<Value>,
     ) {
         let action = match decision {
             codex_protocol::approvals::ElicitationAction::Accept => ElicitationAction::Accept,
             codex_protocol::approvals::ElicitationAction::Decline => ElicitationAction::Decline,
             codex_protocol::approvals::ElicitationAction::Cancel => ElicitationAction::Cancel,
         };
-        // When accepting, send an empty object as content to satisfy MCP servers
-        // that expect non-null content on Accept. For Decline/Cancel, content is None.
         let content = match action {
-            ElicitationAction::Accept => Some(serde_json::json!({})),
+            // Preserve the legacy fallback for clients that only send an action.
+            ElicitationAction::Accept => Some(content.unwrap_or_else(|| serde_json::json!({}))),
             ElicitationAction::Decline | ElicitationAction::Cancel => None,
         };
         let response = ElicitationResponse { action, content };
@@ -4764,6 +4787,7 @@ async fn spawn_review_thread(
 
     let review_turn_context = TurnContext {
         sub_id: review_turn_id,
+        trace_id: current_span_trace_id(),
         realtime_active: parent_turn_context.realtime_active,
         config: per_turn_config,
         auth_manager: auth_manager_for_context,
@@ -4927,25 +4951,38 @@ pub(crate) async fn run_turn(
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
-    let available_connectors = if turn_context.config.features.enabled(Feature::Apps) {
-        let mcp_tools = match sess
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
-            .list_all_tools()
-            .or_cancel(&cancellation_token)
-            .await
-        {
-            Ok(mcp_tools) => mcp_tools,
-            Err(_) => return None,
+    let loaded_plugins = sess
+        .services
+        .plugins_manager
+        .plugins_for_config(&turn_context.config);
+    // Plain-text @plugin mentions are resolved from the current session's
+    // enabled plugins, then converted into turn-scoped guidance below.
+    let mentioned_plugins =
+        collect_explicit_plugin_mentions(&input, loaded_plugins.capability_summaries());
+    let mcp_tools =
+        if turn_context.config.features.enabled(Feature::Apps) || !mentioned_plugins.is_empty() {
+            // Plugin mentions need raw MCP/app inventory even when app tools
+            // are normally hidden so we can describe the plugin's currently
+            // usable capabilities for this turn.
+            match sess
+                .services
+                .mcp_connection_manager
+                .read()
+                .await
+                .list_all_tools()
+                .or_cancel(&cancellation_token)
+                .await
+            {
+                Ok(mcp_tools) => mcp_tools,
+                Err(_) if turn_context.config.features.enabled(Feature::Apps) => return None,
+                Err(_) => HashMap::new(),
+            }
+        } else {
+            HashMap::new()
         };
-        let plugin_apps = sess
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config);
+    let available_connectors = if turn_context.config.features.enabled(Feature::Apps) {
         let connectors = connectors::merge_plugin_apps_with_accessible(
-            plugin_apps.effective_apps(),
+            loaded_plugins.effective_apps(),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
         );
         connectors::with_app_enabled_state(connectors, &turn_context.config)
@@ -5006,12 +5043,29 @@ pub(crate) async fn run_turn(
             .await;
     }
 
+    let plugin_items =
+        build_plugin_injections(&mentioned_plugins, &mcp_tools, &available_connectors);
+
     let mut explicitly_enabled_connectors = collect_explicit_app_ids(&input);
     explicitly_enabled_connectors.extend(collect_explicit_app_ids_from_skill_items(
         &skill_items,
         &available_connectors,
         &skill_name_counts_lower,
     ));
+    // Explicit @plugin mentions can make a plugin's enabled apps callable for
+    // this turn without persisting those connectors as sticky user selections.
+    let mut turn_enabled_connectors = explicitly_enabled_connectors.clone();
+    turn_enabled_connectors.extend(
+        mentioned_plugins
+            .iter()
+            .flat_map(|plugin| plugin.app_connector_ids.iter())
+            .map(|connector_id| connector_id.0.clone())
+            .filter(|connector_id| {
+                available_connectors
+                    .iter()
+                    .any(|connector| connector.is_enabled && connector.id == *connector_id)
+            }),
+    );
     let connector_names_by_id = available_connectors
         .iter()
         .map(|connector| (connector.id.as_str(), connector.name.as_str()))
@@ -5047,6 +5101,10 @@ pub(crate) async fn run_turn(
 
     if !skill_items.is_empty() {
         sess.record_conversation_items(&turn_context, &skill_items)
+            .await;
+    }
+    if !plugin_items.is_empty() {
+        sess.record_conversation_items(&turn_context, &plugin_items)
             .await;
     }
 
@@ -5117,7 +5175,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
-            &explicitly_enabled_connectors,
+            &turn_enabled_connectors,
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
             cancellation_token.child_token(),
@@ -5663,17 +5721,17 @@ async fn built_tools(
         .or_cancel(cancellation_token)
         .await?;
     drop(mcp_connection_manager);
+    let loaded_plugins = sess
+        .services
+        .plugins_manager
+        .plugins_for_config(&turn_context.config);
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
 
     let connectors = if turn_context.features.enabled(Feature::Apps) {
-        let plugin_apps = sess
-            .services
-            .plugins_manager
-            .plugins_for_config(&turn_context.config);
         let connectors = connectors::merge_plugin_apps_with_accessible(
-            plugin_apps.effective_apps(),
+            loaded_plugins.effective_apps(),
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
         );
         Some(connectors::with_app_enabled_state(
@@ -5684,6 +5742,8 @@ async fn built_tools(
         None
     };
 
+    // Keep the connector-grouped app view around for the router even though
+    // app tools only become prompt-visible after explicit selection/discovery.
     let app_tools = connectors.as_ref().map(|connectors| {
         filter_codex_apps_mcp_tools(&mcp_tools, connectors, &turn_context.config)
     });
@@ -6643,6 +6703,7 @@ mod tests {
     use codex_protocol::ThreadId;
     use codex_protocol::models::FunctionCallOutputBody;
     use codex_protocol::models::FunctionCallOutputPayload;
+    use tracing::Span;
 
     use crate::protocol::CompactedItem;
     use crate::protocol::CreditsSnapshot;
@@ -6763,6 +6824,7 @@ mod tests {
             install_url: None,
             is_accessible: true,
             is_enabled: true,
+            plugin_display_names: Vec::new(),
         }
     }
 
@@ -6850,6 +6912,7 @@ mod tests {
             },
             connector_id: connector_id.map(str::to_string),
             connector_name: connector_name.map(str::to_string),
+            plugin_display_names: Vec::new(),
         }
     }
 
@@ -7580,6 +7643,7 @@ mod tests {
         let previous_model = "forked-rollout-model";
         let previous_context_item = TurnContextItem {
             turn_id: Some(turn_context.sub_id.clone()),
+            trace_id: turn_context.trace_id.clone(),
             cwd: turn_context.cwd.clone(),
             current_date: turn_context.current_date.clone(),
             timezone: turn_context.timezone.clone(),
@@ -8552,6 +8616,43 @@ mod tests {
 
         let submitted = rx_sub.recv().await.expect("submission");
         assert_eq!(submitted.trace, Some(expected_trace));
+    }
+
+    #[tokio::test]
+    async fn new_default_turn_captures_current_span_trace_id() {
+        let (session, _turn_context) = make_session_and_context().await;
+
+        init_test_tracing();
+
+        let request_parent = W3cTraceContext {
+            traceparent: Some("00-00000000000000000000000000000011-0000000000000022-01".into()),
+            tracestate: Some("vendor=value".into()),
+        };
+        let request_span = info_span!("app_server.request");
+        assert!(set_parent_from_w3c_trace_context(
+            &request_span,
+            &request_parent
+        ));
+
+        let turn_context_item = async {
+            let expected_trace_id = Span::current()
+                .context()
+                .span()
+                .span_context()
+                .trace_id()
+                .to_string();
+            let turn_context = session.new_default_turn().await;
+            let turn_context_item = turn_context.to_turn_context_item();
+            assert_eq!(turn_context_item.trace_id, Some(expected_trace_id));
+            turn_context_item
+        }
+        .instrument(request_span)
+        .await;
+
+        assert_eq!(
+            turn_context_item.trace_id.as_deref(),
+            Some("00000000000000000000000000000011")
+        );
     }
 
     #[test]
