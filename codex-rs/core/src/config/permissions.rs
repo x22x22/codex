@@ -1,15 +1,63 @@
+use std::collections::BTreeMap;
+use std::io;
+use std::path::Path;
+
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
+use codex_protocol::permissions::FileSystemAccessMode;
+use codex_protocol::permissions::FileSystemPath;
+use codex_protocol::permissions::FileSystemSandboxEntry;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
+use codex_protocol::permissions::FileSystemSpecialPathKind;
+use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
-#[schemars(deny_unknown_fields)]
 pub struct PermissionsToml {
-    /// Network proxy settings from `[permissions.network]`.
-    /// User config can enable the proxy; managed requirements may still constrain values.
-    pub network: Option<NetworkToml>,
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, PermissionProfileToml>,
+}
+
+impl PermissionsToml {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PermissionProfileToml {
+    pub filesystem: Option<FilesystemPermissionsToml>,
+    pub network: Option<PermissionProfileNetworkToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+pub struct FilesystemPermissionsToml {
+    #[serde(flatten)]
+    pub entries: BTreeMap<String, FilesystemPermissionToml>,
+}
+
+impl FilesystemPermissionsToml {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum FilesystemPermissionToml {
+    Access(FileSystemAccessMode),
+    Scoped(BTreeMap<String, FileSystemAccessMode>),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct PermissionProfileNetworkToml {
+    pub enabled: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
@@ -91,13 +139,161 @@ impl NetworkToml {
     }
 }
 
-pub(crate) fn network_proxy_config_from_permissions(
-    permissions: Option<&PermissionsToml>,
+pub(crate) fn network_proxy_config_from_network(
+    network: Option<&NetworkToml>,
 ) -> NetworkProxyConfig {
-    permissions
-        .and_then(|permissions| permissions.network.as_ref())
-        .map_or_else(
-            NetworkProxyConfig::default,
-            NetworkToml::to_network_proxy_config,
+    network.map_or_else(
+        NetworkProxyConfig::default,
+        NetworkToml::to_network_proxy_config,
+    )
+}
+
+pub(crate) fn compile_permission_profile(
+    permissions: &PermissionsToml,
+    profile_name: &str,
+) -> io::Result<(FileSystemSandboxPolicy, NetworkSandboxPolicy)> {
+    let profile = permissions.entries.get(profile_name).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("default_permissions refers to undefined profile `{profile_name}`"),
         )
+    })?;
+
+    let filesystem = profile.filesystem.as_ref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "permissions profile `{profile_name}` must define a `[permissions.{profile_name}.filesystem]` table"
+            ),
+        )
+    })?;
+
+    if filesystem.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "permissions profile `{profile_name}` must define at least one filesystem entry"
+            ),
+        ));
+    }
+
+    let mut entries = Vec::new();
+    for (path, permission) in &filesystem.entries {
+        compile_filesystem_permission(path, permission, &mut entries)?;
+    }
+
+    let network_sandbox_policy = compile_network_sandbox_policy(profile.network.as_ref());
+
+    Ok((
+        FileSystemSandboxPolicy::restricted(entries),
+        network_sandbox_policy,
+    ))
+}
+
+fn compile_network_sandbox_policy(
+    network: Option<&PermissionProfileNetworkToml>,
+) -> NetworkSandboxPolicy {
+    let Some(network) = network else {
+        return NetworkSandboxPolicy::Restricted;
+    };
+
+    match network.enabled {
+        Some(true) => NetworkSandboxPolicy::Enabled,
+        _ => NetworkSandboxPolicy::Restricted,
+    }
+}
+
+fn compile_filesystem_permission(
+    path: &str,
+    permission: &FilesystemPermissionToml,
+    entries: &mut Vec<FileSystemSandboxEntry>,
+) -> io::Result<()> {
+    match permission {
+        FilesystemPermissionToml::Access(access) => entries.push(FileSystemSandboxEntry {
+            path: compile_filesystem_path(path)?,
+            access: *access,
+        }),
+        FilesystemPermissionToml::Scoped(scoped_entries) => {
+            for (subpath, access) in scoped_entries {
+                entries.push(FileSystemSandboxEntry {
+                    path: compile_scoped_filesystem_path(path, subpath)?,
+                    access: *access,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn compile_filesystem_path(path: &str) -> io::Result<FileSystemPath> {
+    if let Some(special) = parse_special_path(path)? {
+        return Ok(FileSystemPath::Special { value: special });
+    }
+
+    let path = parse_absolute_path(path)?;
+    Ok(FileSystemPath::Path { path })
+}
+
+fn compile_scoped_filesystem_path(path: &str, subpath: &str) -> io::Result<FileSystemPath> {
+    if subpath == "." {
+        return compile_filesystem_path(path);
+    }
+
+    let subpath = Path::new(subpath);
+    if subpath.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "filesystem subpath `{}` must be relative",
+                subpath.display()
+            ),
+        ));
+    }
+
+    if let Some(mut special) = parse_special_path(path)? {
+        if !matches!(special.kind, FileSystemSpecialPathKind::ProjectRoots) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("filesystem path `{path}` does not support nested entries"),
+            ));
+        }
+        special.subpath = Some(subpath.to_path_buf());
+        return Ok(FileSystemPath::Special { value: special });
+    }
+
+    let base = parse_absolute_path(path)?;
+    let path = AbsolutePathBuf::resolve_path_against_base(subpath, base.as_path())?;
+    Ok(FileSystemPath::Path { path })
+}
+
+fn parse_special_path(path: &str) -> io::Result<Option<FileSystemSpecialPath>> {
+    let kind = match path {
+        ":root" => Some(FileSystemSpecialPathKind::Root),
+        ":minimal" => Some(FileSystemSpecialPathKind::Minimal),
+        ":project_roots" => Some(FileSystemSpecialPathKind::ProjectRoots),
+        ":tmpdir" => Some(FileSystemSpecialPathKind::Tmpdir),
+        _ if path.starts_with(':') => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown filesystem special path `{path}`"),
+            ));
+        }
+        _ => None,
+    };
+
+    Ok(kind.map(|kind| FileSystemSpecialPath {
+        kind,
+        subpath: None,
+    }))
+}
+
+fn parse_absolute_path(path: &str) -> io::Result<AbsolutePathBuf> {
+    let path_ref = Path::new(path);
+    if !path_ref.is_absolute() && path != "~" && !path.starts_with("~/") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("filesystem path `{path}` must be absolute, use `~/...`, or start with `:`"),
+        ));
+    }
+    AbsolutePathBuf::from_absolute_path(path_ref)
 }
