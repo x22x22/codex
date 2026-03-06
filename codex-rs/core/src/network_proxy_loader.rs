@@ -1,4 +1,3 @@
-use crate::config::NetworkToml;
 use crate::config::PermissionsNetworkToml;
 use crate::config::PermissionsToml;
 use crate::config::find_codex_home;
@@ -119,9 +118,6 @@ fn network_constraints_from_trusted_layers(
         }
 
         let parsed = network_tables_from_toml(&layer.config)?;
-        if let Some(network) = parsed.network {
-            apply_network_constraints(network, &mut constraints);
-        }
         if let Some(network) = parsed
             .permissions
             .and_then(|permissions| permissions.network)
@@ -130,38 +126,6 @@ fn network_constraints_from_trusted_layers(
         }
     }
     Ok(constraints)
-}
-
-fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProxyConstraints) {
-    if let Some(enabled) = network.enabled {
-        constraints.enabled = Some(enabled);
-    }
-    if let Some(mode) = network.mode {
-        constraints.mode = Some(mode);
-    }
-    if let Some(allow_upstream_proxy) = network.allow_upstream_proxy {
-        constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
-    }
-    if let Some(dangerously_allow_non_loopback_proxy) = network.dangerously_allow_non_loopback_proxy
-    {
-        constraints.dangerously_allow_non_loopback_proxy =
-            Some(dangerously_allow_non_loopback_proxy);
-    }
-    if let Some(dangerously_allow_all_unix_sockets) = network.dangerously_allow_all_unix_sockets {
-        constraints.dangerously_allow_all_unix_sockets = Some(dangerously_allow_all_unix_sockets);
-    }
-    if let Some(allowed_domains) = network.allowed_domains {
-        constraints.allowed_domains = Some(allowed_domains);
-    }
-    if let Some(denied_domains) = network.denied_domains {
-        constraints.denied_domains = Some(denied_domains);
-    }
-    if let Some(allow_unix_sockets) = network.allow_unix_sockets {
-        constraints.allow_unix_sockets = Some(allow_unix_sockets);
-    }
-    if let Some(allow_local_binding) = network.allow_local_binding {
-        constraints.allow_local_binding = Some(allow_local_binding);
-    }
 }
 
 fn apply_permissions_network_constraints(
@@ -198,7 +162,6 @@ fn apply_permissions_network_constraints(
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct NetworkTablesToml {
-    network: Option<NetworkToml>,
     permissions: Option<PermissionsToml>,
 }
 
@@ -210,9 +173,6 @@ fn network_tables_from_toml(value: &toml::Value) -> Result<NetworkTablesToml> {
 }
 
 fn apply_network_tables(config: &mut NetworkProxyConfig, parsed: NetworkTablesToml) {
-    if let Some(network) = parsed.network {
-        network.apply_to_network_proxy_config(config);
-    }
     if let Some(network) = parsed
         .permissions
         .and_then(|permissions| permissions.network)
@@ -343,7 +303,7 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn higher_precedence_network_table_beats_lower_permissions_network_table() {
+    fn top_level_network_table_is_ignored() {
         let lower_permissions: toml::Value = toml::from_str(
             r#"
 [permissions.network]
@@ -369,7 +329,7 @@ allowed_domains = ["higher.example.com"]
             network_tables_from_toml(&higher_network).expect("higher layer should deserialize"),
         );
 
-        assert_eq!(config.network.allowed_domains, vec!["higher.example.com"]);
+        assert_eq!(config.network.allowed_domains, vec!["lower.example.com"]);
     }
 
     #[test]
@@ -412,21 +372,22 @@ allowed_domains = ["higher.example.com"]
     }
 
     #[test]
-    fn apply_network_constraints_includes_allow_all_unix_sockets_flag() {
+    fn apply_permissions_network_constraints_includes_allow_all_unix_sockets_flag() {
         let config: toml::Value = toml::from_str(
             r#"
-[network]
+[permissions.network]
 dangerously_allow_all_unix_sockets = true
 "#,
         )
-        .expect("network table should parse");
+        .expect("permissions.network table should parse");
         let network = network_tables_from_toml(&config)
-            .expect("network table should deserialize")
-            .network
-            .expect("network table should be present");
+            .expect("permissions.network table should deserialize")
+            .permissions
+            .and_then(|permissions| permissions.network)
+            .expect("permissions.network table should be present");
 
         let mut constraints = NetworkProxyConstraints::default();
-        apply_network_constraints(network, &mut constraints);
+        apply_permissions_network_constraints(network, &mut constraints);
 
         assert_eq!(constraints.dangerously_allow_all_unix_sockets, Some(true));
     }

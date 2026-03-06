@@ -109,7 +109,6 @@ pub use codex_network_proxy::NetworkProxyAuditMetadata;
 pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
-pub use permissions::NetworkToml;
 pub use permissions::PermissionsNetworkToml;
 pub use permissions::PermissionsToml;
 pub use service::ConfigService;
