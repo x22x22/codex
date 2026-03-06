@@ -5837,8 +5837,8 @@ impl CodexMessageProcessor {
                                 break;
                             }
                         };
-                        let public_event = event.clone();
-                        if matches!(public_event.msg, EventMsg::ResponseMetadata(_)) {
+                        let event = event.clone();
+                        if matches!(event.msg, EventMsg::ResponseMetadata(_)) {
                             continue;
                         }
 
@@ -5846,17 +5846,17 @@ impl CodexMessageProcessor {
                         // JSON-serializing the `Event` as-is, but these should
                         // be migrated to be variants of `ServerNotification`
                         // instead.
-                        let event_formatted = match &public_event.msg {
+                        let event_formatted = match &event.msg {
                             EventMsg::TurnStarted(_) => "task_started",
                             EventMsg::TurnComplete(_) => "task_complete",
-                            _ => &public_event.msg.to_string(),
+                            _ => &event.msg.to_string(),
                         };
                         let request_event_name = format!("codex/event/{event_formatted}");
                         tracing::trace!(
                             conversation_id = %conversation_id,
                             "app-server event: {request_event_name}"
                         );
-                        let mut params = match serde_json::to_value(public_event.clone()) {
+                        let mut params = match serde_json::to_value(event.clone()) {
                             Ok(serde_json::Value::Object(map)) => map,
                             Ok(_) => {
                                 error!("event did not serialize to an object");
@@ -5873,13 +5873,13 @@ impl CodexMessageProcessor {
                         );
                         let raw_events_enabled = {
                             let mut thread_state = thread_state.lock().await;
-                            thread_state.track_current_turn_event(&public_event.msg);
+                            thread_state.track_current_turn_event(&event.msg);
                             thread_state.experimental_raw_events
                         };
                         let subscribed_connection_ids = thread_state_manager
                             .subscribed_connection_ids(conversation_id)
                             .await;
-                        if let EventMsg::RawResponseItem(_) = &public_event.msg
+                        if let EventMsg::RawResponseItem(_) = &event.msg
                             && !raw_events_enabled
                         {
                             continue;
