@@ -312,10 +312,7 @@ allowed_domains = ["lower.example.com"]
         )
         .expect("lower layer should parse");
         let higher_network: toml::Value = toml::from_str(
-            r#"
-[network]
-allowed_domains = ["higher.example.com"]
-"#,
+            r#"network = { allowed_domains = ["higher.example.com"] }"#,
         )
         .expect("higher layer should parse");
 

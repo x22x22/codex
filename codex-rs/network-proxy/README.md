@@ -16,14 +16,14 @@ It enforces an allow/deny policy and a "limited" mode intended for read-only net
 Example config:
 
 ```toml
-[network]
-enabled = true
+[permissions.network]
 proxy_url = "http://127.0.0.1:3128"
 # SOCKS5 listener (enabled by default).
 enable_socks5 = true
 socks_url = "http://127.0.0.1:8081"
 enable_socks5_udp = true
-# When `enabled` is false, the proxy no-ops and does not bind listeners.
+# Use the `enable_network_proxy` experimental feature or requirements config
+# to activate the proxy when running through Codex.
 # When true, respect HTTP(S)_PROXY/ALL_PROXY for upstream requests (HTTP(S) proxies only),
 # including CONNECT tunnels in full mode.
 allow_upstream_proxy = true
