@@ -110,6 +110,7 @@ pub use managed_features::ManagedFeatures;
 pub use network_proxy_spec::NetworkProxySpec;
 pub use network_proxy_spec::StartedNetworkProxy;
 pub use permissions::NetworkToml;
+pub use permissions::PermissionsNetworkToml;
 pub use permissions::PermissionsToml;
 pub use service::ConfigService;
 pub use service::ConfigServiceError;
@@ -1750,7 +1751,7 @@ impl Config {
                 .clone(),
             None => ConfigProfile::default(),
         };
-        let configured_network_proxy_config =
+        let mut configured_network_proxy_config =
             network_proxy_config_from_permissions(cfg.permissions.as_ref());
 
         let feature_overrides = FeatureOverrides {
@@ -1760,6 +1761,10 @@ impl Config {
 
         let configured_features = Features::from_config(&cfg, &config_profile, feature_overrides);
         let features = ManagedFeatures::from_configured(configured_features, feature_requirements)?;
+        let enable_network_proxy = features.enabled(Feature::EnableNetworkProxy);
+        if enable_network_proxy {
+            configured_network_proxy_config.network.enabled = true;
+        }
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let resolved_cwd = normalize_for_native_workdir({
             use std::env;
@@ -2108,16 +2113,16 @@ impl Config {
             if let Some(source) = network_requirements_source.as_ref() {
                 std::io::Error::new(
                     err.kind(),
-                    format!("failed to build managed network proxy from {source}: {err}"),
+                    format!("failed to build network proxy from {source}: {err}"),
                 )
             } else {
                 err
             }
         })?;
-        let network = if has_network_requirements {
+        let network = if has_network_requirements || enable_network_proxy {
             Some(network)
         } else {
-            network.enabled().then_some(network)
+            None
         };
 
         let config = Self {
@@ -2695,7 +2700,6 @@ consolidation_model = "gpt-5"
     fn config_toml_deserializes_permissions_network() {
         let toml = r#"
 [permissions.network]
-enabled = true
 proxy_url = "http://127.0.0.1:43128"
 enable_socks5 = false
 allow_upstream_proxy = false
@@ -2708,8 +2712,7 @@ allowed_domains = ["openai.com"]
             cfg.permissions
                 .and_then(|permissions| permissions.network)
                 .expect("permissions.network should deserialize"),
-            NetworkToml {
-                enabled: Some(true),
+            PermissionsNetworkToml {
                 proxy_url: Some("http://127.0.0.1:43128".to_string()),
                 enable_socks5: Some(false),
                 socks_url: None,
@@ -2727,12 +2730,56 @@ allowed_domains = ["openai.com"]
     }
 
     #[test]
-    fn permissions_network_enabled_populates_runtime_network_proxy_spec() -> std::io::Result<()> {
+    fn config_toml_rejects_permissions_network_enabled_flag() {
+        let toml = r#"
+[permissions.network]
+enabled = true
+"#;
+        let err = toml::from_str::<ConfigToml>(toml)
+            .expect_err("permissions.network.enabled should be rejected");
+        assert!(
+            err.to_string().contains("unknown field `enabled`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn enable_network_proxy_feature_populates_runtime_network_proxy_spec_with_defaults()
+    -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
+            features: Some(FeaturesToml {
+                entries: BTreeMap::from([("enable_network_proxy".to_string(), true)]),
+            }),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        let network = config
+            .permissions
+            .network
+            .as_ref()
+            .expect("enable_network_proxy should produce a NetworkProxySpec");
+
+        assert_eq!(network.proxy_host_and_port(), "127.0.0.1:3128");
+        assert!(network.socks_enabled());
+        Ok(())
+    }
+
+    #[test]
+    fn permissions_network_populates_runtime_network_proxy_spec_when_feature_enabled()
+    -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg = ConfigToml {
+            features: Some(FeaturesToml {
+                entries: BTreeMap::from([("enable_network_proxy".to_string(), true)]),
+            }),
             permissions: Some(PermissionsToml {
-                network: Some(NetworkToml {
-                    enabled: Some(true),
+                network: Some(PermissionsNetworkToml {
                     proxy_url: Some("http://127.0.0.1:43128".to_string()),
                     enable_socks5: Some(false),
                     ..Default::default()
@@ -2750,7 +2797,7 @@ allowed_domains = ["openai.com"]
             .permissions
             .network
             .as_ref()
-            .expect("enabled permissions.network should produce a NetworkProxySpec");
+            .expect("enable_network_proxy should produce a NetworkProxySpec");
 
         assert_eq!(network.proxy_host_and_port(), "127.0.0.1:43128");
         assert!(!network.socks_enabled());
@@ -2758,11 +2805,11 @@ allowed_domains = ["openai.com"]
     }
 
     #[test]
-    fn permissions_network_disabled_by_default_does_not_start_proxy() -> std::io::Result<()> {
+    fn permissions_network_without_feature_flag_does_not_start_proxy() -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let cfg = ConfigToml {
             permissions: Some(PermissionsToml {
-                network: Some(NetworkToml {
+                network: Some(PermissionsNetworkToml {
                     allowed_domains: Some(vec!["openai.com".to_string()]),
                     ..Default::default()
                 }),
@@ -6296,6 +6343,36 @@ mcp_oauth_callback_url = "https://example.com/callback"
             ),
             WebSearchMode::Cached,
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn network_requirements_start_proxy_without_enabled_flag() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let requirements = crate::config_loader::ConfigRequirementsToml {
+            network: Some(crate::config_loader::NetworkRequirementsToml {
+                allow_local_binding: Some(true),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let config = ConfigBuilder::default()
+            .codex_home(codex_home.path().to_path_buf())
+            .cloud_requirements(CloudRequirementsLoader::new(async move {
+                Ok(Some(requirements))
+            }))
+            .build()
+            .await?;
+
+        assert!(config.managed_network_requirements_enabled());
+        let network = config
+            .permissions
+            .network
+            .as_ref()
+            .expect("network requirements should produce a managed network proxy");
+        assert_eq!(network.proxy_host_and_port(), "127.0.0.1:3128");
+
         Ok(())
     }
 

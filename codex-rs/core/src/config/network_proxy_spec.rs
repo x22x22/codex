@@ -68,10 +68,6 @@ impl ConfigReloader for StaticNetworkProxyReloader {
 }
 
 impl NetworkProxySpec {
-    pub(crate) fn enabled(&self) -> bool {
-        self.config.network.enabled
-    }
-
     pub fn proxy_host_and_port(&self) -> String {
         host_and_port_from_network_addr(&self.config.network.proxy_url, 3128)
     }
@@ -161,10 +157,7 @@ impl NetworkProxySpec {
     ) -> (NetworkProxyConfig, NetworkProxyConstraints) {
         let mut constraints = NetworkProxyConstraints::default();
 
-        if let Some(enabled) = requirements.enabled {
-            config.network.enabled = enabled;
-            constraints.enabled = Some(enabled);
-        }
+        config.network.enabled = true;
         if let Some(http_port) = requirements.http_port {
             config.network.proxy_url = format!("http://127.0.0.1:{http_port}");
         }

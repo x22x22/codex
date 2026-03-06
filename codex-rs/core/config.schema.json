@@ -347,6 +347,9 @@
             "enable_experimental_windows_sandbox": {
               "type": "boolean"
             },
+            "enable_network_proxy": {
+              "type": "boolean"
+            },
             "enable_request_compression": {
               "type": "boolean"
             },
@@ -794,60 +797,6 @@
       ],
       "type": "string"
     },
-    "NetworkToml": {
-      "additionalProperties": false,
-      "properties": {
-        "allow_local_binding": {
-          "type": "boolean"
-        },
-        "allow_unix_sockets": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "allow_upstream_proxy": {
-          "type": "boolean"
-        },
-        "allowed_domains": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "dangerously_allow_all_unix_sockets": {
-          "type": "boolean"
-        },
-        "dangerously_allow_non_loopback_proxy": {
-          "type": "boolean"
-        },
-        "denied_domains": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "enable_socks5": {
-          "type": "boolean"
-        },
-        "enable_socks5_udp": {
-          "type": "boolean"
-        },
-        "enabled": {
-          "type": "boolean"
-        },
-        "mode": {
-          "$ref": "#/definitions/NetworkModeSchema"
-        },
-        "proxy_url": {
-          "type": "string"
-        },
-        "socks_url": {
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "Notice": {
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
       "properties": {
@@ -1089,16 +1038,67 @@
       },
       "type": "object"
     },
+    "PermissionsNetworkToml": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_local_binding": {
+          "type": "boolean"
+        },
+        "allow_unix_sockets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allow_upstream_proxy": {
+          "type": "boolean"
+        },
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dangerously_allow_all_unix_sockets": {
+          "type": "boolean"
+        },
+        "dangerously_allow_non_loopback_proxy": {
+          "type": "boolean"
+        },
+        "denied_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enable_socks5": {
+          "type": "boolean"
+        },
+        "enable_socks5_udp": {
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/definitions/NetworkModeSchema"
+        },
+        "proxy_url": {
+          "type": "string"
+        },
+        "socks_url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "PermissionsToml": {
       "additionalProperties": false,
       "properties": {
         "network": {
           "allOf": [
             {
-              "$ref": "#/definitions/NetworkToml"
+              "$ref": "#/definitions/PermissionsNetworkToml"
             }
           ],
-          "description": "Network proxy settings from `[permissions.network]`. User config can enable the proxy; managed requirements may still constrain values."
+          "description": "Network proxy settings from `[permissions.network]`. Applies when the `enable_network_proxy` feature or managed requirements start the proxy."
         }
       },
       "type": "object"
@@ -1733,6 +1733,9 @@
           "type": "boolean"
         },
         "enable_experimental_windows_sandbox": {
+          "type": "boolean"
+        },
+        "enable_network_proxy": {
           "type": "boolean"
         },
         "enable_request_compression": {

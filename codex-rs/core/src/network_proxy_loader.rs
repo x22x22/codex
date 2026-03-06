@@ -1,4 +1,5 @@
 use crate::config::NetworkToml;
+use crate::config::PermissionsNetworkToml;
 use crate::config::PermissionsToml;
 use crate::config::find_codex_home;
 use crate::config_loader::CloudRequirementsLoader;
@@ -125,7 +126,7 @@ fn network_constraints_from_trusted_layers(
             .permissions
             .and_then(|permissions| permissions.network)
         {
-            apply_network_constraints(network, &mut constraints);
+            apply_permissions_network_constraints(network, &mut constraints);
         }
     }
     Ok(constraints)
@@ -135,6 +136,38 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
     if let Some(enabled) = network.enabled {
         constraints.enabled = Some(enabled);
     }
+    if let Some(mode) = network.mode {
+        constraints.mode = Some(mode);
+    }
+    if let Some(allow_upstream_proxy) = network.allow_upstream_proxy {
+        constraints.allow_upstream_proxy = Some(allow_upstream_proxy);
+    }
+    if let Some(dangerously_allow_non_loopback_proxy) = network.dangerously_allow_non_loopback_proxy
+    {
+        constraints.dangerously_allow_non_loopback_proxy =
+            Some(dangerously_allow_non_loopback_proxy);
+    }
+    if let Some(dangerously_allow_all_unix_sockets) = network.dangerously_allow_all_unix_sockets {
+        constraints.dangerously_allow_all_unix_sockets = Some(dangerously_allow_all_unix_sockets);
+    }
+    if let Some(allowed_domains) = network.allowed_domains {
+        constraints.allowed_domains = Some(allowed_domains);
+    }
+    if let Some(denied_domains) = network.denied_domains {
+        constraints.denied_domains = Some(denied_domains);
+    }
+    if let Some(allow_unix_sockets) = network.allow_unix_sockets {
+        constraints.allow_unix_sockets = Some(allow_unix_sockets);
+    }
+    if let Some(allow_local_binding) = network.allow_local_binding {
+        constraints.allow_local_binding = Some(allow_local_binding);
+    }
+}
+
+fn apply_permissions_network_constraints(
+    network: PermissionsNetworkToml,
+    constraints: &mut NetworkProxyConstraints,
+) {
     if let Some(mode) = network.mode {
         constraints.mode = Some(mode);
     }
