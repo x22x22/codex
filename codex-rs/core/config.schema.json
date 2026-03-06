@@ -1098,7 +1098,7 @@
               "$ref": "#/definitions/PermissionsNetworkToml"
             }
           ],
-          "description": "Network proxy settings from `[permissions.network]`. Applies when the `enable_network_proxy` feature or managed requirements start the proxy."
+          "description": "Network proxy settings from `[permissions.network]`. Applies when the `enable_network_proxy` feature or requirements start the proxy."
         }
       },
       "type": "object"
