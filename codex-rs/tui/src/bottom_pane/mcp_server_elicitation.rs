@@ -179,62 +179,62 @@ impl McpServerElicitationFormRequest {
                 && schema
                     .get("properties")
                     .and_then(Value::as_object)
-                    .is_some_and(|properties| properties.is_empty())
+                    .is_some_and(serde_json::Map::is_empty)
         });
 
         let (response_mode, fields) =
             if requested_schema.is_null() || (is_tool_approval && is_empty_object_schema) {
-            let mut options = vec![McpServerElicitationOption {
-                label: "Approve Once".to_string(),
-                description: Some("Run the tool and continue.".to_string()),
-                value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
-            }];
-            if meta
-                .as_ref()
-                .and_then(Value::as_object)
-                .and_then(|meta| meta.get(APPROVAL_PERSIST_KEY))
-                .and_then(Value::as_str)
-                == Some(APPROVAL_PERSIST_SESSION_VALUE)
-            {
-                options.push(McpServerElicitationOption {
-                    label: "Approve this Session".to_string(),
-                    description: Some(
-                        "Run the tool and remember this choice for this session.".to_string(),
-                    ),
-                    value: Value::String(APPROVAL_ACCEPT_SESSION_VALUE.to_string()),
-                });
-            }
-            options.extend([
-                McpServerElicitationOption {
-                    label: "Deny".to_string(),
-                    description: Some("Decline this tool call and continue.".to_string()),
-                    value: Value::String(APPROVAL_DECLINE_VALUE.to_string()),
-                },
-                McpServerElicitationOption {
-                    label: "Cancel".to_string(),
-                    description: Some("Cancel this tool call".to_string()),
-                    value: Value::String(APPROVAL_CANCEL_VALUE.to_string()),
-                },
-            ]);
-            (
-                McpServerElicitationResponseMode::ApprovalAction,
-                vec![McpServerElicitationField {
-                    id: APPROVAL_FIELD_ID.to_string(),
-                    label: String::new(),
-                    prompt: String::new(),
-                    required: true,
-                    input: McpServerElicitationFieldInput::Select {
-                        options,
-                        default_idx: Some(0),
+                let mut options = vec![McpServerElicitationOption {
+                    label: "Approve Once".to_string(),
+                    description: Some("Run the tool and continue.".to_string()),
+                    value: Value::String(APPROVAL_ACCEPT_ONCE_VALUE.to_string()),
+                }];
+                if meta
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .and_then(|meta| meta.get(APPROVAL_PERSIST_KEY))
+                    .and_then(Value::as_str)
+                    == Some(APPROVAL_PERSIST_SESSION_VALUE)
+                {
+                    options.push(McpServerElicitationOption {
+                        label: "Approve this Session".to_string(),
+                        description: Some(
+                            "Run the tool and remember this choice for this session.".to_string(),
+                        ),
+                        value: Value::String(APPROVAL_ACCEPT_SESSION_VALUE.to_string()),
+                    });
+                }
+                options.extend([
+                    McpServerElicitationOption {
+                        label: "Deny".to_string(),
+                        description: Some("Decline this tool call and continue.".to_string()),
+                        value: Value::String(APPROVAL_DECLINE_VALUE.to_string()),
                     },
-                }],
-            )
-        } else {
-            (
-                McpServerElicitationResponseMode::FormContent,
-                parse_fields_from_schema(&requested_schema)?,
-            )
-        };
+                    McpServerElicitationOption {
+                        label: "Cancel".to_string(),
+                        description: Some("Cancel this tool call".to_string()),
+                        value: Value::String(APPROVAL_CANCEL_VALUE.to_string()),
+                    },
+                ]);
+                (
+                    McpServerElicitationResponseMode::ApprovalAction,
+                    vec![McpServerElicitationField {
+                        id: APPROVAL_FIELD_ID.to_string(),
+                        label: String::new(),
+                        prompt: String::new(),
+                        required: true,
+                        input: McpServerElicitationFieldInput::Select {
+                            options,
+                            default_idx: Some(0),
+                        },
+                    }],
+                )
+            } else {
+                (
+                    McpServerElicitationResponseMode::FormContent,
+                    parse_fields_from_schema(&requested_schema)?,
+                )
+            };
 
         Some(Self {
             thread_id,
