@@ -2223,6 +2223,8 @@ pub struct TurnContextNetworkItem {
 pub struct TurnContextItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
     pub cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_date: Option<String>,
@@ -2803,7 +2805,6 @@ pub struct SkillsListEntry {
 pub struct SessionNetworkProxyRuntime {
     pub http_addr: String,
     pub socks_addr: String,
-    pub admin_addr: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -3512,6 +3513,7 @@ mod tests {
             "summary": "auto",
         }))?;
 
+        assert_eq!(item.trace_id, None);
         assert_eq!(item.network, None);
         Ok(())
     }
@@ -3520,6 +3522,7 @@ mod tests {
     fn turn_context_item_serializes_network_when_present() -> Result<()> {
         let item = TurnContextItem {
             turn_id: None,
+            trace_id: None,
             cwd: PathBuf::from("/tmp"),
             current_date: None,
             timezone: None,

@@ -797,9 +797,6 @@
     "NetworkToml": {
       "additionalProperties": false,
       "properties": {
-        "admin_url": {
-          "type": "string"
-        },
         "allow_local_binding": {
           "type": "boolean"
         },
@@ -819,9 +816,6 @@
           "type": "array"
         },
         "dangerously_allow_all_unix_sockets": {
-          "type": "boolean"
-        },
-        "dangerously_allow_non_loopback_admin": {
           "type": "boolean"
         },
         "dangerously_allow_non_loopback_proxy": {
