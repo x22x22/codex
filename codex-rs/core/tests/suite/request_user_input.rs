@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use codex_core::config::Config;
 use codex_core::features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
@@ -78,24 +79,13 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
 
     let server = start_mock_server().await;
 
-    let builder = test_codex();
-    #[allow(clippy::expect_used)]
+    let mut builder = test_codex();
     let TestCodex {
         codex,
         cwd,
         session_configured,
         ..
-    } = builder
-        .with_config(move |config| {
-            if mode == ModeKind::Default {
-                config
-                    .features
-                    .enable(Feature::DefaultModeRequestUserInput)
-                    .expect("test config should allow feature update");
-            }
-        })
-        .build(&server)
-        .await?;
+    } = builder.build(&server).await?;
 
     let call_id = "user-input-call";
     let request_args = json!({
@@ -196,15 +186,20 @@ async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Resul
     Ok(())
 }
 
-async fn assert_request_user_input_rejected<F>(mode_name: &str, build_mode: F) -> anyhow::Result<()>
+async fn assert_request_user_input_rejected_with_config<F, C>(
+    mode_name: &str,
+    build_mode: F,
+    configure: C,
+) -> anyhow::Result<()>
 where
     F: FnOnce(String) -> CollaborationMode,
+    C: FnOnce(&mut Config) + Send + 'static,
 {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(configure);
     let TestCodex {
         codex,
         cwd,
@@ -278,6 +273,13 @@ where
     Ok(())
 }
 
+async fn assert_request_user_input_rejected<F>(mode_name: &str, build_mode: F) -> anyhow::Result<()>
+where
+    F: FnOnce(String) -> CollaborationMode,
+{
+    assert_request_user_input_rejected_with_config(mode_name, build_mode, |_| {}).await
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_rejected_in_execute_mode_alias() -> anyhow::Result<()> {
     assert_request_user_input_rejected("Execute", |model| CollaborationMode {
@@ -292,21 +294,31 @@ async fn request_user_input_rejected_in_execute_mode_alias() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_user_input_rejected_in_default_mode_by_default() -> anyhow::Result<()> {
-    assert_request_user_input_rejected("Default", |model| CollaborationMode {
-        mode: ModeKind::Default,
-        settings: Settings {
-            model,
-            reasoning_effort: None,
-            developer_instructions: None,
-        },
-    })
-    .await
+async fn request_user_input_round_trip_in_default_mode_by_default() -> anyhow::Result<()> {
+    request_user_input_round_trip_for_mode(ModeKind::Default).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_user_input_round_trip_in_default_mode_with_feature() -> anyhow::Result<()> {
-    request_user_input_round_trip_for_mode(ModeKind::Default).await
+async fn request_user_input_rejected_in_default_mode_when_feature_disabled() -> anyhow::Result<()> {
+    assert_request_user_input_rejected_with_config(
+        "Default",
+        |model| CollaborationMode {
+            mode: ModeKind::Default,
+            settings: Settings {
+                model,
+                reasoning_effort: None,
+                developer_instructions: None,
+            },
+        },
+        |config| {
+            #[allow(clippy::expect_used)]
+            config
+                .features
+                .disable(Feature::DefaultModeRequestUserInput)
+                .expect("test config should allow feature update");
+        },
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
