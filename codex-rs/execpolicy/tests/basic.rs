@@ -165,6 +165,7 @@ fn append_allow_prefix_rule_with_justification_round_trips() -> Result<()> {
             matched_rules: vec![RuleMatch::PrefixRuleMatch {
                 matched_prefix: tokens(&["python3"]),
                 decision: Decision::Allow,
+                resolved_program: None,
                 justification: Some("persisted during thread".to_string()),
             }],
         }
