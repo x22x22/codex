@@ -1,11 +1,10 @@
 use core::fmt;
+use std::any::Any;
 use std::io;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
-use portable_pty::MasterPty;
-use portable_pty::SlavePty;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -17,8 +16,8 @@ pub(crate) trait ChildTerminator: Send + Sync {
 }
 
 pub struct PtyHandles {
-    pub _slave: Option<Box<dyn SlavePty + Send>>,
-    pub _master: Box<dyn MasterPty + Send>,
+    pub _slave: Option<Box<dyn Any + Send>>,
+    pub _master: Box<dyn Any + Send>,
 }
 
 impl fmt::Debug for PtyHandles {
