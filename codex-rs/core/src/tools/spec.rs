@@ -119,8 +119,6 @@ impl ToolsConfig {
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
-        } else if features.enabled(Feature::ShellZshFork) {
-            ConfigShellToolType::ShellCommand
         } else if features.enabled(Feature::UnifiedExec) {
             // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
             if codex_utils_pty::conpty_supported() {
@@ -128,6 +126,8 @@ impl ToolsConfig {
             } else {
                 ConfigShellToolType::ShellCommand
             }
+        } else if features.enabled(Feature::ShellZshFork) {
+            ConfigShellToolType::ShellCommand
         } else {
             model_info.shell_type
         };
@@ -2816,7 +2816,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
+    fn shell_zsh_fork_uses_unified_exec_when_enabled() {
         let config = test_config();
         let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
         let mut features = Features::with_defaults();
@@ -2830,7 +2830,7 @@ mod tests {
             session_source: SessionSource::Cli,
         });
 
-        assert_eq!(tools_config.shell_type, ConfigShellToolType::ShellCommand);
+        assert_eq!(tools_config.shell_type, ConfigShellToolType::UnifiedExec);
         assert_eq!(
             tools_config.shell_command_backend,
             ShellCommandBackendConfig::ZshFork
