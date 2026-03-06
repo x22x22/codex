@@ -2403,25 +2403,38 @@ impl Session {
     }
 
     async fn refresh_current_active_turn_context_from_session_configuration(&self) {
-        let Some(current_turn_context) = self.current_active_turn_context().await else {
-            return;
-        };
-        let session_configuration = {
-            let state = self.state.lock().await;
-            state.session_configuration.clone()
-        };
-        let realtime_active = self.conversation.running_state().await.is_some();
-        let next_turn_context = self
-            .build_updated_turn_context(current_turn_context.as_ref(), &session_configuration)
-            .await;
-        let next_turn_context = if next_turn_context.realtime_active == realtime_active {
-            next_turn_context
-        } else {
-            Arc::new(next_turn_context.with_realtime_active(realtime_active))
-        };
-        let _ = self
-            .set_current_active_turn_context(Some(&current_turn_context), next_turn_context)
-            .await;
+        const MAX_CONTEXT_REFRESH_ATTEMPTS: usize = 3;
+        for attempt in 0..MAX_CONTEXT_REFRESH_ATTEMPTS {
+            let Some(current_turn_context) = self.current_active_turn_context().await else {
+                return;
+            };
+            let session_configuration = {
+                let state = self.state.lock().await;
+                state.session_configuration.clone()
+            };
+            let realtime_active = self.conversation.running_state().await.is_some();
+            let next_turn_context = self
+                .build_updated_turn_context(current_turn_context.as_ref(), &session_configuration)
+                .await;
+            let next_turn_context = if next_turn_context.realtime_active == realtime_active {
+                next_turn_context
+            } else {
+                Arc::new(next_turn_context.with_realtime_active(realtime_active))
+            };
+            if self
+                .set_current_active_turn_context(Some(&current_turn_context), next_turn_context)
+                .await
+            {
+                return;
+            }
+
+            if attempt + 1 == MAX_CONTEXT_REFRESH_ATTEMPTS {
+                warn!(
+                    "failed to refresh active turn context from session configuration after {} attempts",
+                    MAX_CONTEXT_REFRESH_ATTEMPTS
+                );
+            }
+        }
     }
 
     pub(crate) async fn refresh_current_active_turn_context_from_realtime_state(&self) {
@@ -2761,7 +2774,7 @@ impl Session {
             turn.tasks.get(sub_id).map(|task| {
                 turn.current_turn_context
                     .clone()
-                    .unwrap_or_else(|| Arc::clone(&task.turn_context))
+                    .unwrap_or_else(|| Arc::clone(&task.initial_turn_context))
             })
         })
     }
@@ -2772,7 +2785,7 @@ impl Session {
         turn.current_turn_context.clone().or_else(|| {
             turn.tasks
                 .first()
-                .map(|(_, task)| Arc::clone(&task.turn_context))
+                .map(|(_, task)| Arc::clone(&task.initial_turn_context))
         })
     }
 
@@ -2792,7 +2805,7 @@ impl Session {
             let Some(current_turn_context) = turn.current_turn_context.clone().or_else(|| {
                 turn.tasks
                     .first()
-                    .map(|(_, task)| Arc::clone(&task.turn_context))
+                    .map(|(_, task)| Arc::clone(&task.initial_turn_context))
             }) else {
                 return false;
             };
@@ -2828,7 +2841,7 @@ impl Session {
         Some((
             turn.current_turn_context
                 .clone()
-                .unwrap_or_else(|| Arc::clone(&task.turn_context)),
+                .unwrap_or_else(|| Arc::clone(&task.initial_turn_context)),
             task.cancellation_token.child_token(),
         ))
     }
@@ -9640,7 +9653,7 @@ mod tests {
                     handle: Arc::new(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
                         async {},
                     ))),
-                    turn_context: Arc::clone(&replacement_turn_context),
+                    initial_turn_context: Arc::clone(&replacement_turn_context),
                     _timer: None,
                 },
             )]),
@@ -9767,7 +9780,7 @@ mod tests {
                     handle: Arc::new(tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
                         async {},
                     ))),
-                    turn_context: Arc::clone(&tc),
+                    initial_turn_context: Arc::clone(&tc),
                     _timer: None,
                 },
             )]),

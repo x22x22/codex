@@ -248,10 +248,6 @@ impl NetworkApprovalService {
             .await;
     }
 
-    async fn active_turn_context(session: &Session) -> Option<Arc<crate::codex::TurnContext>> {
-        session.current_active_turn_context().await
-    }
-
     fn format_network_target(protocol: &str, host: &str, port: u16) -> String {
         format!("{protocol}://{host}:{port}")
     }
@@ -299,7 +295,7 @@ impl NetworkApprovalService {
             format!("Network access to \"{target}\" was blocked by policy.");
         let prompt_reason = format!("{} is not in the allowed_domains", request.host);
 
-        let Some(turn_context) = Self::active_turn_context(session).await else {
+        let Some(turn_context) = session.current_active_turn_context().await else {
             pending.set_decision(PendingApprovalDecision::Deny).await;
             let mut pending_approvals = self.pending_host_approvals.lock().await;
             pending_approvals.remove(&key);
@@ -753,14 +749,15 @@ mod tests {
                     task: Arc::new(NoopTask),
                     cancellation_token: CancellationToken::new(),
                     handle: Arc::new(AbortOnDropHandle::new(handle)),
-                    turn_context: Arc::clone(&original_turn_context),
+                    initial_turn_context: Arc::clone(&original_turn_context),
                     _timer: None,
                 },
             )]),
             ..Default::default()
         });
 
-        let active_turn_context = NetworkApprovalService::active_turn_context(&session)
+        let active_turn_context = session
+            .current_active_turn_context()
             .await
             .expect("active turn context");
 

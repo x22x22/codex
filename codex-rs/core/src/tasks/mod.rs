@@ -185,7 +185,7 @@ impl Session {
             kind: task_kind,
             task,
             cancellation_token,
-            turn_context: Arc::clone(&turn_context),
+            initial_turn_context: Arc::clone(&turn_context),
             _timer: timer,
         };
         self.register_new_active_task(running_task).await;
@@ -361,14 +361,14 @@ impl Session {
     }
 
     async fn handle_task_abort(self: &Arc<Self>, task: RunningTask, reason: TurnAbortReason) {
-        let sub_id = task.turn_context.sub_id.clone();
+        let sub_id = task.initial_turn_context.sub_id.clone();
         if task.cancellation_token.is_cancelled() {
             return;
         }
 
         trace!(task_kind = ?task.kind, sub_id, "aborting running task");
         task.cancellation_token.cancel();
-        task.turn_context
+        task.initial_turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
         let session_task = task.task;
@@ -385,7 +385,7 @@ impl Session {
 
         let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
         session_task
-            .abort(session_ctx, Arc::clone(&task.turn_context))
+            .abort(session_ctx, Arc::clone(&task.initial_turn_context))
             .await;
 
         if reason == TurnAbortReason::Interrupted {
@@ -400,8 +400,11 @@ impl Session {
                 end_turn: None,
                 phase: None,
             };
-            self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
-                .await;
+            self.record_into_history(
+                std::slice::from_ref(&marker),
+                task.initial_turn_context.as_ref(),
+            )
+            .await;
             self.persist_rollout_items(&[RolloutItem::ResponseItem(marker)])
                 .await;
             // Ensure the marker is durably visible before emitting TurnAborted: some clients
@@ -410,10 +413,11 @@ impl Session {
         }
 
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
-            turn_id: Some(task.turn_context.sub_id.clone()),
+            turn_id: Some(task.initial_turn_context.sub_id.clone()),
             reason,
         });
-        self.send_event(task.turn_context.as_ref(), event).await;
+        self.send_event(task.initial_turn_context.as_ref(), event)
+            .await;
     }
 }
 
