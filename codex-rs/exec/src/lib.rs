@@ -789,6 +789,7 @@ fn should_suppress_agent_job_event(msg: &EventMsg) -> bool {
             | EventMsg::RequestUserInput(_)
             | EventMsg::DynamicToolCallRequest(_)
             | EventMsg::DynamicToolCallResponse(_)
+            | EventMsg::ResponseMetadata(_)
             | EventMsg::ElicitationRequest(_)
             | EventMsg::Error(_)
             | EventMsg::Warning(_)

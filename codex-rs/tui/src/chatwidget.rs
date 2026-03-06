@@ -4830,6 +4830,7 @@ impl ChatWidget {
                 }
             }
             EventMsg::RawResponseItem(_)
+            | EventMsg::ResponseMetadata(_)
             | EventMsg::ItemStarted(_)
             | EventMsg::AgentMessageContentDelta(_)
             | EventMsg::ReasoningContentDelta(_)

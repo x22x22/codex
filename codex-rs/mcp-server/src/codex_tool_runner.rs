@@ -355,6 +355,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::ImageGenerationBegin(_)
                     | EventMsg::ImageGenerationEnd(_)
                     | EventMsg::RawResponseItem(_)
+                    | EventMsg::ResponseMetadata(_)
                     | EventMsg::EnteredReviewMode(_)
                     | EventMsg::ItemStarted(_)
                     | EventMsg::ItemCompleted(_)
