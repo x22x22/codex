@@ -31,6 +31,10 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
+#[cfg(target_os = "macos")]
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+#[cfg(target_os = "macos")]
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::SkillScope;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
@@ -474,6 +478,10 @@ async fn prepare_escalated_exec_turn_default_preserves_macos_seatbelt_extensions
         network: None,
         sandbox: SandboxType::None,
         sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        file_system_sandbox_policy: FileSystemSandboxPolicy::from(
+            &SandboxPolicy::new_read_only_policy(),
+        ),
+        network_sandbox_policy: NetworkSandboxPolicy::Restricted,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,
@@ -524,6 +532,8 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
         network: None,
         sandbox: SandboxType::None,
         sandbox_policy: SandboxPolicy::DangerFullAccess,
+        file_system_sandbox_policy: FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
+        network_sandbox_policy: NetworkSandboxPolicy::Enabled,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,
@@ -588,13 +598,16 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
 #[tokio::test]
 async fn prepare_escalated_exec_permission_profile_unions_turn_and_requested_macos_extensions() {
     let cwd = AbsolutePathBuf::from_absolute_path(std::env::temp_dir()).unwrap();
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let executor = CoreShellCommandExecutor {
         command: vec!["echo".to_string(), "ok".to_string()],
         cwd: cwd.to_path_buf(),
         env: HashMap::new(),
         network: None,
         sandbox: SandboxType::None,
-        sandbox_policy: SandboxPolicy::new_read_only_policy(),
+        sandbox_policy: sandbox_policy.clone(),
+        file_system_sandbox_policy: FileSystemSandboxPolicy::from(&sandbox_policy),
+        network_sandbox_policy: NetworkSandboxPolicy::from(&sandbox_policy),
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
         sandbox_permissions: SandboxPermissions::UseDefault,
         justification: None,

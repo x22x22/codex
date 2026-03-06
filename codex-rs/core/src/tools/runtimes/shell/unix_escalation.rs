@@ -24,6 +24,8 @@ use codex_execpolicy::RuleMatch;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::NetworkPolicyRuleAction;
 use codex_protocol::protocol::RejectConfig;
@@ -98,6 +100,8 @@ pub(super) async fn try_run_zsh_fork(
         windows_sandbox_level,
         sandbox_permissions,
         sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
         justification,
         arg0,
     } = sandbox_exec_request;
@@ -113,6 +117,8 @@ pub(super) async fn try_run_zsh_fork(
         command,
         cwd: sandbox_cwd,
         sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
         sandbox,
         env: sandbox_env,
         network: sandbox_network,
@@ -220,6 +226,8 @@ pub(crate) async fn prepare_unified_exec_zsh_fork(
         command: exec_request.command.clone(),
         cwd: exec_request.cwd.clone(),
         sandbox_policy: exec_request.sandbox_policy.clone(),
+        file_system_sandbox_policy: exec_request.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: exec_request.network_sandbox_policy,
         sandbox: exec_request.sandbox,
         env: exec_request.env.clone(),
         network: exec_request.network.clone(),
@@ -728,6 +736,8 @@ struct CoreShellCommandExecutor {
     command: Vec<String>,
     cwd: PathBuf,
     sandbox_policy: SandboxPolicy,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     sandbox: SandboxType,
     env: HashMap<String, String>,
     network: Option<codex_network_proxy::NetworkProxy>,
@@ -747,6 +757,8 @@ struct PrepareSandboxedExecParams<'a> {
     workdir: &'a AbsolutePathBuf,
     env: HashMap<String, String>,
     sandbox_policy: &'a SandboxPolicy,
+    file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     additional_permissions: Option<PermissionProfile>,
     #[cfg(target_os = "macos")]
     macos_seatbelt_profile_extensions: Option<&'a MacOsSeatbeltProfileExtensions>,
@@ -782,6 +794,8 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 windows_sandbox_level: self.windows_sandbox_level,
                 sandbox_permissions: self.sandbox_permissions,
                 sandbox_policy: self.sandbox_policy.clone(),
+                file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
+                network_sandbox_policy: self.network_sandbox_policy,
                 justification: self.justification.clone(),
                 arg0: self.arg0.clone(),
             },
@@ -828,6 +842,8 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                     workdir,
                     env,
                     sandbox_policy: &self.sandbox_policy,
+                    file_system_sandbox_policy: &self.file_system_sandbox_policy,
+                    network_sandbox_policy: self.network_sandbox_policy,
                     additional_permissions: None,
                     #[cfg(target_os = "macos")]
                     macos_seatbelt_profile_extensions: self
@@ -845,6 +861,8 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                     workdir,
                     env,
                     sandbox_policy: &self.sandbox_policy,
+                    file_system_sandbox_policy: &self.file_system_sandbox_policy,
+                    network_sandbox_policy: self.network_sandbox_policy,
                     additional_permissions: Some(permission_profile),
                     #[cfg(target_os = "macos")]
                     macos_seatbelt_profile_extensions: self
@@ -854,11 +872,17 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
             }
             EscalationExecution::Permissions(EscalationPermissions::Permissions(permissions)) => {
                 // Use a fully specified sandbox policy instead of merging into the turn policy.
+                let file_system_sandbox_policy =
+                    FileSystemSandboxPolicy::from(&permissions.sandbox_policy);
+                let network_sandbox_policy =
+                    NetworkSandboxPolicy::from(&permissions.sandbox_policy);
                 self.prepare_sandboxed_exec(PrepareSandboxedExecParams {
                     command,
                     workdir,
                     env,
                     sandbox_policy: &permissions.sandbox_policy,
+                    file_system_sandbox_policy: &file_system_sandbox_policy,
+                    network_sandbox_policy,
                     additional_permissions: None,
                     #[cfg(target_os = "macos")]
                     macos_seatbelt_profile_extensions: permissions
@@ -873,6 +897,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
 }
 
 impl CoreShellCommandExecutor {
+    #[allow(clippy::too_many_arguments)]
     fn prepare_sandboxed_exec(
         &self,
         params: PrepareSandboxedExecParams<'_>,
@@ -882,6 +907,8 @@ impl CoreShellCommandExecutor {
             workdir,
             env,
             sandbox_policy,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
             additional_permissions,
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions,
@@ -891,7 +918,8 @@ impl CoreShellCommandExecutor {
             .ok_or_else(|| anyhow::anyhow!("prepared command must not be empty"))?;
         let sandbox_manager = crate::sandboxing::SandboxManager::new();
         let sandbox = sandbox_manager.select_initial(
-            sandbox_policy,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
             SandboxablePreference::Auto,
             self.windows_sandbox_level,
             self.network.is_some(),
@@ -913,6 +941,8 @@ impl CoreShellCommandExecutor {
                     justification: self.justification.clone(),
                 },
                 policy: sandbox_policy,
+                file_system_policy: file_system_sandbox_policy,
+                network_policy: network_sandbox_policy,
                 sandbox,
                 enforce_managed_network: self.network.is_some(),
                 network: self.network.as_ref(),
