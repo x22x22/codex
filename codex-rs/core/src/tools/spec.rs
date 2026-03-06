@@ -10,6 +10,7 @@ use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::SEARCH_TOOL_BM25_DEFAULT_LIMIT;
 use crate::tools::handlers::SEARCH_TOOL_BM25_TOOL_NAME;
+use crate::tools::handlers::TOOL_SUGGEST_TOOL_NAME;
 use crate::tools::handlers::agent_jobs::BatchJobHandler;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
@@ -1248,6 +1249,15 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
                 )),
             },
         ),
+        (
+            "mode".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Search mode: `available` searches currently available app tools; `installable` searches apps that are not installed yet. Defaults to `available`."
+                        .to_string(),
+                ),
+            },
+        ),
     ]);
     let mut app_names = app_tools
         .values()
@@ -1267,6 +1277,28 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["query".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
+fn create_tool_suggest_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "connector_id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Connector ID returned by `search_tool_bm25` in `installable` mode.".to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: TOOL_SUGGEST_TOOL_NAME.to_string(),
+        description: "Prompt the user to install an app that is not installed yet.".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["connector_id".to_string()]),
             additional_properties: Some(false.into()),
         },
     })
@@ -1816,6 +1848,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::ShellCommandHandler;
     use crate::tools::handlers::ShellHandler;
     use crate::tools::handlers::TestSyncHandler;
+    use crate::tools::handlers::ToolSuggestHandler;
     use crate::tools::handlers::UnifiedExecHandler;
     use crate::tools::handlers::ViewImageHandler;
     use std::sync::Arc;
@@ -1835,6 +1868,7 @@ pub(crate) fn build_specs(
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
     let search_tool_handler = Arc::new(SearchToolBm25Handler);
+    let tool_suggest_handler = Arc::new(ToolSuggestHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let artifacts_handler = Arc::new(ArtifactsHandler);
@@ -1908,7 +1942,9 @@ pub(crate) fn build_specs(
         && let Some(app_tools) = app_tools
     {
         builder.push_spec_with_parallel_support(create_search_tool_bm25_tool(&app_tools), true);
+        builder.push_spec_with_parallel_support(create_tool_suggest_tool(), true);
         builder.register_handler(SEARCH_TOOL_BM25_TOOL_NAME, search_tool_handler);
+        builder.register_handler(TOOL_SUGGEST_TOOL_NAME, tool_suggest_handler);
     }
 
     if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
@@ -3165,6 +3201,76 @@ mod tests {
         };
         assert!(description.contains("Calendar"));
         assert!(!description.contains("mcp__rmcp__echo"));
+        assert!(description.contains("Always search `mode: \"available\"` first."));
+        assert!(description.contains("call `tool_suggest`"));
+    }
+
+    #[test]
+    fn search_tool_spec_includes_mode_and_tool_suggest_is_registered() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Apps);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let (tools, _) = build_specs(
+            &tools_config,
+            Some(HashMap::from([(
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                mcp_tool(
+                    "calendar_create_event",
+                    "Create calendar event",
+                    serde_json::json!({"type": "object"}),
+                ),
+            )])),
+            Some(HashMap::from([(
+                "mcp__codex_apps__calendar_create_event".to_string(),
+                ToolInfo {
+                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    tool_name: "calendar_create_event".to_string(),
+                    tool: mcp_tool(
+                        "calendar_create_event",
+                        "Create calendar event",
+                        serde_json::json!({"type": "object"}),
+                    ),
+                    connector_id: Some("calendar".to_string()),
+                    connector_name: Some("Calendar".to_string()),
+                    plugin_display_names: Vec::new(),
+                },
+            )])),
+            &[],
+        )
+        .build();
+
+        let search_tool = find_tool(&tools, SEARCH_TOOL_BM25_TOOL_NAME);
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &search_tool.spec else {
+            panic!("expected function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("expected object schema");
+        };
+        assert!(properties.contains_key("mode"));
+
+        let tool_suggest = find_tool(&tools, TOOL_SUGGEST_TOOL_NAME);
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &tool_suggest.spec else {
+            panic!("expected function tool");
+        };
+        let JsonSchema::Object {
+            properties,
+            required,
+            ..
+        } = parameters
+        else {
+            panic!("expected object schema");
+        };
+        assert!(properties.contains_key("connector_id"));
+        assert_eq!(required.as_deref(), Some(&["connector_id".to_string()][..]));
     }
 
     #[test]

@@ -2257,6 +2257,7 @@ impl App {
                         url,
                         is_installed,
                         is_enabled,
+                        elicitation_resolution: None,
                     });
             }
             AppEvent::OpenUrlInBrowser { url } => {

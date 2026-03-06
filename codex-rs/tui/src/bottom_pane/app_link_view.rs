@@ -1,3 +1,9 @@
+use codex_protocol::ThreadId;
+use codex_protocol::approvals::ElicitationAction;
+use codex_protocol::approvals::ElicitationRequest;
+use codex_protocol::approvals::ElicitationRequestEvent;
+use codex_protocol::mcp::RequestId as McpRequestId;
+use codex_protocol::protocol::Op;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -11,6 +17,9 @@ use ratatui::widgets::Block;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
+use serde::Deserialize;
+use serde_json::Value;
+use serde_json::json;
 use textwrap::wrap;
 
 use super::CancellationEvent;
@@ -34,6 +43,19 @@ enum AppLinkScreen {
     InstallConfirmation,
 }
 
+const APP_INSTALL_SUGGESTION_META_KIND_VALUE: &str = "app_install_suggestion";
+const APP_INSTALL_SUGGESTION_DECISION_INSTALL: &str = "install";
+pub(crate) const APP_LINK_INSTALL_INSTRUCTIONS: &str =
+    "Install this app in your browser, then reload Codex.";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AppLinkElicitationResolution {
+    pub(crate) thread_id: ThreadId,
+    pub(crate) server_name: String,
+    pub(crate) request_id: McpRequestId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AppLinkViewParams {
     pub(crate) app_id: String,
     pub(crate) title: String,
@@ -42,6 +64,49 @@ pub(crate) struct AppLinkViewParams {
     pub(crate) url: String,
     pub(crate) is_installed: bool,
     pub(crate) is_enabled: bool,
+    pub(crate) elicitation_resolution: Option<AppLinkElicitationResolution>,
+}
+
+#[derive(Deserialize)]
+struct AppInstallSuggestionMeta {
+    #[serde(rename = "codex_approval_kind")]
+    approval_kind: String,
+    connector_id: String,
+    connector_name: String,
+    connector_description: Option<String>,
+    install_url: String,
+}
+
+pub(crate) fn app_install_suggestion_params_from_event(
+    thread_id: ThreadId,
+    request: &ElicitationRequestEvent,
+) -> Option<AppLinkViewParams> {
+    let ElicitationRequest::Form {
+        meta: Some(meta), ..
+    } = &request.request
+    else {
+        return None;
+    };
+
+    let meta = serde_json::from_value::<AppInstallSuggestionMeta>(meta.clone()).ok()?;
+    if meta.approval_kind != APP_INSTALL_SUGGESTION_META_KIND_VALUE {
+        return None;
+    }
+
+    Some(AppLinkViewParams {
+        app_id: meta.connector_id,
+        title: meta.connector_name,
+        description: meta.connector_description,
+        instructions: APP_LINK_INSTALL_INSTRUCTIONS.to_string(),
+        url: meta.install_url,
+        is_installed: false,
+        is_enabled: false,
+        elicitation_resolution: Some(AppLinkElicitationResolution {
+            thread_id,
+            server_name: request.server_name.clone(),
+            request_id: request.id.clone(),
+        }),
+    })
 }
 
 pub(crate) struct AppLinkView {
@@ -52,6 +117,7 @@ pub(crate) struct AppLinkView {
     url: String,
     is_installed: bool,
     is_enabled: bool,
+    elicitation_resolution: Option<AppLinkElicitationResolution>,
     app_event_tx: AppEventSender,
     screen: AppLinkScreen,
     selected_action: usize,
@@ -68,6 +134,7 @@ impl AppLinkView {
             url,
             is_installed,
             is_enabled,
+            elicitation_resolution,
         } = params;
         Self {
             app_id,
@@ -77,6 +144,7 @@ impl AppLinkView {
             url,
             is_installed,
             is_enabled,
+            elicitation_resolution,
             app_event_tx,
             screen: AppLinkScreen::Link,
             selected_action: 0,
@@ -127,6 +195,17 @@ impl AppLinkView {
         self.app_event_tx.send(AppEvent::RefreshConnectors {
             force_refetch: true,
         });
+        self.resolve_elicitation(
+            ElicitationAction::Accept,
+            Some(json!({
+                "decision": APP_INSTALL_SUGGESTION_DECISION_INSTALL,
+            })),
+        );
+        self.complete = true;
+    }
+
+    fn close_flow(&mut self) {
+        self.resolve_elicitation(ElicitationAction::Cancel, None);
         self.complete = true;
     }
 
@@ -143,12 +222,29 @@ impl AppLinkView {
         });
     }
 
+    fn resolve_elicitation(&self, decision: ElicitationAction, content: Option<Value>) {
+        let Some(resolution) = self.elicitation_resolution.as_ref() else {
+            return;
+        };
+
+        self.app_event_tx.send(AppEvent::SubmitThreadOp {
+            thread_id: resolution.thread_id,
+            op: Op::ResolveElicitation {
+                server_name: resolution.server_name.clone(),
+                request_id: resolution.request_id.clone(),
+                decision,
+                content,
+                meta: None,
+            },
+        });
+    }
+
     fn activate_selected_action(&mut self) {
         match self.screen {
             AppLinkScreen::Link => match self.selected_action {
                 0 => self.open_chatgpt_link(),
                 1 if self.is_installed => self.toggle_enabled(),
-                _ => self.complete = true,
+                _ => self.close_flow(),
             },
             AppLinkScreen::InstallConfirmation => match self.selected_action {
                 0 => self.refresh_connectors_and_close(),
@@ -366,7 +462,7 @@ impl BottomPaneView for AppLinkView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
-        self.complete = true;
+        self.close_flow();
         CancellationEvent::Handled
     }
 
@@ -447,24 +543,35 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::render::renderable::Renderable;
+    use pretty_assertions::assert_eq;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn base_params() -> AppLinkViewParams {
+        AppLinkViewParams {
+            app_id: "connector_1".to_string(),
+            title: "Notion".to_string(),
+            description: None,
+            instructions: "Manage app".to_string(),
+            url: "https://example.test/notion".to_string(),
+            is_installed: true,
+            is_enabled: true,
+            elicitation_resolution: None,
+        }
+    }
+
+    fn elicitation_resolution(thread_id: ThreadId) -> AppLinkElicitationResolution {
+        AppLinkElicitationResolution {
+            thread_id,
+            server_name: "codex_apps".to_string(),
+            request_id: McpRequestId::String("request-1".to_string()),
+        }
+    }
 
     #[test]
     fn installed_app_has_toggle_action() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let view = AppLinkView::new(
-            AppLinkViewParams {
-                app_id: "connector_1".to_string(),
-                title: "Notion".to_string(),
-                description: None,
-                instructions: "Manage app".to_string(),
-                url: "https://example.test/notion".to_string(),
-                is_installed: true,
-                is_enabled: true,
-            },
-            tx,
-        );
+        let view = AppLinkView::new(base_params(), tx);
 
         assert_eq!(
             view.action_labels(),
@@ -476,18 +583,7 @@ mod tests {
     fn toggle_action_sends_set_app_enabled_and_updates_label() {
         let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut view = AppLinkView::new(
-            AppLinkViewParams {
-                app_id: "connector_1".to_string(),
-                title: "Notion".to_string(),
-                description: None,
-                instructions: "Manage app".to_string(),
-                url: "https://example.test/notion".to_string(),
-                is_installed: true,
-                is_enabled: true,
-            },
-            tx,
-        );
+        let mut view = AppLinkView::new(base_params(), tx);
 
         view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
 
@@ -512,18 +608,9 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let url_like =
             "example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890";
-        let mut view = AppLinkView::new(
-            AppLinkViewParams {
-                app_id: "connector_1".to_string(),
-                title: "Notion".to_string(),
-                description: None,
-                instructions: "Manage app".to_string(),
-                url: url_like.to_string(),
-                is_installed: true,
-                is_enabled: true,
-            },
-            tx,
-        );
+        let mut params = base_params();
+        params.url = url_like.to_string();
+        let mut view = AppLinkView::new(params, tx);
         view.screen = AppLinkScreen::InstallConfirmation;
 
         let rendered: Vec<String> = view
@@ -552,18 +639,9 @@ mod tests {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let url = "https://example.test/api/v1/projects/alpha-team/releases/2026-02-17/builds/1234567890/artifacts/reports/performance/summary/detail/with/a/very/long/path/tail42";
-        let mut view = AppLinkView::new(
-            AppLinkViewParams {
-                app_id: "connector_1".to_string(),
-                title: "Notion".to_string(),
-                description: None,
-                instructions: "Manage app".to_string(),
-                url: url.to_string(),
-                is_installed: true,
-                is_enabled: true,
-            },
-            tx,
-        );
+        let mut params = base_params();
+        params.url = url.to_string();
+        let mut view = AppLinkView::new(params, tx);
         view.screen = AppLinkScreen::InstallConfirmation;
 
         let width: u16 = 36;
@@ -592,5 +670,140 @@ mod tests {
             rendered_blob.contains("tail42"),
             "expected wrapped setup URL tail to remain visible in narrow pane, got:\n{rendered_blob}"
         );
+    }
+
+    #[test]
+    fn app_install_suggestion_event_builds_app_link_params() {
+        let thread_id = ThreadId::default();
+        let request = ElicitationRequestEvent {
+            turn_id: Some("turn-1".to_string()),
+            server_name: "codex_apps".to_string(),
+            id: McpRequestId::String("request-1".to_string()),
+            request: ElicitationRequest::Form {
+                meta: Some(json!({
+                    "codex_approval_kind": "app_install_suggestion",
+                    "connector_id": "connector_1",
+                    "connector_name": "Notion",
+                    "connector_description": "Docs and notes",
+                    "install_url": "https://example.test/notion",
+                })),
+                message: "Install Notion to continue?".to_string(),
+                requested_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                }),
+            },
+        };
+
+        let params = app_install_suggestion_params_from_event(thread_id, &request);
+
+        assert_eq!(
+            params,
+            Some(AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: Some("Docs and notes".to_string()),
+                instructions: APP_LINK_INSTALL_INSTRUCTIONS.to_string(),
+                url: "https://example.test/notion".to_string(),
+                is_installed: false,
+                is_enabled: false,
+                elicitation_resolution: Some(elicitation_resolution(thread_id)),
+            })
+        );
+    }
+
+    #[test]
+    fn install_confirmation_resolves_elicitation_after_refresh() {
+        let expected_thread_id = ThreadId::default();
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut params = base_params();
+        params.is_installed = false;
+        params.is_enabled = false;
+        params.instructions = APP_LINK_INSTALL_INSTRUCTIONS.to_string();
+        params.elicitation_resolution = Some(elicitation_resolution(expected_thread_id));
+        let mut view = AppLinkView::new(params, tx);
+        view.screen = AppLinkScreen::InstallConfirmation;
+
+        view.activate_selected_action();
+
+        match rx.try_recv() {
+            Ok(AppEvent::RefreshConnectors { force_refetch }) => {
+                assert!(force_refetch);
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+
+        match rx.try_recv() {
+            Ok(AppEvent::SubmitThreadOp {
+                thread_id,
+                op:
+                    Op::ResolveElicitation {
+                        server_name,
+                        request_id,
+                        decision,
+                        content,
+                        meta,
+                    },
+            }) => {
+                assert_eq!(thread_id, expected_thread_id);
+                assert_eq!(server_name, "codex_apps");
+                assert_eq!(request_id, McpRequestId::String("request-1".to_string()));
+                assert_eq!(decision, ElicitationAction::Accept);
+                assert_eq!(
+                    content,
+                    Some(json!({
+                        "decision": "install",
+                    }))
+                );
+                assert_eq!(meta, None);
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+
+        assert!(view.is_complete());
+    }
+
+    #[test]
+    fn closing_link_view_cancels_elicitation_flow() {
+        let expected_thread_id = ThreadId::default();
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut params = base_params();
+        params.is_installed = false;
+        params.is_enabled = false;
+        params.instructions = APP_LINK_INSTALL_INSTRUCTIONS.to_string();
+        params.elicitation_resolution = Some(elicitation_resolution(expected_thread_id));
+        let mut view = AppLinkView::new(params, tx);
+        view.selected_action = 1;
+
+        view.activate_selected_action();
+
+        match rx.try_recv() {
+            Ok(AppEvent::SubmitThreadOp {
+                thread_id,
+                op:
+                    Op::ResolveElicitation {
+                        server_name,
+                        request_id,
+                        decision,
+                        content,
+                        meta,
+                    },
+            }) => {
+                assert_eq!(thread_id, expected_thread_id);
+                assert_eq!(server_name, "codex_apps");
+                assert_eq!(request_id, McpRequestId::String("request-1".to_string()));
+                assert_eq!(decision, ElicitationAction::Cancel);
+                assert_eq!(content, None);
+                assert_eq!(meta, None);
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+
+        assert!(view.is_complete());
     }
 }

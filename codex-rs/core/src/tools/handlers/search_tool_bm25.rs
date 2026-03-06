@@ -5,6 +5,7 @@ use bm25::SearchEngineBuilder;
 use codex_app_server_protocol::AppInfo;
 use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -29,11 +30,21 @@ fn default_limit() -> usize {
     DEFAULT_LIMIT
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum SearchToolMode {
+    #[default]
+    Available,
+    Installable,
+}
+
 #[derive(Deserialize)]
 struct SearchToolBm25Args {
     query: String,
     #[serde(default = "default_limit")]
     limit: usize,
+    #[serde(default)]
+    mode: SearchToolMode,
 }
 
 #[derive(Clone)]
@@ -67,6 +78,26 @@ impl ToolEntry {
                 .map(|description| description.to_string()),
             connector_name: info.connector_name,
             input_keys,
+            search_text,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ConnectorEntry {
+    connector_id: String,
+    connector_name: String,
+    connector_description: Option<String>,
+    search_text: String,
+}
+
+impl ConnectorEntry {
+    fn new(connector: AppInfo) -> Self {
+        let search_text = build_connector_search_text(&connector);
+        Self {
+            connector_id: connector.id,
+            connector_name: connector.name,
+            connector_description: connector.description,
             search_text,
         }
     }
@@ -109,80 +140,151 @@ impl ToolHandler for SearchToolBm25Handler {
             ));
         }
 
-        let limit = args.limit;
+        let content = match args.mode {
+            SearchToolMode::Available => {
+                let mcp_tools = session
+                    .services
+                    .mcp_connection_manager
+                    .read()
+                    .await
+                    .list_all_tools()
+                    .await;
 
-        let mcp_tools = session
-            .services
-            .mcp_connection_manager
-            .read()
-            .await
-            .list_all_tools()
-            .await;
+                let connectors = connectors::with_app_enabled_state(
+                    connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
+                    &turn.config,
+                );
+                let mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, &connectors);
+                let mcp_tools =
+                    connectors::filter_codex_apps_tools_by_policy(mcp_tools, &turn.config);
 
-        let connectors = connectors::with_app_enabled_state(
-            connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
-            &turn.config,
-        );
-        let mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, &connectors);
-        let mcp_tools = connectors::filter_codex_apps_tools_by_policy(mcp_tools, &turn.config);
+                let mut entries: Vec<ToolEntry> = mcp_tools
+                    .into_iter()
+                    .map(|(name, info)| ToolEntry::new(name, info))
+                    .collect();
+                entries.sort_by(|a, b| a.name.cmp(&b.name));
 
-        let mut entries: Vec<ToolEntry> = mcp_tools
-            .into_iter()
-            .map(|(name, info)| ToolEntry::new(name, info))
-            .collect();
-        entries.sort_by(|a, b| a.name.cmp(&b.name));
+                if entries.is_empty() {
+                    let active_selected_tools =
+                        session.get_mcp_tool_selection().await.unwrap_or_default();
+                    json!({
+                        "query": query,
+                        "mode": SearchToolMode::Available,
+                        "total_tools": 0,
+                        "active_selected_tools": active_selected_tools,
+                        "tools": [],
+                    })
+                    .to_string()
+                } else {
+                    let documents: Vec<Document<usize>> = entries
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, entry)| Document::new(idx, entry.search_text.clone()))
+                        .collect();
+                    let search_engine =
+                        SearchEngineBuilder::<usize>::with_documents(Language::English, documents)
+                            .build();
+                    let results = search_engine.search(query, args.limit);
 
-        if entries.is_empty() {
-            let active_selected_tools = session.get_mcp_tool_selection().await.unwrap_or_default();
-            let content = json!({
-                "query": query,
-                "total_tools": 0,
-                "active_selected_tools": active_selected_tools,
-                "tools": [],
-            })
-            .to_string();
-            return Ok(ToolOutput::Function {
-                body: FunctionCallOutputBody::Text(content),
-                success: Some(true),
-            });
-        }
+                    let mut selected_tools = Vec::new();
+                    let mut result_payloads = Vec::new();
+                    for result in results {
+                        let Some(entry) = entries.get(result.document.id) else {
+                            continue;
+                        };
+                        selected_tools.push(entry.name.clone());
+                        result_payloads.push(json!({
+                            "name": entry.name.clone(),
+                            "server": entry.server_name.clone(),
+                            "title": entry.title.clone(),
+                            "description": entry.description.clone(),
+                            "connector_name": entry.connector_name.clone(),
+                            "input_keys": entry.input_keys.clone(),
+                            "score": result.score,
+                        }));
+                    }
 
-        let documents: Vec<Document<usize>> = entries
-            .iter()
-            .enumerate()
-            .map(|(idx, entry)| Document::new(idx, entry.search_text.clone()))
-            .collect();
-        let search_engine =
-            SearchEngineBuilder::<usize>::with_documents(Language::English, documents).build();
-        let results = search_engine.search(query, limit);
+                    let active_selected_tools =
+                        session.merge_mcp_tool_selection(selected_tools).await;
 
-        let mut selected_tools = Vec::new();
-        let mut result_payloads = Vec::new();
-        for result in results {
-            let Some(entry) = entries.get(result.document.id) else {
-                continue;
-            };
-            selected_tools.push(entry.name.clone());
-            result_payloads.push(json!({
-                "name": entry.name.clone(),
-                "server": entry.server_name.clone(),
-                "title": entry.title.clone(),
-                "description": entry.description.clone(),
-                "connector_name": entry.connector_name.clone(),
-                "input_keys": entry.input_keys.clone(),
-                "score": result.score,
-            }));
-        }
+                    json!({
+                        "query": query,
+                        "mode": SearchToolMode::Available,
+                        "total_tools": entries.len(),
+                        "active_selected_tools": active_selected_tools,
+                        "tools": result_payloads,
+                    })
+                    .to_string()
+                }
+            }
+            SearchToolMode::Installable => {
+                let all_connectors = match connectors::list_cached_connectors(&turn.config).await {
+                    Some(connectors) => connectors,
+                    None => connectors::list_connectors(&turn.config)
+                        .await
+                        .map_err(|err| {
+                            FunctionCallError::RespondToModel(format!(
+                                "failed to load installable apps: {err}"
+                            ))
+                        })?,
+                };
+                let active_selected_tools =
+                    session.get_mcp_tool_selection().await.unwrap_or_default();
+                let mut entries: Vec<ConnectorEntry> = all_connectors
+                    .into_iter()
+                    .filter(|connector| !connector.is_accessible && connector.is_enabled)
+                    .map(ConnectorEntry::new)
+                    .collect();
+                entries.sort_by(|a, b| {
+                    a.connector_name
+                        .cmp(&b.connector_name)
+                        .then_with(|| a.connector_id.cmp(&b.connector_id))
+                });
 
-        let active_selected_tools = session.merge_mcp_tool_selection(selected_tools).await;
+                if entries.is_empty() {
+                    json!({
+                        "query": query,
+                        "mode": SearchToolMode::Installable,
+                        "total_connectors": 0,
+                        "active_selected_tools": active_selected_tools,
+                        "connectors": [],
+                    })
+                    .to_string()
+                } else {
+                    let documents: Vec<Document<usize>> = entries
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, entry)| Document::new(idx, entry.search_text.clone()))
+                        .collect();
+                    let search_engine =
+                        SearchEngineBuilder::<usize>::with_documents(Language::English, documents)
+                            .build();
+                    let results = search_engine.search(query, args.limit);
 
-        let content = json!({
-            "query": query,
-            "total_tools": entries.len(),
-            "active_selected_tools": active_selected_tools,
-            "tools": result_payloads,
-        })
-        .to_string();
+                    let mut result_payloads = Vec::new();
+                    for result in results {
+                        let Some(entry) = entries.get(result.document.id) else {
+                            continue;
+                        };
+                        result_payloads.push(json!({
+                            "connector_id": entry.connector_id.clone(),
+                            "connector_name": entry.connector_name.clone(),
+                            "connector_description": entry.connector_description.clone(),
+                            "score": result.score,
+                        }));
+                    }
+
+                    json!({
+                        "query": query,
+                        "mode": SearchToolMode::Installable,
+                        "total_connectors": entries.len(),
+                        "active_selected_tools": active_selected_tools,
+                        "connectors": result_payloads,
+                    })
+                    .to_string()
+                }
+            }
+        };
 
         Ok(ToolOutput::Function {
             body: FunctionCallOutputBody::Text(content),
@@ -240,6 +342,62 @@ fn build_search_text(name: &str, info: &ToolInfo, input_keys: &[String]) -> Stri
 
     if !input_keys.is_empty() {
         parts.extend(input_keys.iter().cloned());
+    }
+
+    parts.join(" ")
+}
+
+fn build_connector_search_text(connector: &AppInfo) -> String {
+    let mut parts = vec![connector.id.clone(), connector.name.clone()];
+
+    if let Some(description) = connector.description.as_deref()
+        && !description.trim().is_empty()
+    {
+        parts.push(description.to_string());
+    }
+
+    if let Some(labels) = connector.labels.as_ref() {
+        parts.extend(
+            labels
+                .iter()
+                .flat_map(|(key, value)| [key.clone(), value.clone()]),
+        );
+    }
+
+    if let Some(branding) = connector.branding.as_ref() {
+        if let Some(category) = branding.category.as_deref()
+            && !category.trim().is_empty()
+        {
+            parts.push(category.to_string());
+        }
+        if let Some(developer) = branding.developer.as_deref()
+            && !developer.trim().is_empty()
+        {
+            parts.push(developer.to_string());
+        }
+    }
+
+    if let Some(app_metadata) = connector.app_metadata.as_ref() {
+        if let Some(categories) = app_metadata.categories.as_ref() {
+            parts.extend(categories.iter().cloned());
+        }
+        if let Some(sub_categories) = app_metadata.sub_categories.as_ref() {
+            parts.extend(sub_categories.iter().cloned());
+        }
+        if let Some(seo_description) = app_metadata.seo_description.as_deref()
+            && !seo_description.trim().is_empty()
+        {
+            parts.push(seo_description.to_string());
+        }
+        if let Some(developer) = app_metadata.developer.as_deref()
+            && !developer.trim().is_empty()
+        {
+            parts.push(developer.to_string());
+        }
+    }
+
+    if !connector.plugin_display_names.is_empty() {
+        parts.extend(connector.plugin_display_names.iter().cloned());
     }
 
     parts.join(" ")
