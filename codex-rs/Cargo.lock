@@ -1440,6 +1440,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-json-to-toml",
  "codex-utils-pty",
+ "codex-utils-rustls-provider",
  "core_test_support",
  "futures",
  "opentelemetry",
