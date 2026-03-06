@@ -5837,19 +5837,9 @@ impl CodexMessageProcessor {
                                 break;
                             }
                         };
-                        let mut public_event = event.clone();
-                        match &mut public_event.msg {
-                            EventMsg::ResponseMetadata(_) => continue,
-                            EventMsg::SessionConfigured(session_configured) => {
-                                if let Some(initial_messages) =
-                                    session_configured.initial_messages.as_mut()
-                                {
-                                    initial_messages.retain(|msg| {
-                                        !matches!(msg, EventMsg::ResponseMetadata(_))
-                                    });
-                                }
-                            }
-                            _ => {}
+                        let public_event = event.clone();
+                        if matches!(public_event.msg, EventMsg::ResponseMetadata(_)) {
+                            continue;
                         }
 
                         // For now, we send a notification for every event,

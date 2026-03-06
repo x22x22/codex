@@ -1979,7 +1979,11 @@ impl InitialHistory {
                     .history
                     .iter()
                     .filter_map(|ri| match ri {
-                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                        RolloutItem::EventMsg(ev)
+                            if !matches!(ev, EventMsg::ResponseMetadata(_)) =>
+                        {
+                            Some(ev.clone())
+                        }
                         _ => None,
                     })
                     .collect(),
@@ -1988,7 +1992,11 @@ impl InitialHistory {
                 items
                     .iter()
                     .filter_map(|ri| match ri {
-                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                        RolloutItem::EventMsg(ev)
+                            if !matches!(ev, EventMsg::ResponseMetadata(_)) =>
+                        {
+                            Some(ev.clone())
+                        }
                         _ => None,
                     })
                     .collect(),
