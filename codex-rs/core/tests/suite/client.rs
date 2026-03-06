@@ -143,6 +143,164 @@ fn write_auth_json(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rollout_persists_responses_request_and_response_ids() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let response = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .insert_header("x-request-id", "req_123")
+        .set_body_string(sse(vec![
+            ev_response_created("resp_123"),
+            ev_completed("resp_123"),
+        ]));
+    let response_mock = core_test_support::responses::mount_response_once(&server, response).await;
+
+    let test = test_codex().build(&server).await.expect("build test codex");
+    test.submit_turn("hello?")
+        .await
+        .expect("submit turn should succeed");
+
+    let request = response_mock.single_request();
+    assert_eq!(request.path(), "/v1/responses");
+
+    let rollout_path = test.codex.rollout_path().expect("rollout path");
+    let rollout = std::fs::read_to_string(&rollout_path).expect("read rollout");
+    let json_lines: Vec<serde_json::Value> = rollout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("rollout json line"))
+        .collect();
+    let lines: Vec<RolloutLine> = rollout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("rollout line"))
+        .collect();
+
+    assert!(lines.iter().any(|line| {
+        matches!(
+            &line.item,
+            RolloutItem::EventMsg(EventMsg::ResponseMetadata(event))
+                if event.request_id.as_deref() == Some("req_123")
+                    && event.response_id.is_none()
+        )
+    }));
+    assert!(lines.iter().any(|line| {
+        matches!(
+            &line.item,
+            RolloutItem::EventMsg(EventMsg::ResponseMetadata(event))
+                if event.request_id.is_none()
+                    && event.response_id.as_deref() == Some("resp_123")
+        )
+    }));
+    assert!(json_lines.iter().any(|line| {
+        line["type"] == "event_msg"
+            && line["payload"]["type"] == "response_metadata"
+            && line["payload"]["request_id"] == "req_123"
+            && line["payload"]["response_id"].is_null()
+    }));
+    assert!(json_lines.iter().any(|line| {
+        line["type"] == "event_msg"
+            && line["payload"]["type"] == "response_metadata"
+            && line["payload"]["request_id"].is_null()
+            && line["payload"]["response_id"] == "resp_123"
+    }));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rollout_persists_request_id_when_responses_request_errors() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = MockServer::start().await;
+    let response = ResponseTemplate::new(418)
+        .insert_header("x-request-id", "req_error_123")
+        .set_body_json(json!({
+            "error": {
+                "message": "teapot"
+            }
+        }));
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(response)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config.model_provider.stream_max_retries = Some(0);
+        })
+        .build(&server)
+        .await?;
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "trigger error".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let response_metadata = wait_for_event(&codex, |event| {
+        matches!(
+            event,
+            EventMsg::ResponseMetadata(metadata)
+                if metadata.request_id.as_deref() == Some("req_error_123")
+                    && metadata.response_id.is_none()
+        )
+    })
+    .await;
+    assert!(
+        matches!(
+            &response_metadata,
+            EventMsg::ResponseMetadata(metadata)
+                if metadata.request_id.as_deref() == Some("req_error_123")
+                    && metadata.response_id.is_none()
+        ),
+        "expected response metadata with request id; got {response_metadata:?}"
+    );
+
+    let error_event = wait_for_event(&codex, |event| matches!(event, EventMsg::Error(_))).await;
+    assert!(
+        matches!(error_event, EventMsg::Error(_)),
+        "expected error event; got {error_event:?}"
+    );
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let rollout_path = codex.rollout_path().expect("rollout path");
+    let rollout = std::fs::read_to_string(&rollout_path).expect("read rollout");
+    let json_lines: Vec<serde_json::Value> = rollout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("rollout json line"))
+        .collect();
+    let lines: Vec<RolloutLine> = rollout
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("rollout line"))
+        .collect();
+
+    assert!(lines.iter().any(|line| {
+        matches!(
+            &line.item,
+            RolloutItem::EventMsg(EventMsg::ResponseMetadata(event))
+                if event.request_id.as_deref() == Some("req_error_123")
+                    && event.response_id.is_none()
+        )
+    }));
+    assert!(json_lines.iter().any(|line| {
+        line["type"] == "event_msg"
+            && line["payload"]["type"] == "response_metadata"
+            && line["payload"]["request_id"] == "req_error_123"
+            && line["payload"]["response_id"].is_null()
+    }));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_includes_initial_messages_and_sends_prior_items() {
     skip_if_no_network!();
 

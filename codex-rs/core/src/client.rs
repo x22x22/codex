@@ -1094,18 +1094,13 @@ fn build_responses_headers(
     headers
 }
 
-fn map_response_stream<S>(
-    api_stream: S,
+fn map_response_stream(
+    api_stream: codex_api::ResponseStream,
     otel_manager: OtelManager,
-) -> (ResponseStream, oneshot::Receiver<LastResponse>)
-where
-    S: futures::Stream<Item = std::result::Result<ResponseEvent, ApiError>>
-        + Unpin
-        + Send
-        + 'static,
-{
+) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let (tx_last_response, rx_last_response) = oneshot::channel::<LastResponse>();
+    let initial_request_id = api_stream.initial_request_id.clone();
 
     tokio::spawn(async move {
         let mut logged_error = false;
@@ -1173,7 +1168,13 @@ where
         }
     });
 
-    (ResponseStream { rx_event }, rx_last_response)
+    (
+        ResponseStream {
+            rx_event,
+            initial_request_id,
+        },
+        rx_last_response,
+    )
 }
 
 /// Handles a 401 response by optionally refreshing ChatGPT tokens once.

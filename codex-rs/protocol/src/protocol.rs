@@ -1176,6 +1176,8 @@ pub enum EventMsg {
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
 
+    ResponseMetadata(ResponseMetadataEvent),
+
     RawResponseItem(RawResponseItemEvent),
 
     ItemStarted(ItemStartedEvent),
@@ -1354,6 +1356,14 @@ impl CodexErrorInfo {
             | Self::Other => true,
         }
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ResponseMetadataEvent {
+    #[serde(default)]
+    pub request_id: Option<String>,
+    #[serde(default)]
+    pub response_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]

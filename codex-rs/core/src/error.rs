@@ -228,6 +228,43 @@ impl CodexErr {
             CodexErr::LandlockRuleset(_) | CodexErr::LandlockPathFd(_) => false,
         }
     }
+
+    pub fn request_id(&self) -> Option<&str> {
+        match self {
+            CodexErr::UnexpectedStatus(err) => err.request_id.as_deref(),
+            CodexErr::RetryLimit(err) => err.request_id.as_deref(),
+            CodexErr::ResponseStreamFailed(err) => err.request_id.as_deref(),
+            CodexErr::TurnAborted
+            | CodexErr::Interrupted
+            | CodexErr::Stream(..)
+            | CodexErr::Timeout
+            | CodexErr::ConnectionFailed(_)
+            | CodexErr::InternalServerError
+            | CodexErr::InternalAgentDied
+            | CodexErr::Io(_)
+            | CodexErr::Json(_)
+            | CodexErr::TokioJoin(_)
+            | CodexErr::EnvVar(_)
+            | CodexErr::Fatal(_)
+            | CodexErr::UsageNotIncluded
+            | CodexErr::QuotaExceeded
+            | CodexErr::InvalidImageRequest()
+            | CodexErr::InvalidRequest(_)
+            | CodexErr::RefreshTokenFailed(_)
+            | CodexErr::UnsupportedOperation(_)
+            | CodexErr::Sandbox(_)
+            | CodexErr::LandlockSandboxExecutableNotProvided
+            | CodexErr::ContextWindowExceeded
+            | CodexErr::ThreadNotFound(_)
+            | CodexErr::AgentLimitReached { .. }
+            | CodexErr::Spawn
+            | CodexErr::SessionConfiguredNotFirstEvent
+            | CodexErr::UsageLimitReached(_)
+            | CodexErr::ServerOverloaded => None,
+            #[cfg(target_os = "linux")]
+            CodexErr::LandlockRuleset(_) | CodexErr::LandlockPathFd(_) => None,
+        }
+    }
 }
 
 #[derive(Debug)]

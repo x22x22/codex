@@ -89,6 +89,7 @@ use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::RawResponseItemEvent;
+use codex_protocol::protocol::ResponseMetadataEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -5986,6 +5987,7 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::ShutdownComplete
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
+        | EventMsg::ResponseMetadata(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::ItemStarted(_)
         | EventMsg::AgentMessageContentDelta(_)
@@ -6308,7 +6310,7 @@ async fn try_run_sampling_request(
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
-    let mut stream = client_session
+    let stream_result = client_session
         .stream(
             prompt,
             &turn_context.model_info,
@@ -6320,7 +6322,34 @@ async fn try_run_sampling_request(
         )
         .instrument(trace_span!("stream_request"))
         .or_cancel(&cancellation_token)
-        .await??;
+        .await;
+    let mut stream = match stream_result {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(err)) => {
+            if let Some(request_id) = err.request_id() {
+                sess.send_event(
+                    &turn_context,
+                    EventMsg::ResponseMetadata(ResponseMetadataEvent {
+                        request_id: Some(request_id.to_string()),
+                        response_id: None,
+                    }),
+                )
+                .await;
+            }
+            return Err(err);
+        }
+        Err(codex_async_utils::CancelErr::Cancelled) => return Err(CodexErr::TurnAborted),
+    };
+    if let Some(request_id) = stream.initial_request_id.clone() {
+        sess.send_event(
+            &turn_context,
+            EventMsg::ResponseMetadata(ResponseMetadataEvent {
+                request_id: Some(request_id),
+                response_id: None,
+            }),
+        )
+        .await;
+    }
 
     let tool_runtime = ToolCallRuntime::new(
         Arc::clone(&router),
@@ -6372,7 +6401,18 @@ async fn try_run_sampling_request(
             .record_responses(&handle_responses, &event);
 
         match event {
-            ResponseEvent::Created => {}
+            ResponseEvent::Created { response_id } => {
+                if let Some(response_id) = response_id {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::ResponseMetadata(ResponseMetadataEvent {
+                            request_id: None,
+                            response_id: Some(response_id),
+                        }),
+                    )
+                    .await;
+                }
+            }
             ResponseEvent::OutputItemDone(item) => {
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()

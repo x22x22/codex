@@ -1,5 +1,6 @@
 use crate::common::ResponseEvent;
 use crate::common::ResponseStream;
+use crate::common::extract_request_id;
 use crate::error::ApiError;
 use crate::rate_limits::parse_all_rate_limits;
 use crate::telemetry::SseTelemetry;
@@ -46,7 +47,10 @@ pub fn stream_from_fixture(
     let stream = ReaderStream::new(reader).map_err(|err| TransportError::Network(err.to_string()));
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent, ApiError>>(1600);
     tokio::spawn(process_sse(Box::pin(stream), tx_event, idle_timeout, None));
-    Ok(ResponseStream { rx_event })
+    Ok(ResponseStream {
+        rx_event,
+        initial_request_id: None,
+    })
 }
 
 pub fn spawn_response_stream(
@@ -55,6 +59,7 @@ pub fn spawn_response_stream(
     telemetry: Option<Arc<dyn SseTelemetry>>,
     turn_state: Option<Arc<OnceLock<String>>>,
 ) -> ResponseStream {
+    let request_id = extract_request_id(&stream_response.headers);
     let rate_limit_snapshots = parse_all_rate_limits(&stream_response.headers);
     let models_etag = stream_response
         .headers
@@ -97,7 +102,10 @@ pub fn spawn_response_stream(
         process_sse(stream_response.bytes, tx_event, idle_timeout, telemetry).await;
     });
 
-    ResponseStream { rx_event }
+    ResponseStream {
+        rx_event,
+        initial_request_id: request_id,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -263,7 +271,13 @@ pub fn process_responses_event(
         }
         "response.created" => {
             if event.response.is_some() {
-                return Ok(Some(ResponseEvent::Created {}));
+                let response_id = event
+                    .response
+                    .as_ref()
+                    .and_then(|response| response.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                return Ok(Some(ResponseEvent::Created { response_id }));
             }
         }
         "response.failed" => {
@@ -771,7 +785,7 @@ mod tests {
         }
 
         fn is_created(ev: &ResponseEvent) -> bool {
-            matches!(ev, ResponseEvent::Created)
+            matches!(ev, ResponseEvent::Created { .. })
         }
         fn is_output(ev: &ResponseEvent) -> bool {
             matches!(ev, ResponseEvent::OutputItemDone(_))
@@ -870,6 +884,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spawn_response_stream_emits_request_id_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", HeaderValue::from_static("req_123"));
+        let bytes = stream::iter(Vec::<Result<Bytes, TransportError>>::new());
+        let stream_response = StreamResponse {
+            status: StatusCode::OK,
+            headers,
+            bytes: Box::pin(bytes),
+        };
+
+        let stream = spawn_response_stream(stream_response, idle_timeout(), None, None);
+        assert_eq!(stream.initial_request_id.as_deref(), Some("req_123"));
+    }
+
+    #[tokio::test]
     async fn process_sse_ignores_response_model_field_in_payload() {
         let events = run_sse(vec![
             json!({
@@ -890,7 +919,10 @@ mod tests {
         .await;
 
         assert_eq!(events.len(), 2);
-        assert_matches!(&events[0], ResponseEvent::Created);
+        assert_matches!(
+            &events[0],
+            ResponseEvent::Created { response_id } if response_id.as_deref() == Some("resp-1")
+        );
         assert_matches!(
             &events[1],
             ResponseEvent::Completed {
@@ -926,7 +958,10 @@ mod tests {
             &events[0],
             ResponseEvent::ServerModel(model) if model == CYBER_RESTRICTED_MODEL_FOR_TESTS
         );
-        assert_matches!(&events[1], ResponseEvent::Created);
+        assert_matches!(
+            &events[1],
+            ResponseEvent::Created { response_id } if response_id.as_deref() == Some("resp-1")
+        );
         assert_matches!(
             &events[2],
             ResponseEvent::Completed {
