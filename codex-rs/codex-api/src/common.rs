@@ -249,7 +249,7 @@ pub fn create_text_param_for_request(
 
 pub struct ResponseStream {
     pub rx_event: mpsc::Receiver<Result<ResponseEvent, ApiError>>,
-    pub rollout_request_id: Option<String>,
+    pub request_id_for_rollout_log: Option<String>,
 }
 
 impl Stream for ResponseStream {

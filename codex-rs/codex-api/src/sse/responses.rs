@@ -49,7 +49,7 @@ pub fn stream_from_fixture(
     tokio::spawn(process_sse(Box::pin(stream), tx_event, idle_timeout, None));
     Ok(ResponseStream {
         rx_event,
-        rollout_request_id: None,
+        request_id_for_rollout_log: None,
     })
 }
 
@@ -104,7 +104,7 @@ pub fn spawn_response_stream(
 
     ResponseStream {
         rx_event,
-        rollout_request_id: request_id,
+        request_id_for_rollout_log: request_id,
     }
 }
 
@@ -895,7 +895,10 @@ mod tests {
         };
 
         let stream = spawn_response_stream(stream_response, idle_timeout(), None, None);
-        assert_eq!(stream.rollout_request_id.as_deref(), Some("req_123"));
+        assert_eq!(
+            stream.request_id_for_rollout_log.as_deref(),
+            Some("req_123")
+        );
     }
 
     #[tokio::test]

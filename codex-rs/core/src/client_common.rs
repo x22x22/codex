@@ -223,7 +223,7 @@ pub(crate) mod tools {
 
 pub struct ResponseStream {
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
-    pub(crate) rollout_request_id: Option<String>,
+    pub(crate) request_id_for_rollout_log: Option<String>,
 }
 
 impl Stream for ResponseStream {

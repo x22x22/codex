@@ -271,7 +271,7 @@ impl ResponsesWebsocketConnection {
             // Websocket upgrade response headers are scoped to the connection, not
             // individual `stream_request` calls, so they cannot be used as per-turn
             // request IDs in rollout metadata.
-            rollout_request_id: None,
+            request_id_for_rollout_log: None,
         })
     }
 }
