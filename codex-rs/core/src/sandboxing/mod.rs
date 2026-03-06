@@ -20,7 +20,6 @@ use crate::protocol::FileSystemPath;
 use crate::protocol::FileSystemSandboxEntry;
 use crate::protocol::FileSystemSandboxKind;
 use crate::protocol::FileSystemSandboxPolicy;
-use crate::protocol::FileSystemSpecialPathKind;
 use crate::protocol::NetworkSandboxPolicy;
 use crate::protocol::SandboxPolicy;
 #[cfg(target_os = "macos")]
@@ -215,7 +214,6 @@ fn additional_permission_roots(
     )
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 fn merge_file_system_policy_with_additional_permissions(
     file_system_policy: &FileSystemSandboxPolicy,
     extra_reads: Vec<AbsolutePathBuf>,
@@ -249,7 +247,6 @@ fn merge_file_system_policy_with_additional_permissions(
         }
     }
 }
-
 fn merge_read_only_access_with_additional_reads(
     read_only_access: &ReadOnlyAccess,
     extra_reads: Vec<AbsolutePathBuf>,
@@ -369,19 +366,10 @@ pub(crate) fn should_require_platform_sandbox(
     }
 
     match file_system_policy.kind {
-        FileSystemSandboxKind::Restricted => !file_system_policy.entries.iter().any(|entry| {
-            entry.access == FileSystemAccessMode::Write
-                && matches!(
-                    &entry.path,
-                    FileSystemPath::Special { value }
-                        if value.kind == FileSystemSpecialPathKind::Root
-                            && value.subpath.is_none()
-                )
-        }),
+        FileSystemSandboxKind::Restricted => !file_system_policy.has_full_disk_write_access(),
         FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => false,
     }
 }
-
 #[derive(Default)]
 pub struct SandboxManager;
 
@@ -461,13 +449,11 @@ impl SandboxManager {
                     if extra_reads.is_empty() && extra_writes.is_empty() {
                         file_system_policy.clone()
                     } else {
-                        match file_system_policy.kind {
-                            FileSystemSandboxKind::Restricted => {
-                                FileSystemSandboxPolicy::from(&effective_policy)
-                            }
-                            FileSystemSandboxKind::Unrestricted
-                            | FileSystemSandboxKind::ExternalSandbox => file_system_policy.clone(),
-                        }
+                        merge_file_system_policy_with_additional_permissions(
+                            file_system_policy,
+                            extra_reads,
+                            extra_writes,
+                        )
                     };
                 let network_sandbox_policy = NetworkSandboxPolicy::from(&effective_policy);
                 (file_system_sandbox_policy, network_sandbox_policy)
