@@ -85,8 +85,6 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(test)]
-use tempfile::tempdir;
 
 use crate::config::permissions::network_proxy_config_from_permissions;
 use crate::config::profile::ConfigProfile;
@@ -139,8 +137,10 @@ fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
         Some(resolved_cwd.join(path))
     }
 }
+
 #[cfg(test)]
 pub(crate) fn test_config() -> Config {
+    use tempfile::tempdir;
     let codex_home = tempdir().expect("create temp dir");
     Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
@@ -2522,6 +2522,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::collections::HashMap;
     use std::time::Duration;
+    use tempfile::tempdir;
     use tempfile::TempDir;
 
     fn stdio_mcp(command: &str) -> McpServerConfig {
