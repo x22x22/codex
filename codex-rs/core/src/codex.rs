@@ -89,7 +89,8 @@ use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::RawResponseItemEvent;
-use codex_protocol::protocol::ResponseMetadataEvent;
+use codex_protocol::protocol::ResponsesApiRequestIdEvent;
+use codex_protocol::protocol::ResponsesApiResponseIdEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
@@ -5987,7 +5988,8 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::ShutdownComplete
         | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_)
-        | EventMsg::ResponseMetadata(_)
+        | EventMsg::ResponsesApiRequestId(_)
+        | EventMsg::ResponsesApiResponseId(_)
         | EventMsg::RawResponseItem(_)
         | EventMsg::ItemStarted(_)
         | EventMsg::AgentMessageContentDelta(_)
@@ -6329,9 +6331,8 @@ async fn try_run_sampling_request(
             if let Some(request_id) = err.request_id() {
                 sess.send_event(
                     &turn_context,
-                    EventMsg::ResponseMetadata(ResponseMetadataEvent {
-                        request_id: Some(request_id.to_string()),
-                        response_id: None,
+                    EventMsg::ResponsesApiRequestId(ResponsesApiRequestIdEvent {
+                        request_id: request_id.to_string(),
                     }),
                 )
                 .await;
@@ -6343,10 +6344,7 @@ async fn try_run_sampling_request(
     if let Some(request_id) = stream.request_id_for_rollout_log.clone() {
         sess.send_event(
             &turn_context,
-            EventMsg::ResponseMetadata(ResponseMetadataEvent {
-                request_id: Some(request_id),
-                response_id: None,
-            }),
+            EventMsg::ResponsesApiRequestId(ResponsesApiRequestIdEvent { request_id }),
         )
         .await;
     }
@@ -6405,9 +6403,8 @@ async fn try_run_sampling_request(
                 if let Some(response_id) = response_id {
                     sess.send_event(
                         &turn_context,
-                        EventMsg::ResponseMetadata(ResponseMetadataEvent {
-                            request_id: None,
-                            response_id: Some(response_id),
+                        EventMsg::ResponsesApiResponseId(ResponsesApiResponseIdEvent {
+                            response_id,
                         }),
                     )
                     .await;

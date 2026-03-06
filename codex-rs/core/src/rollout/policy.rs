@@ -91,7 +91,8 @@ fn event_msg_persistence_mode(ev: &EventMsg) -> Option<EventPersistenceMode> {
     match ev {
         EventMsg::UserMessage(_)
         | EventMsg::AgentMessage(_)
-        | EventMsg::ResponseMetadata(_)
+        | EventMsg::ResponsesApiRequestId(_)
+        | EventMsg::ResponsesApiResponseId(_)
         | EventMsg::AgentReasoning(_)
         | EventMsg::AgentReasoningRawContent(_)
         | EventMsg::TokenCount(_)

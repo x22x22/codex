@@ -1178,7 +1178,11 @@ pub enum EventMsg {
 
     #[schemars(skip)]
     #[ts(skip)]
-    ResponseMetadata(ResponseMetadataEvent),
+    ResponsesApiRequestId(ResponsesApiRequestIdEvent),
+
+    #[schemars(skip)]
+    #[ts(skip)]
+    ResponsesApiResponseId(ResponsesApiResponseIdEvent),
 
     RawResponseItem(RawResponseItemEvent),
 
@@ -1361,11 +1365,13 @@ impl CodexErrorInfo {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
-pub struct ResponseMetadataEvent {
-    #[serde(default)]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub response_id: Option<String>,
+pub struct ResponsesApiRequestIdEvent {
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+pub struct ResponsesApiResponseIdEvent {
+    pub response_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -1980,7 +1986,11 @@ impl InitialHistory {
                     .iter()
                     .filter_map(|ri| match ri {
                         RolloutItem::EventMsg(ev)
-                            if !matches!(ev, EventMsg::ResponseMetadata(_)) =>
+                            if !matches!(
+                                ev,
+                                EventMsg::ResponsesApiRequestId(_)
+                                    | EventMsg::ResponsesApiResponseId(_)
+                            ) =>
                         {
                             Some(ev.clone())
                         }
@@ -1993,7 +2003,11 @@ impl InitialHistory {
                     .iter()
                     .filter_map(|ri| match ri {
                         RolloutItem::EventMsg(ev)
-                            if !matches!(ev, EventMsg::ResponseMetadata(_)) =>
+                            if !matches!(
+                                ev,
+                                EventMsg::ResponsesApiRequestId(_)
+                                    | EventMsg::ResponsesApiResponseId(_)
+                            ) =>
                         {
                             Some(ev.clone())
                         }

@@ -180,29 +180,25 @@ async fn rollout_persists_responses_request_and_response_ids() {
     assert!(lines.iter().any(|line| {
         matches!(
             &line.item,
-            RolloutItem::EventMsg(EventMsg::ResponseMetadata(event))
-                if event.request_id.as_deref() == Some("req_123")
-                    && event.response_id.is_none()
+            RolloutItem::EventMsg(EventMsg::ResponsesApiRequestId(event))
+                if event.request_id == "req_123"
         )
     }));
     assert!(lines.iter().any(|line| {
         matches!(
             &line.item,
-            RolloutItem::EventMsg(EventMsg::ResponseMetadata(event))
-                if event.request_id.is_none()
-                    && event.response_id.as_deref() == Some("resp_123")
+            RolloutItem::EventMsg(EventMsg::ResponsesApiResponseId(event))
+                if event.response_id == "resp_123"
         )
     }));
     assert!(json_lines.iter().any(|line| {
         line["type"] == "event_msg"
-            && line["payload"]["type"] == "response_metadata"
+            && line["payload"]["type"] == "responses_api_request_id"
             && line["payload"]["request_id"] == "req_123"
-            && line["payload"]["response_id"].is_null()
     }));
     assert!(json_lines.iter().any(|line| {
         line["type"] == "event_msg"
-            && line["payload"]["type"] == "response_metadata"
-            && line["payload"]["request_id"].is_null()
+            && line["payload"]["type"] == "responses_api_response_id"
             && line["payload"]["response_id"] == "resp_123"
     }));
 }
@@ -242,23 +238,21 @@ async fn rollout_persists_request_id_when_responses_request_errors() -> anyhow::
         })
         .await?;
 
-    let response_metadata = wait_for_event(&codex, |event| {
+    let request_id_event = wait_for_event(&codex, |event| {
         matches!(
             event,
-            EventMsg::ResponseMetadata(metadata)
-                if metadata.request_id.as_deref() == Some("req_error_123")
-                    && metadata.response_id.is_none()
+            EventMsg::ResponsesApiRequestId(metadata)
+                if metadata.request_id == "req_error_123"
         )
     })
     .await;
     assert!(
         matches!(
-            &response_metadata,
-            EventMsg::ResponseMetadata(metadata)
-                if metadata.request_id.as_deref() == Some("req_error_123")
-                    && metadata.response_id.is_none()
+            &request_id_event,
+            EventMsg::ResponsesApiRequestId(metadata)
+                if metadata.request_id == "req_error_123"
         ),
-        "expected response metadata with request id; got {response_metadata:?}"
+        "expected request id event; got {request_id_event:?}"
     );
 
     let error_event = wait_for_event(&codex, |event| matches!(event, EventMsg::Error(_))).await;
@@ -285,16 +279,14 @@ async fn rollout_persists_request_id_when_responses_request_errors() -> anyhow::
     assert!(lines.iter().any(|line| {
         matches!(
             &line.item,
-            RolloutItem::EventMsg(EventMsg::ResponseMetadata(event))
-                if event.request_id.as_deref() == Some("req_error_123")
-                    && event.response_id.is_none()
+            RolloutItem::EventMsg(EventMsg::ResponsesApiRequestId(event))
+                if event.request_id == "req_error_123"
         )
     }));
     assert!(json_lines.iter().any(|line| {
         line["type"] == "event_msg"
-            && line["payload"]["type"] == "response_metadata"
+            && line["payload"]["type"] == "responses_api_request_id"
             && line["payload"]["request_id"] == "req_error_123"
-            && line["payload"]["response_id"].is_null()
     }));
 
     Ok(())

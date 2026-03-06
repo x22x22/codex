@@ -5838,7 +5838,11 @@ impl CodexMessageProcessor {
                             }
                         };
                         let event = event.clone();
-                        if matches!(event.msg, EventMsg::ResponseMetadata(_)) {
+                        if matches!(
+                            event.msg,
+                            EventMsg::ResponsesApiRequestId(_)
+                                | EventMsg::ResponsesApiResponseId(_)
+                        ) {
                             continue;
                         }
 
