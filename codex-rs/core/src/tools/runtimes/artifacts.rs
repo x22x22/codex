@@ -104,7 +104,7 @@ impl Approvable<ArtifactExecRequest> for ArtifactRuntime {
                             command,
                             cwd,
                             retry_reason,
-                            None,
+                            ctx.network_approval_context.clone(),
                             approval_requirement
                                 .proposed_execpolicy_amendment()
                                 .cloned(),
@@ -174,6 +174,8 @@ mod tests {
     use crate::codex::make_session_and_context_with_rx;
     use crate::protocol::EventMsg;
     use crate::tools::sandboxing::SandboxOverride;
+    use codex_protocol::approvals::NetworkApprovalContext;
+    use codex_protocol::approvals::NetworkApprovalProtocol;
     use pretty_assertions::assert_eq;
     use tokio::time::Duration;
 
@@ -182,6 +184,11 @@ mod tests {
         let (session, turn, rx_event) = make_session_and_context_with_rx().await;
         *session.active_turn.lock().await = Some(crate::state::ActiveTurn::default());
         let mut runtime = ArtifactRuntime;
+        let network_approval_context = NetworkApprovalContext {
+            host: "example.com".to_string(),
+            protocol: NetworkApprovalProtocol::Http,
+        };
+        let network_approval_context_for_watcher = network_approval_context.clone();
         let req = ArtifactExecRequest {
             command: vec![
                 "/path/to/node".to_string(),
@@ -218,6 +225,10 @@ mod tests {
                     .expect("receive approval event");
                 if let EventMsg::ExecApprovalRequest(request) = event.msg {
                     assert_eq!(request.call_id, "call_artifact");
+                    assert_eq!(
+                        request.network_approval_context,
+                        Some(network_approval_context_for_watcher.clone())
+                    );
                     session_for_response
                         .notify_approval(&request.call_id, ReviewDecision::Approved)
                         .await;
@@ -234,7 +245,7 @@ mod tests {
                     turn: &turn,
                     call_id: "call_artifact",
                     retry_reason: Some("command failed; retry without sandbox?".to_string()),
-                    network_approval_context: None,
+                    network_approval_context: Some(network_approval_context),
                 },
             ),
             approval_watcher,
