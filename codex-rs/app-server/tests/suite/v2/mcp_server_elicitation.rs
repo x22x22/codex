@@ -203,7 +203,7 @@ async fn mcp_server_elicitation_round_trip() -> Result<()> {
             request: McpServerElicitationRequest::Form {
                 meta: None,
                 message: ELICITATION_MESSAGE.to_string(),
-                requested_schema: Some(requested_schema),
+                requested_schema,
             },
         }
     );
