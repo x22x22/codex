@@ -1,3 +1,4 @@
+use crate::protocol::NetworkSandboxPolicy;
 use crate::protocol::SandboxPolicy;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
@@ -44,7 +45,7 @@ where
         args,
         arg0,
         cwd: command_cwd,
-        sandbox_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::from(sandbox_policy),
         network,
         stdio_policy,
         env,
