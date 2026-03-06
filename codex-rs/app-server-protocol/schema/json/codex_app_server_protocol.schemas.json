@@ -5312,16 +5312,6 @@
       },
       "type": "object"
     },
-    "MacOsPreferencesValue": {
-      "anyOf": [
-        {
-          "type": "boolean"
-        },
-        {
-          "type": "string"
-        }
-      ]
-    },
     "McpElicitationArrayType": {
       "enum": [
         "array"
