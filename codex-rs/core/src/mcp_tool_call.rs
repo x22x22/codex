@@ -116,10 +116,8 @@ pub(crate) async fn handle_mcp_tool_call(
         sess.as_ref(),
         turn_context,
         &call_id,
-        &server,
-        &tool_name,
+        &invocation,
         metadata.as_ref(),
-        arguments_value.as_ref(),
         app_tool_policy.approval,
     )
     .await
@@ -378,10 +376,8 @@ async fn maybe_request_mcp_tool_approval(
     sess: &Session,
     turn_context: &TurnContext,
     call_id: &str,
-    server: &str,
-    tool_name: &str,
+    invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
-    tool_params: Option<&serde_json::Value>,
     approval_mode: AppToolApproval,
 ) -> Option<McpToolApprovalDecision> {
     if approval_mode == AppToolApproval::Approve {
@@ -399,13 +395,13 @@ async fn maybe_request_mcp_tool_approval(
 
     let approval_key = if approval_mode == AppToolApproval::Auto {
         let connector_id = metadata.and_then(|metadata| metadata.connector_id.clone());
-        if server == CODEX_APPS_MCP_SERVER_NAME && connector_id.is_none() {
+        if invocation.server == CODEX_APPS_MCP_SERVER_NAME && connector_id.is_none() {
             None
         } else {
             Some(McpToolApprovalKey {
-                server: server.to_string(),
+                server: invocation.server.clone(),
                 connector_id,
-                tool_name: tool_name.to_string(),
+                tool_name: invocation.tool.clone(),
             })
         }
     } else {
@@ -420,8 +416,8 @@ async fn maybe_request_mcp_tool_approval(
     let question_id = format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}");
     let question = build_mcp_tool_approval_question(
         question_id.clone(),
-        server,
-        tool_name,
+        &invocation.server,
+        &invocation.tool,
         metadata.and_then(|metadata| metadata.tool_title.as_deref()),
         metadata.and_then(|metadata| metadata.connector_name.as_deref()),
         annotations,
@@ -438,9 +434,9 @@ async fn maybe_request_mcp_tool_approval(
         let params = build_mcp_tool_approval_elicitation_request(
             sess,
             turn_context,
-            server,
+            &invocation.server,
             metadata,
-            tool_params,
+            invocation.arguments.as_ref(),
             question.clone(),
             approval_key.is_some(),
         );

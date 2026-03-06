@@ -2824,8 +2824,42 @@ impl Session {
         request_id: RequestId,
         params: McpServerElicitationRequestParams,
     ) -> Option<ElicitationResponse> {
-        let (tx_response, rx_response) = oneshot::channel();
         let server_name = params.server_name.clone();
+        let request = match params.request {
+            McpServerElicitationRequest::Form {
+                meta,
+                message,
+                requested_schema,
+            } => {
+                let requested_schema = match serde_json::to_value(requested_schema) {
+                    Ok(requested_schema) => requested_schema,
+                    Err(err) => {
+                        warn!(
+                            "failed to serialize MCP elicitation schema for server_name: {server_name}, request_id: {request_id}: {err:#}"
+                        );
+                        return None;
+                    }
+                };
+                codex_protocol::approvals::ElicitationRequest::Form {
+                    meta,
+                    message,
+                    requested_schema,
+                }
+            }
+            McpServerElicitationRequest::Url {
+                meta,
+                message,
+                url,
+                elicitation_id,
+            } => codex_protocol::approvals::ElicitationRequest::Url {
+                meta,
+                message,
+                url,
+                elicitation_id,
+            },
+        };
+
+        let (tx_response, rx_response) = oneshot::channel();
         let prev_entry = {
             let mut active = self.active_turn.lock().await;
             match active.as_mut() {
@@ -2845,30 +2879,6 @@ impl Session {
                 "Overwriting existing pending elicitation for server_name: {server_name}, request_id: {request_id}"
             );
         }
-
-        let request = match params.request {
-            McpServerElicitationRequest::Form {
-                meta,
-                message,
-                requested_schema,
-            } => codex_protocol::approvals::ElicitationRequest::Form {
-                meta,
-                message,
-                requested_schema: serde_json::to_value(requested_schema)
-                    .expect("typed MCP elicitation schema should serialize"),
-            },
-            McpServerElicitationRequest::Url {
-                meta,
-                message,
-                url,
-                elicitation_id,
-            } => codex_protocol::approvals::ElicitationRequest::Url {
-                meta,
-                message,
-                url,
-                elicitation_id,
-            },
-        };
         let id = match request_id {
             rmcp::model::NumberOrString::String(value) => {
                 codex_protocol::mcp::RequestId::String(value.to_string())
