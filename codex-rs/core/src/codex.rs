@@ -6340,7 +6340,7 @@ async fn try_run_sampling_request(
         }
         Err(codex_async_utils::CancelErr::Cancelled) => return Err(CodexErr::TurnAborted),
     };
-    if let Some(request_id) = stream.initial_request_id.clone() {
+    if let Some(request_id) = stream.rollout_request_id.clone() {
         sess.send_event(
             &turn_context,
             EventMsg::ResponseMetadata(ResponseMetadataEvent {

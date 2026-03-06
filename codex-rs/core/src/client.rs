@@ -1100,7 +1100,7 @@ fn map_response_stream(
 ) -> (ResponseStream, oneshot::Receiver<LastResponse>) {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let (tx_last_response, rx_last_response) = oneshot::channel::<LastResponse>();
-    let initial_request_id = api_stream.initial_request_id.clone();
+    let rollout_request_id = api_stream.rollout_request_id.clone();
 
     tokio::spawn(async move {
         let mut logged_error = false;
@@ -1171,7 +1171,7 @@ fn map_response_stream(
     (
         ResponseStream {
             rx_event,
-            initial_request_id,
+            rollout_request_id,
         },
         rx_last_response,
     )
