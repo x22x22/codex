@@ -9050,7 +9050,7 @@ mod tests {
             async fn run(
                 self: Arc<Self>,
                 _session: Arc<SessionTaskContext>,
-                _ctx: Arc<TurnContext>,
+                _initial_turn_context: Arc<TurnContext>,
                 _input: Vec<UserInput>,
                 _cancellation_token: CancellationToken,
             ) -> Option<String> {
@@ -10586,7 +10586,7 @@ mod tests {
         async fn run(
             self: Arc<Self>,
             _session: Arc<SessionTaskContext>,
-            _ctx: Arc<TurnContext>,
+            _initial_turn_context: Arc<TurnContext>,
             _input: Vec<UserInput>,
             cancellation_token: CancellationToken,
         ) -> Option<String> {

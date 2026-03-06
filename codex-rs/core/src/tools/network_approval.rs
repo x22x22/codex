@@ -577,7 +577,7 @@ mod tests {
         async fn run(
             self: Arc<Self>,
             _session: Arc<SessionTaskContext>,
-            _ctx: Arc<crate::codex::TurnContext>,
+            _initial_turn_context: Arc<crate::codex::TurnContext>,
             _input: Vec<UserInput>,
             _cancellation_token: CancellationToken,
         ) -> Option<String> {

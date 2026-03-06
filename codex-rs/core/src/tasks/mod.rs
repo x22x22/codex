@@ -103,7 +103,7 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     async fn run(
         self: Arc<Self>,
         session: Arc<SessionTaskContext>,
-        ctx: Arc<TurnContext>,
+        initial_turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
         cancellation_token: CancellationToken,
     ) -> Option<String>;
@@ -113,15 +113,19 @@ pub(crate) trait SessionTask: Send + Sync + 'static {
     /// The default implementation is a no-op; override this if additional
     /// teardown or notifications are required once
     /// [`Session::abort_all_tasks`] cancels the task.
-    async fn abort(&self, session: Arc<SessionTaskContext>, ctx: Arc<TurnContext>) {
-        let _ = (session, ctx);
+    async fn abort(
+        &self,
+        session: Arc<SessionTaskContext>,
+        initial_turn_context: Arc<TurnContext>,
+    ) {
+        let _ = (session, initial_turn_context);
     }
 }
 
 impl Session {
     pub async fn spawn_task<T: SessionTask>(
         self: &Arc<Self>,
-        turn_context: Arc<TurnContext>,
+        initial_turn_context: Arc<TurnContext>,
         input: Vec<UserInput>,
         task: T,
     ) {
@@ -138,7 +142,7 @@ impl Session {
         let done_clone = Arc::clone(&done);
         let handle = {
             let session_ctx = Arc::new(SessionTaskContext::new(Arc::clone(self)));
-            let ctx = Arc::clone(&turn_context);
+            let task_initial_turn_context = Arc::clone(&initial_turn_context);
             let task_for_run = Arc::clone(&task);
             let task_cancellation_token = cancellation_token.child_token();
             // Task-owned turn spans keep a core-owned span open for the
@@ -147,16 +151,16 @@ impl Session {
                 "turn",
                 otel.name = span_name,
                 thread.id = %self.conversation_id,
-                turn.id = %turn_context.sub_id,
-                model = %turn_context.model_info.slug,
+                turn.id = %initial_turn_context.sub_id,
+                model = %initial_turn_context.model_info.slug,
             );
             tokio::spawn(
                 async move {
-                    let ctx_for_finish = Arc::clone(&ctx);
+                    let initial_turn_context_for_finish = Arc::clone(&task_initial_turn_context);
                     let last_agent_message = task_for_run
                         .run(
                             Arc::clone(&session_ctx),
-                            ctx,
+                            task_initial_turn_context,
                             input,
                             task_cancellation_token.child_token(),
                         )
@@ -165,8 +169,11 @@ impl Session {
                     sess.flush_rollout().await;
                     if !task_cancellation_token.is_cancelled() {
                         // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
-                        sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
-                            .await;
+                        sess.on_task_finished(
+                            Arc::clone(&initial_turn_context_for_finish),
+                            last_agent_message,
+                        )
+                        .await;
                     }
                     done_clone.notify_waiters();
                 }
@@ -174,7 +181,7 @@ impl Session {
             )
         };
 
-        let timer = turn_context
+        let timer = initial_turn_context
             .otel_manager
             .start_timer("codex.turn.e2e_duration_ms", &[])
             .ok();
@@ -185,7 +192,7 @@ impl Session {
             kind: task_kind,
             task,
             cancellation_token,
-            initial_turn_context: Arc::clone(&turn_context),
+            initial_turn_context: Arc::clone(&initial_turn_context),
             _timer: timer,
         };
         self.register_new_active_task(running_task).await;
@@ -202,10 +209,10 @@ impl Session {
 
     pub async fn on_task_finished(
         self: &Arc<Self>,
-        turn_context: Arc<TurnContext>,
+        initial_turn_context: Arc<TurnContext>,
         last_agent_message: Option<String>,
     ) {
-        turn_context
+        initial_turn_context
             .turn_metadata_state
             .cancel_git_enrichment_task();
 
@@ -216,7 +223,7 @@ impl Session {
         let mut turn_tool_calls = 0_u64;
         let mut current_turn_metadata_state = None;
         if let Some(at) = active.as_mut()
-            && at.remove_task(&turn_context.sub_id)
+            && at.remove_task(&initial_turn_context.sub_id)
         {
             current_turn_metadata_state = at
                 .current_turn_context
@@ -246,14 +253,14 @@ impl Session {
                     // normal pre-sampling drain. This helper records the response item once, then
                     // emits ItemStarted/UserMessage and ItemCompleted/UserMessage for clients.
                     self.record_user_prompt_and_emit_turn_item(
-                        turn_context.as_ref(),
+                        initial_turn_context.as_ref(),
                         &user_message.content,
                         response_item,
                     )
                     .await;
                 } else {
                     self.record_conversation_items(
-                        turn_context.as_ref(),
+                        initial_turn_context.as_ref(),
                         std::slice::from_ref(&response_item),
                     )
                     .await;
@@ -321,10 +328,10 @@ impl Session {
             );
         }
         let event = EventMsg::TurnComplete(TurnCompleteEvent {
-            turn_id: turn_context.sub_id.clone(),
+            turn_id: initial_turn_context.sub_id.clone(),
             last_agent_message,
         });
-        self.send_event(turn_context.as_ref(), event).await;
+        self.send_event(initial_turn_context.as_ref(), event).await;
     }
 
     async fn register_new_active_task(&self, task: RunningTask) {
