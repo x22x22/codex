@@ -454,7 +454,7 @@ mod job {
             })
             .collect::<Vec<_>>();
         serde_json::to_string(&filtered).map_err(|err| {
-            CodexErr::InvalidRequest(format!("failed to serialize rollout memory: {err}"))
+            CodexErr::InvalidRequest(format!("failed to serialize rollout memory: {err}").into())
         })
     }
 }

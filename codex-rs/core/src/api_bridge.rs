@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use crate::auth::CodexAuth;
 use crate::error::CodexErr;
+use crate::error::InvalidRequestError;
 use crate::error::RetryLimitReachedError;
 use crate::error::UnexpectedResponseError;
 use crate::error::UsageLimitReachedError;
@@ -31,7 +32,7 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
             cf_ray: None,
             request_id: None,
         }),
-        ApiError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
+        ApiError::InvalidRequest { message } => CodexErr::InvalidRequest(message.into()),
         ApiError::Transport(transport) => match transport {
             TransportError::Http {
                 status,
@@ -60,7 +61,10 @@ pub(crate) fn map_api_error(err: ApiError) -> CodexErr {
                     {
                         CodexErr::InvalidImageRequest()
                     } else {
-                        CodexErr::InvalidRequest(body_text)
+                        CodexErr::InvalidRequest(InvalidRequestError {
+                            message: body_text,
+                            request_id: extract_request_id(headers.as_ref()),
+                        })
                     }
                 } else if status == http::StatusCode::INTERNAL_SERVER_ERROR {
                     CodexErr::InternalServerError
@@ -216,6 +220,37 @@ mod tests {
                 .and_then(|snapshot| snapshot.limit_name.as_deref()),
             None
         );
+    }
+
+    #[test]
+    fn map_api_error_preserves_request_id_for_bad_request() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            REQUEST_ID_HEADER,
+            http::HeaderValue::from_static("req_bad_123"),
+        );
+        let body = serde_json::json!({
+            "error": {
+                "message": "bad request"
+            }
+        })
+        .to_string();
+
+        let err = map_api_error(ApiError::Transport(TransportError::Http {
+            status: http::StatusCode::BAD_REQUEST,
+            url: Some("http://example.com/v1/responses".to_string()),
+            headers: Some(headers),
+            body: Some(body),
+        }));
+
+        let CodexErr::InvalidRequest(invalid_request) = err else {
+            panic!("expected CodexErr::InvalidRequest, got {err:?}");
+        };
+        assert_eq!(
+            invalid_request.message,
+            r#"{"error":{"message":"bad request"}}"#
+        );
+        assert_eq!(invalid_request.request_id.as_deref(), Some("req_bad_123"));
     }
 }
 

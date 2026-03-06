@@ -79,7 +79,9 @@ impl RealtimeHandoffState {
                 output_text,
             })
             .await
-            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+            .map_err(|_| {
+                CodexErr::InvalidRequest("conversation is not running".to_string().into())
+            })?;
         Ok(())
     }
 }
@@ -183,7 +185,7 @@ impl RealtimeConversationManager {
 
         let Some(sender) = sender else {
             return Err(CodexErr::InvalidRequest(
-                "conversation is not running".to_string(),
+                "conversation is not running".to_string().into(),
             ));
         };
 
@@ -194,7 +196,7 @@ impl RealtimeConversationManager {
                 Ok(())
             }
             Err(TrySendError::Closed(_)) => Err(CodexErr::InvalidRequest(
-                "conversation is not running".to_string(),
+                "conversation is not running".to_string().into(),
             )),
         }
     }
@@ -207,14 +209,13 @@ impl RealtimeConversationManager {
 
         let Some(sender) = sender else {
             return Err(CodexErr::InvalidRequest(
-                "conversation is not running".to_string(),
+                "conversation is not running".to_string().into(),
             ));
         };
 
-        sender
-            .send(text)
-            .await
-            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+        sender.send(text).await.map_err(|_| {
+            CodexErr::InvalidRequest("conversation is not running".to_string().into())
+        })?;
         Ok(())
     }
 
@@ -223,7 +224,7 @@ impl RealtimeConversationManager {
             let guard = self.state.lock().await;
             let Some(state) = guard.as_ref() else {
                 return Err(CodexErr::InvalidRequest(
-                    "conversation is not running".to_string(),
+                    "conversation is not running".to_string().into(),
                 ));
             };
             state.handoff.clone()
@@ -415,7 +416,9 @@ fn realtime_api_key(
     }
 
     Err(CodexErr::InvalidRequest(
-        "realtime conversation requires API key auth".to_string(),
+        "realtime conversation requires API key auth"
+            .to_string()
+            .into(),
     ))
 }
 
@@ -432,7 +435,7 @@ fn realtime_request_headers(
     }
 
     let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|err| {
-        CodexErr::InvalidRequest(format!("invalid realtime api key header: {err}"))
+        CodexErr::InvalidRequest(format!("invalid realtime api key header: {err}").into())
     })?;
     headers.insert(AUTHORIZATION, auth_value);
 

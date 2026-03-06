@@ -212,11 +212,11 @@ async fn rollout_persists_request_id_when_responses_request_errors() -> anyhow::
     skip_if_no_network!(Ok(()));
 
     let server = MockServer::start().await;
-    let response = ResponseTemplate::new(418)
+    let response = ResponseTemplate::new(400)
         .insert_header("x-request-id", "req_error_123")
         .set_body_json(json!({
             "error": {
-                "message": "teapot"
+                "message": "bad request"
             }
         }));
     Mock::given(method("POST"))

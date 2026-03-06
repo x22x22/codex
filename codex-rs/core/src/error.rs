@@ -108,7 +108,7 @@ pub enum CodexErr {
 
     /// Invalid request.
     #[error("{0}")]
-    InvalidRequest(String),
+    InvalidRequest(InvalidRequestError),
 
     /// Invalid image.
     #[error("Image poisoning")]
@@ -191,6 +191,22 @@ impl From<CancelErr> for CodexErr {
     }
 }
 
+#[derive(Debug, Error)]
+#[error("{message}")]
+pub struct InvalidRequestError {
+    pub message: String,
+    pub request_id: Option<String>,
+}
+
+impl From<String> for InvalidRequestError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            request_id: None,
+        }
+    }
+}
+
 impl CodexErr {
     pub fn is_retryable(&self) -> bool {
         match self {
@@ -234,6 +250,7 @@ impl CodexErr {
             CodexErr::UnexpectedStatus(err) => err.request_id.as_deref(),
             CodexErr::RetryLimit(err) => err.request_id.as_deref(),
             CodexErr::ResponseStreamFailed(err) => err.request_id.as_deref(),
+            CodexErr::InvalidRequest(err) => err.request_id.as_deref(),
             CodexErr::TurnAborted
             | CodexErr::Interrupted
             | CodexErr::Stream(..)
@@ -249,7 +266,6 @@ impl CodexErr {
             | CodexErr::UsageNotIncluded
             | CodexErr::QuotaExceeded
             | CodexErr::InvalidImageRequest()
-            | CodexErr::InvalidRequest(_)
             | CodexErr::RefreshTokenFailed(_)
             | CodexErr::UnsupportedOperation(_)
             | CodexErr::Sandbox(_)
@@ -1104,6 +1120,21 @@ mod tests {
                 "unexpected status {status}: plain text error, url: https://chatgpt.com/backend-api/codex/responses, cf-ray: 9c81f9f18f2fa49d-LHR, request id: req-xyz"
             )
         );
+    }
+
+    #[test]
+    fn invalid_request_request_id_defaults_to_none() {
+        let err = CodexErr::InvalidRequest("plain invalid request".to_string().into());
+        assert_eq!(err.request_id(), None);
+    }
+
+    #[test]
+    fn invalid_request_request_id_is_preserved() {
+        let err = CodexErr::InvalidRequest(InvalidRequestError {
+            message: "invalid request".to_string(),
+            request_id: Some("req_invalid_123".to_string()),
+        });
+        assert_eq!(err.request_id(), Some("req_invalid_123"));
     }
 
     #[test]

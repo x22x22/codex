@@ -54,11 +54,14 @@ pub async fn build_memories_from_trace_files(
         .summarize_memories(raw_memories, model_info, effort, otel_manager)
         .await?;
     if output.len() != prepared.len() {
-        return Err(CodexErr::InvalidRequest(format!(
-            "unexpected memory summarize output length: expected {}, got {}",
-            prepared.len(),
-            output.len()
-        )));
+        return Err(CodexErr::InvalidRequest(
+            format!(
+                "unexpected memory summarize output length: expected {}, got {}",
+                prepared.len(),
+                output.len()
+            )
+            .into(),
+        ));
     }
 
     Ok(prepared
@@ -116,10 +119,9 @@ fn load_trace_items(path: &Path, text: &str) -> Result<Vec<Value>> {
             .filter(serde_json::Value::is_object)
             .collect::<Vec<_>>();
         if dict_items.is_empty() {
-            return Err(CodexErr::InvalidRequest(format!(
-                "no object items found in trace file: {}",
-                path.display()
-            )));
+            return Err(CodexErr::InvalidRequest(
+                format!("no object items found in trace file: {}", path.display()).into(),
+            ));
         }
         return normalize_trace_items(dict_items, path);
     }
@@ -145,10 +147,9 @@ fn load_trace_items(path: &Path, text: &str) -> Result<Vec<Value>> {
     }
 
     if parsed_items.is_empty() {
-        return Err(CodexErr::InvalidRequest(format!(
-            "no JSON items parsed from trace file: {}",
-            path.display()
-        )));
+        return Err(CodexErr::InvalidRequest(
+            format!("no JSON items parsed from trace file: {}", path.display()).into(),
+        ));
     }
 
     normalize_trace_items(parsed_items, path)
@@ -193,10 +194,13 @@ fn normalize_trace_items(items: Vec<Value>, path: &Path) -> Result<Vec<Value>> {
     }
 
     if normalized.is_empty() {
-        return Err(CodexErr::InvalidRequest(format!(
-            "no valid trace items after normalization: {}",
-            path.display()
-        )));
+        return Err(CodexErr::InvalidRequest(
+            format!(
+                "no valid trace items after normalization: {}",
+                path.display()
+            )
+            .into(),
+        ));
     }
     Ok(normalized)
 }

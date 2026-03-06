@@ -3509,7 +3509,7 @@ impl CodexMessageProcessor {
                         INVALID_REQUEST_ERROR_CODE,
                         format!("failed to load rollout `{}`: {err}", rollout_path.display()),
                     ),
-                    CodexErr::InvalidRequest(message) => (INVALID_REQUEST_ERROR_CODE, message),
+                    CodexErr::InvalidRequest(err) => (INVALID_REQUEST_ERROR_CODE, err.message),
                     _ => (INTERNAL_ERROR_CODE, format!("error forking thread: {err}")),
                 };
                 let error = JSONRPCErrorError {
