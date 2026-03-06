@@ -241,6 +241,7 @@ mod job {
             session,
             &thread.rollout_path,
             &thread.cwd,
+            thread.git_branch.as_deref(),
             stage_one_context,
         )
         .await
@@ -288,6 +289,7 @@ mod job {
         session: &Session,
         rollout_path: &Path,
         rollout_cwd: &Path,
+        rollout_git_branch: Option<&str>,
         stage_one_context: &RequestContext,
     ) -> anyhow::Result<(StageOneOutput, Option<TokenUsage>)> {
         let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(rollout_path).await?;
@@ -302,6 +304,7 @@ mod job {
                         &stage_one_context.model_info,
                         rollout_path,
                         rollout_cwd,
+                        rollout_git_branch,
                         &rollout_contents,
                     )?,
                 }],
