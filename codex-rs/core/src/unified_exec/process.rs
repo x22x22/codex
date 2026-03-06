@@ -1,5 +1,6 @@
 #![allow(clippy::module_inception)]
 
+use std::os::fd::RawFd;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -25,6 +26,10 @@ use super::UnifiedExecError;
 use super::head_tail_buffer::HeadTailBuffer;
 
 pub(crate) trait SpawnLifecycle: std::fmt::Debug + Send + Sync {
+    fn inherited_fds(&self) -> Vec<RawFd> {
+        Vec::new()
+    }
+
     fn after_spawn(&mut self) {}
 }
 
