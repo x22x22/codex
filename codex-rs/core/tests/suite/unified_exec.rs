@@ -32,6 +32,10 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
+#[cfg(unix)]
+use core_test_support::zsh_fork::build_unified_exec_zsh_fork_test;
+#[cfg(unix)]
+use core_test_support::zsh_fork::zsh_fork_runtime;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use serde_json::Value;
@@ -1323,7 +1327,6 @@ async fn exec_command_reports_chunk_and_exit_metadata() -> Result<()> {
         .into_iter()
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
-
     let outputs = collect_tool_outputs(&bodies)?;
     let metadata = outputs
         .get(call_id)
@@ -1445,7 +1448,6 @@ async fn unified_exec_defaults_to_pipe() -> Result<()> {
         .into_iter()
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
-
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs
         .get(call_id)
@@ -1539,7 +1541,6 @@ async fn unified_exec_can_enable_tty() -> Result<()> {
         .into_iter()
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
-
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs
         .get(call_id)
@@ -1624,7 +1625,6 @@ async fn unified_exec_respects_early_exit_notifications() -> Result<()> {
         .into_iter()
         .map(|request| request.body_json())
         .collect::<Vec<_>>();
-
     let outputs = collect_tool_outputs(&bodies)?;
     let output = outputs
         .get(call_id)
@@ -1819,6 +1819,227 @@ async fn write_stdin_returns_exit_metadata_and_clears_session() -> Result<()> {
         exit_chunk.chars().all(|c| c.is_ascii_hexdigit()),
         "chunk id should be hexadecimal: {exit_chunk}"
     );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg(unix)]
+async fn unified_exec_zsh_fork_keeps_python_repl_attached_to_zsh_session() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("unified exec zsh-fork tty session test")? else {
+        return Ok(());
+    };
+
+    let python = match which("python3") {
+        Ok(path) => path,
+        Err(_) => {
+            eprintln!("python3 not found in PATH, skipping zsh-fork python repl test.");
+            return Ok(());
+        }
+    };
+
+    let server = start_mock_server().await;
+    let test = build_unified_exec_zsh_fork_test(
+        &server,
+        runtime,
+        AskForApproval::Never,
+        SandboxPolicy::new_workspace_write_policy(),
+        |_| {},
+    )
+    .await?;
+
+    let start_call_id = "uexec-zsh-fork-python-start";
+    let send_call_id = "uexec-zsh-fork-python-pid";
+    let exit_call_id = "uexec-zsh-fork-python-exit";
+
+    let start_args = serde_json::json!({
+        "cmd": python.display().to_string(),
+        "yield_time_ms": 500,
+        "tty": true,
+    });
+    let send_args = serde_json::json!({
+        "chars": "import os; print(os.getpid())\r\n",
+        "session_id": 1000,
+        "yield_time_ms": 500,
+    });
+    let exit_args = serde_json::json!({
+        "chars": "import sys; sys.exit(0)\r\n",
+        "session_id": 1000,
+        "yield_time_ms": 500,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(
+                start_call_id,
+                "exec_command",
+                &serde_json::to_string(&start_args)?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_function_call(
+                send_call_id,
+                "write_stdin",
+                &serde_json::to_string(&send_args)?,
+            ),
+            ev_completed("resp-2"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-1", "python is running"),
+            ev_completed("resp-3"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-4"),
+            ev_function_call(
+                exit_call_id,
+                "write_stdin",
+                &serde_json::to_string(&exit_args)?,
+            ),
+            ev_completed("resp-4"),
+        ]),
+        sse(vec![
+            ev_assistant_message("msg-2", "all done"),
+            ev_completed("resp-5"),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "test unified exec zsh-fork tty behavior".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    let outputs = collect_tool_outputs(&bodies)?;
+
+    let start_output = outputs
+        .get(start_call_id)
+        .expect("missing start output for exec_command");
+    let process_id = start_output
+        .process_id
+        .clone()
+        .expect("expected process id from exec_command");
+    assert!(
+        start_output.exit_code.is_none(),
+        "initial exec_command should leave the PTY session running"
+    );
+
+    let send_output = outputs
+        .get(send_call_id)
+        .expect("missing write_stdin output");
+    let normalized = send_output.output.replace("\r\n", "\n");
+    let python_pid = Regex::new(r"(?m)^(\d+)$")
+        .expect("valid python pid regex")
+        .captures(&normalized)
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str().to_string())
+        .with_context(|| format!("missing python pid in output {normalized:?}"))?;
+    assert!(
+        process_is_alive(&python_pid)?,
+        "python process should still be alive after printing its pid, got output {normalized:?}"
+    );
+    assert_eq!(send_output.process_id.as_deref(), Some(process_id.as_str()));
+    assert!(
+        send_output.exit_code.is_none(),
+        "write_stdin should not report an exit code while the process is still running"
+    );
+
+    let zsh_pid = std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &python_pid])
+        .output()
+        .context("failed to look up python parent pid")?;
+    let zsh_pid = String::from_utf8(zsh_pid.stdout)
+        .context("python parent pid output is not UTF-8")?
+        .trim()
+        .to_string();
+    assert!(
+        !zsh_pid.is_empty(),
+        "expected python parent pid to identify the zsh session"
+    );
+    assert!(
+        process_is_alive(&zsh_pid)?,
+        "expected zsh parent process {zsh_pid} to still be alive"
+    );
+
+    let zsh_command = std::process::Command::new("ps")
+        .args(["-o", "command=", "-p", &zsh_pid])
+        .output()
+        .context("failed to look up zsh parent command")?;
+    let zsh_command =
+        String::from_utf8(zsh_command.stdout).context("zsh parent command output is not UTF-8")?;
+    assert!(
+        zsh_command.contains("zsh"),
+        "expected python parent command to be zsh, got {zsh_command:?}"
+    );
+
+    test.codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "shut down the python repl".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            model: test.session_configured.model.clone(),
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = request_log.requests();
+    assert!(!requests.is_empty(), "expected at least one POST request");
+    let bodies = requests
+        .into_iter()
+        .map(|request| request.body_json())
+        .collect::<Vec<_>>();
+    let outputs = collect_tool_outputs(&bodies)?;
+    let exit_output = outputs
+        .get(exit_call_id)
+        .expect("missing exit output after requesting python shutdown");
+    assert!(
+        exit_output.exit_code.is_none() || exit_output.exit_code == Some(0),
+        "exit request should either leave cleanup to the background watcher or report success directly, got {exit_output:?}"
+    );
+    wait_for_process_exit(&python_pid).await?;
 
     Ok(())
 }
