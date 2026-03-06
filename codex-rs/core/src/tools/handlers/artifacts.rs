@@ -870,13 +870,25 @@ mod tests {
                 .proposed_execpolicy_amendment()
                 .is_none()
         );
-        assert_eq!(
-            prepared.request.initial_approval_requirement,
-            crate::tools::sandboxing::ExecApprovalRequirement::Skip {
-                bypass_sandbox: false,
-                proposed_execpolicy_amendment: None,
+        match prepared.request.initial_approval_requirement {
+            crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
+                reason,
+                proposed_execpolicy_amendment,
+            } => {
+                assert_eq!(reason, None);
+                assert_eq!(proposed_execpolicy_amendment, None);
             }
-        );
+            crate::tools::sandboxing::ExecApprovalRequirement::Skip {
+                bypass_sandbox,
+                proposed_execpolicy_amendment,
+            } => {
+                assert!(!bypass_sandbox);
+                assert_eq!(proposed_execpolicy_amendment, None);
+            }
+            crate::tools::sandboxing::ExecApprovalRequirement::Forbidden { reason } => {
+                panic!("unexpected forbidden initial requirement: {reason}");
+            }
+        }
         match prepared.request.escalation_approval_requirement {
             crate::tools::sandboxing::ExecApprovalRequirement::NeedsApproval {
                 reason,
