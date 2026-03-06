@@ -672,6 +672,113 @@ impl FileSystemSandboxPolicy {
         }
     }
 
+    /// Returns true when filesystem reads are unrestricted.
+    pub fn has_full_disk_read_access(&self) -> bool {
+        match self.kind {
+            FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => true,
+            FileSystemSandboxKind::Restricted => self.entries.iter().any(|entry| {
+                matches!(
+                    &entry.path,
+                    FileSystemPath::Special { value }
+                        if value.kind == FileSystemSpecialPathKind::Root && entry.access.can_read()
+                )
+            }),
+        }
+    }
+
+    /// Returns true when filesystem writes are unrestricted.
+    pub fn has_full_disk_write_access(&self) -> bool {
+        match self.kind {
+            FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => true,
+            FileSystemSandboxKind::Restricted => self.entries.iter().any(|entry| {
+                matches!(
+                    &entry.path,
+                    FileSystemPath::Special { value }
+                        if value.kind == FileSystemSpecialPathKind::Root && entry.access.can_write()
+                )
+            }),
+        }
+    }
+
+    /// Returns true when platform-default readable roots should be included.
+    pub fn include_platform_defaults(&self) -> bool {
+        !self.has_full_disk_read_access()
+            && matches!(self.kind, FileSystemSandboxKind::Restricted)
+            && self.entries.iter().any(|entry| {
+                matches!(
+                    &entry.path,
+                    FileSystemPath::Special { value }
+                        if value.kind == FileSystemSpecialPathKind::Minimal
+                            && entry.access.can_read()
+                )
+            })
+    }
+
+    /// Returns the explicit readable roots resolved against the provided cwd.
+    pub fn get_readable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
+        if self.has_full_disk_read_access() {
+            return Vec::new();
+        }
+
+        let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        dedup_absolute_paths(
+            self.entries
+                .iter()
+                .filter(|entry| entry.access.can_read())
+                .filter_map(|entry| resolve_file_system_path(&entry.path, cwd_absolute.as_ref()))
+                .collect(),
+        )
+    }
+
+    /// Returns the writable roots together with read-only carveouts resolved
+    /// against the provided cwd.
+    pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<WritableRoot> {
+        if self.has_full_disk_write_access() {
+            return Vec::new();
+        }
+
+        let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        let unreadable_roots = self.get_unreadable_roots_with_cwd(cwd);
+        dedup_absolute_paths(
+            self.entries
+                .iter()
+                .filter(|entry| entry.access.can_write())
+                .filter_map(|entry| resolve_file_system_path(&entry.path, cwd_absolute.as_ref()))
+                .collect(),
+        )
+        .into_iter()
+        .map(|root| {
+            let mut read_only_subpaths = default_read_only_subpaths_for_writable_root(&root);
+            read_only_subpaths.extend(
+                unreadable_roots
+                    .iter()
+                    .filter(|path| path.as_path().starts_with(root.as_path()))
+                    .cloned(),
+            );
+            WritableRoot {
+                root,
+                read_only_subpaths: dedup_absolute_paths(read_only_subpaths),
+            }
+        })
+        .collect()
+    }
+
+    /// Returns explicit unreadable roots resolved against the provided cwd.
+    pub fn get_unreadable_roots_with_cwd(&self, cwd: &Path) -> Vec<AbsolutePathBuf> {
+        if !matches!(self.kind, FileSystemSandboxKind::Restricted) {
+            return Vec::new();
+        }
+
+        let cwd_absolute = AbsolutePathBuf::from_absolute_path(cwd).ok();
+        dedup_absolute_paths(
+            self.entries
+                .iter()
+                .filter(|entry| entry.access == FileSystemAccessMode::None)
+                .filter_map(|entry| resolve_file_system_path(&entry.path, cwd_absolute.as_ref()))
+                .collect(),
+        )
+    }
+
     pub fn to_legacy_sandbox_policy(
         &self,
         network_policy: NetworkSandboxPolicy,
@@ -1157,45 +1264,11 @@ impl SandboxPolicy {
                 // For each root, compute subpaths that should remain read-only.
                 roots
                     .into_iter()
-                    .map(|writable_root| {
-                        let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
-                        #[allow(clippy::expect_used)]
-                        let top_level_git = writable_root
-                            .join(".git")
-                            .expect(".git is a valid relative path");
-                        // This applies to typical repos (directory .git), worktrees/submodules
-                        // (file .git with gitdir pointer), and bare repos when the gitdir is the
-                        // writable root itself.
-                        let top_level_git_is_file = top_level_git.as_path().is_file();
-                        let top_level_git_is_dir = top_level_git.as_path().is_dir();
-                        if top_level_git_is_dir || top_level_git_is_file {
-                            if top_level_git_is_file
-                                && is_git_pointer_file(&top_level_git)
-                                && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
-                                && !subpaths
-                                    .iter()
-                                    .any(|subpath| subpath.as_path() == gitdir.as_path())
-                            {
-                                subpaths.push(gitdir);
-                            }
-                            subpaths.push(top_level_git);
-                        }
-
-                        // Make .agents/skills and .codex/config.toml and
-                        // related files read-only to the agent, by default.
-                        for subdir in &[".agents", ".codex"] {
-                            #[allow(clippy::expect_used)]
-                            let top_level_codex =
-                                writable_root.join(subdir).expect("valid relative path");
-                            if top_level_codex.as_path().is_dir() {
-                                subpaths.push(top_level_codex);
-                            }
-                        }
-
-                        WritableRoot {
-                            root: writable_root,
-                            read_only_subpaths: subpaths,
-                        }
+                    .map(|writable_root| WritableRoot {
+                        read_only_subpaths: default_read_only_subpaths_for_writable_root(
+                            &writable_root,
+                        ),
+                        root: writable_root,
                     })
                     .collect()
             }
@@ -1352,6 +1425,16 @@ impl From<&SandboxPolicy> for FileSystemSandboxPolicy {
     }
 }
 
+fn resolve_file_system_path(
+    path: &FileSystemPath,
+    cwd: Option<&AbsolutePathBuf>,
+) -> Option<AbsolutePathBuf> {
+    match path {
+        FileSystemPath::Path { path } => Some(path.clone()),
+        FileSystemPath::Special { value } => resolve_file_system_special_path(value, cwd),
+    }
+}
+
 fn resolve_file_system_special_path(
     value: &FileSystemSpecialPath,
     cwd: Option<&AbsolutePathBuf>,
@@ -1407,6 +1490,42 @@ fn dedup_absolute_paths(paths: Vec<AbsolutePathBuf>) -> Vec<AbsolutePathBuf> {
         }
     }
     deduped
+}
+
+fn default_read_only_subpaths_for_writable_root(
+    writable_root: &AbsolutePathBuf,
+) -> Vec<AbsolutePathBuf> {
+    let mut subpaths: Vec<AbsolutePathBuf> = Vec::new();
+    #[allow(clippy::expect_used)]
+    let top_level_git = writable_root
+        .join(".git")
+        .expect(".git is a valid relative path");
+    // This applies to typical repos (directory .git), worktrees/submodules
+    // (file .git with gitdir pointer), and bare repos when the gitdir is the
+    // writable root itself.
+    let top_level_git_is_file = top_level_git.as_path().is_file();
+    let top_level_git_is_dir = top_level_git.as_path().is_dir();
+    if top_level_git_is_dir || top_level_git_is_file {
+        if top_level_git_is_file
+            && is_git_pointer_file(&top_level_git)
+            && let Some(gitdir) = resolve_gitdir_from_file(&top_level_git)
+        {
+            subpaths.push(gitdir);
+        }
+        subpaths.push(top_level_git);
+    }
+
+    // Make .agents/skills and .codex/config.toml and related files read-only
+    // to the agent, by default.
+    for subdir in &[".agents", ".codex"] {
+        #[allow(clippy::expect_used)]
+        let top_level_codex = writable_root.join(subdir).expect("valid relative path");
+        if top_level_codex.as_path().is_dir() {
+            subpaths.push(top_level_codex);
+        }
+    }
+
+    dedup_absolute_paths(subpaths)
 }
 
 fn is_git_pointer_file(path: &AbsolutePathBuf) -> bool {
@@ -3636,6 +3755,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::NamedTempFile;
+    use tempfile::TempDir;
 
     #[test]
     fn external_sandbox_reports_full_access_flags() {
@@ -3714,6 +3834,112 @@ mod tests {
                 writable_root.root.as_path().display()
             );
         }
+    }
+
+    #[test]
+    fn restricted_file_system_policy_reports_full_access_from_root_entries() {
+        let read_only = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath {
+                    kind: FileSystemSpecialPathKind::Root,
+                    subpath: None,
+                },
+            },
+            access: FileSystemAccessMode::Read,
+        }]);
+        assert!(read_only.has_full_disk_read_access());
+        assert!(!read_only.has_full_disk_write_access());
+        assert!(!read_only.include_platform_defaults());
+
+        let writable = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath {
+                    kind: FileSystemSpecialPathKind::Root,
+                    subpath: None,
+                },
+            },
+            access: FileSystemAccessMode::Write,
+        }]);
+        assert!(writable.has_full_disk_read_access());
+        assert!(writable.has_full_disk_write_access());
+    }
+
+    #[test]
+    fn restricted_file_system_policy_derives_effective_paths() {
+        let cwd = TempDir::new().expect("tempdir");
+        std::fs::create_dir_all(cwd.path().join(".agents")).expect("create .agents");
+        std::fs::create_dir_all(cwd.path().join(".codex")).expect("create .codex");
+        let cwd_absolute =
+            AbsolutePathBuf::from_absolute_path(cwd.path()).expect("absolute tempdir");
+        let secret = AbsolutePathBuf::resolve_path_against_base("secret", cwd.path())
+            .expect("resolve unreadable path");
+        let agents = AbsolutePathBuf::resolve_path_against_base(".agents", cwd.path())
+            .expect("resolve .agents");
+        let codex = AbsolutePathBuf::resolve_path_against_base(".codex", cwd.path())
+            .expect("resolve .codex");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath {
+                        kind: FileSystemSpecialPathKind::Minimal,
+                        subpath: None,
+                    },
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath {
+                        kind: FileSystemSpecialPathKind::CurrentWorkingDirectory,
+                        subpath: None,
+                    },
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath {
+                        kind: FileSystemSpecialPathKind::CurrentWorkingDirectory,
+                        subpath: Some(PathBuf::from("secret")),
+                    },
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        assert!(!policy.has_full_disk_read_access());
+        assert!(!policy.has_full_disk_write_access());
+        assert!(policy.include_platform_defaults());
+        assert_eq!(
+            policy.get_readable_roots_with_cwd(cwd.path()),
+            vec![cwd_absolute]
+        );
+        assert_eq!(
+            policy.get_unreadable_roots_with_cwd(cwd.path()),
+            vec![secret.clone()]
+        );
+
+        let writable_roots = policy.get_writable_roots_with_cwd(cwd.path());
+        assert_eq!(writable_roots.len(), 1);
+        assert_eq!(writable_roots[0].root.as_path(), cwd.path());
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .iter()
+                .any(|path| path.as_path() == secret.as_path())
+        );
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .iter()
+                .any(|path| path.as_path() == agents.as_path())
+        );
+        assert!(
+            writable_roots[0]
+                .read_only_subpaths
+                .iter()
+                .any(|path| path.as_path() == codex.as_path())
+        );
     }
 
     #[test]
