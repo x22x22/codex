@@ -11,6 +11,7 @@ use crate::config::types::NotificationMethod;
 use crate::config::types::Notifications;
 use crate::config_loader::RequirementSource;
 use crate::features::Feature;
+use crate::protocol::FileSystemAccessMode;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use serde::Deserialize;
@@ -199,7 +200,7 @@ fn runtime_config_defaults_model_availability_nux() {
 #[test]
 fn config_toml_deserializes_permissions_network() {
     let toml = r#"
-[permissions.network]
+[network]
 enabled = true
 proxy_url = "http://127.0.0.1:43128"
 enable_socks5 = false
@@ -207,12 +208,10 @@ allow_upstream_proxy = false
 allowed_domains = ["openai.com"]
 "#;
     let cfg: ConfigToml =
-        toml::from_str(toml).expect("TOML deserialization should succeed for permissions.network");
+        toml::from_str(toml).expect("TOML deserialization should succeed for [network]");
 
     assert_eq!(
-        cfg.permissions
-            .and_then(|permissions| permissions.network)
-            .expect("permissions.network should deserialize"),
+        cfg.network.expect("[network] should deserialize"),
         NetworkToml {
             enabled: Some(true),
             proxy_url: Some("http://127.0.0.1:43128".to_string()),
@@ -235,13 +234,11 @@ allowed_domains = ["openai.com"]
 fn permissions_network_enabled_populates_runtime_network_proxy_spec() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
-        permissions: Some(PermissionsToml {
-            network: Some(NetworkToml {
-                enabled: Some(true),
-                proxy_url: Some("http://127.0.0.1:43128".to_string()),
-                enable_socks5: Some(false),
-                ..Default::default()
-            }),
+        network: Some(NetworkToml {
+            enabled: Some(true),
+            proxy_url: Some("http://127.0.0.1:43128".to_string()),
+            enable_socks5: Some(false),
+            ..Default::default()
         }),
         ..Default::default()
     };
@@ -266,11 +263,9 @@ fn permissions_network_enabled_populates_runtime_network_proxy_spec() -> std::io
 fn permissions_network_disabled_by_default_does_not_start_proxy() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cfg = ConfigToml {
-        permissions: Some(PermissionsToml {
-            network: Some(NetworkToml {
-                allowed_domains: Some(vec!["openai.com".to_string()]),
-                ..Default::default()
-            }),
+        network: Some(NetworkToml {
+            allowed_domains: Some(vec!["openai.com".to_string()]),
+            ..Default::default()
         }),
         ..Default::default()
     };
@@ -281,6 +276,348 @@ fn permissions_network_disabled_by_default_does_not_start_proxy() -> std::io::Re
         codex_home.path().to_path_buf(),
     )?;
     assert!(config.permissions.network.is_none());
+    Ok(())
+}
+
+#[test]
+fn config_toml_deserializes_permission_profiles() {
+    let toml = r#"
+default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.filesystem.":project_roots"]
+"." = "write"
+"docs" = "read"
+"#;
+    let cfg: ConfigToml =
+        toml::from_str(toml).expect("TOML deserialization should succeed for permissions profiles");
+
+    assert_eq!(cfg.default_permissions.as_deref(), Some("workspace"));
+    assert_eq!(
+        cfg.permissions.expect("[permissions] should deserialize"),
+        PermissionsToml {
+            entries: BTreeMap::from([(
+                "workspace".to_string(),
+                PermissionProfileToml {
+                    filesystem: Some(FilesystemPermissionsToml {
+                        entries: BTreeMap::from([
+                            (
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            ),
+                            (
+                                ":project_roots".to_string(),
+                                FilesystemPermissionToml::Scoped(BTreeMap::from([
+                                    (".".to_string(), FileSystemAccessMode::Write),
+                                    ("docs".to_string(), FileSystemAccessMode::Read),
+                                ])),
+                            ),
+                        ]),
+                    }),
+                    network: None,
+                },
+            )]),
+        }
+    );
+}
+
+#[test]
+fn default_permissions_profile_populates_runtime_sandbox_policy() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::create_dir_all(cwd.path().join("docs"))?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let cfg = ConfigToml {
+        default_permissions: Some("workspace".to_string()),
+        permissions: Some(PermissionsToml {
+            entries: BTreeMap::from([(
+                "workspace".to_string(),
+                PermissionProfileToml {
+                    filesystem: Some(FilesystemPermissionsToml {
+                        entries: BTreeMap::from([
+                            (
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            ),
+                            (
+                                ":project_roots".to_string(),
+                                FilesystemPermissionToml::Scoped(BTreeMap::from([
+                                    (".".to_string(), FileSystemAccessMode::Write),
+                                    ("docs".to_string(), FileSystemAccessMode::Read),
+                                ])),
+                            ),
+                        ]),
+                    }),
+                    network: None,
+                },
+            )]),
+        }),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert_eq!(
+        config.permissions.file_system_sandbox_policy,
+        FileSystemSandboxPolicy::restricted(vec![
+            crate::protocol::FileSystemSandboxEntry {
+                path: crate::protocol::FileSystemPath::Special {
+                    value: crate::protocol::FileSystemSpecialPath {
+                        kind: crate::protocol::FileSystemSpecialPathKind::Minimal,
+                        subpath: None,
+                    },
+                },
+                access: FileSystemAccessMode::Read,
+            },
+            crate::protocol::FileSystemSandboxEntry {
+                path: crate::protocol::FileSystemPath::Special {
+                    value: crate::protocol::FileSystemSpecialPath {
+                        kind: crate::protocol::FileSystemSpecialPathKind::ProjectRoots,
+                        subpath: None,
+                    },
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            crate::protocol::FileSystemSandboxEntry {
+                path: crate::protocol::FileSystemPath::Special {
+                    value: crate::protocol::FileSystemSpecialPath {
+                        kind: crate::protocol::FileSystemSpecialPathKind::ProjectRoots,
+                        subpath: Some("docs".into()),
+                    },
+                },
+                access: FileSystemAccessMode::Read,
+            },
+        ]),
+    );
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::WorkspaceWrite {
+            writable_roots: Vec::new(),
+            read_only_access: ReadOnlyAccess::Restricted {
+                include_platform_defaults: true,
+                readable_roots: vec![
+                    AbsolutePathBuf::try_from(cwd.path().join("docs")).expect("absolute docs path"),
+                ],
+            },
+            network_access: false,
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        }
+    );
+    assert_eq!(
+        config.permissions.network_sandbox_policy,
+        NetworkSandboxPolicy::Restricted
+    );
+    Ok(())
+}
+
+#[test]
+fn permissions_profiles_require_default_permissions() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: None,
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )
+    .expect_err("missing default_permissions should be rejected");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "config defines `[permissions]` profiles but does not set `default_permissions`"
+    );
+    Ok(())
+}
+
+#[test]
+fn legacy_permissions_network_requires_migration_to_top_level_network() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+[permissions.network]
+enabled = true
+proxy_url = "http://127.0.0.1:43128"
+"#,
+    )
+    .expect("legacy permissions.network TOML should deserialize");
+
+    let err = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )
+    .expect_err("legacy permissions.network should require migration");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "legacy `[permissions.network]` is no longer supported; move this config to the top-level `[network]` table"
+    );
+    Ok(())
+}
+
+#[test]
+fn legacy_permissions_network_requires_migration_even_with_legacy_sandbox_mode()
+-> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+sandbox_mode = "read-only"
+
+[permissions.network]
+enabled = true
+proxy_url = "http://127.0.0.1:43128"
+"#,
+    )
+    .expect("legacy permissions.network TOML should deserialize");
+
+    let err = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )
+    .expect_err("legacy permissions.network should require migration");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "legacy `[permissions.network]` is no longer supported; move this config to the top-level `[network]` table"
+    );
+    Ok(())
+}
+
+#[test]
+fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+    let external_write_path = if cfg!(windows) { r"C:\temp" } else { "/tmp" };
+
+    let err = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            entries: BTreeMap::from([(
+                                external_write_path.to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                            )]),
+                        }),
+                        network: None,
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )
+    .expect_err("writes outside the workspace root should be rejected");
+
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        err.to_string()
+            .contains("filesystem writes outside the workspace root"),
+        "{err}"
+    );
+    Ok(())
+}
+
+#[test]
+fn permissions_profiles_allow_network_enablement() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+
+    let config = Config::load_from_base_config_with_overrides(
+        ConfigToml {
+            default_permissions: Some("workspace".to_string()),
+            permissions: Some(PermissionsToml {
+                entries: BTreeMap::from([(
+                    "workspace".to_string(),
+                    PermissionProfileToml {
+                        filesystem: Some(FilesystemPermissionsToml {
+                            entries: BTreeMap::from([(
+                                ":minimal".to_string(),
+                                FilesystemPermissionToml::Access(FileSystemAccessMode::Read),
+                            )]),
+                        }),
+                        network: Some(PermissionProfileNetworkToml {
+                            enabled: Some(true),
+                        }),
+                    },
+                )]),
+            }),
+            ..Default::default()
+        },
+        ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert!(
+        config.permissions.network_sandbox_policy.is_enabled(),
+        "expected network sandbox policy to be enabled",
+    );
+    assert!(
+        config
+            .permissions
+            .sandbox_policy
+            .get()
+            .has_full_network_access()
+    );
     Ok(())
 }
 
@@ -2653,6 +2990,10 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             permissions: Permissions {
                 approval_policy: Constrained::allow_any(AskForApproval::Never),
                 sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+                file_system_sandbox_policy: FileSystemSandboxPolicy::from(
+                    &SandboxPolicy::new_read_only_policy(),
+                ),
+                network_sandbox_policy: NetworkSandboxPolicy::Restricted,
                 network: None,
                 allow_login_shell: true,
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -2782,6 +3123,10 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::UnlessTrusted),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
+                &SandboxPolicy::new_read_only_policy(),
+            ),
+            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -2909,6 +3254,10 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
+                &SandboxPolicy::new_read_only_policy(),
+            ),
+            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
@@ -3022,6 +3371,10 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         permissions: Permissions {
             approval_policy: Constrained::allow_any(AskForApproval::OnFailure),
             sandbox_policy: Constrained::allow_any(SandboxPolicy::new_read_only_policy()),
+            file_system_sandbox_policy: FileSystemSandboxPolicy::from(
+                &SandboxPolicy::new_read_only_policy(),
+            ),
+            network_sandbox_policy: NetworkSandboxPolicy::Restricted,
             network: None,
             allow_login_shell: true,
             shell_environment_policy: ShellEnvironmentPolicy::default(),
