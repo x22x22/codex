@@ -2682,36 +2682,6 @@
         },
         {
           "properties": {
-            "request_id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "response_id": {
-              "default": null,
-              "type": [
-                "string",
-                "null"
-              ]
-            },
-            "type": {
-              "enum": [
-                "response_metadata"
-              ],
-              "title": "ResponseMetadataEventMsgType",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "title": "ResponseMetadataEventMsg",
-          "type": "object"
-        },
-        {
-          "properties": {
             "item": {
               "$ref": "#/definitions/ResponseItem"
             },
@@ -8501,36 +8471,6 @@
         "type"
       ],
       "title": "ExitedReviewModeEventMsg",
-      "type": "object"
-    },
-    {
-      "properties": {
-        "request_id": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "response_id": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "type": {
-          "enum": [
-            "response_metadata"
-          ],
-          "title": "ResponseMetadataEventMsgType",
-          "type": "string"
-        }
-      },
-      "required": [
-        "type"
-      ],
-      "title": "ResponseMetadataEventMsg",
       "type": "object"
     },
     {

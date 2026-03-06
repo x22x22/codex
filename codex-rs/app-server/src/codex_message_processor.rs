@@ -5837,22 +5837,36 @@ impl CodexMessageProcessor {
                                 break;
                             }
                         };
+                        let mut public_event = event.clone();
+                        match &mut public_event.msg {
+                            EventMsg::ResponseMetadata(_) => continue,
+                            EventMsg::SessionConfigured(session_configured) => {
+                                if let Some(initial_messages) =
+                                    session_configured.initial_messages.as_mut()
+                                {
+                                    initial_messages.retain(|msg| {
+                                        !matches!(msg, EventMsg::ResponseMetadata(_))
+                                    });
+                                }
+                            }
+                            _ => {}
+                        }
 
                         // For now, we send a notification for every event,
                         // JSON-serializing the `Event` as-is, but these should
                         // be migrated to be variants of `ServerNotification`
                         // instead.
-                        let event_formatted = match &event.msg {
+                        let event_formatted = match &public_event.msg {
                             EventMsg::TurnStarted(_) => "task_started",
                             EventMsg::TurnComplete(_) => "task_complete",
-                            _ => &event.msg.to_string(),
+                            _ => &public_event.msg.to_string(),
                         };
                         let request_event_name = format!("codex/event/{event_formatted}");
                         tracing::trace!(
                             conversation_id = %conversation_id,
                             "app-server event: {request_event_name}"
                         );
-                        let mut params = match serde_json::to_value(event.clone()) {
+                        let mut params = match serde_json::to_value(public_event.clone()) {
                             Ok(serde_json::Value::Object(map)) => map,
                             Ok(_) => {
                                 error!("event did not serialize to an object");
@@ -5869,13 +5883,15 @@ impl CodexMessageProcessor {
                         );
                         let raw_events_enabled = {
                             let mut thread_state = thread_state.lock().await;
-                            thread_state.track_current_turn_event(&event.msg);
+                            thread_state.track_current_turn_event(&public_event.msg);
                             thread_state.experimental_raw_events
                         };
                         let subscribed_connection_ids = thread_state_manager
                             .subscribed_connection_ids(conversation_id)
                             .await;
-                        if let EventMsg::RawResponseItem(_) = &event.msg && !raw_events_enabled {
+                        if let EventMsg::RawResponseItem(_) = &public_event.msg
+                            && !raw_events_enabled
+                        {
                             continue;
                         }
 

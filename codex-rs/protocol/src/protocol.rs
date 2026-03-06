@@ -1176,6 +1176,8 @@ pub enum EventMsg {
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
 
+    #[schemars(skip)]
+    #[ts(skip)]
     ResponseMetadata(ResponseMetadataEvent),
 
     RawResponseItem(RawResponseItemEvent),
