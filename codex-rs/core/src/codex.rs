@@ -7061,6 +7061,7 @@ mod tests {
     use serde::Deserialize;
     use serde_json::json;
     use std::path::PathBuf;
+    use std::process::Command;
     use std::sync::Arc;
     use std::sync::Once;
     use std::time::Duration as StdDuration;
@@ -9527,7 +9528,16 @@ mod tests {
             let state = sess.state.lock().await;
             state.session_configuration.clone()
         };
-        session_configuration.cwd = std::env::current_dir().expect("current dir");
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let repo_path = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&repo_path).expect("create repo directory");
+        let git_init_status = Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo_path)
+            .status()
+            .expect("run git init");
+        assert!(git_init_status.success(), "git init should succeed");
+        session_configuration.cwd = repo_path;
         let refreshed_turn_context = sess
             .build_updated_turn_context(tc.as_ref(), &session_configuration)
             .await;
