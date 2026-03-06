@@ -674,6 +674,35 @@ mod tests {
     }
 
     #[test]
+    fn root_write_policy_with_carveouts_still_uses_platform_sandbox() {
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath {
+                        kind: FileSystemSpecialPathKind::Root,
+                        subpath: None,
+                    },
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath {
+                        kind: FileSystemSpecialPathKind::CurrentWorkingDirectory,
+                        subpath: Some("blocked".into()),
+                    },
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        assert_eq!(
+            should_require_platform_sandbox(&policy, NetworkSandboxPolicy::Enabled, false),
+            true
+        );
+    }
+
+    #[test]
     fn full_access_restricted_policy_still_uses_platform_sandbox_for_restricted_network() {
         let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
             path: FileSystemPath::Special {
