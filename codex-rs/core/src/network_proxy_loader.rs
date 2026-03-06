@@ -1,5 +1,4 @@
 use crate::config::NetworkToml;
-use crate::config::PermissionsToml;
 use crate::config::find_codex_home;
 use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStack;
@@ -121,12 +120,6 @@ fn network_constraints_from_trusted_layers(
         if let Some(network) = parsed.network {
             apply_network_constraints(network, &mut constraints);
         }
-        if let Some(network) = parsed
-            .permissions
-            .and_then(|permissions| permissions.network)
-        {
-            apply_network_constraints(network, &mut constraints);
-        }
     }
     Ok(constraints)
 }
@@ -166,7 +159,6 @@ fn apply_network_constraints(network: NetworkToml, constraints: &mut NetworkProx
 #[derive(Debug, Clone, Default, Deserialize)]
 struct NetworkTablesToml {
     network: Option<NetworkToml>,
-    permissions: Option<PermissionsToml>,
 }
 
 fn network_tables_from_toml(value: &toml::Value) -> Result<NetworkTablesToml> {
@@ -178,12 +170,6 @@ fn network_tables_from_toml(value: &toml::Value) -> Result<NetworkTablesToml> {
 
 fn apply_network_tables(config: &mut NetworkProxyConfig, parsed: NetworkTablesToml) {
     if let Some(network) = parsed.network {
-        network.apply_to_network_proxy_config(config);
-    }
-    if let Some(network) = parsed
-        .permissions
-        .and_then(|permissions| permissions.network)
-    {
         network.apply_to_network_proxy_config(config);
     }
 }
@@ -310,10 +296,10 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn higher_precedence_network_table_beats_lower_permissions_network_table() {
-        let lower_permissions: toml::Value = toml::from_str(
+    fn higher_precedence_network_table_beats_lower_network_table() {
+        let lower_network: toml::Value = toml::from_str(
             r#"
-[permissions.network]
+[network]
 allowed_domains = ["lower.example.com"]
 "#,
         )
@@ -329,7 +315,7 @@ allowed_domains = ["higher.example.com"]
         let mut config = NetworkProxyConfig::default();
         apply_network_tables(
             &mut config,
-            network_tables_from_toml(&lower_permissions).expect("lower layer should deserialize"),
+            network_tables_from_toml(&lower_network).expect("lower layer should deserialize"),
         );
         apply_network_tables(
             &mut config,
