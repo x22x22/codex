@@ -31,6 +31,10 @@ use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsPreferencesPermission;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
+#[cfg(target_os = "macos")]
+use codex_protocol::protocol::FileSystemSandboxPolicy;
+#[cfg(target_os = "macos")]
+use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::SkillScope;
 use codex_shell_escalation::EscalationExecution;
 use codex_shell_escalation::EscalationPermissions;
