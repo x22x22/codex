@@ -787,6 +787,7 @@ impl TurnContext {
     pub(crate) fn with_realtime_active(&self, realtime_active: bool) -> Self {
         Self {
             sub_id: self.sub_id.clone(),
+            trace_id: self.trace_id.clone(),
             realtime_active,
             config: Arc::clone(&self.config),
             auth_manager: self.auth_manager.clone(),
@@ -2360,6 +2361,7 @@ impl Session {
 
         Arc::new(TurnContext {
             sub_id: current_turn_context.sub_id.clone(),
+            trace_id: current_turn_context.trace_id.clone(),
             realtime_active: current_turn_context.realtime_active,
             config: Arc::new(per_turn_config.clone()),
             auth_manager: current_turn_context.auth_manager.clone(),
