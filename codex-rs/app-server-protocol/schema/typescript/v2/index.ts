@@ -176,6 +176,8 @@ export type { ReviewTarget } from "./ReviewTarget";
 export type { SandboxMode } from "./SandboxMode";
 export type { SandboxPolicy } from "./SandboxPolicy";
 export type { SandboxWorkspaceWrite } from "./SandboxWorkspaceWrite";
+export type { SdkDelegationConfig } from "./SdkDelegationConfig";
+export type { SdkDelegationConfiguredNotification } from "./SdkDelegationConfiguredNotification";
 export type { ServerRequestResolvedNotification } from "./ServerRequestResolvedNotification";
 export type { SessionSource } from "./SessionSource";
 export type { SkillDependencies } from "./SkillDependencies";

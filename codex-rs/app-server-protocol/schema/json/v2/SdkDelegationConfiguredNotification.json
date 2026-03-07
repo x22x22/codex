@@ -1,0 +1,21 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "bridgeUrl": {
+      "type": "string"
+    },
+    "modelProvider": {
+      "type": "string"
+    },
+    "threadId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "bridgeUrl",
+    "modelProvider",
+    "threadId"
+  ],
+  "title": "SdkDelegationConfiguredNotification",
+  "type": "object"
+}

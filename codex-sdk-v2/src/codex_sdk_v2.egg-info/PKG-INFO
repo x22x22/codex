@@ -1,0 +1,30 @@
+Metadata-Version: 2.4
+Name: codex-sdk-v2
+Version: 0.1.0
+Summary: Experimental Codex SDK v2 prototype built on Codex app-server
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: httpx>=0.27.0
+
+# codex-sdk-v2
+
+`codex-sdk-v2` is an experimental Python prototype that borrows the host/runtime split from Universal Computer but uses `codex app-server` as the execution runtime.
+
+Prototype shape:
+
+- The host SDK owns workspace materialization, Codex process startup, and Responses API transport.
+- A host bridge exposes `/v1/responses` to the locally running Codex runtime.
+- Codex runs with `codex app-server --listen stdio://`.
+- The SDK talks to app-server over stdio.
+- Thread startup uses `thread/start.sdkDelegation` to point Codex at the host bridge.
+- The prototype uses a local attached-process backend so it can run against the host-installed Codex binary without cross-compiling a Linux container binary.
+
+Current delegation shape:
+
+1. The SDK starts a local HTTP bridge on the host.
+2. `thread/start.sdkDelegation.bridgeUrl` tells Codex to use that host bridge as its Responses base URL for the thread.
+3. Codex sends the raw Responses request body to the host bridge.
+4. The host bridge adds the upstream `Authorization` header on the host side and forwards the request to OpenAI.
+5. The bridge streams the upstream response back to Codex unchanged.
+
+This means the prototype is bridge-based delegation, not the full event-by-event delegated Responses flow from the RFC yet.

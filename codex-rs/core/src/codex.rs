@@ -356,6 +356,7 @@ impl Codex {
         session_source: SessionSource,
         agent_control: AgentControl,
         dynamic_tools: Vec<DynamicToolSpec>,
+        builtin_tools: Option<Vec<String>>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -497,6 +498,7 @@ impl Codex {
             app_server_client_name: None,
             session_source,
             dynamic_tools,
+            builtin_tools,
             persist_extended_history,
             inherited_shell_snapshot,
         };
@@ -745,7 +747,8 @@ impl TurnContext {
             session_source: self.session_source.clone(),
         })
         .with_allow_login_shell(self.tools_config.allow_login_shell)
-        .with_agent_roles(config.agent_roles.clone());
+        .with_agent_roles(config.agent_roles.clone())
+        .with_builtin_tools(self.tools_config.builtin_tools.clone());
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -901,6 +904,7 @@ pub(crate) struct SessionConfiguration {
     /// Source of the session (cli, vscode, exec, mcp, ...)
     session_source: SessionSource,
     dynamic_tools: Vec<DynamicToolSpec>,
+    builtin_tools: Option<Vec<String>>,
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
 }
@@ -1120,7 +1124,8 @@ impl Session {
             session_source: session_source.clone(),
         })
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
-        .with_agent_roles(per_turn_config.agent_roles.clone());
+        .with_agent_roles(per_turn_config.agent_roles.clone())
+        .with_builtin_tools(session_configuration.builtin_tools.clone());
 
         let cwd = session_configuration.cwd.clone();
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
@@ -4912,7 +4917,8 @@ async fn spawn_review_thread(
         session_source: parent_turn_context.session_source.clone(),
     })
     .with_allow_login_shell(config.permissions.allow_login_shell)
-    .with_agent_roles(config.agent_roles.clone());
+    .with_agent_roles(config.agent_roles.clone())
+    .with_builtin_tools(parent_turn_context.tools_config.builtin_tools.clone());
 
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.provider.clone();

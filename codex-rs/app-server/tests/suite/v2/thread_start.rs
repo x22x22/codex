@@ -6,6 +6,8 @@ use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SdkDelegationConfig;
+use codex_app_server_protocol::SdkDelegationConfiguredNotification;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -178,6 +180,55 @@ model_reasoning_effort = "high"
     } = to_response::<ThreadStartResponse>(resp)?;
 
     assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_emits_sdk_delegation_configured_notification() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            sdk_delegation: Some(SdkDelegationConfig {
+                bridge_url: "http://127.0.0.1:8080/v1".to_string(),
+                model_provider_id: Some("sdk-provider".to_string()),
+                stream_idle_timeout_ms: Some(5000),
+            }),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(resp)?;
+
+    let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
+    let notification = loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let message = timeout(remaining, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        if notification.method == "codexSdk/delegationConfigured" {
+            break notification;
+        }
+    };
+
+    let configured: SdkDelegationConfiguredNotification =
+        serde_json::from_value(notification.params.expect("params must be present"))?;
+    assert_eq!(configured.thread_id, thread.id);
+    assert_eq!(configured.model_provider, "sdk-provider");
+    assert_eq!(configured.bridge_url, "http://127.0.0.1:8080/v1");
+
     Ok(())
 }
 

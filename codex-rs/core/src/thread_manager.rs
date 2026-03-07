@@ -314,18 +314,20 @@ impl ThreadManager {
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
         // Box delegated thread-spawn futures so these convenience wrappers do
         // not inline the full spawn path into every caller's async state.
-        Box::pin(self.start_thread_with_tools(config, Vec::new(), false)).await
+        Box::pin(self.start_thread_with_tools(config, Vec::new(), None, false)).await
     }
 
     pub async fn start_thread_with_tools(
         &self,
         config: Config,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        builtin_tools: Option<Vec<String>>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
         Box::pin(self.start_thread_with_tools_and_service_name(
             config,
             dynamic_tools,
+            builtin_tools,
             persist_extended_history,
             None,
         ))
@@ -336,6 +338,7 @@ impl ThreadManager {
         &self,
         config: Config,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        builtin_tools: Option<Vec<String>>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
     ) -> CodexResult<NewThread> {
@@ -345,6 +348,7 @@ impl ThreadManager {
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             dynamic_tools,
+            builtin_tools,
             persist_extended_history,
             metrics_service_name,
         ))
@@ -375,6 +379,7 @@ impl ThreadManager {
             auth_manager,
             self.agent_control(),
             Vec::new(),
+            None,
             persist_extended_history,
             None,
         ))
@@ -416,6 +421,7 @@ impl ThreadManager {
             Arc::clone(&self.state.auth_manager),
             self.agent_control(),
             Vec::new(),
+            None,
             persist_extended_history,
             None,
         ))
@@ -499,6 +505,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             Vec::new(),
+            None,
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
@@ -522,6 +529,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             Vec::new(),
+            None,
             false,
             None,
             inherited_shell_snapshot,
@@ -545,6 +553,7 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             Vec::new(),
+            None,
             persist_extended_history,
             None,
             inherited_shell_snapshot,
@@ -561,6 +570,7 @@ impl ThreadManagerState {
         auth_manager: Arc<AuthManager>,
         agent_control: AgentControl,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        builtin_tools: Option<Vec<String>>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
     ) -> CodexResult<NewThread> {
@@ -571,6 +581,7 @@ impl ThreadManagerState {
             agent_control,
             self.session_source.clone(),
             dynamic_tools,
+            builtin_tools,
             persist_extended_history,
             metrics_service_name,
             None,
@@ -587,6 +598,7 @@ impl ThreadManagerState {
         agent_control: AgentControl,
         session_source: SessionSource,
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        builtin_tools: Option<Vec<String>>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -608,6 +620,7 @@ impl ThreadManagerState {
             session_source,
             agent_control,
             dynamic_tools,
+            builtin_tools,
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,

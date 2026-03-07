@@ -1868,6 +1868,9 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.dynamicTools")]
     #[ts(optional = nullable)]
     pub dynamic_tools: Option<Vec<DynamicToolSpec>>,
+    #[experimental("thread/start.builtinTools")]
+    #[ts(optional = nullable)]
+    pub builtin_tools: Option<Vec<String>>,
     /// Test-only experimental field used to validate experimental gating and
     /// schema filtering behavior in a stable way.
     #[experimental("thread/start.mockExperimentalField")]
@@ -1883,6 +1886,24 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.persistFullHistory")]
     #[serde(default)]
     pub persist_extended_history: bool,
+    /// EXPERIMENTAL - route this thread's model traffic through a host-managed
+    /// bridge instead of the user's default provider configuration.
+    #[experimental("thread/start.sdkDelegation")]
+    #[ts(optional = nullable)]
+    pub sdk_delegation: Option<SdkDelegationConfig>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SdkDelegationConfig {
+    /// Base URL for the host-managed Responses bridge reachable by the Codex runtime.
+    pub bridge_url: String,
+    /// Optional model-provider id to register for this thread.
+    /// Defaults to `codex-sdk-v2`.
+    pub model_provider_id: Option<String>,
+    /// Optional stream idle timeout override for the delegated provider.
+    pub stream_idle_timeout_ms: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, JsonSchema, TS)]
@@ -3732,6 +3753,15 @@ pub struct ThreadStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct SdkDelegationConfiguredNotification {
+    pub thread_id: String,
+    pub model_provider: String,
+    pub bridge_url: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct ThreadStatusChangedNotification {
     pub thread_id: String,
     pub status: ThreadStatus,
@@ -5550,6 +5580,42 @@ mod tests {
         let serialized_without_override =
             serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
         assert_eq!(serialized_without_override.get("serviceTier"), None);
+    }
+
+    #[test]
+    fn thread_start_params_round_trip_sdk_delegation() {
+        let params: ThreadStartParams = serde_json::from_value(json!({
+            "sdkDelegation": {
+                "bridgeUrl": "http://127.0.0.1:8080/v1",
+                "modelProviderId": "codex-sdk-v2",
+                "streamIdleTimeoutMs": 5000
+            }
+        }))
+        .expect("params should deserialize");
+        assert_eq!(
+            params.sdk_delegation,
+            Some(SdkDelegationConfig {
+                bridge_url: "http://127.0.0.1:8080/v1".to_string(),
+                model_provider_id: Some("codex-sdk-v2".to_string()),
+                stream_idle_timeout_ms: Some(5000),
+            })
+        );
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        let mut expected =
+            serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
+        expected
+            .as_object_mut()
+            .expect("serialized params should be an object")
+            .insert(
+                "sdkDelegation".to_string(),
+                json!({
+                    "bridgeUrl": "http://127.0.0.1:8080/v1",
+                    "modelProviderId": "codex-sdk-v2",
+                    "streamIdleTimeoutMs": 5000
+                }),
+            );
+        assert_eq!(serialized, expected);
     }
 
     #[test]

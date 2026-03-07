@@ -1,8 +1,11 @@
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use crate::client_common::tools::FreeformTool;
+use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
@@ -283,6 +286,21 @@ impl ToolRegistryBuilder {
         }
     }
 
+    pub fn filter_builtin_tools(
+        mut self,
+        builtin_tools: &BTreeSet<String>,
+        enabled_builtin_tools: &BTreeSet<String>,
+    ) -> Self {
+        self.specs.retain(|tool| {
+            let name = tool_spec_name(&tool.spec);
+            !builtin_tools.contains(name) || enabled_builtin_tools.contains(name)
+        });
+        self.handlers.retain(|name, _| {
+            !builtin_tools.contains(name) || enabled_builtin_tools.contains(name)
+        });
+        self
+    }
+
     // TODO(jif) for dynamic tools.
     // pub fn register_many<I>(&mut self, names: I, handler: Arc<dyn ToolHandler>)
     // where
@@ -304,6 +322,16 @@ impl ToolRegistryBuilder {
     pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
         let registry = ToolRegistry::new(self.handlers);
         (self.specs, registry)
+    }
+}
+
+fn tool_spec_name(spec: &ToolSpec) -> &str {
+    match spec {
+        ToolSpec::Function(ResponsesApiTool { name, .. }) => name,
+        ToolSpec::LocalShell {} => "local_shell",
+        ToolSpec::ImageGeneration { .. } => "image_generation",
+        ToolSpec::WebSearch { .. } => "web_search",
+        ToolSpec::Freeform(FreeformTool { name, .. }) => name,
     }
 }
 

@@ -33,6 +33,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
@@ -72,6 +73,7 @@ pub(crate) struct ToolsConfig {
     pub experimental_supported_tools: Vec<String>,
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
+    pub builtin_tools: Option<Vec<String>>,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -172,6 +174,7 @@ impl ToolsConfig {
             experimental_supported_tools: model_info.experimental_supported_tools.clone(),
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
+            builtin_tools: None,
         }
     }
 
@@ -182,6 +185,11 @@ impl ToolsConfig {
 
     pub fn with_allow_login_shell(mut self, allow_login_shell: bool) -> Self {
         self.allow_login_shell = allow_login_shell;
+        self
+    }
+
+    pub fn with_builtin_tools(mut self, builtin_tools: Option<Vec<String>>) -> Self {
+        self.builtin_tools = builtin_tools;
         self
     }
 }
@@ -2055,7 +2063,50 @@ pub(crate) fn build_specs(
         }
     }
 
-    builder
+    if let Some(builtin_tools) = &config.builtin_tools {
+        let builtin_tools = builtin_tools.iter().cloned().collect::<BTreeSet<_>>();
+        builder.filter_builtin_tools(&known_builtin_tool_names(), &builtin_tools)
+    } else {
+        builder
+    }
+}
+
+fn known_builtin_tool_names() -> BTreeSet<String> {
+    [
+        "artifacts",
+        "apply_patch",
+        "close_agent",
+        "container.exec",
+        "exec_command",
+        "grep_files",
+        "image_generation",
+        "js_repl",
+        "js_repl_reset",
+        "list_dir",
+        "list_mcp_resource_templates",
+        "list_mcp_resources",
+        "local_shell",
+        "read_file",
+        "read_mcp_resource",
+        "report_agent_job_result",
+        "request_user_input",
+        "resume_agent",
+        "search_tool_bm25",
+        "send_input",
+        "shell",
+        "shell_command",
+        "spawn_agent",
+        "spawn_agents_on_csv",
+        "test_sync_tool",
+        "update_plan",
+        "view_image",
+        "wait",
+        "web_search",
+        "write_stdin",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 #[cfg(test)]

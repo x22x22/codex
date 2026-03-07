@@ -28,6 +28,8 @@ use core_test_support::responses;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use std::collections::HashMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -114,6 +116,87 @@ async fn thread_start_injects_dynamic_tools_into_model_requests() -> Result<()> 
         Some(&Value::String(dynamic_tool.description.clone()))
     );
     assert_eq!(tool.get("parameters"), Some(&input_schema));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_builtin_tools_filters_model_requests() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            config: Some(HashMap::from([
+                ("experimental_use_unified_exec_tool".to_string(), json!(true)),
+                ("include_apply_patch_tool".to_string(), json!(true)),
+            ])),
+            builtin_tools: Some(vec![
+                "exec_command".to_string(),
+                "write_stdin".to_string(),
+                "update_plan".to_string(),
+                "view_image".to_string(),
+            ]),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+    let _turn: TurnStartResponse = to_response::<TurnStartResponse>(turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let bodies = responses_bodies(&server).await?;
+    let body = bodies
+        .first()
+        .context("expected at least one responses request")?;
+    let tool_names = body
+        .get("tools")
+        .and_then(Value::as_array)
+        .context("expected tools array in request body")?
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .collect::<HashSet<_>>();
+
+    assert_eq!(
+        tool_names,
+        HashSet::from([
+            "exec_command",
+            "write_stdin",
+            "update_plan",
+            "view_image",
+        ])
+    );
 
     Ok(())
 }

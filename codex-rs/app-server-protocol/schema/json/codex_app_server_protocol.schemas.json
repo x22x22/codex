@@ -7265,6 +7265,26 @@
           "properties": {
             "method": {
               "enum": [
+                "codexSdk/delegationConfigured"
+              ],
+              "title": "CodexSdk/delegationConfiguredNotificationMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/SdkDelegationConfiguredNotification"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "title": "CodexSdk/delegationConfiguredNotification",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "enum": [
                 "item/reasoning/summaryTextDelta"
               ],
               "title": "Item/reasoning/summaryTextDeltaNotificationMethod",
@@ -13159,6 +13179,55 @@
             "type": "array"
           }
         },
+        "type": "object"
+      },
+      "SdkDelegationConfig": {
+        "properties": {
+          "bridgeUrl": {
+            "description": "Base URL for the host-managed Responses bridge reachable by the Codex runtime.",
+            "type": "string"
+          },
+          "modelProviderId": {
+            "description": "Optional model-provider id to register for this thread. Defaults to `codex-sdk-v2`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "streamIdleTimeoutMs": {
+            "description": "Optional stream idle timeout override for the delegated provider.",
+            "format": "uint64",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "bridgeUrl"
+        ],
+        "type": "object"
+      },
+      "SdkDelegationConfiguredNotification": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "bridgeUrl": {
+            "type": "string"
+          },
+          "modelProvider": {
+            "type": "string"
+          },
+          "threadId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bridgeUrl",
+          "modelProvider",
+          "threadId"
+        ],
+        "title": "SdkDelegationConfiguredNotification",
         "type": "object"
       },
       "ServerRequestResolvedNotification": {

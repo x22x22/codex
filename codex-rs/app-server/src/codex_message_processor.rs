@@ -92,6 +92,8 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget as ApiReviewTarget;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::SdkDelegationConfig;
+use codex_app_server_protocol::SdkDelegationConfiguredNotification;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestResolvedNotification;
 use codex_app_server_protocol::SkillsConfigWriteParams;
@@ -1602,11 +1604,13 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             dynamic_tools,
+            builtin_tools,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
             personality,
             ephemeral,
             persist_extended_history,
+            sdk_delegation,
         } = params;
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
@@ -1620,6 +1624,11 @@ impl CodexMessageProcessor {
             personality,
         );
         typesafe_overrides.ephemeral = ephemeral;
+        let mut config = config.unwrap_or_default();
+        let sdk_delegation = sdk_delegation.inspect(|delegation| {
+            apply_sdk_delegation_overrides(&mut config, &mut typesafe_overrides, delegation);
+        });
+        let config = (!config.is_empty()).then_some(config);
         let cli_overrides = self.cli_overrides.clone();
         let cloud_requirements = self.current_cloud_requirements();
         let listener_task_context = ListenerTaskContext {
@@ -1640,9 +1649,11 @@ impl CodexMessageProcessor {
                 config,
                 typesafe_overrides,
                 dynamic_tools,
+                builtin_tools,
                 persist_extended_history,
                 service_name,
                 experimental_raw_events,
+                sdk_delegation,
             )
             .await;
         });
@@ -1657,9 +1668,11 @@ impl CodexMessageProcessor {
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
+        builtin_tools: Option<Vec<String>>,
         persist_extended_history: bool,
         service_name: Option<String>,
         experimental_raw_events: bool,
+        sdk_delegation: Option<SdkDelegationConfig>,
     ) {
         let config = match derive_config_from_params(
             &cli_overrides,
@@ -1685,6 +1698,20 @@ impl CodexMessageProcessor {
         };
 
         let dynamic_tools = dynamic_tools.unwrap_or_default();
+        if let Some(builtin_tools) = builtin_tools.as_ref()
+            && let Err(message) = validate_builtin_tools(builtin_tools)
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message,
+                data: None,
+            };
+            listener_task_context
+                .outgoing
+                .send_error(request_id, error)
+                .await;
+            return;
+        }
         let core_dynamic_tools = if dynamic_tools.is_empty() {
             Vec::new()
         } else {
@@ -1715,6 +1742,7 @@ impl CodexMessageProcessor {
             .start_thread_with_tools_and_service_name(
                 config,
                 core_dynamic_tools,
+                builtin_tools,
                 persist_extended_history,
                 service_name,
             )
@@ -1772,17 +1800,36 @@ impl CodexMessageProcessor {
                     sandbox: config_snapshot.sandbox_policy.into(),
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
+                let response_thread_id = response.thread.id.clone();
+                let response_model_provider = response.model_provider.clone();
 
                 listener_task_context
                     .outgoing
                     .send_response(request_id, response)
                     .await;
+                info!("thread/start created thread {response_thread_id}");
 
                 let notif = ThreadStartedNotification { thread };
                 listener_task_context
                     .outgoing
                     .send_server_notification(ServerNotification::ThreadStarted(notif))
                     .await;
+                info!("thread/start sent thread/started for {response_thread_id}");
+
+                if let Some(sdk_delegation) = sdk_delegation {
+                    let notification = SdkDelegationConfiguredNotification {
+                        thread_id: response_thread_id,
+                        model_provider: response_model_provider,
+                        bridge_url: sdk_delegation.bridge_url,
+                    };
+                    listener_task_context
+                        .outgoing
+                        .send_server_notification(ServerNotification::SdkDelegationConfigured(
+                            notification,
+                        ))
+                        .await;
+                    info!("thread/start sent codexSdk/delegationConfigured");
+                }
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
@@ -6877,6 +6924,26 @@ fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
     Ok(())
 }
 
+fn validate_builtin_tools(tools: &[String]) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for tool in tools {
+        let name = tool.trim();
+        if name.is_empty() {
+            return Err("builtin tool name must not be empty".to_string());
+        }
+        if name != tool {
+            return Err(format!(
+                "builtin tool name has leading/trailing whitespace: {}",
+                tool
+            ));
+        }
+        if !seen.insert(name.to_string()) {
+            return Err(format!("duplicate builtin tool name: {name}"));
+        }
+    }
+    Ok(())
+}
+
 fn replace_cloud_requirements_loader(
     cloud_requirements: &RwLock<CloudRequirementsLoader>,
     auth_manager: Arc<AuthManager>,
@@ -6946,6 +7013,47 @@ async fn derive_config_from_params(
         .cloud_requirements(cloud_requirements.clone())
         .build()
         .await
+}
+
+fn apply_sdk_delegation_overrides(
+    request_overrides: &mut HashMap<String, serde_json::Value>,
+    typesafe_overrides: &mut ConfigOverrides,
+    sdk_delegation: &SdkDelegationConfig,
+) {
+    let provider_id = sdk_delegation
+        .model_provider_id
+        .clone()
+        .unwrap_or_else(|| "codex-sdk-v2".to_string());
+    typesafe_overrides.model_provider = Some(provider_id.clone());
+
+    let provider_prefix = format!("model_providers.{provider_id}");
+    request_overrides.insert(
+        format!("{provider_prefix}.name"),
+        serde_json::Value::String("Codex SDK v2 Delegated Provider".to_string()),
+    );
+    request_overrides.insert(
+        format!("{provider_prefix}.base_url"),
+        serde_json::Value::String(sdk_delegation.bridge_url.clone()),
+    );
+    request_overrides.insert(
+        format!("{provider_prefix}.wire_api"),
+        serde_json::Value::String("responses".to_string()),
+    );
+    request_overrides.insert(
+        format!("{provider_prefix}.supports_websockets"),
+        serde_json::Value::Bool(false),
+    );
+    request_overrides.insert(
+        format!("{provider_prefix}.requires_openai_auth"),
+        serde_json::Value::Bool(false),
+    );
+
+    if let Some(stream_idle_timeout_ms) = sdk_delegation.stream_idle_timeout_ms {
+        request_overrides.insert(
+            format!("{provider_prefix}.stream_idle_timeout_ms"),
+            serde_json::Value::Number(stream_idle_timeout_ms.into()),
+        );
+    }
 }
 
 async fn derive_config_for_cwd(

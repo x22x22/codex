@@ -1450,6 +1450,25 @@
         }
       ]
     },
+    "SdkDelegationConfiguredNotification": {
+      "properties": {
+        "bridgeUrl": {
+          "type": "string"
+        },
+        "modelProvider": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bridgeUrl",
+        "modelProvider",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "ServerRequestResolvedNotification": {
       "properties": {
         "requestId": {
@@ -3646,6 +3665,26 @@
         "params"
       ],
       "title": "App/list/updatedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "codexSdk/delegationConfigured"
+          ],
+          "title": "CodexSdk/delegationConfiguredNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/SdkDelegationConfiguredNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "CodexSdk/delegationConfiguredNotification",
       "type": "object"
     },
     {
