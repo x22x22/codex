@@ -51,6 +51,7 @@ export type { ConversationGitInfo } from "./ConversationGitInfo";
 export type { ConversationSummary } from "./ConversationSummary";
 export type { CreditsSnapshot } from "./CreditsSnapshot";
 export type { CustomPrompt } from "./CustomPrompt";
+export type { DenyReadPattern } from "./DenyReadPattern";
 export type { DeprecationNoticeEvent } from "./DeprecationNoticeEvent";
 export type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 export type { DynamicToolCallRequest } from "./DynamicToolCallRequest";

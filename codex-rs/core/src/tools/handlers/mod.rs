@@ -147,7 +147,7 @@ fn reject_explicit_escalation_if_deny_read_present(
     sandbox_policy: &SandboxPolicy,
 ) -> Result<(), FunctionCallError> {
     if sandbox_permissions.requires_escalated_permissions()
-        && sandbox_policy.has_denied_read_paths()
+        && sandbox_policy.has_denied_read_restrictions()
     {
         return Err(FunctionCallError::RespondToModel(
             "filesystem deny_read policy is enforced; reject command — you cannot ask for escalated permissions because managed read restrictions must remain sandboxed".to_string(),
@@ -161,6 +161,7 @@ fn reject_explicit_escalation_if_deny_read_present(
 mod tests {
     use super::reject_explicit_escalation_if_deny_read_present;
     use crate::function_tool::FunctionCallError;
+    use crate::protocol::DenyReadPattern;
     use crate::protocol::SandboxPolicy;
     use crate::sandboxing::SandboxPermissions;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -169,7 +170,9 @@ mod tests {
     fn explicit_escalation_is_rejected_when_deny_read_paths_exist() {
         let mut policy = SandboxPolicy::new_workspace_write_policy();
         let path = AbsolutePathBuf::try_from("/tmp/deny-read-test").expect("absolute path");
-        policy.append_deny_read_paths(&[path]);
+        policy.append_deny_read_patterns(&[DenyReadPattern::from(
+            path.to_string_lossy().into_owned(),
+        )]);
 
         let result = reject_explicit_escalation_if_deny_read_present(
             SandboxPermissions::RequireEscalated,
@@ -186,7 +189,9 @@ mod tests {
     fn non_escalated_command_is_allowed_when_deny_read_paths_exist() {
         let mut policy = SandboxPolicy::new_workspace_write_policy();
         let path = AbsolutePathBuf::try_from("/tmp/deny-read-test").expect("absolute path");
-        policy.append_deny_read_paths(&[path]);
+        policy.append_deny_read_patterns(&[DenyReadPattern::from(
+            path.to_string_lossy().into_owned(),
+        )]);
 
         let result = reject_explicit_escalation_if_deny_read_present(
             SandboxPermissions::UseDefault,

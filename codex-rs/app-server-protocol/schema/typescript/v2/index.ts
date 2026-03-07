@@ -58,6 +58,7 @@ export type { ConfigWarningNotification } from "./ConfigWarningNotification";
 export type { ConfigWriteResponse } from "./ConfigWriteResponse";
 export type { ContextCompactedNotification } from "./ContextCompactedNotification";
 export type { CreditsSnapshot } from "./CreditsSnapshot";
+export type { DenyReadPattern } from "./DenyReadPattern";
 export type { DeprecationNoticeNotification } from "./DeprecationNoticeNotification";
 export type { DynamicToolCallOutputContentItem } from "./DynamicToolCallOutputContentItem";
 export type { DynamicToolCallParams } from "./DynamicToolCallParams";

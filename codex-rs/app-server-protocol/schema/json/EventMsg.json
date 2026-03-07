@@ -5261,10 +5261,10 @@
               ],
               "description": "Read access granted while running under this policy."
             },
-            "deny_read_paths": {
-              "description": "Paths that must not be readable, even when broad read access is otherwise allowed.",
+            "deny_read_patterns": {
+              "description": "Patterns that must not be readable, even when broad read access is otherwise allowed.",
               "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
+                "type": "string"
               },
               "type": "array"
             },
@@ -5285,10 +5285,10 @@
         {
           "description": "Indicates the process is already in an external sandbox. Allows full disk access while honoring the provided network setting.",
           "properties": {
-            "deny_read_paths": {
-              "description": "Paths that must not be readable, even when broad read access is otherwise allowed.",
+            "deny_read_patterns": {
+              "description": "Patterns that must not be readable, even when broad read access is otherwise allowed.",
               "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
+                "type": "string"
               },
               "type": "array"
             },
@@ -5318,10 +5318,10 @@
         {
           "description": "Same as `ReadOnly` but additionally grants write access to the current working directory (\"workspace\").",
           "properties": {
-            "deny_read_paths": {
-              "description": "Paths that must not be readable, even when broad read access is otherwise allowed.",
+            "deny_read_patterns": {
+              "description": "Patterns that must not be readable, even when broad read access is otherwise allowed.",
               "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
+                "type": "string"
               },
               "type": "array"
             },

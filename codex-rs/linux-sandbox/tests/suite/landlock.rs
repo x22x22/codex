@@ -88,7 +88,7 @@ async fn run_cmd_result_with_writable_roots(
             .iter()
             .map(|p| AbsolutePathBuf::try_from(p.as_path()).unwrap())
             .collect(),
-        deny_read_paths: vec![],
+        deny_read_patterns: vec![],
         read_only_access: Default::default(),
         network_access,
         // Exclude tmp-related folders from writable roots because we need a

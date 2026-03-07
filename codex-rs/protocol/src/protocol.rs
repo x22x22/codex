@@ -558,6 +558,42 @@ impl ReadOnlyAccess {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(transparent)]
+/// A deny-only filesystem read pattern.
+///
+/// Literal entries deny that exact path (or subtree for directory paths).
+/// Pattern entries are interpreted by platform-specific sandbox backends.
+pub struct DenyReadPattern(String);
+
+impl DenyReadPattern {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn contains_glob(&self) -> bool {
+        self.0.chars().any(|ch| matches!(ch, '*' | '?' | '['))
+    }
+
+    pub fn literal_path(&self) -> Option<AbsolutePathBuf> {
+        (!self.contains_glob())
+            .then(|| AbsolutePathBuf::try_from(self.0.as_str()).ok())
+            .flatten()
+    }
+}
+
+impl From<String> for DenyReadPattern {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&str> for DenyReadPattern {
+    fn from(value: &str) -> Self {
+        Self(value.to_string())
+    }
+}
+
 /// Determines execution restrictions for model shell commands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
 #[strum(serialize_all = "kebab-case")]
@@ -576,9 +612,9 @@ pub enum SandboxPolicy {
             skip_serializing_if = "ReadOnlyAccess::has_full_disk_read_access"
         )]
         access: ReadOnlyAccess,
-        /// Paths that must not be readable, even when broad read access is otherwise allowed.
+        /// Patterns that must not be readable, even when broad read access is otherwise allowed.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        deny_read_paths: Vec<AbsolutePathBuf>,
+        deny_read_patterns: Vec<DenyReadPattern>,
     },
 
     /// Indicates the process is already in an external sandbox. Allows full
@@ -588,9 +624,9 @@ pub enum SandboxPolicy {
         /// Whether the external sandbox permits outbound network traffic.
         #[serde(default)]
         network_access: NetworkAccess,
-        /// Paths that must not be readable, even when broad read access is otherwise allowed.
+        /// Patterns that must not be readable, even when broad read access is otherwise allowed.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        deny_read_paths: Vec<AbsolutePathBuf>,
+        deny_read_patterns: Vec<DenyReadPattern>,
     },
 
     /// Same as `ReadOnly` but additionally grants write access to the current
@@ -609,9 +645,9 @@ pub enum SandboxPolicy {
         )]
         read_only_access: ReadOnlyAccess,
 
-        /// Paths that must not be readable, even when broad read access is otherwise allowed.
+        /// Patterns that must not be readable, even when broad read access is otherwise allowed.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        deny_read_paths: Vec<AbsolutePathBuf>,
+        deny_read_patterns: Vec<DenyReadPattern>,
 
         /// When set to `true`, outbound network access is allowed. `false` by
         /// default.
@@ -675,7 +711,7 @@ impl SandboxPolicy {
     pub fn new_read_only_policy() -> Self {
         SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
         }
     }
 
@@ -686,7 +722,7 @@ impl SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             read_only_access: ReadOnlyAccess::FullAccess,
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -729,8 +765,8 @@ impl SandboxPolicy {
             SandboxPolicy::DangerFullAccess => true,
             SandboxPolicy::ExternalSandbox {
                 network_access,
-                deny_read_paths,
-            } => network_access.is_enabled() && !deny_read_paths.is_empty(),
+                deny_read_patterns,
+            } => network_access.is_enabled() && !deny_read_patterns.is_empty(),
             SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => false,
         }
     }
@@ -749,57 +785,61 @@ impl SandboxPolicy {
         }
     }
 
-    pub fn denied_read_paths(&self) -> Vec<AbsolutePathBuf> {
+    pub fn deny_read_patterns(&self) -> Vec<DenyReadPattern> {
         match self {
             SandboxPolicy::ReadOnly {
-                deny_read_paths, ..
+                deny_read_patterns, ..
             }
             | SandboxPolicy::ExternalSandbox {
-                deny_read_paths, ..
+                deny_read_patterns, ..
             }
             | SandboxPolicy::WorkspaceWrite {
-                deny_read_paths, ..
-            } => deny_read_paths.clone(),
+                deny_read_patterns, ..
+            } => deny_read_patterns.clone(),
             SandboxPolicy::DangerFullAccess => Vec::new(),
         }
     }
 
-    pub fn has_denied_read_paths(&self) -> bool {
+    pub fn has_denied_read_patterns(&self) -> bool {
         match self {
             SandboxPolicy::ReadOnly {
-                deny_read_paths, ..
+                deny_read_patterns, ..
             }
             | SandboxPolicy::ExternalSandbox {
-                deny_read_paths, ..
+                deny_read_patterns, ..
             }
             | SandboxPolicy::WorkspaceWrite {
-                deny_read_paths, ..
-            } => !deny_read_paths.is_empty(),
+                deny_read_patterns, ..
+            } => !deny_read_patterns.is_empty(),
             SandboxPolicy::DangerFullAccess => false,
         }
     }
 
-    pub fn append_deny_read_paths(&mut self, new_paths: &[AbsolutePathBuf]) {
-        if new_paths.is_empty() {
+    pub fn has_denied_read_restrictions(&self) -> bool {
+        self.has_denied_read_patterns()
+    }
+
+    pub fn append_deny_read_patterns(&mut self, new_patterns: &[DenyReadPattern]) {
+        if new_patterns.is_empty() {
             return;
         }
 
-        let target_paths = match self {
+        let target_patterns = match self {
             SandboxPolicy::ReadOnly {
-                deny_read_paths, ..
+                deny_read_patterns, ..
             }
             | SandboxPolicy::ExternalSandbox {
-                deny_read_paths, ..
+                deny_read_patterns, ..
             }
             | SandboxPolicy::WorkspaceWrite {
-                deny_read_paths, ..
-            } => deny_read_paths,
+                deny_read_patterns, ..
+            } => deny_read_patterns,
             SandboxPolicy::DangerFullAccess => return,
         };
 
-        target_paths.extend(new_paths.iter().cloned());
+        target_patterns.extend(new_patterns.iter().cloned());
         let mut seen = HashSet::new();
-        target_paths.retain(|path| seen.insert(path.to_path_buf()));
+        target_patterns.retain(|pattern| seen.insert(pattern.as_str().to_string()));
     }
 
     /// Returns the list of readable roots (tailored to the current working
@@ -842,7 +882,7 @@ impl SandboxPolicy {
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
                 network_access: _,
-                deny_read_paths: _,
+                deny_read_patterns: _,
             } => {
                 // Start from explicitly configured writable roots.
                 let mut roots: Vec<AbsolutePathBuf> = writable_roots.clone();
@@ -3146,21 +3186,21 @@ mod tests {
     fn external_sandbox_reports_full_access_flags() {
         let restricted = SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Restricted,
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
         };
         assert!(restricted.has_full_disk_write_access());
         assert!(!restricted.has_full_network_access());
 
         let enabled = SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Enabled,
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
         };
         assert!(enabled.has_full_disk_write_access());
         assert!(enabled.has_full_network_access());
     }
 
     #[test]
-    fn append_deny_read_paths_ignores_danger_full_access() {
+    fn append_deny_read_patterns_ignores_danger_full_access() {
         let denied_path = if cfg!(windows) {
             AbsolutePathBuf::try_from(r"C:\sensitive\secret.txt").expect("absolute path")
         } else {
@@ -3168,7 +3208,8 @@ mod tests {
         };
         let mut policy = SandboxPolicy::DangerFullAccess;
 
-        policy.append_deny_read_paths(std::slice::from_ref(&denied_path));
+        let denied_pattern = DenyReadPattern::from(denied_path.to_string_lossy().into_owned());
+        policy.append_deny_read_patterns(std::slice::from_ref(&denied_pattern));
 
         assert_eq!(policy, SandboxPolicy::DangerFullAccess);
     }
@@ -3185,7 +3226,7 @@ mod tests {
             policy,
             SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Enabled,
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
             }
         );
     }
@@ -3223,7 +3264,7 @@ mod tests {
                 include_platform_defaults: false,
                 readable_roots: vec![],
             },
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: false,

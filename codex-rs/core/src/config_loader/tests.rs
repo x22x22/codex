@@ -430,7 +430,7 @@ allowed_sandbox_modes = ["read-only"]
             .can_set(&SandboxPolicy::WorkspaceWrite {
                 writable_roots: Vec::new(),
                 read_only_access: Default::default(),
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,

@@ -39,7 +39,6 @@ use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
 use crate::features::FeaturesToml;
-use crate::filesystem_deny_read::expand_deny_read_patterns;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 use crate::model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;
@@ -50,6 +49,7 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use crate::project_doc::LOCAL_PROJECT_DOC_FILENAME;
 use crate::protocol::AskForApproval;
+use crate::protocol::DenyReadPattern;
 use crate::protocol::ReadOnlyAccess;
 use crate::protocol::SandboxPolicy;
 use crate::unified_exec::DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS;
@@ -1463,7 +1463,7 @@ impl ConfigToml {
                 }) => SandboxPolicy::WorkspaceWrite {
                     writable_roots: writable_roots.clone(),
                     read_only_access: ReadOnlyAccess::FullAccess,
-                    deny_read_paths: vec![],
+                    deny_read_patterns: vec![],
                     network_access: *network_access,
                     exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                     exclude_slash_tmp: *exclude_slash_tmp,
@@ -2050,7 +2050,20 @@ impl Config {
         }) = filesystem_requirements
             && !filesystem_requirements.deny_read.is_empty()
         {
-            let deny_read_paths = expand_deny_read_patterns(&filesystem_requirements.deny_read);
+            let has_glob_patterns = filesystem_requirements
+                .deny_read
+                .iter()
+                .any(crate::config_loader::FilesystemDenyReadPattern::contains_glob);
+            let deny_read_patterns = filesystem_requirements
+                .deny_read
+                .iter()
+                .map(|pattern| DenyReadPattern::from(pattern.as_str()))
+                .collect::<Vec<_>>();
+            if has_glob_patterns && !cfg!(target_os = "macos") {
+                startup_warnings.push(format!(
+                    "managed filesystem deny_read from {filesystem_requirements_source} only supports glob patterns on macOS; use literal paths on this platform"
+                ));
+            }
             let requirement_source = filesystem_requirements_source.clone();
             constrained_sandbox_policy
                 .value
@@ -2069,7 +2082,7 @@ impl Config {
             constrained_sandbox_policy
                 .value
                 .add_normalizer(move |mut policy| {
-                    policy.append_deny_read_paths(&deny_read_paths);
+                    policy.append_deny_read_patterns(&deny_read_patterns);
                     policy
                 })
                 .map_err(std::io::Error::from)?;
@@ -2850,7 +2863,7 @@ exclude_slash_tmp = true
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![writable_root.clone()],
                     read_only_access: ReadOnlyAccess::FullAccess,
-                    deny_read_paths: vec![],
+                    deny_read_patterns: vec![],
                     network_access: false,
                     exclude_tmpdir_env_var: true,
                     exclude_slash_tmp: true,
@@ -2893,7 +2906,7 @@ trust_level = "trusted"
                 SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![writable_root],
                     read_only_access: ReadOnlyAccess::FullAccess,
-                    deny_read_paths: vec![],
+                    deny_read_patterns: vec![],
                     network_access: false,
                     exclude_tmpdir_env_var: true,
                     exclude_slash_tmp: true,
@@ -6053,30 +6066,24 @@ mcp_oauth_callback_url = "https://example.com/callback"
             .await?;
 
         assert_eq!(
-            config.permissions.sandbox_policy.get().denied_read_paths(),
-            vec![denied_path]
+            config.permissions.sandbox_policy.get().deny_read_patterns(),
+            vec![crate::protocol::DenyReadPattern::from(
+                denied_path.to_string_lossy().into_owned(),
+            )]
         );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn requirements_filesystem_deny_read_glob_expands_to_matching_paths()
+    async fn requirements_filesystem_deny_read_glob_is_preserved_for_macos_policy()
     -> std::io::Result<()> {
         let codex_home = TempDir::new()?;
         let sensitive_dir = codex_home.path().join("sensitive");
         let nested_dir = sensitive_dir.join("nested");
         std::fs::create_dir_all(&nested_dir)?;
-        let top_match = sensitive_dir.join("top.txt");
-        let nested_match = nested_dir.join("deep.txt");
-        let ignored = sensitive_dir.join("top.log");
-        std::fs::write(&top_match, "top")?;
-        std::fs::write(&nested_match, "deep")?;
-        std::fs::write(&ignored, "ignored")?;
-
         let glob_pattern = format!("{}/sensitive/**/*.txt", codex_home.path().display());
-        let top_match = AbsolutePathBuf::try_from(top_match).expect("absolute path");
-        let nested_match = AbsolutePathBuf::try_from(nested_match).expect("absolute path");
+        let expected_glob_pattern = glob_pattern.clone();
 
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
@@ -6095,10 +6102,11 @@ mcp_oauth_callback_url = "https://example.com/callback"
             .build()
             .await?;
 
-        assert_eq!(
-            config.permissions.sandbox_policy.get().denied_read_paths(),
-            vec![top_match, nested_match]
-        );
+        let policy = config.permissions.sandbox_policy.get();
+        let expected_patterns = vec![crate::protocol::DenyReadPattern::from(
+            expected_glob_pattern,
+        )];
+        assert_eq!(policy.deny_read_patterns(), expected_patterns);
         Ok(())
     }
 
@@ -6138,8 +6146,10 @@ mcp_oauth_callback_url = "https://example.com/callback"
             .map_err(std::io::Error::from)?;
 
         assert_eq!(
-            config.permissions.sandbox_policy.get().denied_read_paths(),
-            vec![denied_path]
+            config.permissions.sandbox_policy.get().deny_read_patterns(),
+            vec![crate::protocol::DenyReadPattern::from(
+                denied_path.to_string_lossy().into_owned(),
+            )]
         );
 
         Ok(())
@@ -6186,7 +6196,7 @@ mcp_oauth_callback_url = "https://example.com/callback"
             .sandbox_policy
             .set(SandboxPolicy::ExternalSandbox {
                 network_access: crate::protocol::NetworkAccess::Enabled,
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
             })
             .expect_err("external-sandbox should be rejected");
 
@@ -6236,7 +6246,12 @@ mcp_oauth_callback_url = "https://example.com/callback"
             policy,
             SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. }
         ));
-        assert_eq!(policy.denied_read_paths(), vec![denied_path]);
+        assert_eq!(
+            policy.deny_read_patterns(),
+            vec![crate::protocol::DenyReadPattern::from(
+                denied_path.to_string_lossy().into_owned(),
+            )]
+        );
         assert!(
             config.startup_warnings.iter().any(
                 |warning| warning.contains("Configured value for `sandbox_mode` is disallowed")
@@ -6268,9 +6283,7 @@ mcp_oauth_callback_url = "https://example.com/callback"
         };
         let sandbox_policy = SandboxPolicy::ExternalSandbox {
             network_access: crate::protocol::NetworkAccess::Enabled,
-            deny_read_paths: vec![
-                AbsolutePathBuf::try_from(denied_path).expect("absolute deny_read path"),
-            ],
+            deny_read_patterns: vec![crate::protocol::DenyReadPattern::from(denied_path)],
         };
 
         assert_eq!(

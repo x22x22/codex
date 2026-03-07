@@ -270,7 +270,7 @@ impl ExecPolicyManager {
                 // Bypass sandbox for trusted execpolicy allow rules unless the current
                 // sandbox policy carries filesystem deny_read restrictions that must
                 // still be enforced for shell/unified_exec commands.
-                bypass_sandbox: !sandbox_policy.has_denied_read_paths()
+                bypass_sandbox: !sandbox_policy.has_denied_read_restrictions()
                     && evaluation.matched_rules.iter().any(|rule_match| {
                         is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
                     }),
@@ -2101,7 +2101,9 @@ prefix_rule(pattern=["git"], decision="prompt")
 
         let mut sandbox_policy = SandboxPolicy::new_workspace_write_policy();
         let deny_path = AbsolutePathBuf::try_from("/tmp/secret-config").expect("absolute path");
-        sandbox_policy.append_deny_read_paths(&[deny_path]);
+        sandbox_policy.append_deny_read_patterns(&[crate::protocol::DenyReadPattern::from(
+            deny_path.to_string_lossy().into_owned(),
+        )]);
 
         let manager = ExecPolicyManager::new(policy);
         let requirement = manager

@@ -89,10 +89,10 @@
                 "type": "fullAccess"
               }
             },
-            "denyReadPaths": {
+            "denyReadPatterns": {
               "default": [],
               "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
+                "type": "string"
               },
               "type": "array"
             },
@@ -112,10 +112,10 @@
         },
         {
           "properties": {
-            "denyReadPaths": {
+            "denyReadPatterns": {
               "default": [],
               "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
+                "type": "string"
               },
               "type": "array"
             },
@@ -143,10 +143,10 @@
         },
         {
           "properties": {
-            "denyReadPaths": {
+            "denyReadPatterns": {
               "default": [],
               "items": {
-                "$ref": "#/definitions/AbsolutePathBuf"
+                "type": "string"
               },
               "type": "array"
             },

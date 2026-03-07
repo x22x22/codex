@@ -209,7 +209,7 @@ fn sandbox_policy_with_additional_permissions(
             network_access,
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
-            deny_read_paths,
+            deny_read_patterns,
         } => {
             let mut merged_writes = writable_roots.clone();
             merged_writes.extend(extra_writes);
@@ -222,17 +222,17 @@ fn sandbox_policy_with_additional_permissions(
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
-                deny_read_paths: deny_read_paths.clone(),
+                deny_read_patterns: deny_read_patterns.clone(),
             }
         }
         SandboxPolicy::ReadOnly {
             access,
-            deny_read_paths,
+            deny_read_patterns,
         } => {
             if extra_writes.is_empty() {
                 SandboxPolicy::ReadOnly {
                     access: merge_read_only_access_with_additional_reads(access, extra_reads),
-                    deny_read_paths: deny_read_paths.clone(),
+                    deny_read_patterns: deny_read_patterns.clone(),
                 }
             } else {
                 // todo(dylan) - for now, this grants more access than the request. We should restrict this,
@@ -247,7 +247,7 @@ fn sandbox_policy_with_additional_permissions(
                     network_access: false,
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
-                    deny_read_paths: deny_read_paths.clone(),
+                    deny_read_patterns: deny_read_patterns.clone(),
                 }
             }
         }
@@ -271,7 +271,8 @@ impl SandboxManager {
         windows_sandbox_level: WindowsSandboxLevel,
         has_managed_network_requirements: bool,
     ) -> SandboxType {
-        let enforce_deny_read = policy.has_denied_read_paths() && !cfg!(target_os = "windows");
+        let enforce_deny_read =
+            policy.has_denied_read_restrictions() && !cfg!(target_os = "windows");
         match pref {
             SandboxablePreference::Forbid => SandboxType::None,
             SandboxablePreference::Require => {
@@ -467,10 +468,9 @@ mod tests {
         let sandbox = manager.select_initial(
             &SandboxPolicy::ExternalSandbox {
                 network_access: codex_protocol::protocol::NetworkAccess::Enabled,
-                deny_read_paths: vec![
-                    codex_utils_absolute_path::AbsolutePathBuf::from_absolute_path(denied_path)
-                        .expect("absolute path"),
-                ],
+                deny_read_patterns: vec![codex_protocol::protocol::DenyReadPattern::from(
+                    denied_path,
+                )],
             },
             SandboxablePreference::Auto,
             WindowsSandboxLevel::Disabled,

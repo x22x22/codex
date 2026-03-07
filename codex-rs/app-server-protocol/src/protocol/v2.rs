@@ -42,6 +42,7 @@ use codex_protocol::protocol::AgentStatus as CoreAgentStatus;
 use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
+use codex_protocol::protocol::DenyReadPattern as CoreDenyReadPattern;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
 use codex_protocol::protocol::ModelRerouteReason as CoreModelRerouteReason;
 use codex_protocol::protocol::NetworkAccess as CoreNetworkAccess;
@@ -936,6 +937,23 @@ impl From<CoreReadOnlyAccess> for ReadOnlyAccess {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, JsonSchema, TS)]
+#[serde(transparent)]
+#[ts(export_to = "v2/")]
+pub struct DenyReadPattern(String);
+
+impl From<CoreDenyReadPattern> for DenyReadPattern {
+    fn from(value: CoreDenyReadPattern) -> Self {
+        Self(value.as_str().to_string())
+    }
+}
+
+impl From<DenyReadPattern> for CoreDenyReadPattern {
+    fn from(value: DenyReadPattern) -> Self {
+        CoreDenyReadPattern::from(value.0)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "camelCase")]
 #[ts(tag = "type")]
@@ -948,7 +966,7 @@ pub enum SandboxPolicy {
         #[serde(default)]
         access: ReadOnlyAccess,
         #[serde(default)]
-        deny_read_paths: Vec<AbsolutePathBuf>,
+        deny_read_patterns: Vec<DenyReadPattern>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -956,7 +974,7 @@ pub enum SandboxPolicy {
         #[serde(default)]
         network_access: NetworkAccess,
         #[serde(default)]
-        deny_read_paths: Vec<AbsolutePathBuf>,
+        deny_read_patterns: Vec<DenyReadPattern>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -966,7 +984,7 @@ pub enum SandboxPolicy {
         #[serde(default)]
         read_only_access: ReadOnlyAccess,
         #[serde(default)]
-        deny_read_paths: Vec<AbsolutePathBuf>,
+        deny_read_patterns: Vec<DenyReadPattern>,
         #[serde(default)]
         network_access: bool,
         #[serde(default)]
@@ -984,32 +1002,44 @@ impl SandboxPolicy {
             }
             SandboxPolicy::ReadOnly {
                 access,
-                deny_read_paths,
+                deny_read_patterns,
             } => codex_protocol::protocol::SandboxPolicy::ReadOnly {
                 access: access.to_core(),
-                deny_read_paths: deny_read_paths.clone(),
+                deny_read_patterns: deny_read_patterns
+                    .clone()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
             },
             SandboxPolicy::ExternalSandbox {
                 network_access,
-                deny_read_paths,
+                deny_read_patterns,
             } => codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
                 network_access: match network_access {
                     NetworkAccess::Restricted => CoreNetworkAccess::Restricted,
                     NetworkAccess::Enabled => CoreNetworkAccess::Enabled,
                 },
-                deny_read_paths: deny_read_paths.clone(),
+                deny_read_patterns: deny_read_patterns
+                    .clone()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
             },
             SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 read_only_access,
-                deny_read_paths,
+                deny_read_patterns,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: writable_roots.clone(),
                 read_only_access: read_only_access.to_core(),
-                deny_read_paths: deny_read_paths.clone(),
+                deny_read_patterns: deny_read_patterns
+                    .clone()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
                 network_access: *network_access,
                 exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
                 exclude_slash_tmp: *exclude_slash_tmp,
@@ -1026,32 +1056,32 @@ impl From<codex_protocol::protocol::SandboxPolicy> for SandboxPolicy {
             }
             codex_protocol::protocol::SandboxPolicy::ReadOnly {
                 access,
-                deny_read_paths,
+                deny_read_patterns,
             } => SandboxPolicy::ReadOnly {
                 access: ReadOnlyAccess::from(access),
-                deny_read_paths,
+                deny_read_patterns: deny_read_patterns.into_iter().map(Into::into).collect(),
             },
             codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
                 network_access,
-                deny_read_paths,
+                deny_read_patterns,
             } => SandboxPolicy::ExternalSandbox {
                 network_access: match network_access {
                     CoreNetworkAccess::Restricted => NetworkAccess::Restricted,
                     CoreNetworkAccess::Enabled => NetworkAccess::Enabled,
                 },
-                deny_read_paths,
+                deny_read_patterns: deny_read_patterns.into_iter().map(Into::into).collect(),
             },
             codex_protocol::protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 read_only_access,
-                deny_read_paths,
+                deny_read_patterns,
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
             } => SandboxPolicy::WorkspaceWrite {
                 writable_roots,
                 read_only_access: ReadOnlyAccess::from(read_only_access),
-                deny_read_paths,
+                deny_read_patterns: deny_read_patterns.into_iter().map(Into::into).collect(),
                 network_access,
                 exclude_tmpdir_env_var,
                 exclude_slash_tmp,
@@ -4235,7 +4265,7 @@ mod tests {
     fn sandbox_policy_round_trips_external_sandbox_network_access() {
         let v2_policy = SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Enabled,
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
         };
 
         let core_policy = v2_policy.to_core();
@@ -4243,7 +4273,7 @@ mod tests {
             core_policy,
             codex_protocol::protocol::SandboxPolicy::ExternalSandbox {
                 network_access: CoreNetworkAccess::Enabled,
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
             }
         );
 
@@ -4259,7 +4289,7 @@ mod tests {
                 include_platform_defaults: false,
                 readable_roots: vec![readable_root.clone()],
             },
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
         };
 
         let core_policy = v2_policy.to_core();
@@ -4270,7 +4300,7 @@ mod tests {
                     include_platform_defaults: false,
                     readable_roots: vec![readable_root],
                 },
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
             }
         );
 
@@ -4287,7 +4317,7 @@ mod tests {
                 include_platform_defaults: false,
                 readable_roots: vec![readable_root.clone()],
             },
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -4302,7 +4332,7 @@ mod tests {
                     include_platform_defaults: false,
                     readable_roots: vec![readable_root],
                 },
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -4323,7 +4353,7 @@ mod tests {
             policy,
             SandboxPolicy::ReadOnly {
                 access: ReadOnlyAccess::FullAccess,
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
             }
         );
     }
@@ -4343,7 +4373,7 @@ mod tests {
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: ReadOnlyAccess::FullAccess,
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
                 network_access: false,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -4362,7 +4392,7 @@ mod tests {
             policy,
             SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Enabled,
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
             }
         );
     }

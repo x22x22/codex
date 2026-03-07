@@ -231,7 +231,7 @@ impl FilesystemDenyReadPattern {
     }
 
     pub fn contains_glob(&self) -> bool {
-        self.0.contains('*')
+        self.0.chars().any(is_glob_metacharacter)
     }
 
     pub fn from_input(input: &str) -> Result<Self, String> {
@@ -280,7 +280,7 @@ fn deserialize_absolute_path(input: &str) -> Result<AbsolutePathBuf, String> {
 }
 
 fn split_glob_pattern(input: &str) -> (&str, &str) {
-    let Some(first_glob) = input.find('*') else {
+    let Some(first_glob) = input.find(is_glob_metacharacter) else {
         return ("", input);
     };
     let separator_index = input[..first_glob]
@@ -310,6 +310,10 @@ fn is_path_separator(ch: char) -> bool {
     } else {
         ch == '/'
     }
+}
+
+fn is_glob_metacharacter(ch: char) -> bool {
+    matches!(ch, '*' | '?' | '[')
 }
 
 #[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

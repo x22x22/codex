@@ -296,9 +296,9 @@ impl From<&FileType> for DirEntryKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::DenyReadPattern;
     use crate::protocol::ReadOnlyAccess;
     use crate::protocol::SandboxPolicy;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -564,10 +564,14 @@ mod tests {
 
         let policy = SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
-            deny_read_paths: vec![
-                AbsolutePathBuf::try_from(denied_dir.as_path()).expect("absolute denied dir"),
-                AbsolutePathBuf::try_from(dir_path.join("top_secret.txt"))
-                    .expect("absolute denied file"),
+            deny_read_patterns: vec![
+                DenyReadPattern::from(denied_dir.to_string_lossy().into_owned()),
+                DenyReadPattern::from(
+                    dir_path
+                        .join("top_secret.txt")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
             ],
         };
 

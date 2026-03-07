@@ -11,7 +11,9 @@ pub(crate) fn sandbox_tag(
     if matches!(policy, SandboxPolicy::DangerFullAccess) {
         return "none";
     }
-    if matches!(policy, SandboxPolicy::ExternalSandbox { .. }) && !policy.has_denied_read_paths() {
+    if matches!(policy, SandboxPolicy::ExternalSandbox { .. })
+        && !policy.has_denied_read_restrictions()
+    {
         return "external";
     }
     if cfg!(target_os = "windows") && matches!(windows_sandbox_level, WindowsSandboxLevel::Elevated)
@@ -52,7 +54,7 @@ mod tests {
         let actual = sandbox_tag(
             &SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Enabled,
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
             },
             WindowsSandboxLevel::Disabled,
             true,

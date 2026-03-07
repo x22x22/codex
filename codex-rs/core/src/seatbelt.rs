@@ -186,20 +186,172 @@ fn normalize_path_for_sandbox(path: &Path) -> Option<AbsolutePathBuf> {
     normalized_path.or(Some(absolute_path))
 }
 
+fn normalize_glob_pattern_for_sandbox(pattern: &str) -> Option<String> {
+    let (prefix, suffix) = split_glob_pattern(pattern);
+    let normalized_prefix = normalize_path_for_sandbox(Path::new(prefix))?;
+    if suffix.is_empty() {
+        return Some(normalized_prefix.to_string_lossy().to_string());
+    }
+    if normalized_prefix.as_path() == Path::new("/") {
+        Some(format!("/{suffix}"))
+    } else {
+        Some(format!("{}/{suffix}", normalized_prefix.to_string_lossy()))
+    }
+}
+
+fn split_glob_pattern(pattern: &str) -> (&str, &str) {
+    let Some(first_glob) = pattern.find(is_glob_metacharacter) else {
+        return (pattern, "");
+    };
+    let separator_index = pattern[..first_glob].rfind('/');
+    match separator_index {
+        Some(0) => ("/", &pattern[1..]),
+        Some(index) => (&pattern[..index], &pattern[index + 1..]),
+        None => ("", pattern),
+    }
+}
+
+fn glob_pattern_base_directory(pattern: &str) -> Option<AbsolutePathBuf> {
+    let (prefix, _) = split_glob_pattern(pattern);
+    if prefix.is_empty() || prefix == "/" {
+        return None;
+    }
+    normalize_path_for_sandbox(Path::new(prefix))
+}
+
+fn glob_pattern_to_regex(pattern: &str) -> String {
+    let chars: Vec<char> = pattern.chars().collect();
+    let mut regex = String::from("^");
+    let mut index = 0;
+
+    while index < chars.len() {
+        if chars[index] == '*' {
+            let has_globstar = chars.get(index + 1) == Some(&'*');
+            if has_globstar {
+                let ends_pattern = index + 2 == chars.len();
+                let followed_by_separator = chars.get(index + 2) == Some(&'/');
+                if ends_pattern && index > 0 && chars[index - 1] == '/' {
+                    regex.pop();
+                    regex.push_str("(?:/.*)?");
+                    break;
+                }
+                if followed_by_separator {
+                    regex.push_str("(?:[^/]+/)*");
+                    index += 3;
+                    continue;
+                }
+                regex.push_str(".*");
+                index += 2;
+                continue;
+            }
+            regex.push_str("[^/]*");
+            index += 1;
+            continue;
+        }
+        if chars[index] == '?' {
+            regex.push_str("[^/]");
+            index += 1;
+            continue;
+        }
+        if chars[index] == '[' {
+            let mut class_end = index + 1;
+            while class_end < chars.len() && chars[class_end] != ']' {
+                class_end += 1;
+            }
+            if class_end == chars.len() {
+                regex.push_str("\\[");
+                index += 1;
+                continue;
+            }
+
+            regex.push('[');
+            let mut class_index = index + 1;
+            if matches!(chars.get(class_index), Some('!')) {
+                regex.push('^');
+                class_index += 1;
+            } else if matches!(chars.get(class_index), Some('^')) {
+                regex.push('\\');
+                regex.push('^');
+                class_index += 1;
+            }
+            while class_index < class_end {
+                if matches!(chars[class_index], '\\' | ']') {
+                    regex.push('\\');
+                }
+                regex.push(chars[class_index]);
+                class_index += 1;
+            }
+            regex.push(']');
+            index = class_end + 1;
+            continue;
+        }
+
+        if matches!(
+            chars[index],
+            '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|' | '?' | '\\'
+        ) {
+            regex.push('\\');
+        }
+        regex.push(chars[index]);
+        index += 1;
+    }
+
+    regex.push('$');
+    regex
+}
+
+fn escape_seatbelt_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn is_glob_metacharacter(ch: char) -> bool {
+    matches!(ch, '*' | '?' | '[')
+}
+
 fn deny_read_policy_and_params(sandbox_policy: &SandboxPolicy) -> (String, Vec<(String, PathBuf)>) {
-    let denied_paths = sandbox_policy.denied_read_paths();
-    if denied_paths.is_empty() {
+    let deny_read_patterns = sandbox_policy.deny_read_patterns();
+    if deny_read_patterns.is_empty() {
         return (String::new(), Vec::new());
     }
 
     let mut read_deny_params = BTreeMap::new();
+    let mut read_deny_regexes = BTreeSet::new();
     let mut unlink_deny_params = BTreeMap::new();
 
-    for denied_path in denied_paths {
-        let Some(normalized) = normalize_path_for_sandbox(denied_path.as_path()) else {
+    for denied_pattern in deny_read_patterns {
+        if denied_pattern.contains_glob() {
+            let Some(normalized_pattern) =
+                normalize_glob_pattern_for_sandbox(denied_pattern.as_str())
+            else {
+                warn!(
+                    "ignoring deny_read pattern because it could not be normalized for seatbelt: {}",
+                    denied_pattern.as_str()
+                );
+                continue;
+            };
+
+            read_deny_regexes.insert(glob_pattern_to_regex(&normalized_pattern));
+
+            if let Some(base_directory) = glob_pattern_base_directory(&normalized_pattern) {
+                for ancestor in base_directory.as_path().ancestors() {
+                    if ancestor == Path::new("/") {
+                        break;
+                    }
+                    if let Some(normalized_ancestor) = normalize_path_for_sandbox(ancestor) {
+                        unlink_deny_params
+                            .entry(normalized_ancestor.to_string_lossy().to_string())
+                            .or_insert(normalized_ancestor);
+                    }
+                }
+            }
+            continue;
+        }
+
+        let Some(normalized) = normalize_path_for_sandbox(Path::new(denied_pattern.as_str()))
+        else {
             warn!(
-                "ignoring deny_read path because it could not be normalized for seatbelt: {}",
-                denied_path.display()
+                "ignoring deny_read pattern because it could not be normalized for seatbelt: {}",
+                denied_pattern.as_str()
             );
             continue;
         };
@@ -220,7 +372,7 @@ fn deny_read_policy_and_params(sandbox_policy: &SandboxPolicy) -> (String, Vec<(
         }
     }
 
-    if read_deny_params.is_empty() {
+    if read_deny_params.is_empty() && read_deny_regexes.is_empty() {
         return (String::new(), Vec::new());
     }
 
@@ -231,6 +383,12 @@ fn deny_read_policy_and_params(sandbox_policy: &SandboxPolicy) -> (String, Vec<(
         let key = format!("DENY_READ_{index}");
         policy.push_str(&format!("(deny file-read* (subpath (param \"{key}\")))\n"));
         params.push((key, path.into_path_buf()));
+    }
+    for regex in read_deny_regexes {
+        policy.push_str(&format!(
+            "(deny file-read* (regex \"{}\"))\n",
+            escape_seatbelt_string(&regex)
+        ));
     }
 
     if !unlink_deny_params.is_empty() {
@@ -548,6 +706,7 @@ mod tests {
     use super::normalize_path_for_sandbox;
     use super::unix_socket_dir_params;
     use super::unix_socket_policy;
+    use crate::protocol::DenyReadPattern;
     use crate::protocol::SandboxPolicy;
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
     use crate::seatbelt_permissions::MacOsAutomationPermission;
@@ -585,7 +744,9 @@ mod tests {
 
         let policy = SandboxPolicy::ReadOnly {
             access: Default::default(),
-            deny_read_paths: vec![AbsolutePathBuf::try_from(denied_file).expect("absolute path")],
+            deny_read_patterns: vec![DenyReadPattern::from(
+                denied_file.to_string_lossy().into_owned(),
+            )],
         };
 
         let (policy_text, params) = deny_read_policy_and_params(&policy);
@@ -598,6 +759,29 @@ mod tests {
                 .any(|(key, value)| key.starts_with("DENY_READ_")
                     && value.ends_with(Path::new("secrets.txt")))
         );
+        assert!(
+            params
+                .iter()
+                .any(|(key, value)| key.starts_with("DENY_UNLINK_")
+                    && value.ends_with(Path::new("private")))
+        );
+    }
+
+    #[test]
+    fn deny_read_policy_emits_regex_for_glob_patterns() {
+        let tmp = TempDir::new().expect("tempdir");
+        let denied_pattern = format!("{}/private/**/*.txt", tmp.path().display());
+
+        let policy = SandboxPolicy::ReadOnly {
+            access: Default::default(),
+            deny_read_patterns: vec![DenyReadPattern::from(denied_pattern)],
+        };
+
+        let (policy_text, params) = deny_read_policy_and_params(&policy);
+
+        assert!(policy_text.contains("(deny file-read* (regex \"^"));
+        assert!(policy_text.contains("private/(?:[^/]+/)*[^/]*\\.txt$"));
+        assert!(policy_text.contains("(deny file-write-unlink"));
         assert!(
             params
                 .iter()
@@ -801,7 +985,7 @@ sys.exit(0 if allowed else 13)
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: Default::default(),
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -831,7 +1015,7 @@ sys.exit(0 if allowed else 13)
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: Default::default(),
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -950,7 +1134,7 @@ sys.exit(0 if allowed else 13)
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: Default::default(),
-                deny_read_paths: vec![],
+                deny_read_patterns: vec![],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -1002,7 +1186,7 @@ sys.exit(0 if allowed else 13)
                 .map(|p| p.try_into().unwrap())
                 .collect(),
             read_only_access: Default::default(),
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1197,7 +1381,7 @@ sys.exit(0 if allowed else 13)
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![worktree_root.try_into().expect("worktree_root is absolute")],
             read_only_access: Default::default(),
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1283,7 +1467,7 @@ sys.exit(0 if allowed else 13)
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             read_only_access: Default::default(),
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,

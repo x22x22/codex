@@ -116,7 +116,7 @@ pub fn run_main() -> ! {
 
     if sandbox_policy.has_full_disk_write_access()
         && !allow_network_for_proxy
-        && !sandbox_policy.has_denied_read_paths()
+        && !sandbox_policy.has_denied_read_patterns()
     {
         if let Err(e) = apply_sandbox_policy_to_current_thread(
             &sandbox_policy,

@@ -1,10 +1,11 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_config::FilesystemDenyReadPattern;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use globset::GlobBuilder;
 
 use crate::function_tool::FunctionCallError;
+use crate::protocol::DenyReadPattern;
 use crate::protocol::SandboxPolicy;
 
 const DENY_READ_POLICY_MESSAGE: &str =
@@ -36,52 +37,69 @@ pub(crate) fn ensure_search_root_does_not_overlap_deny_read(
     Ok(())
 }
 
-pub(crate) fn expand_deny_read_patterns(
-    patterns: &[FilesystemDenyReadPattern],
-) -> Vec<AbsolutePathBuf> {
-    let mut expanded = Vec::new();
-    for pattern in patterns {
-        if pattern.contains_glob() {
-            expand_glob_pattern(pattern, &mut expanded);
-        } else if let Ok(path) = AbsolutePathBuf::try_from(pattern.as_str()) {
-            push_unique_absolute(&mut expanded, path);
-        }
-    }
-    expanded
-}
-
 pub(crate) fn is_read_denied(path: &Path, sandbox_policy: &SandboxPolicy) -> bool {
-    let denied_paths = sandbox_policy.denied_read_paths();
-    if denied_paths.is_empty() {
-        return false;
-    }
-
+    let denied_paths = literal_deny_read_paths(sandbox_policy);
     let path_candidates = normalized_and_canonical_candidates(path);
-    denied_paths.iter().any(|denied| {
+    if denied_paths.iter().any(|denied| {
         let denied_candidates = normalized_and_canonical_candidates(denied.as_path());
         path_candidates.iter().any(|candidate| {
             denied_candidates.iter().any(|denied_candidate| {
                 candidate == denied_candidate || candidate.starts_with(denied_candidate)
             })
         })
-    })
-}
+    }) {
+        return true;
+    }
 
-pub(crate) fn overlaps_deny_read(path: &Path, sandbox_policy: &SandboxPolicy) -> bool {
-    let denied_paths = sandbox_policy.denied_read_paths();
-    if denied_paths.is_empty() {
+    if !cfg!(target_os = "macos") {
         return false;
     }
 
+    sandbox_policy
+        .deny_read_patterns()
+        .iter()
+        .filter(|pattern| pattern.contains_glob())
+        .any(|pattern| glob_pattern_matches_any_candidate(&path_candidates, pattern))
+}
+
+pub(crate) fn overlaps_deny_read(path: &Path, sandbox_policy: &SandboxPolicy) -> bool {
+    let denied_paths = literal_deny_read_paths(sandbox_policy);
     let path_candidates = normalized_and_canonical_candidates(path);
-    denied_paths.iter().any(|denied| {
+    if denied_paths.iter().any(|denied| {
         let denied_candidates = normalized_and_canonical_candidates(denied.as_path());
         path_candidates.iter().any(|candidate| {
             denied_candidates.iter().any(|denied_candidate| {
                 candidate.starts_with(denied_candidate) || denied_candidate.starts_with(candidate)
             })
         })
-    })
+    }) {
+        return true;
+    }
+
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+
+    sandbox_policy
+        .deny_read_patterns()
+        .iter()
+        .filter(|pattern| pattern.contains_glob())
+        .filter_map(glob_pattern_prefix)
+        .any(|prefix| {
+            path_candidates.iter().any(|candidate| {
+                candidate.starts_with(prefix.as_path()) || prefix.as_path().starts_with(candidate)
+            })
+        })
+}
+
+fn literal_deny_read_paths(sandbox_policy: &SandboxPolicy) -> Vec<AbsolutePathBuf> {
+    let mut denied_paths = Vec::new();
+    for pattern in sandbox_policy.deny_read_patterns() {
+        if let Some(path) = pattern.literal_path() {
+            push_unique_absolute(&mut denied_paths, path);
+        }
+    }
+    denied_paths
 }
 
 fn normalized_and_canonical_candidates(path: &Path) -> Vec<PathBuf> {
@@ -117,24 +135,37 @@ fn push_unique_absolute(candidates: &mut Vec<AbsolutePathBuf>, candidate: Absolu
     }
 }
 
-fn expand_glob_pattern(pattern: &FilesystemDenyReadPattern, expanded: &mut Vec<AbsolutePathBuf>) {
-    let (root, components) = split_glob_pattern(pattern.as_str());
-    let Ok(root) = AbsolutePathBuf::try_from(root) else {
-        return;
+fn glob_pattern_matches_any_candidate(
+    path_candidates: &[PathBuf],
+    pattern: &DenyReadPattern,
+) -> bool {
+    let Ok(glob) = GlobBuilder::new(pattern.as_str())
+        .literal_separator(true)
+        .build()
+    else {
+        return false;
     };
-    expand_glob_components(root.as_path(), &components, expanded);
+    let matcher = glob.compile_matcher();
+    path_candidates
+        .iter()
+        .any(|candidate| matcher.is_match(candidate))
 }
 
-fn split_glob_pattern(pattern: &str) -> (&str, Vec<&str>) {
-    let Some(first_glob) = pattern.find('*') else {
-        return (pattern, Vec::new());
+fn glob_pattern_prefix(pattern: &DenyReadPattern) -> Option<AbsolutePathBuf> {
+    let (root, _) = split_glob_pattern(pattern.as_str());
+    AbsolutePathBuf::try_from(root).ok()
+}
+
+fn split_glob_pattern(pattern: &str) -> (&str, &str) {
+    let Some(first_glob) = pattern.find(is_glob_metacharacter) else {
+        return (pattern, "");
     };
     let separator_index = pattern[..first_glob]
         .char_indices()
         .rev()
         .find(|(_, ch)| is_path_separator(*ch))
         .map(|(index, _)| index);
-    let (root, suffix) = match separator_index {
+    match separator_index {
         Some(0) => ("/", &pattern[1..]),
         Some(index)
             if cfg!(windows)
@@ -146,109 +177,7 @@ fn split_glob_pattern(pattern: &str) -> (&str, Vec<&str>) {
         }
         Some(index) => (&pattern[..index], &pattern[index + 1..]),
         None => ("", pattern),
-    };
-    let components = suffix
-        .split(is_path_separator)
-        .filter(|component| !component.is_empty())
-        .collect();
-    (root, components)
-}
-
-fn expand_glob_components(current: &Path, remaining: &[&str], expanded: &mut Vec<AbsolutePathBuf>) {
-    if remaining.is_empty() {
-        if let Ok(path) = AbsolutePathBuf::try_from(current) {
-            push_unique_absolute(expanded, path);
-        }
-        return;
     }
-
-    let component = remaining[0];
-    let rest = &remaining[1..];
-
-    if component == "**" {
-        expand_glob_components(current, rest, expanded);
-
-        let Ok(entries) = std::fs::read_dir(current) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if rest.is_empty()
-                && let Ok(path) = AbsolutePathBuf::try_from(path.as_path())
-            {
-                push_unique_absolute(expanded, path);
-            }
-            if path.is_dir() {
-                expand_glob_components(&path, remaining, expanded);
-            }
-        }
-        return;
-    }
-
-    let Ok(entries) = std::fs::read_dir(current) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
-        };
-        if !segment_matches(component, name) {
-            continue;
-        }
-        if rest.is_empty() {
-            if let Ok(path) = AbsolutePathBuf::try_from(path.as_path()) {
-                push_unique_absolute(expanded, path);
-            }
-        } else if path.is_dir() {
-            expand_glob_components(&path, rest, expanded);
-        }
-    }
-}
-
-fn segment_matches(pattern: &str, candidate: &str) -> bool {
-    if !pattern.contains('*') {
-        return pattern == candidate;
-    }
-
-    let pattern_chars: Vec<char> = pattern.chars().collect();
-    let candidate_chars: Vec<char> = candidate.chars().collect();
-    let mut pattern_index = 0;
-    let mut candidate_index = 0;
-    let mut star_index = None;
-    let mut star_candidate_index = 0;
-
-    while candidate_index < candidate_chars.len() {
-        if pattern_index < pattern_chars.len()
-            && pattern_chars[pattern_index] == candidate_chars[candidate_index]
-        {
-            pattern_index += 1;
-            candidate_index += 1;
-            continue;
-        }
-
-        if pattern_index < pattern_chars.len() && pattern_chars[pattern_index] == '*' {
-            star_index = Some(pattern_index);
-            pattern_index += 1;
-            star_candidate_index = candidate_index;
-            continue;
-        }
-
-        if let Some(star_index) = star_index {
-            pattern_index = star_index + 1;
-            star_candidate_index += 1;
-            candidate_index = star_candidate_index;
-            continue;
-        }
-
-        return false;
-    }
-
-    while pattern_index < pattern_chars.len() && pattern_chars[pattern_index] == '*' {
-        pattern_index += 1;
-    }
-
-    pattern_index == pattern_chars.len()
 }
 
 fn is_path_separator(ch: char) -> bool {
@@ -259,22 +188,25 @@ fn is_path_separator(ch: char) -> bool {
     }
 }
 
+fn is_glob_metacharacter(ch: char) -> bool {
+    matches!(ch, '*' | '?' | '[')
+}
+
 #[cfg(test)]
 mod tests {
-    use super::expand_deny_read_patterns;
-    use super::is_read_denied;
-    use super::overlaps_deny_read;
+    use crate::protocol::DenyReadPattern;
     use crate::protocol::ReadOnlyAccess;
     use crate::protocol::SandboxPolicy;
-    use codex_config::FilesystemDenyReadPattern;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+
+    use super::is_read_denied;
+    use super::overlaps_deny_read;
 
     fn deny_policy(path: &std::path::Path) -> SandboxPolicy {
         SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
-            deny_read_paths: vec![AbsolutePathBuf::try_from(path).expect("absolute deny path")],
+            deny_read_patterns: vec![DenyReadPattern::from(path.to_string_lossy().into_owned())],
         }
     }
 
@@ -332,37 +264,45 @@ mod tests {
     }
 
     #[test]
-    fn expand_deny_read_patterns_supports_star_and_globstar() {
+    fn literal_patterns_are_denied_and_globs_are_ignored_off_macos() {
         let temp = tempdir().expect("temp dir");
-        let secrets = temp.path().join("secrets");
-        let nested = secrets.join("nested");
-        std::fs::create_dir_all(&nested).expect("create nested");
-        let top = secrets.join("top.txt");
-        let deep = nested.join("deep.txt");
-        let ignored = secrets.join("top.log");
-        std::fs::write(&top, "top").expect("write top");
-        std::fs::write(&deep, "deep").expect("write deep");
-        std::fs::write(&ignored, "ignored").expect("write ignored");
+        let literal = temp.path().join("private");
+        let other = temp.path().join("notes.txt");
+        std::fs::create_dir_all(&literal).expect("create literal dir");
+        std::fs::write(&other, "notes").expect("write notes");
 
-        let top_pattern = FilesystemDenyReadPattern::from_input(&format!(
-            "{}/secrets/*.txt",
-            temp.path().display()
-        ))
-        .expect("normalize pattern");
-        let deep_pattern = FilesystemDenyReadPattern::from_input(&format!(
-            "{}/secrets/**/*.txt",
-            temp.path().display()
-        ))
-        .expect("normalize pattern");
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            deny_read_patterns: vec![
+                DenyReadPattern::from(literal.to_string_lossy().into_owned()),
+                DenyReadPattern::from(format!("{}/**/*.txt", temp.path().display())),
+            ],
+        };
 
-        let expanded = expand_deny_read_patterns(&[top_pattern, deep_pattern]);
+        assert_eq!(is_read_denied(&literal, &policy), true);
+        assert_eq!(is_read_denied(&other, &policy), cfg!(target_os = "macos"));
+    }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn glob_patterns_deny_matching_paths_on_macos() {
+        let temp = tempdir().expect("temp dir");
+        let denied = temp.path().join("private").join("secret1.txt");
+        std::fs::create_dir_all(denied.parent().expect("parent")).expect("create parent");
+        std::fs::write(&denied, "secret").expect("write secret");
+
+        let policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            deny_read_patterns: vec![DenyReadPattern::from(format!(
+                "{}/private/secret?.txt",
+                temp.path().display()
+            ))],
+        };
+
+        assert_eq!(is_read_denied(&denied, &policy), true);
         assert_eq!(
-            expanded,
-            vec![
-                AbsolutePathBuf::try_from(top).expect("absolute path"),
-                AbsolutePathBuf::try_from(deep).expect("absolute path"),
-            ]
+            overlaps_deny_read(&temp.path().join("private"), &policy),
+            true
         );
     }
 }

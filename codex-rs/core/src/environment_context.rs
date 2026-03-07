@@ -2,9 +2,9 @@ use crate::codex::TurnContext;
 use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::shell::Shell;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::DenyReadPattern;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -17,7 +17,7 @@ pub(crate) struct EnvironmentContext {
     pub current_date: Option<String>,
     pub timezone: Option<String>,
     pub network: Option<NetworkContext>,
-    pub deny_read_paths: Vec<AbsolutePathBuf>,
+    pub deny_read_patterns: Vec<DenyReadPattern>,
     pub subagents: Option<String>,
 }
 
@@ -34,7 +34,7 @@ impl EnvironmentContext {
         current_date: Option<String>,
         timezone: Option<String>,
         network: Option<NetworkContext>,
-        deny_read_paths: Vec<AbsolutePathBuf>,
+        deny_read_patterns: Vec<DenyReadPattern>,
         subagents: Option<String>,
     ) -> Self {
         Self {
@@ -43,7 +43,7 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
-            deny_read_paths,
+            deny_read_patterns,
             subagents,
         }
     }
@@ -57,7 +57,7 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
-            deny_read_paths,
+            deny_read_patterns,
             subagents,
             shell: _,
         } = other;
@@ -65,7 +65,7 @@ impl EnvironmentContext {
             && self.current_date == *current_date
             && self.timezone == *timezone
             && self.network == *network
-            && self.deny_read_paths == *deny_read_paths
+            && self.deny_read_patterns == *deny_read_patterns
             && self.subagents == *subagents
     }
 
@@ -76,8 +76,8 @@ impl EnvironmentContext {
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
         let after_network = Self::network_from_turn_context(after);
-        let before_deny_read_paths = before.sandbox_policy.denied_read_paths();
-        let after_deny_read_paths = after.sandbox_policy.denied_read_paths();
+        let before_deny_read_patterns = before.sandbox_policy.deny_read_patterns();
+        let after_deny_read_patterns = after.sandbox_policy.deny_read_patterns();
         let cwd = if before.cwd != after.cwd {
             Some(after.cwd.clone())
         } else {
@@ -90,10 +90,10 @@ impl EnvironmentContext {
         } else {
             before_network
         };
-        let deny_read_paths = if before_deny_read_paths != after_deny_read_paths {
-            after_deny_read_paths
+        let deny_read_patterns = if before_deny_read_patterns != after_deny_read_patterns {
+            after_deny_read_patterns
         } else {
-            before_deny_read_paths
+            before_deny_read_patterns
         };
         EnvironmentContext::new(
             cwd,
@@ -101,7 +101,7 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
-            deny_read_paths,
+            deny_read_patterns,
             None,
         )
     }
@@ -113,7 +113,7 @@ impl EnvironmentContext {
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
-            turn_context.sandbox_policy.denied_read_paths(),
+            turn_context.sandbox_policy.deny_read_patterns(),
             None,
         )
     }
@@ -125,7 +125,7 @@ impl EnvironmentContext {
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
-            turn_context_item.sandbox_policy.denied_read_paths(),
+            turn_context_item.sandbox_policy.deny_read_patterns(),
             None,
         )
     }
@@ -174,6 +174,9 @@ impl EnvironmentContext {
     /// <environment_context>
     ///   <cwd>...</cwd>
     ///   <shell>...</shell>
+    ///   <deny_read_patterns>
+    ///     <pattern>...</pattern>
+    ///   </deny_read_patterns>
     /// </environment_context>
     /// ```
     pub fn serialize_to_xml(self) -> String {
@@ -206,12 +209,12 @@ impl EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
-        if !self.deny_read_paths.is_empty() {
-            lines.push("  <deny_read_paths>".to_string());
-            for path in &self.deny_read_paths {
-                lines.push(format!("    <path>{}</path>", path.to_string_lossy()));
+        if !self.deny_read_patterns.is_empty() {
+            lines.push("  <deny_read_patterns>".to_string());
+            for pattern in &self.deny_read_patterns {
+                lines.push(format!("    <pattern>{}</pattern>", pattern.as_str()));
             }
-            lines.push("  </deny_read_paths>".to_string());
+            lines.push("  </deny_read_patterns>".to_string());
         }
         if let Some(subagents) = self.subagents {
             lines.push("  <subagents>".to_string());
@@ -233,7 +236,6 @@ mod tests {
     use crate::shell::ShellType;
 
     use super::*;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use core_test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
@@ -245,8 +247,8 @@ mod tests {
         }
     }
 
-    fn deny_path(path: &str) -> AbsolutePathBuf {
-        AbsolutePathBuf::try_from(path).expect("deny path should be absolute")
+    fn deny_path(path: &str) -> DenyReadPattern {
+        DenyReadPattern::from(path)
     }
 
     #[test]
@@ -441,7 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn serialize_environment_context_with_deny_read_paths() {
+    fn serialize_environment_context_with_deny_read_patterns() {
         let denied = vec![deny_path("/repo/.gitconfig"), deny_path("/repo/.ssh")];
         let context = EnvironmentContext::new(
             Some(test_path_buf("/repo")),
@@ -459,10 +461,10 @@ mod tests {
   <shell>bash</shell>
   <current_date>2026-02-26</current_date>
   <timezone>America/Los_Angeles</timezone>
-  <deny_read_paths>
-    <path>/repo/.gitconfig</path>
-    <path>/repo/.ssh</path>
-  </deny_read_paths>
+  <deny_read_patterns>
+    <pattern>/repo/.gitconfig</pattern>
+    <pattern>/repo/.ssh</pattern>
+  </deny_read_patterns>
 </environment_context>"#,
             test_path_buf("/repo").display()
         );
@@ -495,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn equals_except_shell_compares_deny_read_paths() {
+    fn equals_except_shell_compares_deny_read_patterns() {
         let context1 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
             fake_shell(),

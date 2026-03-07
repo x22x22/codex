@@ -65,9 +65,9 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
         install_network_seccomp_filter_on_current_thread(mode)?;
     }
 
-    if apply_landlock_fs && sandbox_policy.has_denied_read_paths() {
+    if apply_landlock_fs && sandbox_policy.has_denied_read_patterns() {
         return Err(CodexErr::UnsupportedOperation(
-            "Filesystem deny_read paths are not supported by the legacy Linux Landlock filesystem backend."
+            "Filesystem deny_read patterns are not supported by the legacy Linux Landlock filesystem backend."
                 .to_string(),
         ));
     }

@@ -91,7 +91,7 @@ pub(crate) fn create_bwrap_command_args(
 ) -> Result<Vec<String>> {
     if sandbox_policy.has_full_disk_write_access() {
         return if options.network_mode == BwrapNetworkMode::FullAccess {
-            if sandbox_policy.has_denied_read_paths() {
+            if sandbox_policy.has_denied_read_patterns() {
                 Ok(create_bwrap_flags_full_filesystem(
                     command,
                     sandbox_policy,
@@ -316,9 +316,9 @@ fn apply_deny_read_overlays(
     writable_roots: &[WritableRoot],
 ) {
     let deny_read_paths: BTreeSet<PathBuf> = sandbox_policy
-        .denied_read_paths()
+        .deny_read_patterns()
         .into_iter()
-        .map(PathBuf::from)
+        .filter_map(|pattern| pattern.literal_path().map(PathBuf::from))
         .collect();
 
     let writable_roots: Vec<PathBuf> = writable_roots
@@ -467,10 +467,10 @@ fn find_first_non_existent_component(target_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_protocol::protocol::DenyReadPattern;
     use codex_protocol::protocol::NetworkAccess;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
-    use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
 
@@ -501,9 +501,9 @@ mod tests {
             command.clone(),
             &SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Enabled,
-                deny_read_paths: vec![
-                    AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute path"),
-                ],
+                deny_read_patterns: vec![DenyReadPattern::from(
+                    denied_file.to_string_lossy().into_owned(),
+                )],
             },
             Path::new("/"),
             BwrapOptions {
@@ -561,7 +561,7 @@ mod tests {
         let sandbox_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![AbsolutePathBuf::try_from(Path::new("/dev")).expect("/dev path")],
             read_only_access: Default::default(),
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -600,7 +600,7 @@ mod tests {
                         .expect("absolute readable root"),
                 ],
             },
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
         };
 
         let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
@@ -626,7 +626,7 @@ mod tests {
                 include_platform_defaults: true,
                 readable_roots: Vec::new(),
             },
-            deny_read_paths: vec![],
+            deny_read_patterns: vec![],
         };
 
         // `ReadOnlyAccess::Restricted` always includes `cwd` as a readable
@@ -654,9 +654,9 @@ mod tests {
 
         let policy = SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
-            deny_read_paths: vec![
-                AbsolutePathBuf::try_from(denied_dir.as_path()).expect("absolute dir"),
-                AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute file"),
+            deny_read_patterns: vec![
+                DenyReadPattern::from(denied_dir.to_string_lossy().into_owned()),
+                DenyReadPattern::from(denied_file.to_string_lossy().into_owned()),
             ],
         };
 
@@ -690,9 +690,9 @@ mod tests {
                         .expect("absolute readable root"),
                 ],
             },
-            deny_read_paths: vec![
-                AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute denied file"),
-            ],
+            deny_read_patterns: vec![DenyReadPattern::from(
+                denied_file.to_string_lossy().into_owned(),
+            )],
         };
 
         let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
@@ -727,9 +727,9 @@ mod tests {
 
         let policy = SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
-            deny_read_paths: vec![
-                AbsolutePathBuf::try_from(denied_dir.as_path()).expect("absolute dir"),
-                AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute file"),
+            deny_read_patterns: vec![
+                DenyReadPattern::from(denied_dir.to_string_lossy().into_owned()),
+                DenyReadPattern::from(denied_file.to_string_lossy().into_owned()),
             ],
         };
 
@@ -755,9 +755,9 @@ mod tests {
 
         let policy = SandboxPolicy::ReadOnly {
             access: ReadOnlyAccess::FullAccess,
-            deny_read_paths: vec![
-                AbsolutePathBuf::try_from(denied_file.as_path()).expect("absolute file"),
-            ],
+            deny_read_patterns: vec![DenyReadPattern::from(
+                denied_file.to_string_lossy().into_owned(),
+            )],
         };
 
         let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
