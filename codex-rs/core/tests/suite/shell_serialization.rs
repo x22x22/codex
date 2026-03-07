@@ -740,6 +740,7 @@ async fn shell_command_output_is_freeform() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "echo shell command",
+        "login": false,
         "timeout_ms": 1_000,
     });
     let responses = vec![
@@ -791,6 +792,7 @@ async fn shell_command_output_is_not_truncated_under_10k_bytes() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "perl -e 'print \"1\" x 10000'",
+        "login": false,
         "timeout_ms": 1000,
     });
     let responses = vec![
@@ -841,6 +843,7 @@ async fn shell_command_output_is_not_truncated_over_10k_bytes() -> Result<()> {
     let call_id = "shell-command";
     let args = json!({
         "command": "perl -e 'print \"1\" x 10001'",
+        "login": false,
         "timeout_ms": 1000,
     });
     let responses = vec![
