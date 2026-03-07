@@ -29,6 +29,7 @@ use crate::sandboxing::CommandSpec;
 use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxManager;
 use crate::sandboxing::SandboxPermissions;
+use crate::sandboxing::should_require_platform_sandbox;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
@@ -165,22 +166,17 @@ pub async fn process_exec_tool_call(
 ) -> Result<ExecToolCallOutput> {
     let windows_sandbox_level = params.windows_sandbox_level;
     let enforce_managed_network = params.network.is_some();
-    let sandbox_type = match file_system_sandbox_policy.kind {
-        FileSystemSandboxKind::Unrestricted | FileSystemSandboxKind::ExternalSandbox => {
-            if enforce_managed_network {
-                get_platform_sandbox(
-                    windows_sandbox_level
-                        != codex_protocol::config_types::WindowsSandboxLevel::Disabled,
-                )
-                .unwrap_or(SandboxType::None)
-            } else {
-                SandboxType::None
-            }
-        }
-        _ => get_platform_sandbox(
+    let sandbox_type = if should_require_platform_sandbox(
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        enforce_managed_network,
+    ) {
+        get_platform_sandbox(
             windows_sandbox_level != codex_protocol::config_types::WindowsSandboxLevel::Disabled,
         )
-        .unwrap_or(SandboxType::None),
+        .unwrap_or(SandboxType::None)
+    } else {
+        SandboxType::None
     };
     tracing::debug!("Sandbox type: {sandbox_type:?}");
 
