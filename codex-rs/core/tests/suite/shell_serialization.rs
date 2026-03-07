@@ -349,7 +349,7 @@ async fn shell_output_for_freeform_tool_records_duration(
     let test = builder.build(&server).await?;
 
     let call_id = "shell-structured";
-    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "sleep 1"], output_type)?;
+    let responses = shell_responses(call_id, vec!["/bin/sh", "-c", "sleep 0.2"], output_type)?;
     let mock = mount_sse_sequence(&server, responses).await;
 
     test.submit_turn_with_policy(
@@ -381,7 +381,7 @@ $"#;
         .and_then(|value| value.as_str().parse::<f32>().ok())
         .expect("expected structured shell output to contain wall time seconds");
     assert!(
-        wall_time_seconds > 0.5,
+        wall_time_seconds > 0.1,
         "expected wall time to be greater than zero seconds, got {wall_time_seconds}"
     );
 
