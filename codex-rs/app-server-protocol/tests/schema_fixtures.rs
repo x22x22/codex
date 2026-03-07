@@ -7,40 +7,15 @@ use similar::TextDiff;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::Instant;
 
 #[test]
 fn typescript_schema_fixtures_match_generated() -> Result<()> {
-    let start = Instant::now();
     let schema_root = schema_root()?;
-    eprintln!(
-        "[schema_fixtures][typescript] resolved schema root in {:?}: {}",
-        start.elapsed(),
-        schema_root.display()
-    );
-
-    let fixture_read_start = Instant::now();
     let fixture_tree = read_tree(&schema_root, "typescript")?;
-    eprintln!(
-        "[schema_fixtures][typescript] read {} vendored files in {:?}",
-        fixture_tree.len(),
-        fixture_read_start.elapsed()
-    );
-
-    let generate_start = Instant::now();
     let generated_tree = generate_typescript_schema_fixture_subtree_for_tests()
         .context("generate in-memory typescript schema fixtures")?;
-    eprintln!(
-        "[schema_fixtures][typescript] generated schema fixtures in {:?}",
-        generate_start.elapsed()
-    );
 
     assert_schema_trees_match("typescript", &fixture_tree, &generated_tree)?;
-    eprintln!(
-        "[schema_fixtures][typescript] compared {} files in {:?}",
-        fixture_tree.len(),
-        start.elapsed()
-    );
 
     Ok(())
 }
@@ -56,24 +31,10 @@ fn assert_schema_fixtures_match_generated(
     label: &'static str,
     generate: impl FnOnce(&Path) -> Result<()>,
 ) -> Result<()> {
-    let start = Instant::now();
     let schema_root = schema_root()?;
-    eprintln!(
-        "[schema_fixtures][{label}] resolved schema root in {:?}: {}",
-        start.elapsed(),
-        schema_root.display()
-    );
-
-    let fixture_read_start = Instant::now();
     let fixture_tree = read_tree(&schema_root, label)?;
-    eprintln!(
-        "[schema_fixtures][{label}] read {} vendored files in {:?}",
-        fixture_tree.len(),
-        fixture_read_start.elapsed()
-    );
 
     let temp_dir = tempfile::tempdir().context("create temp dir")?;
-    let generate_start = Instant::now();
     let generated_root = temp_dir.path().join(label);
     generate(&generated_root).with_context(|| {
         format!(
@@ -81,25 +42,10 @@ fn assert_schema_fixtures_match_generated(
             generated_root.display()
         )
     })?;
-    eprintln!(
-        "[schema_fixtures][{label}] generated schema fixtures in {:?}",
-        generate_start.elapsed()
-    );
 
-    let generated_read_start = Instant::now();
     let generated_tree = read_tree(temp_dir.path(), label)?;
-    eprintln!(
-        "[schema_fixtures][{label}] read {} generated files in {:?}",
-        generated_tree.len(),
-        generated_read_start.elapsed()
-    );
 
     assert_schema_trees_match(label, &fixture_tree, &generated_tree)?;
-    eprintln!(
-        "[schema_fixtures][{label}] compared {} files in {:?}",
-        fixture_tree.len(),
-        start.elapsed()
-    );
 
     Ok(())
 }

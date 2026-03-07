@@ -6831,10 +6831,6 @@ async fn try_run_sampling_request(
     if cancellation_token.is_cancelled()
         && outcome.as_ref().is_ok_and(|result| result.needs_follow_up)
     {
-        debug!(
-            turn_id = %turn_context.sub_id,
-            "turn cancelled after tool drain; suppressing follow-up request"
-        );
         return Err(CodexErr::TurnAborted);
     }
 

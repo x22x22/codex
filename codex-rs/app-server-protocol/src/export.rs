@@ -34,7 +34,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
-use std::time::Instant;
 use ts_rs::TS;
 
 pub(crate) const GENERATED_TS_HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
@@ -109,12 +108,10 @@ pub fn generate_ts_with_options(
     prettier: Option<&Path>,
     options: GenerateTsOptions,
 ) -> Result<()> {
-    let generate_start = Instant::now();
     let v2_out_dir = out_dir.join("v2");
     ensure_dir(out_dir)?;
     ensure_dir(&v2_out_dir)?;
 
-    let export_start = Instant::now();
     ClientRequest::export_all_to(out_dir)?;
     export_client_responses(out_dir)?;
     ClientNotification::export_all_to(out_dir)?;
@@ -123,28 +120,14 @@ pub fn generate_ts_with_options(
     export_server_responses(out_dir)?;
     ServerNotification::export_all_to(out_dir)?;
     EventMsg::export_all_to(out_dir)?;
-    eprintln!(
-        "[app_server_protocol::generate_ts_with_options] exported TypeScript files in {:?}",
-        export_start.elapsed()
-    );
 
     if !options.experimental_api {
-        let filter_start = Instant::now();
         filter_experimental_ts(out_dir)?;
-        eprintln!(
-            "[app_server_protocol::generate_ts_with_options] filtered experimental entries in {:?}",
-            filter_start.elapsed()
-        );
     }
 
     if options.generate_indices {
-        let indices_start = Instant::now();
         generate_index_ts(out_dir)?;
         generate_index_ts(&v2_out_dir)?;
-        eprintln!(
-            "[app_server_protocol::generate_ts_with_options] generated index files in {:?}",
-            indices_start.elapsed()
-        );
     }
 
     // Ensure our header is present on all TS files (root + subdirs like v2/).
@@ -152,17 +135,10 @@ pub fn generate_ts_with_options(
     let should_collect_ts_files =
         options.ensure_headers || (options.run_prettier && prettier.is_some());
     if should_collect_ts_files {
-        let collect_start = Instant::now();
         ts_files = ts_files_in_recursive(out_dir)?;
-        eprintln!(
-            "[app_server_protocol::generate_ts_with_options] collected {} TypeScript files in {:?}",
-            ts_files.len(),
-            collect_start.elapsed()
-        );
     }
 
     if options.ensure_headers {
-        let headers_start = Instant::now();
         let worker_count = thread::available_parallelism()
             .map_or(1, usize::from)
             .min(ts_files.len().max(1));
@@ -186,11 +162,6 @@ pub fn generate_ts_with_options(
 
             Ok(())
         })?;
-        eprintln!(
-            "[app_server_protocol::generate_ts_with_options] ensured headers across {} files with {worker_count} workers in {:?}",
-            ts_files.len(),
-            headers_start.elapsed()
-        );
     }
 
     // Optionally run Prettier on all generated TS files.
@@ -209,11 +180,6 @@ pub fn generate_ts_with_options(
             return Err(anyhow!("Prettier failed with status {status}"));
         }
     }
-
-    eprintln!(
-        "[app_server_protocol::generate_ts_with_options] finished in {:?}",
-        generate_start.elapsed()
-    );
 
     Ok(())
 }

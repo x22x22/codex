@@ -292,9 +292,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             Err(err) if err.kind() == ErrorKind::AddrInUse && bind_retries < MAX_BIND_RETRIES => {
                 bind_retries += 1;
-                eprintln!(
-                    "bind retry {bind_retries}/{MAX_BIND_RETRIES} for {bind_addr} failed: {err}"
-                );
                 sleep(BIND_RETRY_DELAY).await;
             }
             Err(err) => return Err(err.into()),

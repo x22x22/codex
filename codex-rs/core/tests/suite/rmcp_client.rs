@@ -1126,21 +1126,8 @@ async fn wait_for_streamable_http_server(
         attempts += 1;
 
         match tokio::time::timeout(remaining, client.get(&metadata_url).send()).await {
-            Ok(Ok(response)) if response.status() == StatusCode::OK => {
-                if attempts > 1 {
-                    eprintln!(
-                        "streamable HTTP server metadata became ready after {attempts} attempts: {metadata_url}"
-                    );
-                }
-                return Ok(());
-            }
+            Ok(Ok(response)) if response.status() == StatusCode::OK => return Ok(()),
             Ok(Ok(response)) => {
-                if attempts == 1 || attempts.is_multiple_of(10) {
-                    eprintln!(
-                        "streamable HTTP server metadata not ready yet (attempt {attempts}) at {metadata_url}: HTTP {}",
-                        response.status()
-                    );
-                }
                 if Instant::now() >= deadline {
                     return Err(anyhow::anyhow!(
                         "timed out waiting for streamable HTTP server metadata at {metadata_url}: HTTP {}",
@@ -1149,11 +1136,6 @@ async fn wait_for_streamable_http_server(
                 }
             }
             Ok(Err(error)) => {
-                if attempts == 1 || attempts.is_multiple_of(10) {
-                    eprintln!(
-                        "streamable HTTP server metadata not reachable yet (attempt {attempts}) at {metadata_url}: {error}"
-                    );
-                }
                 if Instant::now() >= deadline {
                     return Err(anyhow::anyhow!(
                         "timed out waiting for streamable HTTP server metadata at {metadata_url}: {error}"
