@@ -14,12 +14,14 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
-use core_test_support::fs_wait;
+use codex_utils_cargo_bin::cargo_bin;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
+use tokio::time::Instant;
+use tokio::time::sleep;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -191,29 +193,27 @@ async fn turn_start_notify_payload_includes_initialize_client_name() -> Result<(
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;
     let codex_home = TempDir::new()?;
-    let notify_script = codex_home.path().join("notify.py");
-    std::fs::write(
-        &notify_script,
-        r#"from pathlib import Path
-import sys
-
-payload_path = Path(__file__).with_name("notify.json")
-tmp_path = payload_path.with_suffix(".json.tmp")
-tmp_path.write_text(sys.argv[-1], encoding="utf-8")
-tmp_path.replace(payload_path)
-"#,
-    )?;
     let notify_file = codex_home.path().join("notify.json");
-    let notify_script = notify_script
+    let notify_log = codex_home.path().join("notify.log");
+    let notify_capture = cargo_bin("codex-app-server-test-notify-capture")?;
+    let notify_capture = notify_capture
         .to_str()
-        .expect("notify script path should be valid UTF-8");
+        .expect("notify capture path should be valid UTF-8");
+    let notify_file_str = notify_file
+        .to_str()
+        .expect("notify file path should be valid UTF-8");
+    let notify_log_str = notify_log
+        .to_str()
+        .expect("notify log path should be valid UTF-8");
     create_config_toml_with_extra(
         codex_home.path(),
         &server.uri(),
         "never",
         &format!(
-            "notify = [\"python3\", {}]",
-            toml_basic_string(notify_script)
+            "notify = [{}, {}, {}]",
+            toml_basic_string(notify_capture),
+            toml_basic_string(notify_file_str),
+            toml_basic_string(notify_log_str)
         ),
     )?;
 
@@ -261,12 +261,47 @@ tmp_path.replace(payload_path)
     )
     .await??;
 
-    fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
-    let payload_raw = tokio::fs::read_to_string(&notify_file).await?;
-    let payload: Value = serde_json::from_str(&payload_raw)?;
+    let payload = wait_for_json_file(&notify_file, &notify_log).await?;
     assert_eq!(payload["client"], "xcode");
 
     Ok(())
+}
+
+async fn wait_for_json_file(path: &Path, log_path: &Path) -> Result<Value> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut last_contents = None;
+    loop {
+        match tokio::fs::read_to_string(path).await {
+            Ok(contents) => {
+                if let Ok(payload) = serde_json::from_str(&contents) {
+                    return Ok(payload);
+                }
+                last_contents = Some(contents);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err.into()),
+        }
+
+        if Instant::now() >= deadline {
+            let helper_log = match tokio::fs::read_to_string(log_path).await {
+                Ok(contents) => contents,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                    "<missing helper log>".to_string()
+                }
+                Err(err) => format!("<failed to read helper log: {err}>"),
+            };
+            let last_contents =
+                last_contents.unwrap_or_else(|| "<missing notify file>".to_string());
+            anyhow::bail!(
+                "timed out waiting for valid JSON in {}. helper log: {} last contents: {}",
+                path.display(),
+                helper_log.trim_end(),
+                last_contents.trim_end()
+            );
+        }
+
+        sleep(Duration::from_millis(25)).await;
+    }
 }
 
 // Helper to create a config.toml pointing at the mock model server.
@@ -296,6 +331,9 @@ sandbox_mode = "read-only"
 model_provider = "mock_provider"
 
 {extra}
+
+[features]
+shell_snapshot = false
 
 [model_providers.mock_provider]
 name = "Mock provider for test"

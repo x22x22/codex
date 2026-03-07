@@ -29,6 +29,7 @@ use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
+use serial_test::serial;
 use std::ffi::OsString;
 use std::fs;
 use std::time::Duration;
@@ -230,6 +231,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(openai_api_key_env)]
 async fn conversation_start_uses_openai_env_key_fallback_with_chatgpt_auth() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

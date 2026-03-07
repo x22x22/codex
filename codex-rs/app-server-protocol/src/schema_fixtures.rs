@@ -27,6 +27,15 @@ pub fn read_schema_fixture_tree(schema_root: &Path) -> Result<BTreeMap<PathBuf, 
     Ok(all)
 }
 
+pub fn read_schema_fixture_subtree(
+    schema_root: &Path,
+    label: &str,
+) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
+    let subtree_root = schema_root.join(label);
+    collect_files_recursive(&subtree_root)
+        .with_context(|| format!("read schema fixture subtree {}", subtree_root.display()))
+}
+
 /// Regenerates `schema/typescript/` and `schema/json/`.
 ///
 /// This is intended to be used by tooling (e.g., `just write-app-server-schema`).

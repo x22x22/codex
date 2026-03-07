@@ -1,18 +1,70 @@
 use anyhow::Context;
 use anyhow::Result;
-use codex_app_server_protocol::read_schema_fixture_tree;
-use codex_app_server_protocol::write_schema_fixtures;
+use codex_app_server_protocol::GenerateTsOptions;
+use codex_app_server_protocol::generate_json_with_experimental;
+use codex_app_server_protocol::generate_ts_with_options;
+use codex_app_server_protocol::read_schema_fixture_subtree;
 use similar::TextDiff;
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::path::PathBuf;
+use std::time::Instant;
 
 #[test]
-fn schema_fixtures_match_generated() -> Result<()> {
+fn typescript_schema_fixtures_match_generated() -> Result<()> {
+    assert_schema_fixtures_match_generated("typescript", |output_dir| {
+        generate_ts_with_options(output_dir, None, GenerateTsOptions::default())
+    })
+}
+
+#[test]
+fn json_schema_fixtures_match_generated() -> Result<()> {
+    assert_schema_fixtures_match_generated("json", |output_dir| {
+        generate_json_with_experimental(output_dir, false)
+    })
+}
+
+fn assert_schema_fixtures_match_generated(
+    label: &'static str,
+    generate: impl FnOnce(&Path) -> Result<()>,
+) -> Result<()> {
+    let start = Instant::now();
     let schema_root = schema_root()?;
-    let fixture_tree = read_tree(&schema_root)?;
+    eprintln!(
+        "[schema_fixtures][{label}] resolved schema root in {:?}: {}",
+        start.elapsed(),
+        schema_root.display()
+    );
+
+    let fixture_read_start = Instant::now();
+    let fixture_tree = read_tree(&schema_root, label)?;
+    eprintln!(
+        "[schema_fixtures][{label}] read {} vendored files in {:?}",
+        fixture_tree.len(),
+        fixture_read_start.elapsed()
+    );
 
     let temp_dir = tempfile::tempdir().context("create temp dir")?;
-    write_schema_fixtures(temp_dir.path(), None).context("generate schema fixtures")?;
-    let generated_tree = read_tree(temp_dir.path())?;
+    let generate_start = Instant::now();
+    let generated_root = temp_dir.path().join(label);
+    generate(&generated_root).with_context(|| {
+        format!(
+            "generate {label} schema fixtures into {}",
+            generated_root.display()
+        )
+    })?;
+    eprintln!(
+        "[schema_fixtures][{label}] generated schema fixtures in {:?}",
+        generate_start.elapsed()
+    );
+
+    let generated_read_start = Instant::now();
+    let generated_tree = read_tree(temp_dir.path(), label)?;
+    eprintln!(
+        "[schema_fixtures][{label}] read {} generated files in {:?}",
+        generated_tree.len(),
+        generated_read_start.elapsed()
+    );
 
     let fixture_paths = fixture_tree
         .keys()
@@ -32,7 +84,7 @@ fn schema_fixtures_match_generated() -> Result<()> {
             .to_string();
 
         panic!(
-            "Vendored app-server schema fixture file set doesn't match freshly generated output. \
+            "Vendored {label} app-server schema fixture file set doesn't match freshly generated output. \
 Run `just write-app-server-schema` to overwrite with your changes.\n\n{diff}"
         );
     }
@@ -54,16 +106,22 @@ Run `just write-app-server-schema` to overwrite with your changes.\n\n{diff}"
             .header("fixture", "generated")
             .to_string();
         panic!(
-            "Vendored app-server schema fixture {} differs from generated output. \
+            "Vendored {label} app-server schema fixture {} differs from generated output. \
 Run `just write-app-server-schema` to overwrite with your changes.\n\n{diff}",
             path.display()
         );
     }
 
+    eprintln!(
+        "[schema_fixtures][{label}] compared {} files in {:?}",
+        fixture_tree.len(),
+        start.elapsed()
+    );
+
     Ok(())
 }
 
-fn schema_root() -> Result<std::path::PathBuf> {
+fn schema_root() -> Result<PathBuf> {
     // In Bazel runfiles (especially manifest-only mode), resolving directories is not
     // reliable. Resolve a known file, then walk up to the schema root.
     let typescript_index = codex_utils_cargo_bin::find_resource!("schema/typescript/index.ts")
@@ -92,6 +150,11 @@ fn schema_root() -> Result<std::path::PathBuf> {
     Ok(schema_root)
 }
 
-fn read_tree(root: &Path) -> Result<std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>> {
-    read_schema_fixture_tree(root).context("read schema fixture tree")
+fn read_tree(root: &Path, label: &str) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
+    read_schema_fixture_subtree(root, label).with_context(|| {
+        format!(
+            "read {label} schema fixture subtree from {}",
+            root.display()
+        )
+    })
 }

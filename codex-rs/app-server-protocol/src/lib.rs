@@ -17,6 +17,7 @@ pub use protocol::thread_history::*;
 pub use protocol::v1::*;
 pub use protocol::v2::*;
 pub use schema_fixtures::SchemaFixtureOptions;
+pub use schema_fixtures::read_schema_fixture_subtree;
 pub use schema_fixtures::read_schema_fixture_tree;
 pub use schema_fixtures::write_schema_fixtures;
 pub use schema_fixtures::write_schema_fixtures_with_options;
