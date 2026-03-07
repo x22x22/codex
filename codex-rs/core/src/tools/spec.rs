@@ -2262,9 +2262,7 @@ mod tests {
             create_exec_command_tool(true, false),
             create_write_stdin_tool(),
             PLAN_TOOL.clone(),
-            create_request_user_input_tool(CollaborationModesConfig {
-                default_mode_request_user_input: true,
-            }),
+            create_request_user_input_tool(CollaborationModesConfig::default()),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
@@ -2383,12 +2381,10 @@ mod tests {
         let request_user_input_tool = find_tool(&tools, "request_user_input");
         assert_eq!(
             request_user_input_tool.spec,
-            create_request_user_input_tool(CollaborationModesConfig {
-                default_mode_request_user_input: true,
-            })
+            create_request_user_input_tool(CollaborationModesConfig::default())
         );
 
-        features.disable(Feature::DefaultModeRequestUserInput);
+        features.enable(Feature::DefaultModeRequestUserInput);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
             features: &features,
@@ -2399,7 +2395,9 @@ mod tests {
         let request_user_input_tool = find_tool(&tools, "request_user_input");
         assert_eq!(
             request_user_input_tool.spec,
-            create_request_user_input_tool(CollaborationModesConfig::default())
+            create_request_user_input_tool(CollaborationModesConfig {
+                default_mode_request_user_input: true,
+            })
         );
     }
 

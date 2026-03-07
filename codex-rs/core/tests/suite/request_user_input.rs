@@ -71,15 +71,21 @@ fn call_output_content_and_success(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn request_user_input_round_trip_resolves_pending() -> anyhow::Result<()> {
-    request_user_input_round_trip_for_mode(ModeKind::Plan).await
+    request_user_input_round_trip_for_mode(ModeKind::Plan, |_| {}).await
 }
 
-async fn request_user_input_round_trip_for_mode(mode: ModeKind) -> anyhow::Result<()> {
+async fn request_user_input_round_trip_for_mode<C>(
+    mode: ModeKind,
+    configure: C,
+) -> anyhow::Result<()>
+where
+    C: FnOnce(&mut Config) + Send + 'static,
+{
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
 
-    let mut builder = test_codex();
+    let mut builder = test_codex().with_config(configure);
     let TestCodex {
         codex,
         cwd,
@@ -294,30 +300,28 @@ async fn request_user_input_rejected_in_execute_mode_alias() -> anyhow::Result<(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_user_input_round_trip_in_default_mode_by_default() -> anyhow::Result<()> {
-    request_user_input_round_trip_for_mode(ModeKind::Default).await
+async fn request_user_input_rejected_in_default_mode_by_default() -> anyhow::Result<()> {
+    assert_request_user_input_rejected("Default", |model| CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model,
+            reasoning_effort: None,
+            developer_instructions: None,
+        },
+    })
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_user_input_rejected_in_default_mode_when_feature_disabled() -> anyhow::Result<()> {
-    assert_request_user_input_rejected_with_config(
-        "Default",
-        |model| CollaborationMode {
-            mode: ModeKind::Default,
-            settings: Settings {
-                model,
-                reasoning_effort: None,
-                developer_instructions: None,
-            },
-        },
-        |config| {
-            #[allow(clippy::expect_used)]
-            config
-                .features
-                .disable(Feature::DefaultModeRequestUserInput)
-                .expect("test config should allow feature update");
-        },
-    )
+async fn request_user_input_round_trip_in_default_mode_when_feature_enabled() -> anyhow::Result<()>
+{
+    request_user_input_round_trip_for_mode(ModeKind::Default, |config| {
+        #[allow(clippy::expect_used)]
+        config
+            .features
+            .enable(Feature::DefaultModeRequestUserInput)
+            .expect("test config should allow feature update");
+    })
     .await
 }
 

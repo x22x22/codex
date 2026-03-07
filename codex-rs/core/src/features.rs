@@ -686,8 +686,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::DefaultModeRequestUserInput,
         key: "default_mode_request_user_input",
-        stage: Stage::Stable,
-        default_enabled: true,
+        stage: Stage::Experimental {
+            name: "Default mode request_user_input",
+            menu_description: "Allow Codex to use the request_user_input tool in Default mode when it truly cannot proceed safely with a reasonable assumption. Restart Codex after enabling.",
+            announcement: "NEW: Allow request_user_input in Default mode. Enable it in /experimental and restart Codex!",
+        },
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::CollaborationModes,
@@ -882,6 +886,28 @@ mod tests {
             ))
         );
         assert_eq!(Feature::JsRepl.default_enabled(), false);
+    }
+
+    #[test]
+    fn default_mode_request_user_input_is_experimental_and_user_toggleable() {
+        let spec = Feature::DefaultModeRequestUserInput.info();
+        let stage = spec.stage;
+
+        assert!(matches!(stage, Stage::Experimental { .. }));
+        assert_eq!(
+            stage.experimental_menu_name(),
+            Some("Default mode request_user_input")
+        );
+        assert_eq!(
+            stage.experimental_menu_description(),
+            Some(
+                "Allow Codex to use the request_user_input tool in Default mode when it truly cannot proceed safely with a reasonable assumption. Restart Codex after enabling."
+            )
+        );
+        assert_eq!(
+            Feature::DefaultModeRequestUserInput.default_enabled(),
+            false
+        );
     }
 
     #[test]
