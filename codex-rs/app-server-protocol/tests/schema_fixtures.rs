@@ -1,8 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
-use codex_app_server_protocol::GenerateTsOptions;
 use codex_app_server_protocol::generate_json_with_experimental;
-use codex_app_server_protocol::generate_ts_with_options;
+use codex_app_server_protocol::generate_typescript_schema_fixture_subtree_for_tests;
 use codex_app_server_protocol::read_schema_fixture_subtree;
 use similar::TextDiff;
 use std::collections::BTreeMap;
@@ -12,16 +11,38 @@ use std::time::Instant;
 
 #[test]
 fn typescript_schema_fixtures_match_generated() -> Result<()> {
-    assert_schema_fixtures_match_generated("typescript", |output_dir| {
-        generate_ts_with_options(
-            output_dir,
-            None,
-            GenerateTsOptions {
-                ensure_headers: false,
-                ..GenerateTsOptions::default()
-            },
-        )
-    })
+    let start = Instant::now();
+    let schema_root = schema_root()?;
+    eprintln!(
+        "[schema_fixtures][typescript] resolved schema root in {:?}: {}",
+        start.elapsed(),
+        schema_root.display()
+    );
+
+    let fixture_read_start = Instant::now();
+    let fixture_tree = read_tree(&schema_root, "typescript")?;
+    eprintln!(
+        "[schema_fixtures][typescript] read {} vendored files in {:?}",
+        fixture_tree.len(),
+        fixture_read_start.elapsed()
+    );
+
+    let generate_start = Instant::now();
+    let generated_tree = generate_typescript_schema_fixture_subtree_for_tests()
+        .context("generate in-memory typescript schema fixtures")?;
+    eprintln!(
+        "[schema_fixtures][typescript] generated schema fixtures in {:?}",
+        generate_start.elapsed()
+    );
+
+    assert_schema_trees_match("typescript", &fixture_tree, &generated_tree)?;
+    eprintln!(
+        "[schema_fixtures][typescript] compared {} files in {:?}",
+        fixture_tree.len(),
+        start.elapsed()
+    );
+
+    Ok(())
 }
 
 #[test]
@@ -73,6 +94,21 @@ fn assert_schema_fixtures_match_generated(
         generated_read_start.elapsed()
     );
 
+    assert_schema_trees_match(label, &fixture_tree, &generated_tree)?;
+    eprintln!(
+        "[schema_fixtures][{label}] compared {} files in {:?}",
+        fixture_tree.len(),
+        start.elapsed()
+    );
+
+    Ok(())
+}
+
+fn assert_schema_trees_match(
+    label: &str,
+    fixture_tree: &BTreeMap<PathBuf, Vec<u8>>,
+    generated_tree: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<()> {
     let fixture_paths = fixture_tree
         .keys()
         .map(|p| p.display().to_string())
@@ -118,12 +154,6 @@ Run `just write-app-server-schema` to overwrite with your changes.\n\n{diff}",
             path.display()
         );
     }
-
-    eprintln!(
-        "[schema_fixtures][{label}] compared {} files in {:?}",
-        fixture_tree.len(),
-        start.elapsed()
-    );
 
     Ok(())
 }

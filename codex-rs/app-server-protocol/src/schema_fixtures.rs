@@ -1,12 +1,25 @@
+use crate::ClientNotification;
+use crate::ClientRequest;
+use crate::ServerNotification;
+use crate::ServerRequest;
 use crate::export::GENERATED_TS_HEADER;
+use crate::export::filter_experimental_ts_tree;
+use crate::export::generate_index_ts_tree;
+use crate::protocol::common::visit_client_response_types;
+use crate::protocol::common::visit_server_response_types;
 use anyhow::Context;
 use anyhow::Result;
+use codex_protocol::protocol::EventMsg;
 use serde_json::Map;
 use serde_json::Value;
+use std::any::TypeId;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use ts_rs::TS;
+use ts_rs::TypeVisitor;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SchemaFixtureOptions {
@@ -35,6 +48,33 @@ pub fn read_schema_fixture_subtree(
     let subtree_root = schema_root.join(label);
     collect_files_recursive(&subtree_root)
         .with_context(|| format!("read schema fixture subtree {}", subtree_root.display()))
+}
+
+#[doc(hidden)]
+pub fn generate_typescript_schema_fixture_subtree_for_tests() -> Result<BTreeMap<PathBuf, Vec<u8>>>
+{
+    let mut files = BTreeMap::new();
+    let mut seen = HashSet::new();
+
+    collect_typescript_fixture_file::<ClientRequest>(&mut files, &mut seen)?;
+    visit_typescript_fixture_dependencies(&mut files, &mut seen, |visitor| {
+        visit_client_response_types(visitor);
+    })?;
+    collect_typescript_fixture_file::<ClientNotification>(&mut files, &mut seen)?;
+    collect_typescript_fixture_file::<ServerRequest>(&mut files, &mut seen)?;
+    visit_typescript_fixture_dependencies(&mut files, &mut seen, |visitor| {
+        visit_server_response_types(visitor);
+    })?;
+    collect_typescript_fixture_file::<ServerNotification>(&mut files, &mut seen)?;
+    collect_typescript_fixture_file::<EventMsg>(&mut files, &mut seen)?;
+
+    filter_experimental_ts_tree(&mut files)?;
+    generate_index_ts_tree(&mut files);
+
+    Ok(files
+        .into_iter()
+        .map(|(path, content)| (path, content.into_bytes()))
+        .collect())
 }
 
 /// Regenerates `schema/typescript/` and `schema/json/`.
@@ -223,6 +263,68 @@ fn collect_files_recursive(root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
     }
 
     Ok(files)
+}
+
+fn collect_typescript_fixture_file<T: TS + 'static + ?Sized>(
+    files: &mut BTreeMap<PathBuf, String>,
+    seen: &mut HashSet<TypeId>,
+) -> Result<()> {
+    let Some(output_path) = T::output_path() else {
+        return Ok(());
+    };
+    if !seen.insert(TypeId::of::<T>()) {
+        return Ok(());
+    }
+
+    let contents = T::export_to_string().context("export TypeScript fixture content")?;
+    files.insert(
+        output_path,
+        contents.replace("\r\n", "\n").replace('\r', "\n"),
+    );
+
+    let mut visitor = TypeScriptFixtureCollector {
+        files,
+        seen,
+        error: None,
+    };
+    T::visit_dependencies(&mut visitor);
+    if let Some(error) = visitor.error {
+        return Err(error);
+    }
+
+    Ok(())
+}
+
+fn visit_typescript_fixture_dependencies(
+    files: &mut BTreeMap<PathBuf, String>,
+    seen: &mut HashSet<TypeId>,
+    visit: impl FnOnce(&mut TypeScriptFixtureCollector<'_>),
+) -> Result<()> {
+    let mut visitor = TypeScriptFixtureCollector {
+        files,
+        seen,
+        error: None,
+    };
+    visit(&mut visitor);
+    if let Some(error) = visitor.error {
+        return Err(error);
+    }
+    Ok(())
+}
+
+struct TypeScriptFixtureCollector<'a> {
+    files: &'a mut BTreeMap<PathBuf, String>,
+    seen: &'a mut HashSet<TypeId>,
+    error: Option<anyhow::Error>,
+}
+
+impl TypeVisitor for TypeScriptFixtureCollector<'_> {
+    fn visit<T: TS + 'static + ?Sized>(&mut self) {
+        if self.error.is_some() {
+            return;
+        }
+        self.error = collect_typescript_fixture_file::<T>(self.files, self.seen).err();
+    }
 }
 
 #[cfg(test)]
