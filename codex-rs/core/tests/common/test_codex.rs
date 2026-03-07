@@ -193,6 +193,7 @@ impl TestCodexBuilder {
                 auth.clone(),
                 config.model_provider.clone(),
                 config.codex_home.clone(),
+                config.plan_mode_developer_instructions.clone(),
             )
         };
         let thread_manager = Arc::new(thread_manager);

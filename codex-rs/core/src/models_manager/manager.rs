@@ -387,6 +387,20 @@ impl ModelsManager {
         auth_manager: Arc<AuthManager>,
         provider: ModelProviderInfo,
     ) -> Self {
+        Self::with_provider_and_plan_instructions_for_tests(
+            codex_home,
+            auth_manager,
+            provider,
+            None,
+        )
+    }
+
+    pub(crate) fn with_provider_and_plan_instructions_for_tests(
+        codex_home: PathBuf,
+        auth_manager: Arc<AuthManager>,
+        provider: ModelProviderInfo,
+        plan_mode_developer_instructions: Option<String>,
+    ) -> Self {
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
         let cache_manager = ModelsCacheManager::new(cache_path, DEFAULT_MODEL_CACHE_TTL);
         Self {
@@ -400,7 +414,7 @@ impl ModelsManager {
             etag: RwLock::new(None),
             cache_manager,
             provider,
-            plan_mode_developer_instructions: None,
+            plan_mode_developer_instructions,
         }
     }
 
