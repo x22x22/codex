@@ -6932,8 +6932,13 @@ async fn experimental_popup_shows_js_repl_node_requirement() {
     chat.open_experimental_popup();
 
     let popup = render_bottom_popup(&chat, 120);
+    let normalized_popup = popup.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized_requirement = node_requirement
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     assert!(
-        popup.contains(node_requirement),
+        normalized_popup.contains(&normalized_requirement),
         "expected js_repl feature description to mention the required Node version, got:\n{popup}"
     );
 }
