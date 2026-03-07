@@ -102,6 +102,14 @@ pub(super) fn normalize_and_validate_additional_permissions(
         SandboxPermissions::WithAdditionalPermissions
     );
 
+    if sandbox_permissions.requires_escalated_permissions()
+        && approval_policy != AskForApproval::OnRequest
+    {
+        return Err(format!(
+            "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
+        ));
+    }
+
     if !request_permission_enabled
         && (uses_additional_permissions || additional_permissions.is_some())
     {
@@ -112,7 +120,7 @@ pub(super) fn normalize_and_validate_additional_permissions(
     }
 
     if uses_additional_permissions {
-        if !matches!(approval_policy, AskForApproval::OnRequest) {
+        if approval_policy != AskForApproval::OnRequest {
             return Err(format!(
                 "approval policy is {approval_policy:?}; reject command — you cannot request additional permissions unless the approval policy is OnRequest"
             ));
