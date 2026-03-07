@@ -77,6 +77,7 @@ use toml::Value as TomlValue;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+const INITIALIZE_RESPONSE_DELAY_MS_ENV_VAR: &str = "CODEX_APP_SERVER_INITIALIZE_RESPONSE_DELAY_MS";
 
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -582,6 +583,21 @@ impl MessageProcessor {
                     platform_family: std::env::consts::FAMILY.to_string(),
                     platform_os: std::env::consts::OS.to_string(),
                 };
+                if let Ok(raw_delay_ms) = std::env::var(INITIALIZE_RESPONSE_DELAY_MS_ENV_VAR) {
+                    match raw_delay_ms.parse::<u64>() {
+                        Ok(delay_ms) => {
+                            tracing::info!(
+                                "delaying initialize response by {delay_ms}ms because {INITIALIZE_RESPONSE_DELAY_MS_ENV_VAR} is set"
+                            );
+                            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                        }
+                        Err(err) => {
+                            tracing::warn!(
+                                "ignoring invalid {INITIALIZE_RESPONSE_DELAY_MS_ENV_VAR} value `{raw_delay_ms}`: {err}"
+                            );
+                        }
+                    }
+                }
                 self.outgoing
                     .send_response(connection_request_id, response)
                     .await;
