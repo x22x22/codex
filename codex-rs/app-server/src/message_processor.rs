@@ -460,6 +460,12 @@ impl MessageProcessor {
         self.codex_message_processor.thread_created_receiver()
     }
 
+    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+        self.codex_message_processor
+            .connection_initialized(connection_id)
+            .await;
+    }
+
     pub(crate) async fn send_initialize_notifications_to_connection(
         &self,
         connection_id: ConnectionId,
