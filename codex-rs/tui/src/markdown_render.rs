@@ -20,6 +20,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::LazyLock;
 use url::Url;
+use urlencoding::decode;
 
 struct MarkdownStyles {
     h1: Style,
@@ -157,7 +158,19 @@ fn local_link_display_text(dest_url: &str, cwd: Option<&Path>) -> Option<String>
 fn split_local_link_destination(dest_url: &str) -> Option<(PathBuf, String)> {
     if dest_url.starts_with("file://") {
         let url = Url::parse(dest_url).ok()?;
-        let path = url.to_file_path().ok()?;
+        let path = url.to_file_path().ok().or_else(|| {
+            let decoded_path = decode(url.path()).ok()?.into_owned();
+            if decoded_path.is_empty() {
+                return None;
+            }
+            let file_path = match url.host_str() {
+                Some(host) if !host.is_empty() && host != "localhost" => {
+                    format!("//{host}{decoded_path}")
+                }
+                _ => decoded_path,
+            };
+            Some(PathBuf::from(file_path))
+        })?;
         let location_suffix = url
             .fragment()
             .map(|fragment| format!("#{fragment}"))
