@@ -1416,6 +1416,8 @@ async fn set_rate_limits_retains_previous_credits() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -1510,6 +1512,8 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -1811,13 +1815,13 @@ async fn build_test_config(codex_home: &Path) -> Config {
         .expect("load default test config")
 }
 
-fn otel_manager(
+fn session_telemetry(
     conversation_id: ThreadId,
     config: &Config,
     model_info: &ModelInfo,
     session_source: SessionSource,
-) -> OtelManager {
-    OtelManager::new(
+) -> SessionTelemetry {
+    SessionTelemetry::new(
         conversation_id,
         ModelsManager::get_model_offline_for_tests(config.model.as_deref()).as_str(),
         model_info.slug.as_str(),
@@ -1862,6 +1866,8 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -1919,6 +1925,8 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -2009,6 +2017,8 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -2026,7 +2036,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         session_configuration.collaboration_mode.model(),
         &per_turn_config,
     );
-    let otel_manager = otel_manager(
+    let session_telemetry = session_telemetry(
         conversation_id,
         config.as_ref(),
         &model_info,
@@ -2068,7 +2078,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: auth_manager.clone(),
-        otel_manager: otel_manager.clone(),
+        session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         execve_session_approvals: RwLock::new(HashMap::new()),
@@ -2100,7 +2110,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
     let turn_context = Session::make_turn_context(
         Some(Arc::clone(&auth_manager)),
-        &otel_manager,
+        &session_telemetry,
         session_configuration.provider.clone(),
         &session_configuration,
         per_turn_config,
@@ -2414,6 +2424,8 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         compact_prompt: config.compact_prompt.clone(),
         approval_policy: config.permissions.approval_policy.clone(),
         sandbox_policy: config.permissions.sandbox_policy.clone(),
+        file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: config.permissions.network_sandbox_policy,
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         cwd: config.cwd.clone(),
         codex_home: config.codex_home.clone(),
@@ -2431,7 +2443,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         session_configuration.collaboration_mode.model(),
         &per_turn_config,
     );
-    let otel_manager = otel_manager(
+    let session_telemetry = session_telemetry(
         conversation_id,
         config.as_ref(),
         &model_info,
@@ -2473,7 +2485,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         exec_policy,
         auth_manager: Arc::clone(&auth_manager),
-        otel_manager: otel_manager.clone(),
+        session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         execve_session_approvals: RwLock::new(HashMap::new()),
@@ -2505,7 +2517,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
     let skills_outcome = Arc::new(services.skills_manager.skills_for_config(&per_turn_config));
     let turn_context = Arc::new(Session::make_turn_context(
         Some(Arc::clone(&auth_manager)),
-        &otel_manager,
+        &session_telemetry,
         session_configuration.provider.clone(),
         &session_configuration,
         per_turn_config,
@@ -3841,11 +3853,15 @@ async fn rejects_escalated_permissions_when_policy_not_on_request() {
 
     // Now retry the same command WITHOUT escalated permissions; should succeed.
     // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
-    Arc::get_mut(&mut turn_context)
-        .expect("unique turn context Arc")
+    let turn_context_mut = Arc::get_mut(&mut turn_context).expect("unique turn context Arc");
+    turn_context_mut
         .sandbox_policy
         .set(SandboxPolicy::DangerFullAccess)
         .expect("test setup should allow updating sandbox policy");
+    turn_context_mut.file_system_sandbox_policy =
+        FileSystemSandboxPolicy::from(turn_context_mut.sandbox_policy.get());
+    turn_context_mut.network_sandbox_policy =
+        NetworkSandboxPolicy::from(turn_context_mut.sandbox_policy.get());
 
     let resp2 = handler
         .handle(ToolInvocation {
