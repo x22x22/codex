@@ -133,7 +133,7 @@ Run `just write-app-server-schema` to overwrite with your changes.\n\n{diff}"
     }
 
     // If the file sets match, diff contents for each file for a nicer error.
-    for (path, expected) in &fixture_tree {
+    for (path, expected) in fixture_tree {
         let actual = generated_tree
             .get(path)
             .ok_or_else(|| anyhow::anyhow!("missing generated file: {}", path.display()))?;
