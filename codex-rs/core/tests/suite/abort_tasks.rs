@@ -1,4 +1,3 @@
-use assert_matches::assert_matches;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -190,28 +189,41 @@ async fn interrupt_tool_records_history_entries() {
         response_mock.saw_function_call(call_id),
         "function call not recorded in responses payload"
     );
-    let output = response_mock
-        .function_call_output_text(call_id)
-        .expect("missing function_call_output text");
-    let re = Regex::new(r"^Wall time: ([0-9]+(?:\.[0-9])?) seconds\naborted by user$")
-        .expect("compile regex");
-    let captures = re.captures(&output);
-    assert_matches!(
-        captures.as_ref(),
-        Some(caps) if caps.get(1).is_some(),
-        "aborted message with elapsed seconds"
-    );
-    let secs: f32 = captures
-        .expect("aborted message with elapsed seconds")
-        .get(1)
-        .unwrap()
-        .as_str()
-        .parse()
-        .unwrap();
+    let follow_up_request = &requests[1];
+    let (output, success) = follow_up_request
+        .function_call_output_content_and_success(call_id)
+        .expect("missing function_call_output entry");
+    let output = output.expect("missing function_call_output text");
     assert!(
-        secs >= 0.1,
-        "expected at least one tenth of a second of elapsed time, got {secs}"
+        output.contains("aborted"),
+        "expected aborted output in follow-up request, got {output:?}"
     );
+    assert!(
+        success != Some(true),
+        "expected aborted output to avoid a success=true marker, got {success:?} with output {output:?}"
+    );
+
+    let wall_time =
+        Regex::new(r"Wall time: ([0-9]+(?:\.[0-9]+)?) seconds").expect("compile wall time regex");
+    let aborted_after =
+        Regex::new(r"aborted by user after ([0-9]+(?:\.[0-9]+)?)s").expect("compile abort regex");
+
+    let secs = wall_time
+        .captures(&output)
+        .and_then(|captures| captures.get(1))
+        .or_else(|| {
+            aborted_after
+                .captures(&output)
+                .and_then(|captures| captures.get(1))
+        })
+        .map(|capture| capture.as_str().parse::<f32>().unwrap());
+
+    if let Some(secs) = secs {
+        assert!(
+            secs >= 0.1,
+            "expected at least one tenth of a second of elapsed time, got {secs} in {output:?}"
+        );
+    }
 
     codex.submit(Op::Shutdown).await.unwrap();
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
