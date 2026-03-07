@@ -1,3 +1,4 @@
+use crate::export::GENERATED_TS_HEADER;
 use anyhow::Context;
 use anyhow::Result;
 use serde_json::Map;
@@ -95,6 +96,12 @@ fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
         let text = String::from_utf8(bytes)
             .with_context(|| format!("expected UTF-8 TypeScript in {}", path.display()))?;
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        // Fixture comparisons care about schema content, not whether the generator
+        // re-prepended the standard banner to every TypeScript file.
+        let text = text
+            .strip_prefix(GENERATED_TS_HEADER)
+            .unwrap_or(&text)
+            .to_string();
         return Ok(text.into_bytes());
     }
     Ok(bytes)

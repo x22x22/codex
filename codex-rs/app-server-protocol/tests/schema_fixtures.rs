@@ -13,7 +13,14 @@ use std::time::Instant;
 #[test]
 fn typescript_schema_fixtures_match_generated() -> Result<()> {
     assert_schema_fixtures_match_generated("typescript", |output_dir| {
-        generate_ts_with_options(output_dir, None, GenerateTsOptions::default())
+        generate_ts_with_options(
+            output_dir,
+            None,
+            GenerateTsOptions {
+                ensure_headers: false,
+                ..GenerateTsOptions::default()
+            },
+        )
     })
 }
 

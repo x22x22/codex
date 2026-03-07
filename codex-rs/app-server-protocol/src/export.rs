@@ -36,7 +36,7 @@ use std::thread;
 use std::time::Instant;
 use ts_rs::TS;
 
-const HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
+pub(crate) const GENERATED_TS_HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 const JSON_V1_ALLOWLIST: &[&str] = &["InitializeParams", "InitializeResponse"];
 const SPECIAL_DEFINITIONS: &[&str] = &[
@@ -1835,13 +1835,13 @@ fn prepend_header_if_missing(path: &Path) -> Result<()> {
             .with_context(|| format!("Failed to read {}", path.display()))?;
     }
 
-    if content.starts_with(HEADER) {
+    if content.starts_with(GENERATED_TS_HEADER) {
         return Ok(());
     }
 
     let mut f = fs::File::create(path)
         .with_context(|| format!("Failed to open {} for writing", path.display()))?;
-    f.write_all(HEADER.as_bytes())
+    f.write_all(GENERATED_TS_HEADER.as_bytes())
         .with_context(|| format!("Failed to write header to {}", path.display()))?;
     f.write_all(content.as_bytes())
         .with_context(|| format!("Failed to write content to {}", path.display()))?;
@@ -1909,9 +1909,10 @@ fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
         entries.push("export * as v2 from \"./v2\";\n".to_string());
     }
 
-    let mut content =
-        String::with_capacity(HEADER.len() + entries.iter().map(String::len).sum::<usize>());
-    content.push_str(HEADER);
+    let mut content = String::with_capacity(
+        GENERATED_TS_HEADER.len() + entries.iter().map(String::len).sum::<usize>(),
+    );
+    content.push_str(GENERATED_TS_HEADER);
     for line in &entries {
         content.push_str(line);
     }
