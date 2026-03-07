@@ -64,10 +64,10 @@ async fn wait_for_session_updated_allowing_clean_close(
 ) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            let event = codex
-                .next_event()
-                .await
-                .expect("realtime conversation event should arrive");
+            let event = match codex.next_event().await {
+                Ok(event) => event,
+                Err(err) => panic!("realtime conversation event should arrive: {err:?}"),
+            };
             match event.msg {
                 EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
                     payload: RealtimeEvent::SessionUpdated { session_id, .. },
