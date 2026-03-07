@@ -2234,10 +2234,15 @@ async fn denying_network_policy_amendment_persists_policy_and_skips_future_netwo
     let home = Arc::new(TempDir::new()?);
     fs::write(
         home.path().join("config.toml"),
-        r#"[features]
+        r#"default_permissions = "workspace"
+
+[features]
 enable_network_proxy = true
 
-[permissions.network]
+[permissions.workspace.filesystem]
+":minimal" = "read"
+
+[permissions.workspace.network]
 mode = "limited"
 allow_local_binding = true
 "#,

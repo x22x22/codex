@@ -13,10 +13,18 @@ It enforces an allow/deny policy and a "limited" mode intended for read-only net
 
 `codex-network-proxy` reads from Codex's merged `config.toml` (via `codex-core` config loading).
 
-Example config:
+Network settings live under the selected permissions profile. Example config:
 
 ```toml
-[permissions.network]
+default_permissions = "workspace"
+
+[features]
+enable_network_proxy = true
+
+[permissions.workspace.network]
+# `enabled` controls sandbox network access for the selected profile.
+# The proxy itself starts when `enable_network_proxy` or requirements enable it.
+enabled = true
 proxy_url = "http://127.0.0.1:3128"
 # SOCKS5 listener (enabled by default).
 enable_socks5 = true
@@ -45,7 +53,7 @@ denied_domains = ["evil.example"]
 # If false, local/private networking is rejected. Explicit allowlisting of local IP literals
 # (or `localhost`) is required to permit them.
 # Hostnames that resolve to local/private IPs are still blocked even if allowlisted.
-allow_local_binding = true
+allow_local_binding = false
 
 # macOS-only: allows proxying to a unix socket when request includes `x-unix-socket: /path`.
 allow_unix_sockets = ["/tmp/example.sock"]
@@ -203,7 +211,8 @@ what it can reasonably guarantee.
     proxy into a remote bridge into local daemons.
 - `dangerously_allow_all_unix_sockets = true` bypasses the unix socket allowlist entirely (still
   macOS-only and absolute-path-only). Use only in tightly controlled environments.
-- `enabled` is enforced at runtime; when false the proxy no-ops and does not bind listeners.
+- Proxy startup is gated by `enable_network_proxy` or requirements, not by
+  `[permissions.<profile>.network].enabled`.
 Limitations:
 
 - DNS rebinding is hard to fully prevent without pinning the resolved IP(s) all the way down to the

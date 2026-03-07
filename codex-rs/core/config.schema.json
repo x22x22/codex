@@ -533,10 +533,10 @@
         "service_tier": {
           "$ref": "#/definitions/ServiceTier"
         },
-        "tools_view_image": {
-          "type": "boolean"
+        "tools": {
+          "$ref": "#/definitions/ToolsToml"
         },
-        "tools_web_search": {
+        "tools_view_image": {
           "type": "boolean"
         },
         "web_search": {
@@ -569,6 +569,30 @@
           "type": "boolean"
         }
       },
+      "type": "object"
+    },
+    "FileSystemAccessMode": {
+      "enum": [
+        "none",
+        "read",
+        "write"
+      ],
+      "type": "string"
+    },
+    "FilesystemPermissionToml": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/FileSystemAccessMode"
+        },
+        {
+          "additionalProperties": {
+            "$ref": "#/definitions/FileSystemAccessMode"
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "FilesystemPermissionsToml": {
       "type": "object"
     },
     "ForcedLoginMethod": {
@@ -796,6 +820,60 @@
         "full"
       ],
       "type": "string"
+    },
+    "NetworkToml": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_local_binding": {
+          "type": "boolean"
+        },
+        "allow_unix_sockets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "allow_upstream_proxy": {
+          "type": "boolean"
+        },
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dangerously_allow_all_unix_sockets": {
+          "type": "boolean"
+        },
+        "dangerously_allow_non_loopback_proxy": {
+          "type": "boolean"
+        },
+        "denied_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enable_socks5": {
+          "type": "boolean"
+        },
+        "enable_socks5_udp": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/definitions/NetworkModeSchema"
+        },
+        "proxy_url": {
+          "type": "string"
+        },
+        "socks_url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "Notice": {
       "description": "Settings for notices we display to users via the tui and app-server clients (primarily the Codex IDE extension). NOTE: these are different from notifications - notices are warnings, NUX screens, acknowledgements, etc.",
@@ -1038,69 +1116,19 @@
       },
       "type": "object"
     },
-    "PermissionsNetworkToml": {
+    "PermissionProfileToml": {
       "additionalProperties": false,
       "properties": {
-        "allow_local_binding": {
-          "type": "boolean"
+        "filesystem": {
+          "$ref": "#/definitions/FilesystemPermissionsToml"
         },
-        "allow_unix_sockets": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "allow_upstream_proxy": {
-          "type": "boolean"
-        },
-        "allowed_domains": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "dangerously_allow_all_unix_sockets": {
-          "type": "boolean"
-        },
-        "dangerously_allow_non_loopback_proxy": {
-          "type": "boolean"
-        },
-        "denied_domains": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "enable_socks5": {
-          "type": "boolean"
-        },
-        "enable_socks5_udp": {
-          "type": "boolean"
-        },
-        "mode": {
-          "$ref": "#/definitions/NetworkModeSchema"
-        },
-        "proxy_url": {
-          "type": "string"
-        },
-        "socks_url": {
-          "type": "string"
+        "network": {
+          "$ref": "#/definitions/NetworkToml"
         }
       },
       "type": "object"
     },
     "PermissionsToml": {
-      "additionalProperties": false,
-      "properties": {
-        "network": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/PermissionsNetworkToml"
-            }
-          ],
-          "description": "Network proxy settings from `[permissions.network]`. Applies when the `enable_network_proxy` feature or requirements start the proxy."
-        }
-      },
       "type": "object"
     },
     "Personality": {
@@ -1439,8 +1467,12 @@
           "type": "boolean"
         },
         "web_search": {
-          "default": null,
-          "type": "boolean"
+          "allOf": [
+            {
+              "$ref": "#/definitions/WebSearchToolConfig"
+            }
+          ],
+          "default": null
         }
       },
       "type": "object"
@@ -1548,6 +1580,32 @@
       ],
       "type": "string"
     },
+    "WebSearchContextSize": {
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
+    "WebSearchLocation": {
+      "additionalProperties": false,
+      "properties": {
+        "city": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "region": {
+          "type": "string"
+        },
+        "timezone": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "WebSearchMode": {
       "enum": [
         "disabled",
@@ -1555,6 +1613,24 @@
         "live"
       ],
       "type": "string"
+    },
+    "WebSearchToolConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "context_size": {
+          "$ref": "#/definitions/WebSearchContextSize"
+        },
+        "location": {
+          "$ref": "#/definitions/WebSearchLocation"
+        }
+      },
+      "type": "object"
     },
     "WindowsSandboxModeToml": {
       "enum": [
@@ -1664,6 +1740,10 @@
       "description": "Compact prompt used for history compaction.",
       "type": "string"
     },
+    "default_permissions": {
+      "description": "Default named permissions profile to apply from the `[permissions]` table.",
+      "type": "string"
+    },
     "developer_instructions": {
       "default": null,
       "description": "Developer instructions inserted as a `developer` role message.",
@@ -1686,6 +1766,10 @@
     },
     "experimental_realtime_ws_model": {
       "description": "Experimental / do not use. Selects the realtime websocket model/snapshot used for the `Op::RealtimeConversation` connection.",
+      "type": "string"
+    },
+    "experimental_realtime_ws_startup_context": {
+      "description": "Experimental / do not use. Replaces the synthesized realtime startup context appended to websocket session instructions. An empty string disables startup context injection entirely.",
       "type": "string"
     },
     "experimental_use_freeform_apply_patch": {
@@ -2070,7 +2154,7 @@
         }
       ],
       "default": null,
-      "description": "Nested permissions settings."
+      "description": "Named permissions profiles."
     },
     "personality": {
       "allOf": [
