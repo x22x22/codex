@@ -3759,6 +3759,10 @@ impl ChatComposer {
         self.status_line_enabled = enabled;
         true
     }
+
+    pub(crate) fn transcription_placeholder_exists(&self, id: &str) -> bool {
+        self.textarea.named_element_range(id).is_some()
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -4034,10 +4038,6 @@ impl ChatComposer {
         let id = self.next_id();
         self.textarea.insert_named_element(text, id.clone());
         id
-    }
-
-    pub(crate) fn transcription_placeholder_exists(&self, id: &str) -> bool {
-        self.textarea.named_element_range(id).is_some()
     }
 
     pub fn remove_transcription_placeholder(&mut self, id: &str) {
