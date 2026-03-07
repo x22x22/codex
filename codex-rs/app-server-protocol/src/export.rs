@@ -1994,7 +1994,7 @@ pub(crate) fn generate_index_ts_tree(tree: &mut BTreeMap<PathBuf, String>) {
         .collect::<Vec<_>>();
     if !v2_entries.is_empty() {
         tree.insert(
-            PathBuf::from("v2/index.ts"),
+            PathBuf::from("v2").join("index.ts"),
             index_ts_entries(&v2_entries, false),
         );
     }
