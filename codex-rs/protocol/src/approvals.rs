@@ -5,17 +5,22 @@ use crate::mcp::RequestId;
 use crate::models::MacOsSeatbeltProfileExtensions;
 use crate::models::PermissionProfile;
 use crate::parse_command::ParsedCommand;
+use crate::permissions::FileSystemSandboxPolicy;
+use crate::permissions::NetworkSandboxPolicy;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Permissions {
     pub sandbox_policy: SandboxPolicy,
+    pub file_system_sandbox_policy: FileSystemSandboxPolicy,
+    pub network_sandbox_policy: NetworkSandboxPolicy,
     pub macos_seatbelt_profile_extensions: Option<MacOsSeatbeltProfileExtensions>,
 }
 
@@ -190,15 +195,45 @@ impl ExecApprovalRequestEvent {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+#[ts(tag = "mode")]
+pub enum ElicitationRequest {
+    Form {
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, rename = "_meta")]
+        meta: Option<JsonValue>,
+        message: String,
+        requested_schema: JsonValue,
+    },
+    Url {
+        #[serde(rename = "_meta", default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional, rename = "_meta")]
+        meta: Option<JsonValue>,
+        message: String,
+        url: String,
+        elicitation_id: String,
+    },
+}
+
+impl ElicitationRequest {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Form { message, .. } | Self::Url { message, .. } => message,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ElicitationRequestEvent {
+    /// Turn ID that this elicitation belongs to, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub turn_id: Option<String>,
     pub server_name: String,
     #[ts(type = "string | number")]
     pub id: RequestId,
-    pub message: String,
-    // TODO: MCP servers can request we fill out a schema for the elicitation. We don't support
-    // this yet.
-    // pub requested_schema: ElicitRequestParamsRequestedSchema,
+    pub request: ElicitationRequest,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

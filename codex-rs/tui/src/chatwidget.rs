@@ -42,6 +42,7 @@ use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
+use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
@@ -73,8 +74,8 @@ use codex_core::terminal::TerminalName;
 use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
-use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
+use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -111,6 +112,8 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::ImageGenerationBeginEvent;
+use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListCustomPromptsResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::McpListToolsResponseEvent;
@@ -222,6 +225,7 @@ use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
+use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
@@ -474,7 +478,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) startup_tooltip_override: Option<String>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
-    pub(crate) otel_manager: OtelManager,
+    pub(crate) session_telemetry: SessionTelemetry,
 }
 
 #[derive(Default)]
@@ -556,7 +560,7 @@ pub(crate) struct ChatWidget {
     active_collaboration_mask: Option<CollaborationModeMask>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
-    otel_manager: OtelManager,
+    session_telemetry: SessionTelemetry,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
@@ -1141,7 +1145,7 @@ impl ChatWidget {
     }
 
     fn collect_runtime_metrics_delta(&mut self) {
-        if let Some(delta) = self.otel_manager.runtime_metrics_summary() {
+        if let Some(delta) = self.session_telemetry.runtime_metrics_summary() {
             self.apply_runtime_metrics_delta(delta);
         }
     }
@@ -1221,7 +1225,9 @@ impl ChatWidget {
         self.refresh_model_display();
         self.sync_fast_command_enabled();
         self.sync_personality_command_enabled();
+        self.refresh_plugin_mentions();
         let startup_tooltip_override = self.startup_tooltip_override.take();
+        let show_fast_status = self.should_show_fast_status(event.service_tier);
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -1231,6 +1237,7 @@ impl ChatWidget {
             self.auth_manager
                 .auth_cached()
                 .and_then(|auth| auth.account_plan_type()),
+            show_fast_status,
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -1356,9 +1363,7 @@ impl ChatWidget {
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
-            snapshot
-                .feedback_diagnostics_attachment_text(true)
-                .is_some(),
+            snapshot.feedback_diagnostics(),
         );
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
@@ -1501,7 +1506,7 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
-        self.otel_manager.reset_runtime_metrics();
+        self.session_telemetry.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
@@ -2282,6 +2287,20 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn on_image_generation_begin(&mut self, _event: ImageGenerationBeginEvent) {
+        self.flush_answer_stream_with_separator();
+    }
+
+    fn on_image_generation_end(&mut self, event: ImageGenerationEndEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_image_generation_call(
+            event.call_id,
+            event.status,
+            event.revised_prompt,
+        ));
+        self.request_redraw();
+    }
+
     fn on_patch_apply_end(&mut self, event: codex_protocol::protocol::PatchApplyEndEvent) {
         let ev2 = event.clone();
         self.defer_or_handle(
@@ -2855,21 +2874,36 @@ impl ChatWidget {
             server_name: ev.server_name.clone(),
         });
 
-        let request = ApprovalRequest::McpElicitation {
-            thread_id: self.thread_id.unwrap_or_default(),
-            thread_label: None,
-            server_name: ev.server_name,
-            request_id: ev.id,
-            message: ev.message,
-        };
-        self.bottom_pane
-            .push_approval_request(request, &self.config.features);
+        let thread_id = self.thread_id.unwrap_or_default();
+        if let Some(request) = McpServerElicitationFormRequest::from_event(thread_id, ev.clone()) {
+            self.bottom_pane
+                .push_mcp_server_elicitation_request(request);
+        } else {
+            let request = ApprovalRequest::McpElicitation {
+                thread_id,
+                thread_label: None,
+                server_name: ev.server_name,
+                request_id: ev.id,
+                message: ev.request.message().to_string(),
+            };
+            self.bottom_pane
+                .push_approval_request(request, &self.config.features);
+        }
         self.request_redraw();
     }
 
     pub(crate) fn push_approval_request(&mut self, request: ApprovalRequest) {
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
+        self.request_redraw();
+    }
+
+    pub(crate) fn push_mcp_server_elicitation_request(
+        &mut self,
+        request: McpServerElicitationFormRequest,
+    ) {
+        self.bottom_pane
+            .push_mcp_server_elicitation_request(request);
         self.request_redraw();
     }
 
@@ -3010,7 +3044,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override,
             status_line_invalid_items_warned,
-            otel_manager,
+            session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3069,7 +3103,7 @@ impl ChatWidget {
             active_collaboration_mask,
             auth_manager,
             models_manager,
-            otel_manager,
+            session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
@@ -3193,7 +3227,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override,
             status_line_invalid_items_warned,
-            otel_manager,
+            session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3251,7 +3285,7 @@ impl ChatWidget {
             active_collaboration_mask,
             auth_manager,
             models_manager,
-            otel_manager,
+            session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
@@ -3340,6 +3374,9 @@ impl ChatWidget {
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
+        widget
+            .bottom_pane
+            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
         widget
     }
@@ -3364,7 +3401,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override: _,
             status_line_invalid_items_warned,
-            otel_manager,
+            session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
@@ -3422,7 +3459,7 @@ impl ChatWidget {
             active_collaboration_mask,
             auth_manager,
             models_manager,
-            otel_manager,
+            session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
@@ -3520,6 +3557,9 @@ impl ChatWidget {
                 ),
         );
         widget.update_collaboration_mode_indicator();
+        widget
+            .bottom_pane
+            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
         widget
     }
@@ -3800,7 +3840,8 @@ impl ChatWidget {
                 self.open_review_popup();
             }
             SlashCommand::Rename => {
-                self.otel_manager.counter("codex.thread.rename", 1, &[]);
+                self.session_telemetry
+                    .counter("codex.thread.rename", 1, &[]);
                 self.show_rename_prompt();
             }
             SlashCommand::Model => {
@@ -3902,7 +3943,7 @@ impl ChatWidget {
                         return;
                     }
 
-                    self.otel_manager.counter(
+                    self.session_telemetry.counter(
                         "codex.windows_sandbox.setup_elevated_sandbox_command",
                         1,
                         &[],
@@ -3912,7 +3953,7 @@ impl ChatWidget {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = &self.otel_manager;
+                    let _ = &self.session_telemetry;
                     // Not supported; on non-Windows this command should never be reachable.
                 };
             }
@@ -4116,7 +4157,8 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
-                self.otel_manager.counter("codex.thread.rename", 1, &[]);
+                self.session_telemetry
+                    .counter("codex.thread.rename", 1, &[]);
                 let Some((prepared_args, _prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(false)
                 else {
@@ -4372,6 +4414,7 @@ impl ChatWidget {
             .collect();
         let mut skill_names_lower: HashSet<String> = HashSet::new();
         let mut selected_skill_paths: HashSet<PathBuf> = HashSet::new();
+        let mut selected_plugin_ids: HashSet<String> = HashSet::new();
 
         if let Some(skills) = self.bottom_pane.skills() {
             skill_names_lower = skills
@@ -4408,6 +4451,30 @@ impl ChatWidget {
                     name: skill.name.clone(),
                     path: skill.path_to_skills_md.clone(),
                 });
+            }
+        }
+
+        if let Some(plugins) = self.plugins_for_mentions() {
+            for binding in &mention_bindings {
+                let Some(plugin_config_name) = binding
+                    .path
+                    .strip_prefix("plugin://")
+                    .filter(|id| !id.is_empty())
+                else {
+                    continue;
+                };
+                if !selected_plugin_ids.insert(plugin_config_name.to_string()) {
+                    continue;
+                }
+                if let Some(plugin) = plugins
+                    .iter()
+                    .find(|plugin| plugin.config_name == plugin_config_name)
+                {
+                    items.push(UserInput::Mention {
+                        name: plugin.display_name.clone(),
+                        path: binding.path.clone(),
+                    });
+                }
             }
         }
 
@@ -4738,6 +4805,8 @@ impl ChatWidget {
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
             EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
+            EventMsg::ImageGenerationBegin(ev) => self.on_image_generation_begin(ev),
+            EventMsg::ImageGenerationEnd(ev) => self.on_image_generation_end(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
@@ -5095,6 +5164,10 @@ impl ChatWidget {
         let configured_status_line_items = self.configured_status_line_items();
         let view = StatusLineSetupView::new(
             Some(configured_status_line_items.as_slice()),
+            StatusLinePreviewData::from_iter(StatusLineItem::iter().filter_map(|item| {
+                self.status_line_value_for_item(&item)
+                    .map(|value| (item, value))
+            })),
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -5275,6 +5348,13 @@ impl ChatWidget {
                 format_tokens_compact(self.status_line_total_usage().output_tokens)
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
+            StatusLineItem::FastMode => Some(
+                if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                    "Fast on".to_string()
+                } else {
+                    "Fast off".to_string()
+                },
+            ),
         }
     }
 
@@ -6858,7 +6938,7 @@ impl ChatWidget {
             return;
         }
 
-        self.otel_manager
+        self.session_telemetry
             .counter("codex.windows_sandbox.elevated_prompt_shown", 1, &[]);
 
         let mut header = ColumnRenderable::new();
@@ -6869,10 +6949,10 @@ impl ChatWidget {
             .wrap(Wrap { trim: false }),
         ));
 
-        let accept_otel = self.otel_manager.clone();
-        let legacy_otel = self.otel_manager.clone();
+        let accept_otel = self.session_telemetry.clone();
+        let legacy_otel = self.session_telemetry.clone();
         let legacy_preset = preset.clone();
-        let quit_otel = self.otel_manager.clone();
+        let quit_otel = self.session_telemetry.clone();
         let items = vec![
             SelectionItem {
                 name: "Set up default sandbox (requires Administrator permissions)".to_string(),
@@ -6943,13 +7023,13 @@ impl ChatWidget {
 
         let elevated_preset = preset.clone();
         let legacy_preset = preset;
-        let quit_otel = self.otel_manager.clone();
+        let quit_otel = self.session_telemetry.clone();
         let items = vec![
             SelectionItem {
                 name: "Try setting up admin sandbox again".to_string(),
                 description: None,
                 actions: vec![Box::new({
-                    let otel = self.otel_manager.clone();
+                    let otel = self.session_telemetry.clone();
                     let preset = elevated_preset;
                     move |tx| {
                         otel.counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
@@ -6965,7 +7045,7 @@ impl ChatWidget {
                 name: "Use Codex with non-admin sandbox".to_string(),
                 description: None,
                 actions: vec![Box::new({
-                    let otel = self.otel_manager.clone();
+                    let otel = self.session_telemetry.clone();
                     let preset = legacy_preset;
                     move |tx| {
                         otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
@@ -7108,6 +7188,9 @@ impl ChatWidget {
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
+        if feature == Feature::Plugins {
+            self.refresh_plugin_mentions();
+        }
         if feature == Feature::PreventIdleSleep {
             self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
             self.turn_sleep_inhibitor
@@ -7195,6 +7278,15 @@ impl ChatWidget {
 
     pub(crate) fn current_service_tier(&self) -> Option<ServiceTier> {
         self.config.service_tier
+    }
+
+    pub(crate) fn should_show_fast_status(&self, service_tier: Option<ServiceTier>) -> bool {
+        matches!(service_tier, Some(ServiceTier::Fast))
+            && self
+                .auth_manager
+                .auth_cached()
+                .as_ref()
+                .is_some_and(CodexAuth::is_chatgpt_auth)
     }
 
     fn fast_mode_enabled(&self) -> bool {
@@ -7524,6 +7616,14 @@ impl ChatWidget {
         }
     }
 
+    fn plugins_for_mentions(&self) -> Option<&[codex_core::plugins::PluginCapabilitySummary]> {
+        if !self.config.features.enabled(Feature::Plugins) {
+            return None;
+        }
+
+        self.bottom_pane.plugins().map(Vec::as_slice)
+    }
+
     /// Build a placeholder header cell while the session is configuring.
     fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
@@ -7531,6 +7631,7 @@ impl ChatWidget {
             DEFAULT_MODEL_DISPLAY_NAME.to_string(),
             placeholder_style,
             None,
+            false,
             config.cwd.clone(),
             CODEX_CLI_VERSION,
         ))
@@ -8022,6 +8123,7 @@ impl ChatWidget {
 
     fn on_list_skills(&mut self, ev: ListSkillsResponseEvent) {
         self.set_skills_from_response(&ev);
+        self.refresh_plugin_mentions();
     }
 
     pub(crate) fn on_connectors_loaded(
@@ -8103,6 +8205,19 @@ impl ChatWidget {
         self.refresh_connectors_popup_if_open(&snapshot.connectors);
         self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
         self.bottom_pane.set_connectors_snapshot(Some(snapshot));
+    }
+
+    fn refresh_plugin_mentions(&mut self) {
+        if !self.config.features.enabled(Feature::Plugins) {
+            self.bottom_pane.set_plugin_mentions(None);
+            return;
+        }
+
+        let plugins = PluginsManager::new(self.config.codex_home.clone())
+            .plugins_for_config(&self.config)
+            .capability_summaries()
+            .to_vec();
+        self.bottom_pane.set_plugin_mentions(Some(plugins));
     }
 
     pub(crate) fn open_review_popup(&mut self) {
