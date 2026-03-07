@@ -636,10 +636,13 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
 
     let server = start_websocket_server(vec![
         vec![],
-        vec![vec![json!({
-            "type": "session.updated",
-            "session": { "id": "sess_custom_context", "instructions": "prompt from config" }
-        })]],
+        vec![
+            vec![json!({
+                "type": "session.updated",
+                "session": { "id": "sess_custom_context", "instructions": "prompt from config" }
+            })],
+            vec![],
+        ],
     ])
     .await;
 
@@ -695,10 +698,13 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
 
     let server = start_websocket_server(vec![
         vec![],
-        vec![vec![json!({
-            "type": "session.updated",
-            "session": { "id": "sess_no_context", "instructions": "prompt from config" }
-        })]],
+        vec![
+            vec![json!({
+                "type": "session.updated",
+                "session": { "id": "sess_no_context", "instructions": "prompt from config" }
+            })],
+            vec![],
+        ],
     ])
     .await;
 
@@ -753,10 +759,13 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
 
     let server = start_websocket_server(vec![
         vec![],
-        vec![vec![json!({
-            "type": "session.updated",
-            "session": { "id": "sess_context", "instructions": "backend prompt" }
-        })]],
+        vec![
+            vec![json!({
+                "type": "session.updated",
+                "session": { "id": "sess_context", "instructions": "backend prompt" }
+            })],
+            vec![],
+        ],
     ])
     .await;
 
@@ -814,10 +823,13 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
 
     let server = start_websocket_server(vec![
         vec![],
-        vec![vec![json!({
-            "type": "session.updated",
-            "session": { "id": "sess_workspace", "instructions": "backend prompt" }
-        })]],
+        vec![
+            vec![json!({
+                "type": "session.updated",
+                "session": { "id": "sess_workspace", "instructions": "backend prompt" }
+            })],
+            vec![],
+        ],
     ])
     .await;
 
