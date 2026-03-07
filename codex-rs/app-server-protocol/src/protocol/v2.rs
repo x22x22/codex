@@ -3633,6 +3633,24 @@ impl ThreadItem {
             | ThreadItem::ContextCompaction { id, .. } => id,
         }
     }
+
+    pub fn is_experimental(&self) -> bool {
+        crate::experimental_api::ExperimentalApi::experimental_reason(self).is_some()
+    }
+}
+
+impl Thread {
+    pub fn strip_experimental_thread_items(&mut self) {
+        for turn in &mut self.turns {
+            turn.strip_experimental_thread_items();
+        }
+    }
+}
+
+impl Turn {
+    pub fn strip_experimental_thread_items(&mut self) {
+        self.items.retain(|item| !item.is_experimental());
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
