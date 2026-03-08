@@ -302,11 +302,17 @@ fn create_filesystem_args(
     }
 
     if !unreadable_roots.is_empty() {
+        // Apply explicit deny carveouts after all readable and writable mounts
+        // so they win even when the broader baseline includes `/` or a writable
+        // parent path.
         let null_file = File::open("/dev/null")?;
         let null_fd = null_file.as_raw_fd().to_string();
         for unreadable_root in unreadable_roots {
             let unreadable_root = unreadable_root.as_path();
             if unreadable_root.is_dir() {
+                // Bubblewrap cannot bind `/dev/null` over a directory, so mask
+                // denied directories by overmounting them with an empty tmpfs
+                // and then remounting that tmpfs read-only.
                 args.push("--perms".to_string());
                 args.push("000".to_string());
                 args.push("--tmpfs".to_string());
@@ -316,6 +322,10 @@ fn create_filesystem_args(
                 continue;
             }
 
+            // For files, bind a stable null-file payload over the original path
+            // so later reads do not expose host contents. `--ro-bind-data`
+            // expects a live fd number, so keep the backing file open until we
+            // exec bubblewrap below.
             args.push("--perms".to_string());
             args.push("000".to_string());
             args.push("--ro-bind-data".to_string());
