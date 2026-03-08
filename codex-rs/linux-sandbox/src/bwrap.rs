@@ -84,16 +84,6 @@ impl BwrapNetworkMode {
 /// returns `command` unchanged so we avoid unnecessary sandboxing overhead.
 /// If network isolation is requested, we still wrap with bubblewrap so network
 /// namespace restrictions apply while preserving full filesystem access.
-pub(crate) fn create_bwrap_command_args(
-    command: Vec<String>,
-    sandbox_policy: &SandboxPolicy,
-    cwd: &Path,
-    options: BwrapOptions,
-) -> Result<Vec<String>> {
-    let file_system_sandbox_policy = FileSystemSandboxPolicy::from(sandbox_policy);
-    create_bwrap_command_args_for_policy(command, &file_system_sandbox_policy, cwd, options)
-}
-
 pub(crate) fn create_bwrap_command_args_for_policy(
     command: Vec<String>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
@@ -404,8 +394,6 @@ mod tests {
     use codex_protocol::protocol::FileSystemPath;
     use codex_protocol::protocol::FileSystemSandboxEntry;
     use codex_protocol::protocol::FileSystemSandboxPolicy;
-    use codex_protocol::protocol::FileSystemSpecialPath;
-    use codex_protocol::protocol::FileSystemSpecialPathKind;
     use codex_protocol::protocol::ReadOnlyAccess;
     use codex_protocol::protocol::SandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
@@ -415,9 +403,9 @@ mod tests {
     #[test]
     fn full_disk_write_full_network_returns_unwrapped_command() {
         let command = vec!["/bin/true".to_string()];
-        let args = create_bwrap_command_args(
+        let args = create_bwrap_command_args_for_policy(
             command.clone(),
-            &SandboxPolicy::DangerFullAccess,
+            &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
             Path::new("/"),
             BwrapOptions {
                 mount_proc: true,
@@ -432,9 +420,9 @@ mod tests {
     #[test]
     fn full_disk_write_proxy_only_keeps_full_filesystem_but_unshares_network() {
         let command = vec!["/bin/true".to_string()];
-        let args = create_bwrap_command_args(
+        let args = create_bwrap_command_args_for_policy(
             command,
-            &SandboxPolicy::DangerFullAccess,
+            &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
             Path::new("/"),
             BwrapOptions {
                 mount_proc: true,
@@ -472,7 +460,11 @@ mod tests {
             exclude_slash_tmp: true,
         };
 
-        let args = create_filesystem_args(&sandbox_policy, Path::new("/")).expect("bwrap fs args");
+        let args = create_filesystem_args(
+            &FileSystemSandboxPolicy::from(&sandbox_policy),
+            Path::new("/"),
+        )
+        .expect("bwrap fs args");
         assert_eq!(
             args,
             vec![
@@ -508,7 +500,8 @@ mod tests {
             network_access: false,
         };
 
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args = create_filesystem_args(&FileSystemSandboxPolicy::from(&policy), temp_dir.path())
+            .expect("filesystem args");
 
         assert_eq!(args[0..4], ["--tmpfs", "/", "--dev", "/dev"]);
 
@@ -537,7 +530,8 @@ mod tests {
         // `ReadOnlyAccess::Restricted` always includes `cwd` as a readable
         // root. Using `"/"` here would intentionally collapse to broad read
         // access, so use a non-root cwd to exercise the restricted path.
-        let args = create_filesystem_args(&policy, temp_dir.path()).expect("filesystem args");
+        let args = create_filesystem_args(&FileSystemSandboxPolicy::from(&policy), temp_dir.path())
+            .expect("filesystem args");
 
         assert!(args.starts_with(&["--tmpfs".to_string(), "/".to_string()]));
 
