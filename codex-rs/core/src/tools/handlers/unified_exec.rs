@@ -172,7 +172,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let request_permission_enabled =
                     session.features().enabled(Feature::RequestPermissions);
 
-                if sandbox_permissions.requires_additional_permissions()
+                if sandbox_permissions.requests_sandbox_override()
                     && !matches!(
                         context.turn.approval_policy.value(),
                         codex_protocol::protocol::AskForApproval::OnRequest
@@ -186,7 +186,7 @@ impl ToolHandler for UnifiedExecHandler {
                 }
                 reject_explicit_escalation_if_deny_read_present(
                     sandbox_permissions,
-                    &context.turn.sandbox_policy,
+                    &context.turn.file_system_sandbox_policy,
                 )?;
 
                 let workdir = workdir.filter(|value| !value.is_empty());

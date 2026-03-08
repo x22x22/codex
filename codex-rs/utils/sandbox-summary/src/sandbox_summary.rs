@@ -2,13 +2,16 @@ use codex_protocol::protocol::NetworkAccess;
 use codex_protocol::protocol::SandboxPolicy;
 
 pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
-    if sandbox_policy.behaves_like_danger_full_access() {
-        return "danger-full-access".to_string();
-    }
-
     match sandbox_policy {
-        SandboxPolicy::ReadOnly { .. } => "read-only".to_string(),
-        SandboxPolicy::ExternalSandbox { network_access, .. } => {
+        SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
+        SandboxPolicy::ReadOnly { network_access, .. } => {
+            let mut summary = "read-only".to_string();
+            if *network_access {
+                summary.push_str(" (network access enabled)");
+            }
+            summary
+        }
+        SandboxPolicy::ExternalSandbox { network_access } => {
             let mut summary = "external-sandbox".to_string();
             if matches!(network_access, NetworkAccess::Enabled) {
                 summary.push_str(" (network access enabled)");
@@ -21,7 +24,6 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             exclude_tmpdir_env_var,
             exclude_slash_tmp,
             read_only_access: _,
-            deny_read_paths: _,
         } => {
             let mut summary = "workspace-write".to_string();
 
@@ -45,7 +47,6 @@ pub fn summarize_sandbox_policy(sandbox_policy: &SandboxPolicy) -> String {
             }
             summary
         }
-        SandboxPolicy::DangerFullAccess => "danger-full-access".to_string(),
     }
 }
 
@@ -59,7 +60,6 @@ mod tests {
     fn summarizes_external_sandbox_without_network_access_suffix() {
         let summary = summarize_sandbox_policy(&SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Restricted,
-            deny_read_paths: vec![],
         });
         assert_eq!(summary, "external-sandbox");
     }
@@ -68,9 +68,17 @@ mod tests {
     fn summarizes_external_sandbox_with_enabled_network() {
         let summary = summarize_sandbox_policy(&SandboxPolicy::ExternalSandbox {
             network_access: NetworkAccess::Enabled,
-            deny_read_paths: vec![],
         });
         assert_eq!(summary, "external-sandbox (network access enabled)");
+    }
+
+    #[test]
+    fn summarizes_read_only_with_enabled_network() {
+        let summary = summarize_sandbox_policy(&SandboxPolicy::ReadOnly {
+            access: Default::default(),
+            network_access: true,
+        });
+        assert_eq!(summary, "read-only (network access enabled)");
     }
 
     #[test]
@@ -80,7 +88,6 @@ mod tests {
         let summary = summarize_sandbox_policy(&SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![writable_root.clone()],
             read_only_access: Default::default(),
-            deny_read_paths: vec![],
             network_access: true,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,

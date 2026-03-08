@@ -2,7 +2,7 @@ use crate::codex::TurnContext;
 use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use crate::shell::Shell;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::DenyReadPattern;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use serde::Deserialize;
@@ -17,7 +17,7 @@ pub(crate) struct EnvironmentContext {
     pub current_date: Option<String>,
     pub timezone: Option<String>,
     pub network: Option<NetworkContext>,
-    pub deny_read_patterns: Vec<DenyReadPattern>,
+    pub deny_read_patterns: Vec<String>,
     pub subagents: Option<String>,
 }
 
@@ -34,7 +34,7 @@ impl EnvironmentContext {
         current_date: Option<String>,
         timezone: Option<String>,
         network: Option<NetworkContext>,
-        deny_read_patterns: Vec<DenyReadPattern>,
+        deny_read_patterns: Vec<String>,
         subagents: Option<String>,
     ) -> Self {
         Self {
@@ -76,8 +76,9 @@ impl EnvironmentContext {
     ) -> Self {
         let before_network = Self::network_from_turn_context_item(before);
         let after_network = Self::network_from_turn_context(after);
-        let before_deny_read_patterns = before.sandbox_policy.deny_read_patterns();
-        let after_deny_read_patterns = after.sandbox_policy.deny_read_patterns();
+        let before_deny_read_patterns = Vec::new();
+        let after_deny_read_patterns =
+            deny_read_patterns(&after.file_system_sandbox_policy, &after.cwd);
         let cwd = if before.cwd != after.cwd {
             Some(after.cwd.clone())
         } else {
@@ -113,7 +114,7 @@ impl EnvironmentContext {
             turn_context.current_date.clone(),
             turn_context.timezone.clone(),
             Self::network_from_turn_context(turn_context),
-            turn_context.sandbox_policy.deny_read_patterns(),
+            deny_read_patterns(&turn_context.file_system_sandbox_policy, &turn_context.cwd),
             None,
         )
     }
@@ -125,7 +126,7 @@ impl EnvironmentContext {
             turn_context_item.current_date.clone(),
             turn_context_item.timezone.clone(),
             Self::network_from_turn_context_item(turn_context_item),
-            turn_context_item.sandbox_policy.deny_read_patterns(),
+            Vec::new(),
             None,
         )
     }
@@ -212,7 +213,7 @@ impl EnvironmentContext {
         if !self.deny_read_patterns.is_empty() {
             lines.push("  <deny_read_patterns>".to_string());
             for pattern in &self.deny_read_patterns {
-                lines.push(format!("    <pattern>{}</pattern>", pattern.as_str()));
+                lines.push(format!("    <pattern>{pattern}</pattern>"));
             }
             lines.push("  </deny_read_patterns>".to_string());
         }
@@ -231,6 +232,21 @@ impl From<EnvironmentContext> for ResponseItem {
     }
 }
 
+fn deny_read_patterns(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &std::path::Path,
+) -> Vec<String> {
+    let unreadable_roots = file_system_sandbox_policy
+        .get_unreadable_roots_with_cwd(cwd)
+        .into_iter()
+        .map(|path| path.to_string_lossy().into_owned());
+    let glob_patterns = file_system_sandbox_policy
+        .deny_read_patterns()
+        .iter()
+        .cloned();
+    unreadable_roots.chain(glob_patterns).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::shell::ShellType;
@@ -245,10 +261,6 @@ mod tests {
             shell_path: PathBuf::from("/bin/bash"),
             shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
         }
-    }
-
-    fn deny_path(path: &str) -> DenyReadPattern {
-        DenyReadPattern::from(path)
     }
 
     #[test]
@@ -444,7 +456,7 @@ mod tests {
 
     #[test]
     fn serialize_environment_context_with_deny_read_patterns() {
-        let denied = vec![deny_path("/repo/.gitconfig"), deny_path("/repo/.ssh")];
+        let denied = vec!["/repo/.gitconfig".to_string(), "/repo/.ssh".to_string()];
         let context = EnvironmentContext::new(
             Some(test_path_buf("/repo")),
             fake_shell(),
@@ -504,7 +516,7 @@ mod tests {
             None,
             None,
             None,
-            vec![deny_path("/repo/.gitconfig")],
+            vec!["/repo/.gitconfig".to_string()],
             None,
         );
         let context2 = EnvironmentContext::new(
@@ -513,7 +525,7 @@ mod tests {
             None,
             None,
             None,
-            vec![deny_path("/repo/.ssh")],
+            vec!["/repo/.ssh".to_string()],
             None,
         );
 

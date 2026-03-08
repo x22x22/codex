@@ -1,21 +1,21 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use globset::GlobBuilder;
 
 use crate::function_tool::FunctionCallError;
-use crate::protocol::DenyReadPattern;
-use crate::protocol::SandboxPolicy;
 
 const DENY_READ_POLICY_MESSAGE: &str =
     "access denied: reading this path is blocked by filesystem deny_read policy";
 
 pub(crate) fn ensure_read_allowed(
     path: &Path,
-    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
 ) -> Result<(), FunctionCallError> {
-    if is_read_denied(path, sandbox_policy) {
+    if is_read_denied(path, file_system_sandbox_policy, cwd) {
         return Err(FunctionCallError::RespondToModel(format!(
             "{DENY_READ_POLICY_MESSAGE}: `{}`",
             path.display()
@@ -26,9 +26,10 @@ pub(crate) fn ensure_read_allowed(
 
 pub(crate) fn ensure_search_root_does_not_overlap_deny_read(
     search_root: &Path,
-    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
 ) -> Result<(), FunctionCallError> {
-    if overlaps_deny_read(search_root, sandbox_policy) {
+    if overlaps_deny_read(search_root, file_system_sandbox_policy, cwd) {
         return Err(FunctionCallError::RespondToModel(format!(
             "access denied: grep_files path `{}` overlaps a filesystem deny_read path; narrow the search path",
             search_root.display()
@@ -37,8 +38,12 @@ pub(crate) fn ensure_search_root_does_not_overlap_deny_read(
     Ok(())
 }
 
-pub(crate) fn is_read_denied(path: &Path, sandbox_policy: &SandboxPolicy) -> bool {
-    let denied_paths = literal_deny_read_paths(sandbox_policy);
+pub(crate) fn is_read_denied(
+    path: &Path,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
+) -> bool {
+    let denied_paths = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
     let path_candidates = normalized_and_canonical_candidates(path);
     if denied_paths.iter().any(|denied| {
         let denied_candidates = normalized_and_canonical_candidates(denied.as_path());
@@ -55,15 +60,18 @@ pub(crate) fn is_read_denied(path: &Path, sandbox_policy: &SandboxPolicy) -> boo
         return false;
     }
 
-    sandbox_policy
+    file_system_sandbox_policy
         .deny_read_patterns()
         .iter()
-        .filter(|pattern| pattern.contains_glob())
         .any(|pattern| glob_pattern_matches_any_candidate(&path_candidates, pattern))
 }
 
-pub(crate) fn overlaps_deny_read(path: &Path, sandbox_policy: &SandboxPolicy) -> bool {
-    let denied_paths = literal_deny_read_paths(sandbox_policy);
+pub(crate) fn overlaps_deny_read(
+    path: &Path,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    cwd: &Path,
+) -> bool {
+    let denied_paths = file_system_sandbox_policy.get_unreadable_roots_with_cwd(cwd);
     let path_candidates = normalized_and_canonical_candidates(path);
     if denied_paths.iter().any(|denied| {
         let denied_candidates = normalized_and_canonical_candidates(denied.as_path());
@@ -80,26 +88,15 @@ pub(crate) fn overlaps_deny_read(path: &Path, sandbox_policy: &SandboxPolicy) ->
         return false;
     }
 
-    sandbox_policy
+    file_system_sandbox_policy
         .deny_read_patterns()
         .iter()
-        .filter(|pattern| pattern.contains_glob())
-        .filter_map(glob_pattern_prefix)
+        .filter_map(|pattern| glob_pattern_prefix(pattern))
         .any(|prefix| {
             path_candidates.iter().any(|candidate| {
                 candidate.starts_with(prefix.as_path()) || prefix.as_path().starts_with(candidate)
             })
         })
-}
-
-fn literal_deny_read_paths(sandbox_policy: &SandboxPolicy) -> Vec<AbsolutePathBuf> {
-    let mut denied_paths = Vec::new();
-    for pattern in sandbox_policy.deny_read_patterns() {
-        if let Some(path) = pattern.literal_path() {
-            push_unique_absolute(&mut denied_paths, path);
-        }
-    }
-    denied_paths
 }
 
 fn normalized_and_canonical_candidates(path: &Path) -> Vec<PathBuf> {
@@ -126,23 +123,8 @@ fn push_unique(candidates: &mut Vec<PathBuf>, candidate: PathBuf) {
     }
 }
 
-fn push_unique_absolute(candidates: &mut Vec<AbsolutePathBuf>, candidate: AbsolutePathBuf) {
-    if !candidates
-        .iter()
-        .any(|existing| existing.as_path() == candidate.as_path())
-    {
-        candidates.push(candidate);
-    }
-}
-
-fn glob_pattern_matches_any_candidate(
-    path_candidates: &[PathBuf],
-    pattern: &DenyReadPattern,
-) -> bool {
-    let Ok(glob) = GlobBuilder::new(pattern.as_str())
-        .literal_separator(true)
-        .build()
-    else {
+fn glob_pattern_matches_any_candidate(path_candidates: &[PathBuf], pattern: &str) -> bool {
+    let Ok(glob) = GlobBuilder::new(pattern).literal_separator(true).build() else {
         return false;
     };
     let matcher = glob.compile_matcher();
@@ -151,8 +133,8 @@ fn glob_pattern_matches_any_candidate(
         .any(|candidate| matcher.is_match(candidate))
 }
 
-fn glob_pattern_prefix(pattern: &DenyReadPattern) -> Option<AbsolutePathBuf> {
-    let (root, _) = split_glob_pattern(pattern.as_str());
+fn glob_pattern_prefix(pattern: &str) -> Option<AbsolutePathBuf> {
+    let (root, _) = split_glob_pattern(pattern);
     AbsolutePathBuf::try_from(root).ok()
 }
 
@@ -194,20 +176,23 @@ fn is_glob_metacharacter(ch: char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::protocol::DenyReadPattern;
-    use crate::protocol::ReadOnlyAccess;
-    use crate::protocol::SandboxPolicy;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     use super::is_read_denied;
     use super::overlaps_deny_read;
+    use super::*;
 
-    fn deny_policy(path: &std::path::Path) -> SandboxPolicy {
-        SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::FullAccess,
-            deny_read_patterns: vec![DenyReadPattern::from(path.to_string_lossy().into_owned())],
-        }
+    fn deny_policy(path: &std::path::Path) -> FileSystemSandboxPolicy {
+        FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(path).expect("absolute deny path"),
+            },
+            access: FileSystemAccessMode::None,
+        }])
     }
 
     #[test]
@@ -219,10 +204,10 @@ mod tests {
         std::fs::write(&nested, "secret").expect("write secret");
 
         let policy = deny_policy(&denied_dir);
-        assert_eq!(is_read_denied(&denied_dir, &policy), true);
-        assert_eq!(is_read_denied(&nested, &policy), true);
+        assert_eq!(is_read_denied(&denied_dir, &policy, temp.path()), true);
+        assert_eq!(is_read_denied(&nested, &policy, temp.path()), true);
         assert_eq!(
-            is_read_denied(&temp.path().join("other.txt"), &policy),
+            is_read_denied(&temp.path().join("other.txt"), &policy, temp.path()),
             false
         );
     }
@@ -243,7 +228,7 @@ mod tests {
         let alias_secret = alias_dir.join("secret.txt");
 
         let policy = deny_policy(&real_dir);
-        assert_eq!(is_read_denied(&alias_secret, &policy), true);
+        assert_eq!(is_read_denied(&alias_secret, &policy, temp.path()), true);
     }
 
     #[test]
@@ -255,10 +240,13 @@ mod tests {
         std::fs::create_dir_all(&nested_search_root).expect("create nested");
 
         let policy = deny_policy(&denied);
-        assert_eq!(overlaps_deny_read(search_root, &policy), true);
-        assert_eq!(overlaps_deny_read(&nested_search_root, &policy), true);
+        assert_eq!(overlaps_deny_read(search_root, &policy, temp.path()), true);
         assert_eq!(
-            overlaps_deny_read(&temp.path().join("public"), &policy),
+            overlaps_deny_read(&nested_search_root, &policy, temp.path()),
+            true
+        );
+        assert_eq!(
+            overlaps_deny_read(&temp.path().join("public"), &policy, temp.path()),
             false
         );
     }
@@ -271,16 +259,14 @@ mod tests {
         std::fs::create_dir_all(&literal).expect("create literal dir");
         std::fs::write(&other, "notes").expect("write notes");
 
-        let policy = SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::FullAccess,
-            deny_read_patterns: vec![
-                DenyReadPattern::from(literal.to_string_lossy().into_owned()),
-                DenyReadPattern::from(format!("{}/**/*.txt", temp.path().display())),
-            ],
-        };
+        let mut policy = deny_policy(&literal);
+        policy.deny_read_patterns = vec![format!("{}/**/*.txt", temp.path().display())];
 
-        assert_eq!(is_read_denied(&literal, &policy), true);
-        assert_eq!(is_read_denied(&other, &policy), cfg!(target_os = "macos"));
+        assert_eq!(is_read_denied(&literal, &policy, temp.path()), true);
+        assert_eq!(
+            is_read_denied(&other, &policy, temp.path()),
+            cfg!(target_os = "macos")
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -291,17 +277,12 @@ mod tests {
         std::fs::create_dir_all(denied.parent().expect("parent")).expect("create parent");
         std::fs::write(&denied, "secret").expect("write secret");
 
-        let policy = SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::FullAccess,
-            deny_read_patterns: vec![DenyReadPattern::from(format!(
-                "{}/private/secret?.txt",
-                temp.path().display()
-            ))],
-        };
+        let mut policy = FileSystemSandboxPolicy::default();
+        policy.deny_read_patterns = vec![format!("{}/private/secret?.txt", temp.path().display())];
 
-        assert_eq!(is_read_denied(&denied, &policy), true);
+        assert_eq!(is_read_denied(&denied, &policy, temp.path()), true);
         assert_eq!(
-            overlaps_deny_read(&temp.path().join("private"), &policy),
+            overlaps_deny_read(&temp.path().join("private"), &policy, temp.path()),
             true
         );
     }

@@ -135,6 +135,7 @@ async fn submit_turn(
             model: session_model,
             effort: None,
             summary: None,
+            service_tier: None,
             collaboration_mode: None,
             personality: None,
         })
@@ -201,18 +202,24 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
-    let requested_write = test.workspace_path("requested-but-unused.txt");
+    let requested_dir = test.workspace_path("requested-dir");
+    fs::create_dir_all(&requested_dir)?;
+    let requested_dir_canonical = requested_dir.canonicalize()?;
+    let requested_write = requested_dir.join("requested-but-unused.txt");
     let _ = fs::remove_file(&requested_write);
     let call_id = "request_permissions_skip_approval";
-    let command = "touch requested-but-unused.txt";
+    let command = "touch requested-dir/requested-but-unused.txt";
     let requested_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: Some(vec![]),
-            write: Some(vec![absolute_path(&requested_write)]),
+            write: Some(vec![absolute_path(&requested_dir_canonical)]),
         }),
         ..Default::default()
     };
@@ -280,12 +287,16 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
     let nested_dir = test.workspace_path("nested");
     fs::create_dir_all(&nested_dir)?;
+    let nested_dir_canonical = nested_dir.canonicalize()?;
     let requested_write = nested_dir.join("relative-write.txt");
     let _ = fs::remove_file(&requested_write);
 
@@ -294,7 +305,7 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
     let expected_permissions = PermissionProfile {
         file_system: Some(FileSystemPermissions {
             read: None,
-            write: Some(vec![absolute_path(&requested_write)]),
+            write: Some(vec![absolute_path(&nested_dir_canonical)]),
         }),
         ..Default::default()
     };
@@ -304,7 +315,7 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
         Some("nested"),
         json!({
             "file_system": {
-                "write": ["./relative-write.txt"],
+                "write": ["."],
             },
         }),
     )?;
@@ -360,7 +371,8 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(target_os = "macos")]
-async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write() -> Result<()> {
+async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_cwd_write()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -372,7 +384,10 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write()
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -431,16 +446,18 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write()
 
     let result = parse_result(&results.single_request().function_call_output(call_id));
     assert!(
-        result.exit_code.is_none() || result.exit_code == Some(0),
-        "unexpected exit code/output: {:?} {}",
+        result.exit_code != Some(0),
+        "unrequested cwd write should stay denied: {:?} {}",
         result.exit_code,
         result.stdout
     );
-    assert!(result.stdout.contains("cwd-widened"));
-    assert_eq!(fs::read_to_string(&unrequested_write)?, "cwd-widened");
     assert!(
         !requested_write.exists(),
-        "only the unrequested cwd path should have been written"
+        "requested path should remain untouched when the command targets an unrequested file"
+    );
+    assert!(
+        !unrequested_write.exists(),
+        "unrequested cwd write should remain blocked"
     );
 
     let _ = fs::remove_file(unrequested_write);
@@ -450,7 +467,8 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_cwd_write()
 
 #[tokio::test(flavor = "current_thread")]
 #[cfg(target_os = "macos")]
-async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write() -> Result<()> {
+async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_tmp_write()
+-> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
 
@@ -462,7 +480,10 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write()
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -522,16 +543,18 @@ async fn read_only_with_additional_permissions_widens_to_unrequested_tmp_write()
 
     let result = parse_result(&results.single_request().function_call_output(call_id));
     assert!(
-        result.exit_code.is_none() || result.exit_code == Some(0),
-        "unexpected exit code/output: {:?} {}",
+        result.exit_code != Some(0),
+        "unrequested tmp write should stay denied: {:?} {}",
         result.exit_code,
         result.stdout
     );
-    assert!(result.stdout.contains("tmp-widened"));
-    assert_eq!(fs::read_to_string(&tmp_write)?, "tmp-widened");
     assert!(
         !requested_write.exists(),
-        "only the unrequested tmp path should have been written"
+        "requested path should remain untouched when the command targets an unrequested file"
+    );
+    assert!(
+        !tmp_write.exists(),
+        "unrequested tmp write should remain blocked"
     );
 
     let _ = fs::remove_file(tmp_write);
@@ -553,7 +576,10 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 
@@ -651,7 +677,10 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
     let mut builder = test_codex().with_config(move |config| {
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy_for_config);
-        config.features.enable(Feature::RequestPermissions);
+        config
+            .features
+            .enable(Feature::RequestPermissions)
+            .expect("test config should allow feature update");
     });
     let test = builder.build(&server).await?;
 

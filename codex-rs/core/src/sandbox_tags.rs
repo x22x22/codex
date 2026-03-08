@@ -11,9 +11,7 @@ pub(crate) fn sandbox_tag(
     if matches!(policy, SandboxPolicy::DangerFullAccess) {
         return "none";
     }
-    if matches!(policy, SandboxPolicy::ExternalSandbox { .. })
-        && !policy.has_denied_read_restrictions()
-    {
+    if matches!(policy, SandboxPolicy::ExternalSandbox { .. }) {
         return "external";
     }
     if cfg!(target_os = "windows") && matches!(windows_sandbox_level, WindowsSandboxLevel::Elevated)

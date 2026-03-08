@@ -139,7 +139,7 @@ impl ToolHandler for ReadFileHandler {
                 "file_path must be an absolute path".to_string(),
             ));
         }
-        ensure_read_allowed(&path, &turn.sandbox_policy)?;
+        ensure_read_allowed(&path, &turn.file_system_sandbox_policy, &turn.cwd)?;
 
         let collected = match mode {
             ReadMode::Slice => slice::read(&path, offset, limit).await?,

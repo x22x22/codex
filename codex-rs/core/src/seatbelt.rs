@@ -22,6 +22,8 @@ use crate::spawn::CODEX_SANDBOX_ENV_VAR;
 use crate::spawn::SpawnChildRequest;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 
 const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl");
 const MACOS_SEATBELT_NETWORK_POLICY: &str = include_str!("seatbelt_network_policy.sbpl");
@@ -51,7 +53,7 @@ pub async fn spawn_command_under_seatbelt(
         args,
         arg0,
         cwd: command_cwd,
-        sandbox_policy,
+        network_sandbox_policy: NetworkSandboxPolicy::from(sandbox_policy),
         network,
         stdio_policy,
         env,
@@ -129,7 +131,7 @@ impl Default for UnixDomainSocketPolicy {
 
 #[derive(Debug, Clone)]
 struct UnixSocketPathParam {
-    key: String,
+    index: usize,
     path: AbsolutePathBuf,
 }
 
@@ -186,225 +188,6 @@ fn normalize_path_for_sandbox(path: &Path) -> Option<AbsolutePathBuf> {
     normalized_path.or(Some(absolute_path))
 }
 
-fn normalize_glob_pattern_for_sandbox(pattern: &str) -> Option<String> {
-    let (prefix, suffix) = split_glob_pattern(pattern);
-    let normalized_prefix = normalize_path_for_sandbox(Path::new(prefix))?;
-    if suffix.is_empty() {
-        return Some(normalized_prefix.to_string_lossy().to_string());
-    }
-    if normalized_prefix.as_path() == Path::new("/") {
-        Some(format!("/{suffix}"))
-    } else {
-        Some(format!("{}/{suffix}", normalized_prefix.to_string_lossy()))
-    }
-}
-
-fn split_glob_pattern(pattern: &str) -> (&str, &str) {
-    let Some(first_glob) = pattern.find(is_glob_metacharacter) else {
-        return (pattern, "");
-    };
-    let separator_index = pattern[..first_glob].rfind('/');
-    match separator_index {
-        Some(0) => ("/", &pattern[1..]),
-        Some(index) => (&pattern[..index], &pattern[index + 1..]),
-        None => ("", pattern),
-    }
-}
-
-fn glob_pattern_base_directory(pattern: &str) -> Option<AbsolutePathBuf> {
-    let (prefix, _) = split_glob_pattern(pattern);
-    if prefix.is_empty() || prefix == "/" {
-        return None;
-    }
-    normalize_path_for_sandbox(Path::new(prefix))
-}
-
-fn glob_pattern_to_regex(pattern: &str) -> String {
-    let chars: Vec<char> = pattern.chars().collect();
-    let mut regex = String::from("^");
-    let mut index = 0;
-
-    while index < chars.len() {
-        if chars[index] == '*' {
-            let has_globstar = chars.get(index + 1) == Some(&'*');
-            if has_globstar {
-                let ends_pattern = index + 2 == chars.len();
-                let followed_by_separator = chars.get(index + 2) == Some(&'/');
-                if ends_pattern && index > 0 && chars[index - 1] == '/' {
-                    regex.pop();
-                    regex.push_str("(?:/.*)?");
-                    break;
-                }
-                if followed_by_separator {
-                    regex.push_str("(?:[^/]+/)*");
-                    index += 3;
-                    continue;
-                }
-                regex.push_str(".*");
-                index += 2;
-                continue;
-            }
-            regex.push_str("[^/]*");
-            index += 1;
-            continue;
-        }
-        if chars[index] == '?' {
-            regex.push_str("[^/]");
-            index += 1;
-            continue;
-        }
-        if chars[index] == '[' {
-            let mut class_end = index + 1;
-            while class_end < chars.len() && chars[class_end] != ']' {
-                class_end += 1;
-            }
-            if class_end == chars.len() {
-                regex.push_str("\\[");
-                index += 1;
-                continue;
-            }
-
-            regex.push('[');
-            let mut class_index = index + 1;
-            if matches!(chars.get(class_index), Some('!')) {
-                regex.push('^');
-                class_index += 1;
-            } else if matches!(chars.get(class_index), Some('^')) {
-                regex.push('\\');
-                regex.push('^');
-                class_index += 1;
-            }
-            while class_index < class_end {
-                if matches!(chars[class_index], '\\' | ']') {
-                    regex.push('\\');
-                }
-                regex.push(chars[class_index]);
-                class_index += 1;
-            }
-            regex.push(']');
-            index = class_end + 1;
-            continue;
-        }
-
-        if matches!(
-            chars[index],
-            '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|' | '?' | '\\'
-        ) {
-            regex.push('\\');
-        }
-        regex.push(chars[index]);
-        index += 1;
-    }
-
-    regex.push('$');
-    regex
-}
-
-fn escape_seatbelt_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn is_glob_metacharacter(ch: char) -> bool {
-    matches!(ch, '*' | '?' | '[')
-}
-
-fn deny_read_policy_and_params(sandbox_policy: &SandboxPolicy) -> (String, Vec<(String, PathBuf)>) {
-    let deny_read_patterns = sandbox_policy.deny_read_patterns();
-    if deny_read_patterns.is_empty() {
-        return (String::new(), Vec::new());
-    }
-
-    let mut read_deny_params = BTreeMap::new();
-    let mut read_deny_regexes = BTreeSet::new();
-    let mut unlink_deny_params = BTreeMap::new();
-
-    for denied_pattern in deny_read_patterns {
-        if denied_pattern.contains_glob() {
-            let Some(normalized_pattern) =
-                normalize_glob_pattern_for_sandbox(denied_pattern.as_str())
-            else {
-                warn!(
-                    "ignoring deny_read pattern because it could not be normalized for seatbelt: {}",
-                    denied_pattern.as_str()
-                );
-                continue;
-            };
-
-            read_deny_regexes.insert(glob_pattern_to_regex(&normalized_pattern));
-
-            if let Some(base_directory) = glob_pattern_base_directory(&normalized_pattern) {
-                for ancestor in base_directory.as_path().ancestors() {
-                    if ancestor == Path::new("/") {
-                        break;
-                    }
-                    if let Some(normalized_ancestor) = normalize_path_for_sandbox(ancestor) {
-                        unlink_deny_params
-                            .entry(normalized_ancestor.to_string_lossy().to_string())
-                            .or_insert(normalized_ancestor);
-                    }
-                }
-            }
-            continue;
-        }
-
-        let Some(normalized) = normalize_path_for_sandbox(Path::new(denied_pattern.as_str()))
-        else {
-            warn!(
-                "ignoring deny_read pattern because it could not be normalized for seatbelt: {}",
-                denied_pattern.as_str()
-            );
-            continue;
-        };
-
-        read_deny_params
-            .entry(normalized.to_string_lossy().to_string())
-            .or_insert(normalized.clone());
-
-        for ancestor in normalized.as_path().ancestors() {
-            if ancestor == Path::new("/") {
-                break;
-            }
-            if let Some(normalized_ancestor) = normalize_path_for_sandbox(ancestor) {
-                unlink_deny_params
-                    .entry(normalized_ancestor.to_string_lossy().to_string())
-                    .or_insert(normalized_ancestor);
-            }
-        }
-    }
-
-    if read_deny_params.is_empty() && read_deny_regexes.is_empty() {
-        return (String::new(), Vec::new());
-    }
-
-    let mut policy = String::from("; deny managed filesystem read blocklist\n");
-    let mut params = Vec::new();
-
-    for (index, path) in read_deny_params.into_values().enumerate() {
-        let key = format!("DENY_READ_{index}");
-        policy.push_str(&format!("(deny file-read* (subpath (param \"{key}\")))\n"));
-        params.push((key, path.into_path_buf()));
-    }
-    for regex in read_deny_regexes {
-        policy.push_str(&format!(
-            "(deny file-read* (regex \"{}\"))\n",
-            escape_seatbelt_string(&regex)
-        ));
-    }
-
-    if !unlink_deny_params.is_empty() {
-        policy.push_str("; reduce rename/unlink bypasses into denied read paths\n");
-        for (index, path) in unlink_deny_params.into_values().enumerate() {
-            let key = format!("DENY_UNLINK_{index}");
-            policy.push_str(&format!(
-                "(deny file-write-unlink (literal (param \"{key}\")))\n"
-            ));
-            params.push((key, path.into_path_buf()));
-        }
-    }
-
-    (policy, params)
-}
-
 fn unix_socket_path_params(proxy: &ProxyPolicyInputs) -> Vec<UnixSocketPathParam> {
     let mut deduped_paths: BTreeMap<String, AbsolutePathBuf> = BTreeMap::new();
     let UnixDomainSocketPolicy::Restricted { allowed } = &proxy.unix_domain_socket_policy else {
@@ -419,17 +202,23 @@ fn unix_socket_path_params(proxy: &ProxyPolicyInputs) -> Vec<UnixSocketPathParam
     deduped_paths
         .into_values()
         .enumerate()
-        .map(|(index, path)| UnixSocketPathParam {
-            key: format!("UNIX_SOCKET_PATH_{index}"),
-            path,
-        })
+        .map(|(index, path)| UnixSocketPathParam { index, path })
         .collect()
+}
+
+fn unix_socket_path_param_key(index: usize) -> String {
+    format!("UNIX_SOCKET_PATH_{index}")
 }
 
 fn unix_socket_dir_params(proxy: &ProxyPolicyInputs) -> Vec<(String, PathBuf)> {
     unix_socket_path_params(proxy)
         .into_iter()
-        .map(|param| (param.key, param.path.into_path_buf()))
+        .map(|param| {
+            (
+                unix_socket_path_param_key(param.index),
+                param.path.into_path_buf(),
+            )
+        })
         .collect()
 }
 
@@ -437,29 +226,65 @@ fn unix_socket_dir_params(proxy: &ProxyPolicyInputs) -> Vec<(String, PathBuf)> {
 /// When non-empty, the returned string is newline-terminated so callers can
 /// append it directly to larger policy blocks.
 fn unix_socket_policy(proxy: &ProxyPolicyInputs) -> String {
+    let socket_params = unix_socket_path_params(proxy);
+    let has_unix_socket_access = matches!(
+        proxy.unix_domain_socket_policy,
+        UnixDomainSocketPolicy::AllowAll
+    ) || !socket_params.is_empty();
+    if !has_unix_socket_access {
+        return String::new();
+    }
+
+    let mut policy = String::new();
+    policy.push_str("(allow system-socket (socket-domain AF_UNIX))\n");
     if matches!(
         proxy.unix_domain_socket_policy,
         UnixDomainSocketPolicy::AllowAll
     ) {
-        return "(allow network* (subpath \"/\"))\n".to_string();
+        // Keep AllowAll genuinely broad here; path qualifiers look narrower
+        // without a clear macOS behavioral benefit.
+        policy.push_str("(allow network-bind (local unix-socket))\n");
+        policy.push_str("(allow network-outbound (remote unix-socket))\n");
+        return policy;
     }
 
-    unix_socket_path_params(proxy)
-        .iter()
-        .map(|param| format!("(allow network* (subpath (param \"{}\")))\n", param.key))
-        .collect()
+    for param in socket_params {
+        let key = unix_socket_path_param_key(param.index);
+        // Use subpath so allowlists cover sockets created beneath approved directories.
+        policy.push_str(&format!(
+            "(allow network-bind (local unix-socket (subpath (param \"{key}\"))))\n"
+        ));
+        policy.push_str(&format!(
+            "(allow network-outbound (remote unix-socket (subpath (param \"{key}\"))))\n"
+        ));
+    }
+    policy
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn dynamic_network_policy(
     sandbox_policy: &SandboxPolicy,
     enforce_managed_network: bool,
     proxy: &ProxyPolicyInputs,
 ) -> String {
-    if !proxy.ports.is_empty() {
-        let mut policy =
-            String::from("; allow outbound access only to configured loopback proxy endpoints\n");
+    dynamic_network_policy_for_network(
+        NetworkSandboxPolicy::from(sandbox_policy),
+        enforce_managed_network,
+        proxy,
+    )
+}
+
+fn dynamic_network_policy_for_network(
+    network_policy: NetworkSandboxPolicy,
+    enforce_managed_network: bool,
+    proxy: &ProxyPolicyInputs,
+) -> String {
+    let should_use_restricted_network_policy =
+        !proxy.ports.is_empty() || proxy.has_proxy_config || enforce_managed_network;
+    if should_use_restricted_network_policy {
+        let mut policy = String::new();
         if proxy.allow_local_binding {
-            policy.push_str("; allow localhost-only binding and loopback traffic\n");
+            policy.push_str("; allow loopback local binding and loopback traffic\n");
             policy.push_str("(allow network-bind (local ip \"localhost:*\"))\n");
             policy.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
             policy.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
@@ -489,7 +314,7 @@ fn dynamic_network_policy(
         return String::new();
     }
 
-    if sandbox_policy.has_full_network_access() {
+    if network_policy.is_enabled() {
         // No proxy env is configured: retain the existing full-network behavior.
         format!(
             "(allow network-outbound)\n(allow network-inbound)\n{MACOS_SEATBELT_NETWORK_POLICY}"
@@ -506,9 +331,10 @@ pub(crate) fn create_seatbelt_command_args(
     enforce_managed_network: bool,
     network: Option<&NetworkProxy>,
 ) -> Vec<String> {
-    create_seatbelt_command_args_with_extensions(
+    create_seatbelt_command_args_for_policies_with_extensions(
         command,
-        sandbox_policy,
+        &FileSystemSandboxPolicy::from(sandbox_policy),
+        NetworkSandboxPolicy::from(sandbox_policy),
         sandbox_policy_cwd,
         enforce_managed_network,
         network,
@@ -516,6 +342,157 @@ pub(crate) fn create_seatbelt_command_args(
     )
 }
 
+fn root_absolute_path() -> AbsolutePathBuf {
+    match AbsolutePathBuf::from_absolute_path(Path::new("/")) {
+        Ok(path) => path,
+        Err(err) => panic!("root path must be absolute: {err}"),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SeatbeltAccessRoot {
+    root: AbsolutePathBuf,
+    excluded_subpaths: Vec<AbsolutePathBuf>,
+}
+
+fn build_seatbelt_access_policy(
+    action: &str,
+    param_prefix: &str,
+    roots: Vec<SeatbeltAccessRoot>,
+) -> (String, Vec<(String, PathBuf)>) {
+    let mut policy_components = Vec::new();
+    let mut params = Vec::new();
+
+    for (index, access_root) in roots.into_iter().enumerate() {
+        let root =
+            normalize_path_for_sandbox(access_root.root.as_path()).unwrap_or(access_root.root);
+        let root_param = format!("{param_prefix}_{index}");
+        params.push((root_param.clone(), root.into_path_buf()));
+
+        if access_root.excluded_subpaths.is_empty() {
+            policy_components.push(format!("(subpath (param \"{root_param}\"))"));
+            continue;
+        }
+
+        let mut require_parts = vec![format!("(subpath (param \"{root_param}\"))")];
+        for (excluded_index, excluded_subpath) in
+            access_root.excluded_subpaths.into_iter().enumerate()
+        {
+            let excluded_subpath =
+                normalize_path_for_sandbox(excluded_subpath.as_path()).unwrap_or(excluded_subpath);
+            let excluded_param = format!("{param_prefix}_{index}_RO_{excluded_index}");
+            params.push((excluded_param.clone(), excluded_subpath.into_path_buf()));
+            require_parts.push(format!(
+                "(require-not (subpath (param \"{excluded_param}\")))"
+            ));
+        }
+        policy_components.push(format!("(require-all {} )", require_parts.join(" ")));
+    }
+
+    if policy_components.is_empty() {
+        (String::new(), Vec::new())
+    } else {
+        (
+            format!("(allow {action}\n{}\n)", policy_components.join(" ")),
+            params,
+        )
+    }
+}
+
+fn build_seatbelt_deny_read_pattern_policy(
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+) -> String {
+    if file_system_sandbox_policy.deny_read_patterns().is_empty() {
+        return String::new();
+    }
+
+    let mut policy_components = Vec::new();
+    for pattern in file_system_sandbox_policy.deny_read_patterns() {
+        let Some(regex) = seatbelt_regex_for_deny_read_pattern(pattern) else {
+            continue;
+        };
+        let regex = escape_seatbelt_regex(&regex);
+        policy_components.push(format!(r#"(deny file-read* (regex #"{regex}"))"#));
+        policy_components.push(format!(r#"(deny file-write-unlink (regex #"{regex}"))"#));
+    }
+
+    policy_components.join("\n")
+}
+
+fn seatbelt_regex_for_deny_read_pattern(pattern: &str) -> Option<String> {
+    if pattern.is_empty() {
+        return None;
+    }
+
+    let mut regex = String::from("^");
+    let mut chars = pattern.chars().peekable();
+    let mut saw_glob = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '*' => {
+                saw_glob = true;
+                if chars.peek() == Some(&'*') {
+                    chars.next();
+                    regex.push_str(".*");
+                } else {
+                    regex.push_str("[^/]*");
+                }
+            }
+            '?' => {
+                saw_glob = true;
+                regex.push_str("[^/]");
+            }
+            '[' => {
+                saw_glob = true;
+                let mut class = String::new();
+                let mut closed = false;
+                while let Some(class_ch) = chars.next() {
+                    if class_ch == ']' {
+                        closed = true;
+                        break;
+                    }
+                    class.push(class_ch);
+                }
+                if !closed {
+                    regex.push_str("\\[");
+                    regex.push_str(&regex_lite::escape(&class));
+                    continue;
+                }
+
+                regex.push('[');
+                let mut class_chars = class.chars();
+                if let Some(first) = class_chars.next() {
+                    match first {
+                        '!' => regex.push('^'),
+                        '^' => regex.push_str("\\^"),
+                        _ => regex.push(first),
+                    }
+                }
+                for class_ch in class_chars {
+                    match class_ch {
+                        '\\' => regex.push_str("\\\\"),
+                        _ => regex.push(class_ch),
+                    }
+                }
+                regex.push(']');
+            }
+            _ => regex.push_str(&regex_lite::escape(&ch.to_string())),
+        }
+    }
+
+    if !saw_glob {
+        regex.push_str("(/.*)?");
+    }
+    regex.push('$');
+    Some(regex)
+}
+
+fn escape_seatbelt_regex(regex: &str) -> String {
+    regex.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn create_seatbelt_command_args_with_extensions(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
@@ -524,102 +501,112 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
     network: Option<&NetworkProxy>,
     extensions: Option<&MacOsSeatbeltProfileExtensions>,
 ) -> Vec<String> {
-    let (file_write_policy, file_write_dir_params) = {
-        if sandbox_policy.has_full_disk_write_access() {
-            // Allegedly, this is more permissive than `(allow file-write*)`.
-            (
-                r#"(allow file-write* (regex #"^/"))"#.to_string(),
-                Vec::new(),
-            )
-        } else {
-            let writable_roots = sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
+    create_seatbelt_command_args_for_policies_with_extensions(
+        command,
+        &FileSystemSandboxPolicy::from(sandbox_policy),
+        NetworkSandboxPolicy::from(sandbox_policy),
+        sandbox_policy_cwd,
+        enforce_managed_network,
+        network,
+        extensions,
+    )
+}
 
-            let mut writable_folder_policies: Vec<String> = Vec::new();
-            let mut file_write_params = Vec::new();
-
-            for (index, wr) in writable_roots.iter().enumerate() {
-                // Canonicalize to avoid mismatches like /var vs /private/var on macOS.
-                let canonical_root = wr
-                    .root
-                    .as_path()
-                    .canonicalize()
-                    .unwrap_or_else(|_| wr.root.to_path_buf());
-                let root_param = format!("WRITABLE_ROOT_{index}");
-                file_write_params.push((root_param.clone(), canonical_root));
-
-                if wr.read_only_subpaths.is_empty() {
-                    writable_folder_policies.push(format!("(subpath (param \"{root_param}\"))"));
-                } else {
-                    // Add parameters for each read-only subpath and generate
-                    // the `(require-not ...)` clauses.
-                    let mut require_parts: Vec<String> = Vec::new();
-                    require_parts.push(format!("(subpath (param \"{root_param}\"))"));
-                    for (subpath_index, ro) in wr.read_only_subpaths.iter().enumerate() {
-                        let canonical_ro = ro
-                            .as_path()
-                            .canonicalize()
-                            .unwrap_or_else(|_| ro.to_path_buf());
-                        let ro_param = format!("WRITABLE_ROOT_{index}_RO_{subpath_index}");
-                        require_parts
-                            .push(format!("(require-not (subpath (param \"{ro_param}\")))"));
-                        file_write_params.push((ro_param, canonical_ro));
-                    }
-                    let policy_component = format!("(require-all {} )", require_parts.join(" "));
-                    writable_folder_policies.push(policy_component);
-                }
-            }
-
-            if writable_folder_policies.is_empty() {
-                ("".to_string(), Vec::new())
+pub(crate) fn create_seatbelt_command_args_for_policies_with_extensions(
+    command: Vec<String>,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    sandbox_policy_cwd: &Path,
+    enforce_managed_network: bool,
+    network: Option<&NetworkProxy>,
+    extensions: Option<&MacOsSeatbeltProfileExtensions>,
+) -> Vec<String> {
+    let unreadable_roots =
+        file_system_sandbox_policy.get_unreadable_roots_with_cwd(sandbox_policy_cwd);
+    let (file_write_policy, file_write_dir_params) =
+        if file_system_sandbox_policy.has_full_disk_write_access() {
+            if unreadable_roots.is_empty() {
+                // Allegedly, this is more permissive than `(allow file-write*)`.
+                (
+                    r#"(allow file-write* (regex #"^/"))"#.to_string(),
+                    Vec::new(),
+                )
             } else {
-                let file_write_policy = format!(
-                    "(allow file-write*\n{}\n)",
-                    writable_folder_policies.join(" ")
-                );
-                (file_write_policy, file_write_params)
+                build_seatbelt_access_policy(
+                    "file-write*",
+                    "WRITABLE_ROOT",
+                    vec![SeatbeltAccessRoot {
+                        root: root_absolute_path(),
+                        excluded_subpaths: unreadable_roots.clone(),
+                    }],
+                )
             }
-        }
-    };
-
-    let (file_read_policy, file_read_dir_params) = if sandbox_policy.has_full_disk_read_access() {
-        (
-            "; allow read-only file operations\n(allow file-read*)".to_string(),
-            Vec::new(),
-        )
-    } else {
-        let mut readable_roots_policies: Vec<String> = Vec::new();
-        let mut file_read_params = Vec::new();
-        for (index, root) in sandbox_policy
-            .get_readable_roots_with_cwd(sandbox_policy_cwd)
-            .into_iter()
-            .enumerate()
-        {
-            // Canonicalize to avoid mismatches like /var vs /private/var on macOS.
-            let canonical_root = root
-                .as_path()
-                .canonicalize()
-                .unwrap_or_else(|_| root.to_path_buf());
-            let root_param = format!("READABLE_ROOT_{index}");
-            file_read_params.push((root_param.clone(), canonical_root));
-            readable_roots_policies.push(format!("(subpath (param \"{root_param}\"))"));
-        }
-
-        if readable_roots_policies.is_empty() {
-            ("".to_string(), Vec::new())
         } else {
-            (
-                format!(
-                    "; allow read-only file operations\n(allow file-read*\n{}\n)",
-                    readable_roots_policies.join(" ")
-                ),
-                file_read_params,
+            build_seatbelt_access_policy(
+                "file-write*",
+                "WRITABLE_ROOT",
+                file_system_sandbox_policy
+                    .get_writable_roots_with_cwd(sandbox_policy_cwd)
+                    .into_iter()
+                    .map(|root| SeatbeltAccessRoot {
+                        root: root.root,
+                        excluded_subpaths: root.read_only_subpaths,
+                    })
+                    .collect(),
             )
-        }
-    };
-    let (deny_read_policy, deny_read_dir_params) = deny_read_policy_and_params(sandbox_policy);
+        };
+
+    let (file_read_policy, file_read_dir_params) =
+        if file_system_sandbox_policy.has_full_disk_read_access() {
+            if unreadable_roots.is_empty() {
+                (
+                    "; allow read-only file operations\n(allow file-read*)".to_string(),
+                    Vec::new(),
+                )
+            } else {
+                let (policy, params) = build_seatbelt_access_policy(
+                    "file-read*",
+                    "READABLE_ROOT",
+                    vec![SeatbeltAccessRoot {
+                        root: root_absolute_path(),
+                        excluded_subpaths: unreadable_roots,
+                    }],
+                );
+                (
+                    format!("; allow read-only file operations\n{policy}"),
+                    params,
+                )
+            }
+        } else {
+            let (policy, params) = build_seatbelt_access_policy(
+                "file-read*",
+                "READABLE_ROOT",
+                file_system_sandbox_policy
+                    .get_readable_roots_with_cwd(sandbox_policy_cwd)
+                    .into_iter()
+                    .map(|root| SeatbeltAccessRoot {
+                        excluded_subpaths: unreadable_roots
+                            .iter()
+                            .filter(|path| path.as_path().starts_with(root.as_path()))
+                            .cloned()
+                            .collect(),
+                        root,
+                    })
+                    .collect(),
+            );
+            if policy.is_empty() {
+                (String::new(), params)
+            } else {
+                (
+                    format!("; allow read-only file operations\n{policy}"),
+                    params,
+                )
+            }
+        };
 
     let proxy = proxy_policy_inputs(network);
-    let network_policy = dynamic_network_policy(sandbox_policy, enforce_managed_network, &proxy);
+    let network_policy =
+        dynamic_network_policy_for_network(network_sandbox_policy, enforce_managed_network, &proxy);
     let seatbelt_extensions = extensions.map_or_else(
         || {
             // Backward-compatibility default when no extension profile is provided.
@@ -628,11 +615,13 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
         build_seatbelt_extensions,
     );
 
-    let include_platform_defaults = sandbox_policy.include_platform_defaults();
+    let include_platform_defaults = file_system_sandbox_policy.include_platform_defaults();
+    let deny_read_policy = build_seatbelt_deny_read_pattern_policy(file_system_sandbox_policy);
     let mut policy_sections = vec![
         MACOS_SEATBELT_BASE_POLICY.to_string(),
         file_read_policy,
         file_write_policy,
+        deny_read_policy,
         network_policy,
     ];
     if include_platform_defaults {
@@ -641,16 +630,12 @@ pub(crate) fn create_seatbelt_command_args_with_extensions(
     if !seatbelt_extensions.policy.is_empty() {
         policy_sections.push(seatbelt_extensions.policy.clone());
     }
-    if !deny_read_policy.is_empty() {
-        policy_sections.push(deny_read_policy);
-    }
 
     let full_policy = policy_sections.join("\n");
 
     let dir_params = [
         file_read_dir_params,
         file_write_dir_params,
-        deny_read_dir_params,
         macos_dir_params(),
         unix_socket_dir_params(&proxy),
         seatbelt_extensions.dir_params,
@@ -699,19 +684,23 @@ mod tests {
     use super::ProxyPolicyInputs;
     use super::UnixDomainSocketPolicy;
     use super::create_seatbelt_command_args;
+    use super::create_seatbelt_command_args_for_policies_with_extensions;
     use super::create_seatbelt_command_args_with_extensions;
-    use super::deny_read_policy_and_params;
     use super::dynamic_network_policy;
     use super::macos_dir_params;
     use super::normalize_path_for_sandbox;
     use super::unix_socket_dir_params;
     use super::unix_socket_policy;
-    use crate::protocol::DenyReadPattern;
     use crate::protocol::SandboxPolicy;
     use crate::seatbelt::MACOS_PATH_TO_SEATBELT_EXECUTABLE;
     use crate::seatbelt_permissions::MacOsAutomationPermission;
     use crate::seatbelt_permissions::MacOsPreferencesPermission;
     use crate::seatbelt_permissions::MacOsSeatbeltProfileExtensions;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
+    use codex_protocol::permissions::NetworkSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -734,60 +723,13 @@ mod tests {
         AbsolutePathBuf::from_absolute_path(Path::new(path)).expect("absolute path")
     }
 
-    #[test]
-    fn deny_read_policy_emits_read_and_unlink_denials() {
-        let tmp = TempDir::new().expect("tempdir");
-        let denied_dir = tmp.path().join("private");
-        let denied_file = denied_dir.join("secrets.txt");
-        std::fs::create_dir_all(&denied_dir).expect("create denied dir");
-        std::fs::write(&denied_file, "secret").expect("write denied file");
-
-        let policy = SandboxPolicy::ReadOnly {
-            access: Default::default(),
-            deny_read_patterns: vec![DenyReadPattern::from(
-                denied_file.to_string_lossy().into_owned(),
-            )],
-        };
-
-        let (policy_text, params) = deny_read_policy_and_params(&policy);
-
-        assert!(policy_text.contains("(deny file-read*"));
-        assert!(policy_text.contains("(deny file-write-unlink"));
-        assert!(
-            params
-                .iter()
-                .any(|(key, value)| key.starts_with("DENY_READ_")
-                    && value.ends_with(Path::new("secrets.txt")))
-        );
-        assert!(
-            params
-                .iter()
-                .any(|(key, value)| key.starts_with("DENY_UNLINK_")
-                    && value.ends_with(Path::new("private")))
-        );
-    }
-
-    #[test]
-    fn deny_read_policy_emits_regex_for_glob_patterns() {
-        let tmp = TempDir::new().expect("tempdir");
-        let denied_pattern = format!("{}/private/**/*.txt", tmp.path().display());
-
-        let policy = SandboxPolicy::ReadOnly {
-            access: Default::default(),
-            deny_read_patterns: vec![DenyReadPattern::from(denied_pattern)],
-        };
-
-        let (policy_text, params) = deny_read_policy_and_params(&policy);
-
-        assert!(policy_text.contains("(deny file-read* (regex \"^"));
-        assert!(policy_text.contains("private/(?:[^/]+/)*[^/]*\\.txt$"));
-        assert!(policy_text.contains("(deny file-write-unlink"));
-        assert!(
-            params
-                .iter()
-                .any(|(key, value)| key.starts_with("DENY_UNLINK_")
-                    && value.ends_with(Path::new("private")))
-        );
+    fn seatbelt_policy_arg(args: &[String]) -> &str {
+        let policy_index = args
+            .iter()
+            .position(|arg| arg == "-p")
+            .expect("seatbelt args should include -p");
+        args.get(policy_index + 1)
+            .expect("seatbelt args should include policy text")
     }
 
     #[test]
@@ -834,6 +776,95 @@ mod tests {
         assert!(
             !policy.contains("(allow network-inbound (local ip \"localhost:*\"))"),
             "policy should not allow loopback inbound unless explicitly enabled:\n{policy}"
+        );
+    }
+
+    #[test]
+    fn explicit_unreadable_paths_are_excluded_from_full_disk_read_and_write_access() {
+        let unreadable = absolute_path("/tmp/codex-unreadable");
+        let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: crate::protocol::FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: unreadable },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        let args = create_seatbelt_command_args_for_policies_with_extensions(
+            vec!["/bin/true".to_string()],
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+            Path::new("/"),
+            false,
+            None,
+            None,
+        );
+
+        let policy = seatbelt_policy_arg(&args);
+        assert!(
+            policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_RO_0\")))"),
+            "expected read carveout in policy:\n{policy}"
+        );
+        assert!(
+            policy.contains("(require-not (subpath (param \"WRITABLE_ROOT_0_RO_0\")))"),
+            "expected write carveout in policy:\n{policy}"
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "-DREADABLE_ROOT_0_RO_0=/tmp/codex-unreadable"),
+            "expected read carveout parameter in args: {args:#?}"
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "-DWRITABLE_ROOT_0_RO_0=/tmp/codex-unreadable"),
+            "expected write carveout parameter in args: {args:#?}"
+        );
+    }
+
+    #[test]
+    fn explicit_unreadable_paths_are_excluded_from_readable_roots() {
+        let root = absolute_path("/tmp/codex-readable");
+        let unreadable = absolute_path("/tmp/codex-readable/private");
+        let file_system_policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: root },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: unreadable },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        let args = create_seatbelt_command_args_for_policies_with_extensions(
+            vec!["/bin/true".to_string()],
+            &file_system_policy,
+            NetworkSandboxPolicy::Restricted,
+            Path::new("/"),
+            false,
+            None,
+            None,
+        );
+
+        let policy = seatbelt_policy_arg(&args);
+        assert!(
+            policy.contains("(require-not (subpath (param \"READABLE_ROOT_0_RO_0\")))"),
+            "expected read carveout in policy:\n{policy}"
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "-DREADABLE_ROOT_0=/tmp/codex-readable"),
+            "expected readable root parameter in args: {args:#?}"
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "-DREADABLE_ROOT_0_RO_0=/tmp/codex-readable/private"),
+            "expected read carveout parameter in args: {args:#?}"
         );
     }
 
@@ -963,7 +994,7 @@ sys.exit(0 if allowed else 13)
 
         assert!(
             policy.contains("(allow network-bind (local ip \"localhost:*\"))"),
-            "policy should allow loopback binding when explicitly enabled:\n{policy}"
+            "policy should allow loopback local binding when explicitly enabled:\n{policy}"
         );
         assert!(
             policy.contains("(allow network-inbound (local ip \"localhost:*\"))"),
@@ -980,12 +1011,11 @@ sys.exit(0 if allowed else 13)
     }
 
     #[test]
-    fn dynamic_network_policy_fails_closed_when_proxy_config_without_ports() {
+    fn dynamic_network_policy_preserves_restricted_policy_when_proxy_config_without_ports() {
         let policy = dynamic_network_policy(
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: Default::default(),
-                deny_read_patterns: vec![],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -1000,6 +1030,10 @@ sys.exit(0 if allowed else 13)
         );
 
         assert!(
+            policy.contains("(socket-domain AF_SYSTEM)"),
+            "policy should keep the restricted network profile when proxy config is present without ports:\n{policy}"
+        );
+        assert!(
             !policy.contains("\n(allow network-outbound)\n"),
             "policy should not include blanket outbound allowance when proxy config is present without ports:\n{policy}"
         );
@@ -1010,12 +1044,12 @@ sys.exit(0 if allowed else 13)
     }
 
     #[test]
-    fn dynamic_network_policy_fails_closed_for_managed_network_without_proxy_config() {
+    fn dynamic_network_policy_preserves_restricted_policy_for_managed_network_without_proxy_config()
+    {
         let policy = dynamic_network_policy(
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: Default::default(),
-                deny_read_patterns: vec![],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -1029,7 +1063,14 @@ sys.exit(0 if allowed else 13)
             },
         );
 
-        assert_eq!(policy, "");
+        assert!(
+            policy.contains("(socket-domain AF_SYSTEM)"),
+            "policy should keep the restricted network profile when managed network is active without proxy endpoints:\n{policy}"
+        );
+        assert!(
+            !policy.contains("\n(allow network-outbound)\n"),
+            "policy should not include blanket outbound allowance when managed network is active without proxy endpoints:\n{policy}"
+        );
     }
 
     #[test]
@@ -1048,8 +1089,24 @@ sys.exit(0 if allowed else 13)
         );
 
         assert!(
-            policy.contains("(allow network* (subpath (param \"UNIX_SOCKET_PATH_0\")))"),
-            "policy should allow explicitly configured unix sockets:\n{policy}"
+            policy.contains("(allow system-socket (socket-domain AF_UNIX))"),
+            "policy should allow AF_UNIX socket creation for configured unix sockets:\n{policy}"
+        );
+        assert!(
+            policy.contains(
+                "(allow network-bind (local unix-socket (subpath (param \"UNIX_SOCKET_PATH_0\"))))"
+            ),
+            "policy should allow binding explicitly configured unix sockets:\n{policy}"
+        );
+        assert!(
+            policy.contains(
+                "(allow network-outbound (remote unix-socket (subpath (param \"UNIX_SOCKET_PATH_0\"))))"
+            ),
+            "policy should allow connecting to explicitly configured unix sockets:\n{policy}"
+        );
+        assert!(
+            !policy.contains("(allow network* (subpath"),
+            "policy should no longer use the generic subpath unix-socket rules:\n{policy}"
         );
     }
 
@@ -1123,8 +1180,20 @@ sys.exit(0 if allowed else 13)
         );
 
         assert!(
-            policy.contains("(allow network* (subpath \"/\"))"),
-            "policy should allow all unix sockets when flag is enabled:\n{policy}"
+            policy.contains("(allow system-socket (socket-domain AF_UNIX))"),
+            "policy should allow AF_UNIX socket creation when unix sockets are enabled:\n{policy}"
+        );
+        assert!(
+            policy.contains("(allow network-bind (local unix-socket))"),
+            "policy should allow binding unix sockets when enabled:\n{policy}"
+        );
+        assert!(
+            policy.contains("(allow network-outbound (remote unix-socket))"),
+            "policy should allow connecting to unix sockets when enabled:\n{policy}"
+        );
+        assert!(
+            !policy.contains("(allow network* (subpath"),
+            "policy should no longer use the generic subpath unix-socket rules:\n{policy}"
         );
     }
 
@@ -1134,7 +1203,6 @@ sys.exit(0 if allowed else 13)
             &SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![],
                 read_only_access: Default::default(),
-                deny_read_patterns: vec![],
                 network_access: true,
                 exclude_tmpdir_env_var: false,
                 exclude_slash_tmp: false,
@@ -1186,7 +1254,6 @@ sys.exit(0 if allowed else 13)
                 .map(|p| p.try_into().unwrap())
                 .collect(),
             read_only_access: Default::default(),
-            deny_read_patterns: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1219,7 +1286,7 @@ sys.exit(0 if allowed else 13)
 ; allow read-only file operations
 (allow file-read*)
 (allow file-write*
-(require-all (subpath (param "WRITABLE_ROOT_0")) (require-not (subpath (param "WRITABLE_ROOT_0_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_0_RO_1"))) ) (subpath (param "WRITABLE_ROOT_1")) (subpath (param "WRITABLE_ROOT_2"))
+(subpath (param "WRITABLE_ROOT_0")) (require-all (subpath (param "WRITABLE_ROOT_1")) (require-not (subpath (param "WRITABLE_ROOT_1_RO_0"))) (require-not (subpath (param "WRITABLE_ROOT_1_RO_1"))) ) (subpath (param "WRITABLE_ROOT_2"))
 )
 
 ; macOS permission profile extensions
@@ -1232,43 +1299,51 @@ sys.exit(0 if allowed else 13)
 "#,
         );
 
-        let mut expected_args = vec![
-            "-p".to_string(),
-            expected_policy,
+        assert_eq!(seatbelt_policy_arg(&args), expected_policy);
+
+        let expected_definitions = [
             format!(
                 "-DWRITABLE_ROOT_0={}",
-                vulnerable_root_canonical.to_string_lossy()
-            ),
-            format!(
-                "-DWRITABLE_ROOT_0_RO_0={}",
-                dot_git_canonical.to_string_lossy()
-            ),
-            format!(
-                "-DWRITABLE_ROOT_0_RO_1={}",
-                dot_codex_canonical.to_string_lossy()
-            ),
-            format!(
-                "-DWRITABLE_ROOT_1={}",
-                empty_root_canonical.to_string_lossy()
-            ),
-            format!(
-                "-DWRITABLE_ROOT_2={}",
                 cwd.canonicalize()
                     .expect("canonicalize cwd")
                     .to_string_lossy()
             ),
+            format!(
+                "-DWRITABLE_ROOT_1={}",
+                vulnerable_root_canonical.to_string_lossy()
+            ),
+            format!(
+                "-DWRITABLE_ROOT_1_RO_0={}",
+                dot_git_canonical.to_string_lossy()
+            ),
+            format!(
+                "-DWRITABLE_ROOT_1_RO_1={}",
+                dot_codex_canonical.to_string_lossy()
+            ),
+            format!(
+                "-DWRITABLE_ROOT_2={}",
+                empty_root_canonical.to_string_lossy()
+            ),
         ];
+        for expected_definition in expected_definitions {
+            assert!(
+                args.contains(&expected_definition),
+                "expected definition arg `{expected_definition}` in {args:#?}"
+            );
+        }
+        for (key, value) in macos_dir_params() {
+            let expected_definition = format!("-D{key}={}", value.to_string_lossy());
+            assert!(
+                args.contains(&expected_definition),
+                "expected definition arg `{expected_definition}` in {args:#?}"
+            );
+        }
 
-        expected_args.extend(
-            macos_dir_params()
-                .into_iter()
-                .map(|(key, value)| format!("-D{key}={value}", value = value.to_string_lossy())),
-        );
-
-        expected_args.push("--".to_string());
-        expected_args.extend(shell_command);
-
-        assert_eq!(expected_args, args);
+        let command_index = args
+            .iter()
+            .position(|arg| arg == "--")
+            .expect("seatbelt args should include command separator");
+        assert_eq!(args[command_index + 1..], shell_command);
 
         // Verify that .codex/config.toml cannot be modified under the generated
         // Seatbelt policy.
@@ -1381,7 +1456,6 @@ sys.exit(0 if allowed else 13)
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![worktree_root.try_into().expect("worktree_root is absolute")],
             read_only_access: Default::default(),
-            deny_read_patterns: vec![],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,
@@ -1467,7 +1541,6 @@ sys.exit(0 if allowed else 13)
         let policy = SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             read_only_access: Default::default(),
-            deny_read_patterns: vec![],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,

@@ -12,6 +12,8 @@ use crate::memories::storage::rollout_summary_file_stem;
 use crate::memories::storage::sync_rollout_summaries_from_memories;
 use codex_config::Constrained;
 use codex_protocol::ThreadId;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
@@ -43,7 +45,7 @@ struct Counters {
 pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     let phase_two_e2e_timer = session
         .services
-        .otel_manager
+        .session_telemetry
         .start_timer(metrics::MEMORY_PHASE_TWO_E2E_MS, &[])
         .ok();
 
@@ -59,7 +61,7 @@ pub(super) async fn run(session: &Arc<Session>, config: Arc<Config>) {
     let claim = match job::claim(session, db).await {
         Ok(claim) => claim,
         Err(e) => {
-            session.services.otel_manager.counter(
+            session.services.session_telemetry.counter(
                 metrics::MEMORY_PHASE_TWO_JOBS,
                 1,
                 &[("status", e)],
@@ -183,7 +185,7 @@ mod job {
         session: &Arc<Session>,
         db: &StateRuntime,
     ) -> Result<Claim, &'static str> {
-        let otel_manager = &session.services.otel_manager;
+        let session_telemetry = &session.services.session_telemetry;
         let claim = db
             .try_claim_global_phase2_job(session.conversation_id, phase_two::JOB_LEASE_SECONDS)
             .await
@@ -196,7 +198,11 @@ mod job {
                 ownership_token,
                 input_watermark,
             } => {
-                otel_manager.counter(metrics::MEMORY_PHASE_TWO_JOBS, 1, &[("status", "claimed")]);
+                session_telemetry.counter(
+                    metrics::MEMORY_PHASE_TWO_JOBS,
+                    1,
+                    &[("status", "claimed")],
+                );
                 (ownership_token, input_watermark)
             }
             codex_state::Phase2JobClaimOutcome::SkippedNotDirty => return Err("skipped_not_dirty"),
@@ -212,7 +218,7 @@ mod job {
         claim: &Claim,
         reason: &'static str,
     ) {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_TWO_JOBS,
             1,
             &[("status", reason)],
@@ -244,7 +250,7 @@ mod job {
         selected_outputs: &[codex_state::Stage1Output],
         reason: &'static str,
     ) {
-        session.services.otel_manager.counter(
+        session.services.session_telemetry.counter(
             metrics::MEMORY_PHASE_TWO_JOBS,
             1,
             &[("status", reason)],
@@ -266,7 +272,7 @@ mod agent {
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
         // Consolidation runs as an internal sub-agent and must not recursively delegate.
-        agent_config.features.disable(Feature::Collab);
+        let _ = agent_config.features.disable(Feature::Collab);
 
         // Sandbox policy
         let mut writable_roots = Vec::new();
@@ -281,16 +287,21 @@ mod agent {
         let consolidation_sandbox_policy = SandboxPolicy::WorkspaceWrite {
             writable_roots,
             read_only_access: Default::default(),
-            deny_read_patterns: vec![],
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
         };
+        let consolidation_file_system_sandbox_policy =
+            FileSystemSandboxPolicy::from(&consolidation_sandbox_policy);
         agent_config
             .permissions
             .sandbox_policy
-            .set(consolidation_sandbox_policy)
+            .set(consolidation_sandbox_policy.clone())
             .ok()?;
+        agent_config.permissions.file_system_sandbox_policy =
+            consolidation_file_system_sandbox_policy;
+        agent_config.permissions.network_sandbox_policy =
+            NetworkSandboxPolicy::from(&consolidation_sandbox_policy);
 
         agent_config.model = Some(
             config
@@ -451,7 +462,7 @@ pub(super) fn get_watermark(
 }
 
 fn emit_metrics(session: &Arc<Session>, counters: Counters) {
-    let otel = session.services.otel_manager.clone();
+    let otel = session.services.session_telemetry.clone();
     if counters.input > 0 {
         otel.counter(metrics::MEMORY_PHASE_TWO_INPUT, counters.input, &[]);
     }
@@ -464,7 +475,7 @@ fn emit_metrics(session: &Arc<Session>, counters: Counters) {
 }
 
 fn emit_token_usage_metrics(session: &Arc<Session>, token_usage: &TokenUsage) {
-    let otel = session.services.otel_manager.clone();
+    let otel = session.services.session_telemetry.clone();
     otel.histogram(
         metrics::MEMORY_PHASE_TWO_TOKEN_USAGE,
         token_usage.total_tokens.max(0),

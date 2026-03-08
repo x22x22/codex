@@ -13,7 +13,6 @@ use tokio::fs;
 use crate::filesystem_deny_read::ensure_read_allowed;
 use crate::filesystem_deny_read::is_read_denied;
 use crate::function_tool::FunctionCallError;
-use crate::protocol::SandboxPolicy;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -100,11 +99,16 @@ impl ToolHandler for ListDirHandler {
                 "dir_path must be an absolute path".to_string(),
             ));
         }
-        ensure_read_allowed(&path, &turn.sandbox_policy)?;
+        ensure_read_allowed(&path, &turn.file_system_sandbox_policy, &turn.cwd)?;
 
-        let entries =
-            list_dir_slice_with_policy(&path, offset, limit, depth, Some(&turn.sandbox_policy))
-                .await?;
+        let entries = list_dir_slice_with_policy(
+            &path,
+            offset,
+            limit,
+            depth,
+            Some((&turn.file_system_sandbox_policy, &turn.cwd)),
+        )
+        .await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
@@ -130,7 +134,7 @@ async fn list_dir_slice_with_policy(
     offset: usize,
     limit: usize,
     depth: usize,
-    sandbox_policy: Option<&SandboxPolicy>,
+    sandbox_policy: Option<(&codex_protocol::permissions::FileSystemSandboxPolicy, &Path)>,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
     collect_entries(path, Path::new(""), depth, sandbox_policy, &mut entries).await?;
@@ -169,7 +173,7 @@ async fn collect_entries(
     dir_path: &Path,
     relative_prefix: &Path,
     depth: usize,
-    sandbox_policy: Option<&SandboxPolicy>,
+    sandbox_policy: Option<(&codex_protocol::permissions::FileSystemSandboxPolicy, &Path)>,
     entries: &mut Vec<DirEntry>,
 ) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();
@@ -186,8 +190,8 @@ async fn collect_entries(
             FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
         })? {
             let entry_path = entry.path();
-            if let Some(policy) = sandbox_policy
-                && is_read_denied(&entry_path, policy)
+            if let Some((policy, cwd)) = sandbox_policy
+                && is_read_denied(&entry_path, policy, cwd)
             {
                 continue;
             }

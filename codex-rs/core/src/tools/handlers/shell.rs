@@ -343,9 +343,7 @@ impl ShellHandler {
         .map_err(FunctionCallError::RespondToModel)?;
 
         // Approval policy guard for explicit escalation in non-OnRequest modes.
-        if exec_params
-            .sandbox_permissions
-            .requires_additional_permissions()
+        if exec_params.sandbox_permissions.requests_sandbox_override()
             && !matches!(
                 turn.approval_policy.value(),
                 codex_protocol::protocol::AskForApproval::OnRequest
@@ -358,7 +356,7 @@ impl ShellHandler {
         }
         reject_explicit_escalation_if_deny_read_present(
             exec_params.sandbox_permissions,
-            &turn.sandbox_policy,
+            &turn.file_system_sandbox_policy,
         )?;
 
         // Intercept apply_patch if present.
@@ -394,6 +392,7 @@ impl ShellHandler {
                 command: &exec_params.command,
                 approval_policy: turn.approval_policy.value(),
                 sandbox_policy: turn.sandbox_policy.get(),
+                file_system_sandbox_policy: &turn.file_system_sandbox_policy,
                 sandbox_permissions: exec_params.sandbox_permissions,
                 prefix_rule,
             })

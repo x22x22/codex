@@ -31,6 +31,7 @@ use crate::bash::parse_shell_lc_plain_commands;
 use crate::bash::parse_shell_lc_single_command_prefix;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
 use shlex::try_join as shlex_try_join;
 
 const PROMPT_CONFLICT_REASON: &str =
@@ -104,7 +105,7 @@ fn is_policy_match(rule_match: &RuleMatch) -> bool {
 /// `prompt_is_rule` distinguishes policy-rule prompts from sandbox/escalation
 /// prompts so `Reject.rules` and `Reject.sandbox_approval` are honored
 /// independently. When both are present, policy-rule prompts take precedence.
-fn prompt_is_rejected_by_policy(
+pub(crate) fn prompt_is_rejected_by_policy(
     approval_policy: AskForApproval,
     prompt_is_rule: bool,
 ) -> Option<&'static str> {
@@ -173,6 +174,7 @@ pub(crate) struct ExecApprovalRequest<'a> {
     pub(crate) command: &'a [String],
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: &'a SandboxPolicy,
+    pub(crate) file_system_sandbox_policy: &'a FileSystemSandboxPolicy,
     pub(crate) sandbox_permissions: SandboxPermissions,
     pub(crate) prefix_rule: Option<Vec<String>>,
 }
@@ -204,6 +206,7 @@ impl ExecPolicyManager {
             command,
             approval_policy,
             sandbox_policy,
+            file_system_sandbox_policy,
             sandbox_permissions,
             prefix_rule,
         } = req;
@@ -270,7 +273,7 @@ impl ExecPolicyManager {
                 // Bypass sandbox for trusted execpolicy allow rules unless the current
                 // sandbox policy carries filesystem deny_read restrictions that must
                 // still be enforced for shell/unified_exec commands.
-                bypass_sandbox: !sandbox_policy.has_denied_read_restrictions()
+                bypass_sandbox: !file_system_sandbox_policy.has_denied_read_restrictions()
                     && evaluation.matched_rules.iter().any(|rule_match| {
                         is_policy_match(rule_match) && rule_match.decision() == Decision::Allow
                     }),
@@ -505,16 +508,18 @@ pub fn render_decision_for_unmatched_command(
         cfg!(windows) && matches!(sandbox_policy, SandboxPolicy::ReadOnly { .. });
 
     // If the command is flagged as dangerous or we have no sandbox protection,
-    // we should never allow it to run without user approval.
+    // we should never allow it to run without approval.
     //
     // We prefer to prompt the user rather than outright forbid the command,
     // but if the user has explicitly disabled prompts, we must
     // forbid the command.
     if command_might_be_dangerous(command) || runtime_sandbox_provides_safety {
-        return if matches!(approval_policy, AskForApproval::Never) {
-            Decision::Forbidden
-        } else {
-            Decision::Prompt
+        return match approval_policy {
+            AskForApproval::Never => Decision::Forbidden,
+            AskForApproval::OnFailure
+            | AskForApproval::OnRequest
+            | AskForApproval::UnlessTrusted
+            | AskForApproval::Reject(_) => Decision::Prompt,
         };
     }
 
@@ -541,7 +546,7 @@ pub fn render_decision_for_unmatched_command(
                     // In restricted sandboxes (ReadOnly/WorkspaceWrite), do not prompt for
                     // non‑escalated, non‑dangerous commands — let the sandbox enforce
                     // restrictions (e.g., block network/write) without a user prompt.
-                    if sandbox_permissions.requires_additional_permissions() {
+                    if sandbox_permissions.requests_sandbox_override() {
                         Decision::Prompt
                     } else {
                         Decision::Allow
@@ -556,7 +561,7 @@ pub fn render_decision_for_unmatched_command(
                 Decision::Allow
             }
             SandboxPolicy::ReadOnly { .. } | SandboxPolicy::WorkspaceWrite { .. } => {
-                if sandbox_permissions.requires_additional_permissions() {
+                if sandbox_permissions.requests_sandbox_override() {
                     Decision::Prompt
                 } else {
                     Decision::Allow
@@ -1581,7 +1586,8 @@ prefix_rule(pattern=["git"], decision="prompt")
     }
 
     #[tokio::test]
-    async fn exec_approval_requirement_rejects_unmatched_prompt_when_sandbox_rejection_enabled() {
+    async fn exec_approval_requirement_rejects_unmatched_sandbox_escalation_when_sandbox_rejection_enabled()
+     {
         let command = vec!["madeup-cmd".to_string()];
 
         let requirement = ExecPolicyManager::default()
