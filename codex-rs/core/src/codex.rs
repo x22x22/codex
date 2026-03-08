@@ -6172,6 +6172,63 @@ impl AssistantMessageStreamParsers {
     }
 }
 
+#[derive(Debug, Default)]
+struct ActiveResponseItems {
+    items_by_id: HashMap<String, TurnItem>,
+    active_assistant_item_id: Option<String>,
+    active_reasoning_item_id: Option<String>,
+}
+
+impl ActiveResponseItems {
+    fn insert(&mut self, item: TurnItem) {
+        let item_id = item.id();
+        match &item {
+            TurnItem::AgentMessage(_) => {
+                self.active_assistant_item_id = Some(item_id.clone());
+            }
+            TurnItem::Reasoning(_) => {
+                self.active_reasoning_item_id = Some(item_id.clone());
+            }
+            _ => {}
+        }
+        self.items_by_id.insert(item_id, item);
+    }
+
+    fn remove_for_response_item(&mut self, item: &ResponseItem) -> Option<TurnItem> {
+        let item_id = response_item_stream_id(item)?;
+        let removed = self.items_by_id.remove(&item_id);
+        if self.active_assistant_item_id.as_deref() == Some(item_id.as_str()) {
+            self.active_assistant_item_id = None;
+        }
+        if self.active_reasoning_item_id.as_deref() == Some(item_id.as_str()) {
+            self.active_reasoning_item_id = None;
+        }
+        removed
+    }
+
+    fn active_assistant_item(&self) -> Option<&TurnItem> {
+        self.active_assistant_item_id
+            .as_ref()
+            .and_then(|item_id| self.items_by_id.get(item_id))
+    }
+
+    fn active_reasoning_item(&self) -> Option<&TurnItem> {
+        self.active_reasoning_item_id
+            .as_ref()
+            .and_then(|item_id| self.items_by_id.get(item_id))
+    }
+}
+
+fn response_item_stream_id(item: &ResponseItem) -> Option<String> {
+    match item {
+        ResponseItem::Message { id, role, .. } if role == "assistant" => id.clone(),
+        ResponseItem::Reasoning { id, .. } => Some(id.clone()),
+        ResponseItem::WebSearchCall { id, .. } => Some(id.clone().unwrap_or_default()),
+        ResponseItem::ImageGenerationCall { id, .. } => Some(id.clone()),
+        _ => None,
+    }
+}
+
 impl ProposedPlanItemState {
     fn new(turn_id: &str) -> Self {
         Self {
@@ -6673,7 +6730,7 @@ async fn try_run_sampling_request(
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
-    let mut active_item: Option<TurnItem> = None;
+    let mut active_response_items = ActiveResponseItems::default();
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
@@ -6716,7 +6773,7 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                let previously_active_item = active_item.take();
+                let previously_active_item = active_response_items.remove_for_response_item(&item);
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
                 {
@@ -6812,7 +6869,7 @@ async fn try_run_sampling_request(
                         )
                         .await;
                     }
-                    active_item = Some(turn_item);
+                    active_response_items.insert(turn_item);
                 }
             }
             ResponseEvent::ServerModel(server_model) => {
@@ -6861,28 +6918,17 @@ async fn try_run_sampling_request(
             ResponseEvent::OutputTextDelta(delta) => {
                 // In review child threads, suppress assistant text deltas; the
                 // UI will show a selection popup from the final ReviewOutput.
-                if let Some(active) = active_item.as_ref() {
+                if let Some(active) = active_response_items.active_assistant_item() {
                     let item_id = active.id();
-                    if matches!(active, TurnItem::AgentMessage(_)) {
-                        let parsed = assistant_message_stream_parsers.parse_delta(&item_id, &delta);
-                        emit_streamed_assistant_text_delta(
-                            &sess,
-                            &turn_context,
-                            plan_mode_state.as_mut(),
-                            &item_id,
-                            parsed,
-                        )
-                        .await;
-                    } else {
-                        let event = AgentMessageContentDeltaEvent {
-                            thread_id: sess.conversation_id.to_string(),
-                            turn_id: turn_context.sub_id.clone(),
-                            item_id,
-                            delta,
-                        };
-                        sess.send_event(&turn_context, EventMsg::AgentMessageContentDelta(event))
-                            .await;
-                    }
+                    let parsed = assistant_message_stream_parsers.parse_delta(&item_id, &delta);
+                    emit_streamed_assistant_text_delta(
+                        &sess,
+                        &turn_context,
+                        plan_mode_state.as_mut(),
+                        &item_id,
+                        parsed,
+                    )
+                    .await;
                 } else {
                     error_or_panic("OutputTextDelta without active item".to_string());
                 }
@@ -6891,7 +6937,7 @@ async fn try_run_sampling_request(
                 delta,
                 summary_index,
             } => {
-                if let Some(active) = active_item.as_ref() {
+                if let Some(active) = active_response_items.active_reasoning_item() {
                     let event = ReasoningContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),
@@ -6906,7 +6952,7 @@ async fn try_run_sampling_request(
                 }
             }
             ResponseEvent::ReasoningSummaryPartAdded { summary_index } => {
-                if let Some(active) = active_item.as_ref() {
+                if let Some(active) = active_response_items.active_reasoning_item() {
                     let event =
                         EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {
                             item_id: active.id(),
@@ -6921,7 +6967,7 @@ async fn try_run_sampling_request(
                 delta,
                 content_index,
             } => {
-                if let Some(active) = active_item.as_ref() {
+                if let Some(active) = active_response_items.active_reasoning_item() {
                     let event = ReasoningRawContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
                         turn_id: turn_context.sub_id.clone(),

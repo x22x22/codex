@@ -506,17 +506,15 @@ async fn interleaved_reasoning_and_assistant_streams_keep_item_ids_aligned() -> 
     .await;
 
     assert_eq!(reasoning_started.id, "reasoning-1");
+    assert_eq!(reasoning_started.summary_text, vec![String::new()]);
     assert_eq!(reasoning_delta.item_id, reasoning_started.id);
     assert_eq!(reasoning_delta.delta, "thinking");
     assert_eq!(reasoning_completed.id, reasoning_started.id);
     assert_eq!(
         reasoning_completed.summary_text,
-        reasoning_started.summary_text
+        vec!["thinking".to_string()]
     );
-    assert_eq!(
-        reasoning_completed.raw_content,
-        reasoning_started.raw_content
-    );
+    assert_eq!(reasoning_completed.raw_content, Vec::<String>::new());
 
     assert_eq!(agent_started.id, "msg-1");
     assert_eq!(agent_delta.item_id, agent_started.id);
