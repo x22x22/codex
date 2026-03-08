@@ -30,8 +30,6 @@ pub enum ExperimentalEnumVariantEncoding {
     StringLiteral,
     /// A tagged object arm, such as `{ "type": "chatgptAuthTokens", ... }`.
     TaggedObject { tag_name: &'static str },
-    /// An externally tagged object arm, such as `{ "reject": { ... } }`.
-    ExternallyTaggedObject,
 }
 
 /// Describes an experimental enum variant on a specific type.

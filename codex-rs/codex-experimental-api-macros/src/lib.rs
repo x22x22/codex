@@ -262,9 +262,7 @@ fn experimental_enum_variant_registration(
             crate::experimental_api::ExperimentalEnumVariantEncoding::StringLiteral
         }
     } else {
-        quote! {
-            crate::experimental_api::ExperimentalEnumVariantEncoding::ExternallyTaggedObject
-        }
+        return None;
     };
 
     Some(quote! {

@@ -880,9 +880,6 @@ fn ts_union_arm_matches_experimental_enum_variant(
         ExperimentalEnumVariantEncoding::TaggedObject { tag_name } => {
             ts_object_arm_has_string_property(arm, tag_name, variant.serialized_name)
         }
-        ExperimentalEnumVariantEncoding::ExternallyTaggedObject => {
-            ts_object_arm_has_property(arm, variant.serialized_name)
-        }
     }
 }
 
@@ -905,17 +902,6 @@ fn ts_object_arm_has_string_property(arm: &str, property_name: &str, property_va
     false
 }
 
-fn ts_object_arm_has_property(arm: &str, property_name: &str) -> bool {
-    let Some((open, close)) = find_top_level_brace_span(arm) else {
-        return false;
-    };
-    let inner = &arm[open + 1..close];
-    split_top_level(inner, ',').into_iter().any(|field| {
-        let field = strip_leading_block_comments(field.as_str());
-        parse_property_name(field).is_some_and(|name| name == property_name)
-    })
-}
-
 fn json_schema_matches_experimental_enum_variant(
     schema: &Value,
     variant: &ExperimentalEnumVariant,
@@ -926,9 +912,6 @@ fn json_schema_matches_experimental_enum_variant(
         }
         ExperimentalEnumVariantEncoding::TaggedObject { tag_name } => {
             json_schema_has_tagged_variant(schema, tag_name, variant.serialized_name)
-        }
-        ExperimentalEnumVariantEncoding::ExternallyTaggedObject => {
-            json_schema_has_property(schema, variant.serialized_name)
         }
     }
 }
@@ -955,16 +938,6 @@ fn json_schema_has_tagged_variant(schema: &Value, tag_name: &str, tag_value: &st
     properties
         .get(tag_name)
         .is_some_and(|tag_schema| json_schema_matches_string_literal(tag_schema, tag_value))
-}
-
-fn json_schema_has_property(schema: &Value, property_name: &str) -> bool {
-    let Value::Object(map) = schema else {
-        return false;
-    };
-    let Some(properties) = map.get("properties").and_then(Value::as_object) else {
-        return false;
-    };
-    properties.contains_key(property_name)
 }
 
 fn strip_leading_block_comments(input: &str) -> &str {
