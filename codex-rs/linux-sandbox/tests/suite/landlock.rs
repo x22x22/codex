@@ -68,7 +68,6 @@ async fn run_cmd_output(
         .expect("sandboxed command should execute")
 }
 
-#[expect(clippy::expect_used)]
 async fn run_cmd_result_with_writable_roots(
     cmd: &[&str],
     writable_roots: &[PathBuf],
