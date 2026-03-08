@@ -13,7 +13,9 @@ use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::FileSystemSpecialPath;
 use codex_protocol::permissions::NetworkSandboxPolicy;
+use codex_protocol::protocol::ReadOnlyAccess;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
@@ -551,6 +553,57 @@ async fn sandbox_blocks_explicit_split_policy_carveouts_under_bwrap() {
         )
         .await,
         "explicit split-policy carveout should be denied under bubblewrap",
+    );
+
+    assert_ne!(output.exit_code, 0);
+}
+
+#[tokio::test]
+async fn sandbox_blocks_root_read_carveouts_under_bwrap() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tmpdir = tempfile::tempdir().expect("tempdir");
+    let blocked = tmpdir.path().join("blocked");
+    std::fs::create_dir_all(&blocked).expect("create blocked dir");
+    let blocked_target = blocked.join("secret.txt");
+    std::fs::write(&blocked_target, "secret").expect("seed blocked file");
+
+    let sandbox_policy = SandboxPolicy::ReadOnly {
+        access: ReadOnlyAccess::FullAccess,
+        network_access: true,
+    };
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Special {
+                value: FileSystemSpecialPath::Root,
+            },
+            access: FileSystemAccessMode::Read,
+        },
+        FileSystemSandboxEntry {
+            path: FileSystemPath::Path {
+                path: AbsolutePathBuf::try_from(blocked.as_path()).expect("absolute blocked dir"),
+            },
+            access: FileSystemAccessMode::None,
+        },
+    ]);
+    let output = expect_denied(
+        run_cmd_result_with_policies(
+            &[
+                "bash",
+                "-lc",
+                &format!("cat {}", blocked_target.to_string_lossy()),
+            ],
+            sandbox_policy,
+            file_system_sandbox_policy,
+            NetworkSandboxPolicy::Enabled,
+            LONG_TIMEOUT_MS,
+            true,
+        )
+        .await,
+        "root-read carveout should be denied under bubblewrap",
     );
 
     assert_ne!(output.exit_code, 0);

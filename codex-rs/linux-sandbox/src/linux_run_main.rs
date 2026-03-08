@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
-use crate::bwrap::create_bwrap_command_args_for_policy;
+use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
 use crate::proxy_routing::prepare_host_proxy_route_spec;
@@ -285,13 +285,13 @@ fn run_bwrap_with_proc_fallback(
         mount_proc,
         network_mode,
     };
-    let argv = build_bwrap_argv(
+    let bwrap_args = build_bwrap_argv(
         inner,
         file_system_sandbox_policy,
         sandbox_policy_cwd,
         options,
     );
-    exec_vendored_bwrap(argv);
+    exec_vendored_bwrap(bwrap_args.args, bwrap_args.preserved_files);
 }
 
 fn bwrap_network_mode(
@@ -312,8 +312,8 @@ fn build_bwrap_argv(
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     sandbox_policy_cwd: &Path,
     options: BwrapOptions,
-) -> Vec<String> {
-    let mut args = create_bwrap_command_args_for_policy(
+) -> crate::bwrap::BwrapArgs {
+    let mut bwrap_args = create_bwrap_command_args(
         inner,
         file_system_sandbox_policy,
         sandbox_policy_cwd,
@@ -321,18 +321,22 @@ fn build_bwrap_argv(
     )
     .unwrap_or_else(|err| panic!("error building bubblewrap command: {err:?}"));
 
-    let command_separator_index = args
+    let command_separator_index = bwrap_args
+        .args
         .iter()
         .position(|arg| arg == "--")
         .unwrap_or_else(|| panic!("bubblewrap argv is missing command separator '--'"));
-    args.splice(
+    bwrap_args.args.splice(
         command_separator_index..command_separator_index,
         ["--argv0".to_string(), "codex-linux-sandbox".to_string()],
     );
 
     let mut argv = vec!["bwrap".to_string()];
-    argv.extend(args);
-    argv
+    argv.extend(bwrap_args.args);
+    crate::bwrap::BwrapArgs {
+        args: argv,
+        preserved_files: bwrap_args.preserved_files,
+    }
 }
 
 fn preflight_proc_mount_support(
@@ -350,7 +354,7 @@ fn build_preflight_bwrap_argv(
     sandbox_policy_cwd: &Path,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
     network_mode: BwrapNetworkMode,
-) -> Vec<String> {
+) -> crate::bwrap::BwrapArgs {
     let preflight_command = vec![resolve_true_command()];
     build_bwrap_argv(
         preflight_command,
@@ -383,7 +387,7 @@ fn resolve_true_command() -> String {
 /// - We capture stderr from that preflight to match known mount-failure text.
 ///   We do not stream it because this is a one-shot probe with a trivial
 ///   command, and reads are bounded to a fixed max size.
-fn run_bwrap_in_child_capture_stderr(argv: Vec<String>) -> String {
+fn run_bwrap_in_child_capture_stderr(bwrap_args: crate::bwrap::BwrapArgs) -> String {
     const MAX_PREFLIGHT_STDERR_BYTES: u64 = 64 * 1024;
 
     let mut pipe_fds = [0; 2];
@@ -412,7 +416,7 @@ fn run_bwrap_in_child_capture_stderr(argv: Vec<String>) -> String {
             close_fd_or_panic(write_fd, "close write end in bubblewrap child");
         }
 
-        let exit_code = run_vendored_bwrap_main(&argv);
+        let exit_code = run_vendored_bwrap_main(&bwrap_args.args, &bwrap_args.preserved_files);
         std::process::exit(exit_code);
     }
 

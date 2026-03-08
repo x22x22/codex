@@ -44,7 +44,8 @@ fn inserts_bwrap_argv0_before_command_separator() {
             mount_proc: true,
             network_mode: BwrapNetworkMode::FullAccess,
         },
-    );
+    )
+    .args;
     assert_eq!(
         argv,
         vec![
@@ -79,7 +80,8 @@ fn inserts_unshare_net_when_network_isolation_requested() {
             mount_proc: true,
             network_mode: BwrapNetworkMode::Isolated,
         },
-    );
+    )
+    .args;
     assert!(argv.contains(&"--unshare-net".to_string()));
 }
 
@@ -94,7 +96,8 @@ fn inserts_unshare_net_when_proxy_only_network_mode_requested() {
             mount_proc: true,
             network_mode: BwrapNetworkMode::ProxyOnly,
         },
-    );
+    )
+    .args;
     assert!(argv.contains(&"--unshare-net".to_string()));
 }
 
@@ -111,7 +114,8 @@ fn managed_proxy_preflight_argv_is_wrapped_for_full_access_policy() {
         Path::new("/"),
         &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
         mode,
-    );
+    )
+    .args;
     assert!(argv.iter().any(|arg| arg == "--"));
 }
 
