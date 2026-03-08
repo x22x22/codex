@@ -87,6 +87,8 @@ use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::FileChange;
 use codex_protocol::protocol::HasLegacyEvent;
 use codex_protocol::protocol::ItemCompletedEvent;
@@ -407,9 +409,16 @@ impl Codex {
         )
         .await;
 
-        let exec_policy = ExecPolicyManager::load(&config.config_layer_stack)
-            .await
-            .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?;
+        let exec_policy = if crate::guardian::is_guardian_subagent_source(&session_source) {
+            // Guardian review should rely on the built-in shell safety checks,
+            // not on caller-provided exec-policy rules that could shape the
+            // reviewer or silently auto-approve commands.
+            ExecPolicyManager::default()
+        } else {
+            ExecPolicyManager::load(&config.config_layer_stack)
+                .await
+                .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?
+        };
 
         let config = Arc::new(config);
         let refresh_strategy = match session_source {
@@ -449,7 +458,7 @@ impl Codex {
             };
             match thread_id {
                 Some(thread_id) => {
-                    let state_db_ctx = state_db::get_state_db(&config, None).await;
+                    let state_db_ctx = state_db::get_state_db(&config).await;
                     state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
                         .await
                 }
@@ -488,6 +497,8 @@ impl Codex {
             compact_prompt: config.compact_prompt.clone(),
             approval_policy: config.permissions.approval_policy.clone(),
             sandbox_policy: config.permissions.sandbox_policy.clone(),
+            file_system_sandbox_policy: config.permissions.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: config.permissions.network_sandbox_policy,
             windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
@@ -683,6 +694,8 @@ pub(crate) struct TurnContext {
     pub(crate) personality: Option<Personality>,
     pub(crate) approval_policy: Constrained<AskForApproval>,
     pub(crate) sandbox_policy: Constrained<SandboxPolicy>,
+    pub(crate) file_system_sandbox_policy: FileSystemSandboxPolicy,
+    pub(crate) network_sandbox_policy: NetworkSandboxPolicy,
     pub(crate) network: Option<NetworkProxy>,
     pub(crate) windows_sandbox_level: WindowsSandboxLevel,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
@@ -774,6 +787,8 @@ impl TurnContext {
             personality: self.personality,
             approval_policy: self.approval_policy.clone(),
             sandbox_policy: self.sandbox_policy.clone(),
+            file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: self.network_sandbox_policy,
             network: self.network.clone(),
             windows_sandbox_level: self.windows_sandbox_level,
             shell_environment_policy: self.shell_environment_policy.clone(),
@@ -879,6 +894,8 @@ pub(crate) struct SessionConfiguration {
     approval_policy: Constrained<AskForApproval>,
     /// How to sandbox commands executed in the system
     sandbox_policy: Constrained<SandboxPolicy>,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
     windows_sandbox_level: WindowsSandboxLevel,
 
     /// Working directory that should be treated as the *root* of the
@@ -945,6 +962,10 @@ impl SessionConfiguration {
         }
         if let Some(sandbox_policy) = updates.sandbox_policy.clone() {
             next_configuration.sandbox_policy.set(sandbox_policy)?;
+            next_configuration.file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from(next_configuration.sandbox_policy.get());
+            next_configuration.network_sandbox_policy =
+                NetworkSandboxPolicy::from(next_configuration.sandbox_policy.get());
         }
         if let Some(windows_sandbox_level) = updates.windows_sandbox_level {
             next_configuration.windows_sandbox_level = windows_sandbox_level;
@@ -1158,6 +1179,8 @@ impl Session {
             personality: session_configuration.personality,
             approval_policy: session_configuration.approval_policy.clone(),
             sandbox_policy: session_configuration.sandbox_policy.clone(),
+            file_system_sandbox_policy: session_configuration.file_system_sandbox_policy.clone(),
+            network_sandbox_policy: session_configuration.network_sandbox_policy,
             network,
             windows_sandbox_level: session_configuration.windows_sandbox_level,
             shell_environment_policy: per_turn_config.permissions.shell_environment_policy.clone(),
@@ -1257,7 +1280,7 @@ impl Session {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>((None, None))
             } else {
-                let state_db_ctx = state_db::init(&config, None).await;
+                let state_db_ctx = state_db::init(&config).await;
                 let rollout_recorder = RolloutRecorder::new(
                     &config,
                     rollout_params,
@@ -2679,8 +2702,9 @@ impl Session {
     /// Emit an exec approval request event and await the user's decision.
     ///
     /// The request is keyed by `call_id` + `approval_id` so matching responses
-    /// are delivered to the correct in-flight turn. If the task is aborted,
-    /// this returns the default `ReviewDecision` (`Denied`).
+    /// are delivered to the correct in-flight turn. If the pending approval is
+    /// cleared before a response arrives, treat it as an abort so interrupted
+    /// turns do not continue on a synthetic denial.
     ///
     /// Note that if `available_decisions` is `None`, then the other fields will
     /// be used to derive the available decisions via
@@ -2754,7 +2778,7 @@ impl Session {
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;
-        rx_approve.await.unwrap_or_default()
+        rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
 
     pub async fn request_patch_approval(
@@ -3168,6 +3192,7 @@ impl Session {
             DeveloperInstructions::from_policy(
                 turn_context.sandbox_policy.get(),
                 turn_context.approval_policy.value(),
+                turn_context.features.enabled(Feature::GuardianApproval),
                 self.services.exec_policy.current().as_ref(),
                 &turn_context.cwd,
                 turn_context.features.enabled(Feature::RequestPermissions),
@@ -4986,6 +5011,8 @@ async fn spawn_review_thread(
         personality: parent_turn_context.personality,
         approval_policy: parent_turn_context.approval_policy.clone(),
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
+        file_system_sandbox_policy: parent_turn_context.file_system_sandbox_policy.clone(),
+        network_sandbox_policy: parent_turn_context.network_sandbox_policy,
         network: parent_turn_context.network.clone(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
@@ -6832,6 +6859,10 @@ async fn try_run_sampling_request(
     .await;
 
     drain_in_flight(&mut in_flight, sess.clone(), turn_context.clone()).await?;
+
+    if cancellation_token.is_cancelled() {
+        return Err(CodexErr::TurnAborted);
+    }
 
     if should_emit_turn_diff {
         let unified_diff = {
