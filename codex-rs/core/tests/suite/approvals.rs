@@ -683,7 +683,6 @@ fn scenarios() -> Vec<ScenarioSpec> {
     let workspace_write = |network_access| SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         read_only_access: Default::default(),
-        deny_read_patterns: vec![],
         network_access,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -1708,7 +1707,6 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         read_only_access: Default::default(),
-        deny_read_patterns: vec![],
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
@@ -2254,7 +2252,6 @@ allow_local_binding = true
         network_access: true,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
-        deny_read_patterns: vec![],
     };
     let sandbox_policy_for_config = sandbox_policy.clone();
     let mut builder = test_codex().with_home(home).with_config(move |config| {

@@ -581,7 +581,6 @@ async fn apply_patch_cli_rejects_path_traversal_outside_workspace(
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         read_only_access: Default::default(),
-        deny_read_patterns: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
@@ -639,7 +638,6 @@ async fn apply_patch_cli_rejects_move_path_traversal_outside_workspace(
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![],
         read_only_access: Default::default(),
-        deny_read_patterns: vec![],
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,

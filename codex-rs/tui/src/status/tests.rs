@@ -103,7 +103,6 @@ async fn status_snapshot_includes_reasoning_details() {
         .set(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
             read_only_access: Default::default(),
-            deny_read_paths: Vec::new(),
             network_access: false,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,
@@ -189,7 +188,6 @@ async fn status_permissions_non_default_workspace_write_is_custom() {
         .set(SandboxPolicy::WorkspaceWrite {
             writable_roots: Vec::new(),
             read_only_access: Default::default(),
-            deny_read_paths: Vec::new(),
             network_access: true,
             exclude_tmpdir_env_var: false,
             exclude_slash_tmp: false,

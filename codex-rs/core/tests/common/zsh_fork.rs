@@ -47,7 +47,6 @@ pub fn restrictive_workspace_write_policy() -> SandboxPolicy {
         network_access: false,
         exclude_tmpdir_env_var: true,
         exclude_slash_tmp: true,
-        deny_read_patterns: Vec::new(),
     }
 }
 

@@ -227,7 +227,6 @@ fn shell_request_escalation_execution_is_explicit() {
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,
-        deny_read_patterns: vec![],
     };
     let file_system_sandbox_policy = FileSystemSandboxPolicy::restricted(vec![
         FileSystemSandboxEntry {

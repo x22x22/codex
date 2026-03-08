@@ -447,7 +447,7 @@ fn seatbelt_regex_for_deny_read_pattern(pattern: &str) -> Option<String> {
                 saw_glob = true;
                 let mut class = String::new();
                 let mut closed = false;
-                while let Some(class_ch) = chars.next() {
+                for class_ch in chars.by_ref() {
                     if class_ch == ']' {
                         closed = true;
                         break;

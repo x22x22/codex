@@ -52,7 +52,6 @@ mod tests {
         let actual = sandbox_tag(
             &SandboxPolicy::ExternalSandbox {
                 network_access: NetworkAccess::Enabled,
-                deny_read_patterns: vec![],
             },
             WindowsSandboxLevel::Disabled,
             true,

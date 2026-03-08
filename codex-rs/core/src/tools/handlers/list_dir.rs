@@ -300,9 +300,10 @@ impl From<&FileType> for DirEntryKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::DenyReadPattern;
-    use crate::protocol::ReadOnlyAccess;
-    use crate::protocol::SandboxPolicy;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
@@ -566,20 +567,25 @@ mod tests {
             .await
             .expect("write denied top-level file");
 
-        let policy = SandboxPolicy::ReadOnly {
-            access: ReadOnlyAccess::FullAccess,
-            deny_read_patterns: vec![
-                DenyReadPattern::from(denied_dir.to_string_lossy().into_owned()),
-                DenyReadPattern::from(
-                    dir_path
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: denied_dir.try_into().expect("absolute denied dir"),
+                },
+                access: FileSystemAccessMode::None,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path {
+                    path: dir_path
                         .join("top_secret.txt")
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-            ],
-        };
+                        .try_into()
+                        .expect("absolute denied file"),
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
 
-        let entries = list_dir_slice_with_policy(dir_path, 1, 20, 3, Some(&policy))
+        let entries = list_dir_slice_with_policy(dir_path, 1, 20, 3, Some((&policy, dir_path)))
             .await
             .expect("list directory");
 

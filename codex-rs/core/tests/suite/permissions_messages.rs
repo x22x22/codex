@@ -461,7 +461,6 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: vec![writable_root],
         read_only_access: Default::default(),
-        deny_read_patterns: vec![],
         network_access: false,
         exclude_tmpdir_env_var: false,
         exclude_slash_tmp: false,

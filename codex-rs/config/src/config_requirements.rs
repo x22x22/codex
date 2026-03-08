@@ -1110,7 +1110,6 @@ mod tests {
                 .can_set(&SandboxPolicy::WorkspaceWrite {
                     writable_roots: vec![AbsolutePathBuf::from_absolute_path(root)?],
                     read_only_access: Default::default(),
-                    deny_read_paths: vec![],
                     network_access: false,
                     exclude_tmpdir_env_var: false,
                     exclude_slash_tmp: false,
@@ -1133,7 +1132,6 @@ mod tests {
                 .sandbox_policy
                 .can_set(&SandboxPolicy::ExternalSandbox {
                     network_access: NetworkAccess::Restricted,
-                    deny_read_paths: vec![],
                 }),
             Err(ConstraintError::InvalidValue {
                 field_name: "sandbox_mode",

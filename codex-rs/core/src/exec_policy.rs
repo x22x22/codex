@@ -2105,11 +2105,13 @@ prefix_rule(pattern=["git"], decision="prompt")
         let policy = Arc::new(parser.build());
         let command = vec!["cat".to_string(), "~/.gitconfig".to_string()];
 
-        let mut sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+        let sandbox_policy = SandboxPolicy::new_workspace_write_policy();
         let deny_path = AbsolutePathBuf::try_from("/tmp/secret-config").expect("absolute path");
-        sandbox_policy.append_deny_read_patterns(&[crate::protocol::DenyReadPattern::from(
-            deny_path.to_string_lossy().into_owned(),
-        )]);
+        let file_system_sandbox_policy =
+            FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: deny_path },
+                access: FileSystemAccessMode::None,
+            }]);
 
         let manager = ExecPolicyManager::new(policy);
         let requirement = manager
@@ -2117,6 +2119,7 @@ prefix_rule(pattern=["git"], decision="prompt")
                 command: &command,
                 approval_policy: AskForApproval::OnRequest,
                 sandbox_policy: &sandbox_policy,
+                file_system_sandbox_policy: &file_system_sandbox_policy,
                 sandbox_permissions: SandboxPermissions::UseDefault,
                 prefix_rule: None,
             })

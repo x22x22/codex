@@ -167,18 +167,20 @@ fn reject_explicit_escalation_if_deny_read_present(
 mod tests {
     use super::reject_explicit_escalation_if_deny_read_present;
     use crate::function_tool::FunctionCallError;
-    use crate::protocol::DenyReadPattern;
-    use crate::protocol::SandboxPolicy;
     use crate::sandboxing::SandboxPermissions;
+    use codex_protocol::permissions::FileSystemAccessMode;
+    use codex_protocol::permissions::FileSystemPath;
+    use codex_protocol::permissions::FileSystemSandboxEntry;
+    use codex_protocol::permissions::FileSystemSandboxPolicy;
     use codex_utils_absolute_path::AbsolutePathBuf;
 
     #[test]
     fn explicit_escalation_is_rejected_when_deny_read_paths_exist() {
-        let mut policy = SandboxPolicy::new_workspace_write_policy();
         let path = AbsolutePathBuf::try_from("/tmp/deny-read-test").expect("absolute path");
-        policy.append_deny_read_patterns(&[DenyReadPattern::from(
-            path.to_string_lossy().into_owned(),
-        )]);
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path },
+            access: FileSystemAccessMode::None,
+        }]);
 
         let result = reject_explicit_escalation_if_deny_read_present(
             SandboxPermissions::RequireEscalated,
@@ -193,11 +195,11 @@ mod tests {
 
     #[test]
     fn non_escalated_command_is_allowed_when_deny_read_paths_exist() {
-        let mut policy = SandboxPolicy::new_workspace_write_policy();
         let path = AbsolutePathBuf::try_from("/tmp/deny-read-test").expect("absolute path");
-        policy.append_deny_read_patterns(&[DenyReadPattern::from(
-            path.to_string_lossy().into_owned(),
-        )]);
+        let policy = FileSystemSandboxPolicy::restricted(vec![FileSystemSandboxEntry {
+            path: FileSystemPath::Path { path },
+            access: FileSystemAccessMode::None,
+        }]);
 
         let result = reject_explicit_escalation_if_deny_read_present(
             SandboxPermissions::UseDefault,
