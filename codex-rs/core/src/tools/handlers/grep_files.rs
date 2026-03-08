@@ -114,7 +114,7 @@ async fn run_rg_search(
     limit: usize,
     cwd: &Path,
 ) -> Result<Vec<String>, FunctionCallError> {
-    let rg_program = resolve_rg_program();
+    let rg_program = InstallContext::current().rg_command();
     let mut command = Command::new(&rg_program);
     command
         .current_dir(cwd)
@@ -152,10 +152,6 @@ async fn run_rg_search(
             )))
         }
     }
-}
-
-fn resolve_rg_program() -> std::path::PathBuf {
-    InstallContext::current().rg_command()
 }
 
 fn parse_results(stdout: &[u8], limit: usize) -> Vec<String> {
