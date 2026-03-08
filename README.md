@@ -28,6 +28,8 @@ brew install --cask codex
 
 Then simply run `codex` to get started.
 
+> Codex writes code locally on your machine, which is ideal because your bugs deserve low latency too.
+
 <details>
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
 
