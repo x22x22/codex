@@ -529,11 +529,11 @@ mod tests {
                 "--dev".to_string(),
                 "/dev".to_string(),
                 "--bind".to_string(),
-                "/dev".to_string(),
-                "/dev".to_string(),
+                "/".to_string(),
+                "/".to_string(),
                 "--bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
+                "/dev".to_string(),
+                "/dev".to_string(),
             ]
         );
     }
