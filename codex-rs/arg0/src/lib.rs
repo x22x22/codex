@@ -17,6 +17,12 @@ const EXECVE_WRAPPER_ARG0: &str = "codex-execve-wrapper";
 const LOCK_FILENAME: &str = ".lock";
 const TOKIO_WORKER_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
+#[cfg(unix)]
+const PATH_SEPARATOR: &str = ":";
+
+#[cfg(windows)]
+const PATH_SEPARATOR: &str = ";";
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Arg0DispatchPaths {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
@@ -302,12 +308,6 @@ pub fn prepend_path_entry_for_codex_aliases() -> std::io::Result<Arg0PathEntryGu
             )?;
         }
     }
-
-    #[cfg(unix)]
-    const PATH_SEPARATOR: &str = ":";
-
-    #[cfg(windows)]
-    const PATH_SEPARATOR: &str = ";";
 
     let path_element = path.display();
     let updated_path_env_var = match std::env::var("PATH") {

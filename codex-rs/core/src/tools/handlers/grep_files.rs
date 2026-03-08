@@ -1,3 +1,4 @@
+use codex_install_context::InstallContext;
 use codex_protocol::models::FunctionCallOutputBody;
 use std::path::Path;
 use std::time::Duration;
@@ -113,7 +114,8 @@ async fn run_rg_search(
     limit: usize,
     cwd: &Path,
 ) -> Result<Vec<String>, FunctionCallError> {
-    let mut command = Command::new("rg");
+    let rg_program = resolve_rg_program();
+    let mut command = Command::new(&rg_program);
     command
         .current_dir(cwd)
         .arg("--files-with-matches")
@@ -135,7 +137,8 @@ async fn run_rg_search(
         })?
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
-                "failed to launch rg: {err}. Ensure ripgrep is installed and on PATH."
+                "failed to launch ripgrep at `{}`: {err}. Ensure ripgrep is installed or bundled with this native install.",
+                rg_program.display()
             ))
         })?;
 
@@ -149,6 +152,10 @@ async fn run_rg_search(
             )))
         }
     }
+}
+
+fn resolve_rg_program() -> std::path::PathBuf {
+    std::path::PathBuf::from(&InstallContext::current().rg_command)
 }
 
 fn parse_results(stdout: &[u8], limit: usize) -> Vec<String> {
