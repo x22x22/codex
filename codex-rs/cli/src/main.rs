@@ -28,6 +28,8 @@ use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
+use codex_tui::update_action::command_args;
+use codex_tui::update_action::command_str;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
@@ -438,7 +440,7 @@ fn handle_app_exit(exit_info: AppExitInfo) -> anyhow::Result<()> {
 /// Run the update action and print the result.
 fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
     println!();
-    let cmd_str = action.command_str();
+    let cmd_str = command_str(action);
     println!("Updating Codex via `{cmd_str}`...");
 
     let status = {
@@ -451,8 +453,8 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
         }
         #[cfg(not(windows))]
         {
-            let (cmd, args) = action.command_args();
-            let command_path = crate::wsl_paths::normalize_for_wsl(&cmd);
+            let (cmd, args) = command_args(action);
+            let command_path = crate::wsl_paths::normalize_for_wsl(cmd);
             let normalized_args: Vec<String> = args
                 .iter()
                 .map(crate::wsl_paths::normalize_for_wsl)

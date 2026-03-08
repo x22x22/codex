@@ -137,7 +137,7 @@ async fn run_rg_search(
         })?
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
-                "failed to launch ripgrep at `{}`: {err}. Ensure ripgrep is installed or bundled with this native install.",
+                "failed to launch ripgrep at `{}`: {err}. Ensure ripgrep is installed and on PATH or bundled with this native install.",
                 rg_program.display()
             ))
         })?;
@@ -155,7 +155,7 @@ async fn run_rg_search(
 }
 
 fn resolve_rg_program() -> std::path::PathBuf {
-    std::path::PathBuf::from(&InstallContext::current().rg_command)
+    InstallContext::current().rg_command()
 }
 
 fn parse_results(stdout: &[u8], limit: usize) -> Vec<String> {
