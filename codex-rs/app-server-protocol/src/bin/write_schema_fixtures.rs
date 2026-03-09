@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(about = "Regenerate vendored app-server schema fixtures")]
 struct Args {
-    /// Root directory containing `typescript/` and `json/`.
+    /// Root directory containing `typescript/`, `json/`, and `python/`.
     #[arg(long = "schema-root", value_name = "DIR")]
     schema_root: Option<PathBuf>,
 

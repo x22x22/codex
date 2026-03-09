@@ -8,6 +8,8 @@ pub use experimental_api::*;
 pub use export::GenerateTsOptions;
 pub use export::generate_json;
 pub use export::generate_json_with_experimental;
+pub use export::generate_python;
+pub use export::generate_python_with_experimental;
 pub use export::generate_ts;
 pub use export::generate_ts_with_options;
 pub use export::generate_types;

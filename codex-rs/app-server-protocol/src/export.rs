@@ -35,8 +35,10 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
 use ts_rs::TS;
+use uuid::Uuid;
 
 pub(crate) const GENERATED_TS_HEADER: &str = "// GENERATED CODE! DO NOT MODIFY BY HAND!\n\n";
+const PYTHON_MODULE_NAME: &str = "codex_app_server_protocol";
 const IGNORED_DEFINITIONS: &[&str] = &["Option<()>"];
 const JSON_V1_ALLOWLIST: &[&str] = &["InitializeParams", "InitializeResponse"];
 const SPECIAL_DEFINITIONS: &[&str] = &[
@@ -75,8 +77,9 @@ impl GeneratedSchema {
 
 type JsonSchemaEmitter = fn(&Path) -> Result<GeneratedSchema>;
 pub fn generate_types(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
-    generate_ts(out_dir, prettier)?;
-    generate_json(out_dir)?;
+    generate_ts(&out_dir.join("typescript"), prettier)?;
+    generate_json(&out_dir.join("json"))?;
+    generate_python(&out_dir.join("python"))?;
     Ok(())
 }
 
@@ -238,6 +241,169 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
     }
 
     Ok(())
+}
+
+pub fn generate_python(out_dir: &Path) -> Result<()> {
+    generate_python_with_experimental(out_dir, false)
+}
+
+pub fn generate_python_with_experimental(out_dir: &Path, experimental_api: bool) -> Result<()> {
+    ensure_dir(out_dir)?;
+
+    let temp_json_dir = std::env::temp_dir().join(format!(
+        "codex_app_server_protocol_python_{}",
+        Uuid::now_v7()
+    ));
+    fs::create_dir_all(&temp_json_dir).with_context(|| {
+        format!(
+            "Failed to create temporary schema dir {}",
+            temp_json_dir.display()
+        )
+    })?;
+
+    generate_json_with_experimental(&temp_json_dir, experimental_api)?;
+    let bundle_path = temp_json_dir.join("codex_app_server_protocol.schemas.json");
+    let bundle = read_json_value(&bundle_path)?;
+    let root_schema_path = temp_json_dir.join("codex_app_server_protocol.python.schemas.json");
+    let mut root_schema = build_python_root_schema(&bundle)?;
+    rename_python_envelope_titles(&mut root_schema);
+    write_pretty_json(root_schema_path.clone(), &root_schema)?;
+    let v2_schema_path = temp_json_dir.join("codex_app_server_protocol.v2.schemas.json");
+    let mut v2_schema = read_json_value(&v2_schema_path)?;
+    rename_python_envelope_titles(&mut v2_schema);
+    write_pretty_json(v2_schema_path.clone(), &v2_schema)?;
+
+    let module_dir = out_dir.join(PYTHON_MODULE_NAME);
+    ensure_dir(&module_dir)?;
+    generate_python_models(&root_schema_path, &module_dir.join("models.py"))?;
+    fs::write(module_dir.join("__init__.py"), "from .models import *\n").with_context(|| {
+        format!(
+            "Failed to write {}",
+            module_dir.join("__init__.py").display()
+        )
+    })?;
+
+    let v2_module_dir = module_dir.join("v2");
+    ensure_dir(&v2_module_dir)?;
+    generate_python_models(&v2_schema_path, &v2_module_dir.join("models.py"))?;
+    fs::write(v2_module_dir.join("__init__.py"), "from .models import *\n").with_context(|| {
+        format!(
+            "Failed to write {}",
+            v2_module_dir.join("__init__.py").display()
+        )
+    })?;
+    fs::write(module_dir.join("py.typed"), "")
+        .with_context(|| format!("Failed to write {}", module_dir.join("py.typed").display()))?;
+
+    let _ = fs::remove_dir_all(&temp_json_dir);
+    Ok(())
+}
+
+fn generate_python_models(schema_path: &Path, output_path: &Path) -> Result<()> {
+    let mut command = datamodel_codegen_command();
+    command
+        .arg("--input")
+        .arg(schema_path)
+        .arg("--input-file-type")
+        .arg("jsonschema")
+        .arg("--output")
+        .arg(output_path)
+        .arg("--output-model-type")
+        .arg("pydantic_v2.BaseModel")
+        .arg("--target-python-version")
+        .arg("3.11")
+        .arg("--target-pydantic-version")
+        .arg("2")
+        .arg("--use-union-operator")
+        .arg("--use-standard-collections")
+        .arg("--enum-field-as-literal")
+        .arg("one")
+        .arg("--field-constraints")
+        .arg("--use-default-kwarg")
+        .arg("--snake-case-field")
+        .arg("--use-title-as-name")
+        .arg("--use-generic-base-class")
+        .arg("--disable-timestamp")
+        .arg("--formatters")
+        .arg("black")
+        .arg("isort");
+
+    let status = command.status().with_context(|| {
+        format!(
+            "Failed to invoke Python model generator for {}",
+            output_path.display()
+        )
+    })?;
+    if !status.success() {
+        return Err(anyhow!(
+            "Python model generator failed with status {status}. \
+Install `uv`/`uvx` or `datamodel-codegen` to regenerate app-server Python bindings."
+        ));
+    }
+
+    let models_contents = fs::read_to_string(output_path)
+        .with_context(|| format!("Failed to read {}", output_path.display()))?;
+    let base_model_stub = "class BaseModel(_BaseModel):\n    pass\n";
+    let base_model_impl =
+        "class BaseModel(_BaseModel):\n    model_config = ConfigDict(populate_by_name=True)\n";
+    let models_contents = models_contents.replacen(base_model_stub, base_model_impl, 1);
+    fs::write(output_path, models_contents)
+        .with_context(|| format!("Failed to update {}", output_path.display()))?;
+    Ok(())
+}
+
+fn datamodel_codegen_command() -> Command {
+    if command_exists("uvx") {
+        let mut command = Command::new("uvx");
+        command
+            .arg("--with")
+            .arg("black")
+            .arg("--with")
+            .arg("isort")
+            .arg("--from")
+            .arg("datamodel-code-generator")
+            .arg("datamodel-codegen");
+        return command;
+    }
+
+    if command_exists("uv") {
+        let mut command = Command::new("uv");
+        command
+            .arg("tool")
+            .arg("run")
+            .arg("--with")
+            .arg("black")
+            .arg("--with")
+            .arg("isort")
+            .arg("--from")
+            .arg("datamodel-code-generator")
+            .arg("datamodel-codegen");
+        return command;
+    }
+
+    Command::new("datamodel-codegen")
+}
+
+fn command_exists(command: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|path| {
+            let candidate = path.join(command);
+            if candidate.is_file() {
+                return true;
+            }
+
+            #[cfg(windows)]
+            {
+                let candidate = path.join(format!("{command}.exe"));
+                candidate.is_file()
+            }
+
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        })
+    })
 }
 
 fn filter_experimental_ts(out_dir: &Path) -> Result<()> {
@@ -1083,6 +1249,190 @@ fn build_flat_v2_schema(bundle: &Value) -> Result<Value> {
     ensure_no_ref_prefix(&flat_bundle, "#/definitions/v2/", "flat v2")?;
     ensure_referenced_definitions_present(&flat_bundle, "flat v2")?;
     Ok(flat_bundle)
+}
+
+fn build_python_root_schema(bundle: &Value) -> Result<Value> {
+    let Value::Object(root) = bundle else {
+        return Err(anyhow!("expected bundle root to be an object"));
+    };
+    let definitions = root
+        .get("definitions")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("expected bundle definitions map"))?;
+    let v2_definitions = definitions
+        .get("v2")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow!("expected v2 namespace in bundle definitions"))?;
+
+    let mut flat_root = root.clone();
+    let mut flat_definitions = definitions.clone();
+    flat_definitions.remove("v2");
+
+    let mut to_process = collect_refs_with_prefix(
+        &Value::Object(flat_definitions.clone()),
+        "#/definitions/v2/",
+    );
+    let mut seen = HashSet::new();
+    while let Some(name) = to_process.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let Some(v2_schema) = v2_definitions.get(&name) else {
+            continue;
+        };
+
+        if let Some(root_schema) = flat_definitions.get(&name) {
+            if !schemas_equivalent_ignoring_metadata(root_schema, v2_schema) {
+                return Err(anyhow!(
+                    "python root schema name collision for {name} between root and v2 definitions"
+                ));
+            }
+        } else {
+            flat_definitions.insert(name.clone(), v2_schema.clone());
+            to_process.extend(collect_refs_with_prefix(v2_schema, "#/definitions/v2/"));
+        }
+    }
+
+    flat_root.insert("definitions".to_string(), Value::Object(flat_definitions));
+    let mut flat_bundle = Value::Object(flat_root);
+    rewrite_ref_prefix(&mut flat_bundle, "#/definitions/v2/", "#/definitions/");
+    ensure_no_ref_prefix(&flat_bundle, "#/definitions/v2/", "python root")?;
+    ensure_referenced_definitions_present(&flat_bundle, "python root")?;
+    Ok(flat_bundle)
+}
+
+fn rename_python_envelope_titles(bundle: &mut Value) {
+    rename_union_titles(
+        bundle,
+        "ClientRequest",
+        "Request",
+        "ClientRequest",
+        "RequestMethod",
+        "ClientRequestMethod",
+    );
+    rename_union_titles(
+        bundle,
+        "ServerRequest",
+        "Request",
+        "ServerRequest",
+        "RequestMethod",
+        "ServerRequestMethod",
+    );
+    rename_union_titles(
+        bundle,
+        "ClientNotification",
+        "Notification",
+        "ClientNotification",
+        "NotificationMethod",
+        "ClientNotificationMethod",
+    );
+    rename_union_titles(
+        bundle,
+        "ServerNotification",
+        "Notification",
+        "ServerNotification",
+        "NotificationMethod",
+        "ServerNotificationMethod",
+    );
+}
+
+fn rename_union_titles(
+    bundle: &mut Value,
+    definition_name: &str,
+    title_suffix: &str,
+    replacement_suffix: &str,
+    method_suffix: &str,
+    method_replacement_suffix: &str,
+) {
+    let Some(items) = bundle
+        .get_mut("definitions")
+        .and_then(Value::as_object_mut)
+        .and_then(|definitions| definitions.get_mut(definition_name))
+        .and_then(Value::as_object_mut)
+        .and_then(|schema| schema.get_mut("oneOf"))
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+
+    for item in items {
+        let Some(schema) = item.as_object_mut() else {
+            continue;
+        };
+
+        if let Some(Value::String(title)) = schema.get_mut("title")
+            && let Some(prefix) = title.strip_suffix(title_suffix)
+        {
+            *title = format!("{prefix}{replacement_suffix}");
+        }
+
+        let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let Some(method) = properties.get_mut("method").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        if let Some(Value::String(title)) = method.get_mut("title")
+            && let Some(prefix) = title.strip_suffix(method_suffix)
+        {
+            *title = format!("{prefix}{method_replacement_suffix}");
+        }
+    }
+}
+
+fn collect_refs_with_prefix(value: &Value, prefix: &str) -> Vec<String> {
+    let mut refs = HashSet::new();
+    collect_refs_with_prefix_inner(value, prefix, &mut refs);
+    refs.into_iter().collect()
+}
+
+fn collect_refs_with_prefix_inner(value: &Value, prefix: &str, refs: &mut HashSet<String>) {
+    match value {
+        Value::Object(obj) => {
+            if let Some(Value::String(reference)) = obj.get("$ref")
+                && let Some(name) = reference.strip_prefix(prefix)
+            {
+                let name = name.split('/').next().unwrap_or(name);
+                refs.insert(name.to_string());
+            }
+            for child in obj.values() {
+                collect_refs_with_prefix_inner(child, prefix, refs);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                collect_refs_with_prefix_inner(child, prefix, refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn schemas_equivalent_ignoring_metadata(left: &Value, right: &Value) -> bool {
+    let mut left = left.clone();
+    let mut right = right.clone();
+    strip_schema_metadata(&mut left);
+    strip_schema_metadata(&mut right);
+    left == right
+}
+
+fn strip_schema_metadata(value: &mut Value) {
+    match value {
+        Value::Object(obj) => {
+            obj.remove("$schema");
+            obj.remove("title");
+            obj.remove("description");
+            for child in obj.values_mut() {
+                strip_schema_metadata(child);
+            }
+        }
+        Value::Array(items) => {
+            for child in items {
+                strip_schema_metadata(child);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn collect_non_v2_refs(value: &Value) -> HashSet<String> {

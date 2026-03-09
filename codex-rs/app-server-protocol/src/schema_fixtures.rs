@@ -29,6 +29,7 @@ pub struct SchemaFixtureOptions {
 pub fn read_schema_fixture_tree(schema_root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
     let typescript_root = schema_root.join("typescript");
     let json_root = schema_root.join("json");
+    let python_root = schema_root.join("python");
 
     let mut all = BTreeMap::new();
     for (rel, bytes) in collect_files_recursive(&typescript_root)? {
@@ -36,6 +37,9 @@ pub fn read_schema_fixture_tree(schema_root: &Path) -> Result<BTreeMap<PathBuf, 
     }
     for (rel, bytes) in collect_files_recursive(&json_root)? {
         all.insert(PathBuf::from("json").join(rel), bytes);
+    }
+    for (rel, bytes) in collect_files_recursive(&python_root)? {
+        all.insert(PathBuf::from("python").join(rel), bytes);
     }
 
     Ok(all)
@@ -77,7 +81,7 @@ pub fn generate_typescript_schema_fixture_subtree_for_tests() -> Result<BTreeMap
         .collect())
 }
 
-/// Regenerates `schema/typescript/` and `schema/json/`.
+/// Regenerates `schema/typescript/`, `schema/json/`, and `schema/python/`.
 ///
 /// This is intended to be used by tooling (e.g., `just write-app-server-schema`).
 /// It deletes any previously generated files so stale artifacts are removed.
@@ -93,9 +97,11 @@ pub fn write_schema_fixtures_with_options(
 ) -> Result<()> {
     let typescript_out_dir = schema_root.join("typescript");
     let json_out_dir = schema_root.join("json");
+    let python_out_dir = schema_root.join("python");
 
     ensure_empty_dir(&typescript_out_dir)?;
     ensure_empty_dir(&json_out_dir)?;
+    ensure_empty_dir(&python_out_dir)?;
 
     crate::generate_ts_with_options(
         &typescript_out_dir,
@@ -106,6 +112,7 @@ pub fn write_schema_fixtures_with_options(
         },
     )?;
     crate::generate_json_with_experimental(&json_out_dir, options.experimental_api)?;
+    crate::generate_python_with_experimental(&python_out_dir, options.experimental_api)?;
 
     Ok(())
 }
@@ -130,11 +137,14 @@ fn read_file_bytes(path: &Path) -> Result<Vec<u8>> {
             .with_context(|| format!("failed to reserialize JSON in {}", path.display()))?;
         return Ok(normalized);
     }
-    if path.extension().is_some_and(|ext| ext == "ts") {
+    if path
+        .extension()
+        .is_some_and(|ext| matches!(ext.to_str(), Some("md" | "py" | "toml" | "ts")))
+    {
         // Windows checkouts (and some generators) may produce CRLF; normalize so the
         // fixture test is platform-independent.
         let text = String::from_utf8(bytes)
-            .with_context(|| format!("expected UTF-8 TypeScript in {}", path.display()))?;
+            .with_context(|| format!("expected UTF-8 text in {}", path.display()))?;
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         // Fixture comparisons care about schema content, not whether the generator
         // re-prepended the standard banner to every TypeScript file.

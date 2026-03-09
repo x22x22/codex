@@ -46,12 +46,15 @@ Backpressure behavior:
 
 ## Message Schema
 
-Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, or a JSON Schema bundle via `codex app-server generate-json-schema`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
+Currently, you can dump a TypeScript version of the schema using `codex app-server generate-ts`, a JSON Schema bundle via `codex app-server generate-json-schema`, or generated Python/Pydantic bindings via `codex app-server generate-python`. Each output is specific to the version of Codex you used to run the command, so the generated artifacts are guaranteed to match that version.
 
 ```
 codex app-server generate-ts --out DIR
 codex app-server generate-json-schema --out DIR
+codex app-server generate-python --out DIR
 ```
+
+The generated Python package mirrors the existing schema split: root/shared models live at `codex_app_server_protocol.models`, and v2-specific models live under `codex_app_server_protocol.v2.models`.
 
 ## Core Primitives
 
@@ -1269,16 +1272,18 @@ Some app-server methods and fields are intentionally gated behind an experimenta
 
 ### Generating stable vs experimental client schemas
 
-`codex app-server` schema generation defaults to the stable API surface (experimental fields and methods filtered out). Pass `--experimental` to include experimental methods/fields in generated TypeScript or JSON schema:
+`codex app-server` schema generation defaults to the stable API surface (experimental fields and methods filtered out). Pass `--experimental` to include experimental methods/fields in generated TypeScript, JSON schema, or Python bindings:
 
 ```bash
 # Stable-only output (default)
 codex app-server generate-ts --out DIR
 codex app-server generate-json-schema --out DIR
+codex app-server generate-python --out DIR
 
 # Include experimental API surface
 codex app-server generate-ts --out DIR --experimental
 codex app-server generate-json-schema --out DIR --experimental
+codex app-server generate-python --out DIR --experimental
 ```
 
 ### How clients opt in at runtime

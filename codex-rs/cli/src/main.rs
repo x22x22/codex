@@ -348,6 +348,9 @@ enum AppServerSubcommand {
 
     /// [experimental] Generate JSON Schema for the app server protocol.
     GenerateJsonSchema(GenerateJsonSchemaCommand),
+
+    /// [experimental] Generate Python/Pydantic bindings for the app server protocol.
+    GeneratePython(GeneratePythonCommand),
 }
 
 #[derive(Debug, Args)]
@@ -368,6 +371,17 @@ struct GenerateTsCommand {
 #[derive(Debug, Args)]
 struct GenerateJsonSchemaCommand {
     /// Output directory where the schema bundle will be written
+    #[arg(short = 'o', long = "out", value_name = "DIR")]
+    out_dir: PathBuf,
+
+    /// Include experimental methods and fields in the generated output
+    #[arg(long = "experimental", default_value_t = false)]
+    experimental: bool,
+}
+
+#[derive(Debug, Args)]
+struct GeneratePythonCommand {
+    /// Output directory where the generated Python bindings will be written
     #[arg(short = 'o', long = "out", value_name = "DIR")]
     out_dir: PathBuf,
 
@@ -627,6 +641,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             }
             Some(AppServerSubcommand::GenerateJsonSchema(gen_cli)) => {
                 codex_app_server_protocol::generate_json_with_experimental(
+                    &gen_cli.out_dir,
+                    gen_cli.experimental,
+                )?;
+            }
+            Some(AppServerSubcommand::GeneratePython(gen_cli)) => {
+                codex_app_server_protocol::generate_python_with_experimental(
                     &gen_cli.out_dir,
                     gen_cli.experimental,
                 )?;
