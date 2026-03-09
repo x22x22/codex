@@ -246,6 +246,8 @@ The prototype still hand-rolls Python-side JSON-RPC parsing and event handling.
 To make this production-worthy we should generate typed SDK protocol models from the Rust app-server source of truth, including:
 
 - Python Pydantic models for app-server requests, responses, and notifications
+- publishing those generated Python models as a dedicated package to a PyPI repository
+- pinning that package version to Codex releases so SDK/runtime compatibility is explicit
 - continued TypeScript generation from the same Rust source
 - a clearer separation between wire-level protocol models and higher-level SDK runtime objects like pending tool calls
 
@@ -346,7 +348,22 @@ That is a larger operational surface than either original system had in isolatio
 
 ## 6. Suggested engineering roadmap
 
-### Phase 1: Tighten the prototype foundation
+### Phase 0: Generated protocol models and package distribution
+
+Goals:
+
+- frontload generated Python protocol models before broader SDK implementation
+- make app-server wire types a versioned dependency rather than a copied internal detail
+- tie the Python protocol package version explicitly to Codex releases
+
+Deliverables:
+
+- generated Python Pydantic models for app-server protocol payloads
+- continued TypeScript generation from the same Rust source
+- published Python protocol package in the target PyPI repository
+- explicit versioning and compatibility policy between Codex and the protocol package
+
+### Phase 1: Architecture foundation and protocol contracts
 
 Goals:
 
@@ -361,7 +378,6 @@ Deliverables:
 - consistent base/developer instruction semantics
 - better example coverage
 - tighter prompt composition ownership rules
-- generated Python Pydantic models for app-server protocol payloads
 
 ### Phase 2: Replace bridge delegation with real app-server full delegation
 
@@ -440,13 +456,15 @@ Deliverables:
 
 ```mermaid
 flowchart LR
+    P0["Phase 0<br/>Generated protocol package"]
     P1["Phase 1<br/>Architecture + protocol contracts"]
     P2["Phase 2<br/>Full delegation transport"]
     P3["Phase 3<br/>Host-owned rollout + resume"]
     P4["Phase 4<br/>Capabilities + backend generalization"]
-    P5["Phase 5<br/>Multi-provider + hardening"]
+    P5["Phase 5<br/>Provider expansion"]
+    P6["Phase 6<br/>Production hardening"]
 
-    P1 --> P2 --> P3 --> P4 --> P5
+    P0 --> P1 --> P2 --> P3 --> P4 --> P5 --> P6
 ```
 
 ## Final assessment
