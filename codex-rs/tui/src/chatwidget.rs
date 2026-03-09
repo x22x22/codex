@@ -37,10 +37,12 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use self::realtime::PendingSteerCompareKey;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
+use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
@@ -75,8 +77,8 @@ use codex_core::terminal::TerminalName;
 use codex_core::terminal::terminal_info;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
-use codex_otel::OtelManager;
 use codex_otel::RuntimeMetricsSummary;
+use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
 use codex_protocol::approvals::ElicitationRequestEvent;
@@ -84,9 +86,11 @@ use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::local_image_label_text;
@@ -111,6 +115,8 @@ use codex_protocol::protocol::ExecCommandEndEvent;
 use codex_protocol::protocol::ExecCommandOutputDeltaEvent;
 use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ExitedReviewModeEvent;
+use codex_protocol::protocol::ImageGenerationBeginEvent;
+use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListCustomPromptsResponseEvent;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::McpListToolsResponseEvent;
@@ -140,6 +146,7 @@ use codex_protocol::protocol::ViewImageToolCallEvent;
 use codex_protocol::protocol::WarningEvent;
 use codex_protocol::protocol::WebSearchBeginEvent;
 use codex_protocol::protocol::WebSearchEndEvent;
+use codex_protocol::request_permissions::RequestPermissionsEvent;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -168,6 +175,10 @@ const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
+const MULTI_AGENT_ENABLE_TITLE: &str = "Enable multi-agent?";
+const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
+const MULTI_AGENT_ENABLE_NO: &str = "Not now";
+const MULTI_AGENT_ENABLE_NOTICE: &str = "Multi-agent will be enabled in the next session.";
 const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
@@ -219,6 +230,7 @@ use crate::bottom_pane::ExperimentalFeaturesView;
 use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::LocalImageAttachment;
+use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::MentionBinding;
 use crate::bottom_pane::QUIT_SHORTCUT_TIMEOUT;
 use crate::bottom_pane::SelectionAction;
@@ -471,7 +483,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) startup_tooltip_override: Option<String>,
     // Shared latch so we only warn once about invalid status-line item IDs.
     pub(crate) status_line_invalid_items_warned: Arc<AtomicBool>,
-    pub(crate) otel_manager: OtelManager,
+    pub(crate) session_telemetry: SessionTelemetry,
 }
 
 #[derive(Default)]
@@ -596,7 +608,7 @@ pub(crate) struct ChatWidget {
     active_collaboration_mask: Option<CollaborationModeMask>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
-    otel_manager: OtelManager,
+    session_telemetry: SessionTelemetry,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
@@ -647,6 +659,7 @@ pub(crate) struct ChatWidget {
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
+    suppress_queue_autosend: bool,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
     forked_from: Option<ThreadId>,
@@ -660,6 +673,14 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // Steers already submitted to core but not yet committed into history.
+    //
+    // The bottom pane shows these above queued drafts until core records the
+    // corresponding user message item.
+    pending_steers: VecDeque<PendingSteer>,
+    // When set, the next interrupt should resubmit all pending steers as one
+    // fresh user turn instead of restoring them into the composer.
+    submit_pending_steers_after_interrupt: bool,
     /// Terminal-appropriate keybinding for popping the most-recently queued
     /// message back into the composer.  Determined once at construction time via
     /// [`queued_message_edit_binding_for_terminal`] and propagated to
@@ -695,7 +716,9 @@ pub(crate) struct ChatWidget {
     had_work_activity: bool,
     // Whether the current turn emitted a plan update.
     saw_plan_update_this_turn: bool,
-    // Whether the current turn emitted a proposed plan item.
+    // Whether the current turn emitted a proposed plan item that has not been superseded by a
+    // later steer. This is cleared when the user submits a steer so the plan popup only appears
+    // if a newer proposed plan arrives afterward.
     saw_plan_item_this_turn: bool,
     // Incremental buffer for streamed plan content.
     plan_delta_buffer: String,
@@ -757,6 +780,7 @@ pub(crate) struct ActiveCellTranscriptKey {
     pub(crate) animation_tick: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct UserMessage {
     text: String,
     local_images: Vec<LocalImageAttachment>,
@@ -768,6 +792,37 @@ pub(crate) struct UserMessage {
     remote_image_urls: Vec<String>,
     text_elements: Vec<TextElement>,
     mention_bindings: Vec<MentionBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+struct ThreadComposerState {
+    text: String,
+    local_images: Vec<LocalImageAttachment>,
+    remote_image_urls: Vec<String>,
+    text_elements: Vec<TextElement>,
+    mention_bindings: Vec<MentionBinding>,
+    pending_pastes: Vec<(String, String)>,
+}
+
+impl ThreadComposerState {
+    fn has_content(&self) -> bool {
+        !self.text.is_empty()
+            || !self.local_images.is_empty()
+            || !self.remote_image_urls.is_empty()
+            || !self.text_elements.is_empty()
+            || !self.mention_bindings.is_empty()
+            || !self.pending_pastes.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ThreadInputState {
+    composer: Option<ThreadComposerState>,
+    pending_steers: VecDeque<UserMessage>,
+    queued_user_messages: VecDeque<UserMessage>,
+    current_collaboration_mode: CollaborationMode,
+    active_collaboration_mask: Option<CollaborationModeMask>,
+    agent_turn_running: bool,
 }
 
 impl From<String> for UserMessage {
@@ -796,6 +851,11 @@ impl From<&str> for UserMessage {
     }
 }
 
+struct PendingSteer {
+    user_message: UserMessage,
+    compare_key: PendingSteerCompareKey,
+}
+
 pub(crate) fn create_initial_user_message(
     text: Option<String>,
     local_image_paths: Vec<PathBuf>,
@@ -821,6 +881,21 @@ pub(crate) fn create_initial_user_message(
             mention_bindings: Vec::new(),
         })
     }
+}
+
+fn append_text_with_rebased_elements(
+    target_text: &mut String,
+    target_text_elements: &mut Vec<TextElement>,
+    text: &str,
+    text_elements: impl IntoIterator<Item = TextElement>,
+) {
+    let offset = target_text.len();
+    target_text.push_str(text);
+    target_text_elements.extend(text_elements.into_iter().map(|mut element| {
+        element.byte_range.start += offset;
+        element.byte_range.end += offset;
+        element
+    }));
 }
 
 // When merging multiple queued drafts (e.g., after interrupt), each draft starts numbering
@@ -899,6 +974,45 @@ fn remap_placeholders_for_message(message: UserMessage, next_label: &mut usize) 
         text_elements: rebuilt_elements,
         mention_bindings,
     }
+}
+
+fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
+    let mut combined = UserMessage {
+        text: String::new(),
+        text_elements: Vec::new(),
+        local_images: Vec::new(),
+        remote_image_urls: Vec::new(),
+        mention_bindings: Vec::new(),
+    };
+    let total_remote_images = messages
+        .iter()
+        .map(|message| message.remote_image_urls.len())
+        .sum::<usize>();
+    let mut next_image_label = total_remote_images + 1;
+
+    for (idx, message) in messages.into_iter().enumerate() {
+        if idx > 0 {
+            combined.text.push('\n');
+        }
+        let UserMessage {
+            text,
+            text_elements,
+            local_images,
+            remote_image_urls,
+            mention_bindings,
+        } = remap_placeholders_for_message(message, &mut next_image_label);
+        append_text_with_rebased_elements(
+            &mut combined.text,
+            &mut combined.text_elements,
+            &text,
+            text_elements,
+        );
+        combined.local_images.extend(local_images);
+        combined.remote_image_urls.extend(remote_image_urls);
+        combined.mention_bindings.extend(mention_bindings);
+    }
+
+    combined
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1124,7 +1238,7 @@ impl ChatWidget {
     }
 
     fn collect_runtime_metrics_delta(&mut self) {
-        if let Some(delta) = self.otel_manager.runtime_metrics_summary() {
+        if let Some(delta) = self.session_telemetry.runtime_metrics_summary() {
             self.apply_runtime_metrics_delta(delta);
         }
     }
@@ -1202,8 +1316,11 @@ impl ChatWidget {
             mask.reasoning_effort = Some(event.reasoning_effort);
         }
         self.refresh_model_display();
+        self.sync_fast_command_enabled();
         self.sync_personality_command_enabled();
+        self.refresh_plugin_mentions();
         let startup_tooltip_override = self.startup_tooltip_override.take();
+        let show_fast_status = self.should_show_fast_status(event.service_tier);
         let session_info_cell = history_cell::new_session_info(
             &self.config,
             &model_for_header,
@@ -1213,6 +1330,7 @@ impl ChatWidget {
             self.auth_manager
                 .auth_cached()
                 .and_then(|auth| auth.account_plan_type()),
+            show_fast_status,
         );
         self.apply_session_info_cell(session_info_cell);
 
@@ -1299,8 +1417,16 @@ impl ChatWidget {
         category: crate::app_event::FeedbackCategory,
         include_logs: bool,
     ) {
-        // Build a fresh snapshot at the time of opening the note overlay.
         let snapshot = self.feedback.snapshot(self.thread_id);
+        self.show_feedback_note(category, include_logs, snapshot);
+    }
+
+    fn show_feedback_note(
+        &mut self,
+        category: crate::app_event::FeedbackCategory,
+        include_logs: bool,
+        snapshot: codex_feedback::FeedbackSnapshot,
+    ) {
         let rollout = if include_logs {
             self.current_rollout_path.clone()
         } else {
@@ -1325,24 +1451,33 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
+        let snapshot = self.feedback.snapshot(self.thread_id);
         let params = crate::bottom_pane::feedback_upload_consent_params(
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
+            snapshot.feedback_diagnostics(),
         );
         self.bottom_pane.show_selection_view(params);
         self.request_redraw();
     }
 
-    fn on_agent_message(&mut self, message: String) {
-        // If we have a stream_controller, then the final agent message is redundant and will be a
-        // duplicate of what has already been streamed.
-        if self.stream_controller.is_none() && !message.is_empty() {
-            self.handle_streaming_delta(message);
+    fn finalize_completed_assistant_message(&mut self, message: Option<&str>) {
+        // If we have a stream_controller, the finalized message payload is redundant because the
+        // visible content has already been accumulated through deltas.
+        if self.stream_controller.is_none()
+            && let Some(message) = message
+            && !message.is_empty()
+        {
+            self.handle_streaming_delta(message.to_string());
         }
         self.flush_answer_stream_with_separator();
         self.handle_stream_finished();
         self.request_redraw();
+    }
+
+    fn on_agent_message(&mut self, message: String) {
+        self.finalize_completed_assistant_message(Some(&message));
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -1464,7 +1599,7 @@ impl ChatWidget {
         self.adaptive_chunking.reset();
         self.plan_stream_controller = None;
         self.turn_runtime_metrics = RuntimeMetricsSummary::default();
-        self.otel_manager.reset_runtime_metrics();
+        self.session_telemetry.reset_runtime_metrics();
         self.bottom_pane.clear_quit_shortcut_hint();
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
@@ -1479,6 +1614,7 @@ impl ChatWidget {
     }
 
     fn on_task_complete(&mut self, last_agent_message: Option<String>, from_replay: bool) {
+        self.submit_pending_steers_after_interrupt = false;
         if let Some(message) = last_agent_message.as_ref()
             && !message.trim().is_empty()
         {
@@ -1532,7 +1668,14 @@ impl ChatWidget {
         } else {
             self.handle_review_loop_turn_complete()
         };
-        if !from_replay && !review_loop_consumed_turn && self.queued_user_messages.is_empty() {
+        let had_pending_steers = !self.pending_steers.is_empty();
+        self.refresh_pending_input_preview();
+
+        if !from_replay
+            && !review_loop_consumed_turn
+            && self.queued_user_messages.is_empty()
+            && !had_pending_steers
+        {
             self.maybe_prompt_plan_implementation();
         }
         // Keep this flag for replayed completion events so a subsequent live TurnComplete can
@@ -1623,6 +1766,44 @@ impl ChatWidget {
             items,
             ..Default::default()
         });
+        self.notify(Notification::PlanModePrompt {
+            title: PLAN_IMPLEMENTATION_TITLE.to_string(),
+        });
+    }
+
+    pub(crate) fn open_multi_agent_enable_prompt(&mut self) {
+        let items = vec![
+            SelectionItem {
+                name: MULTI_AGENT_ENABLE_YES.to_string(),
+                description: Some(
+                    "Save the setting now. You will need a new session to use it.".to_string(),
+                ),
+                actions: vec![Box::new(|tx| {
+                    tx.send(AppEvent::UpdateFeatureFlags {
+                        updates: vec![(Feature::Collab, true)],
+                    });
+                    tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_warning_event(MULTI_AGENT_ENABLE_NOTICE.to_string()),
+                    )));
+                })],
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: MULTI_AGENT_ENABLE_NO.to_string(),
+                description: Some("Keep multi-agent disabled.".to_string()),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(SelectionViewParams {
+            title: Some(MULTI_AGENT_ENABLE_TITLE.to_string()),
+            subtitle: Some("Multi-agent is currently disabled in your config.".to_string()),
+            footer_hint: Some(standard_popup_hint_line()),
+            items,
+            ..Default::default()
+        });
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -1633,6 +1814,27 @@ impl ChatWidget {
                 self.token_info = None;
             }
         }
+    }
+
+    fn apply_turn_started_context_window(&mut self, model_context_window: Option<i64>) {
+        let info = match self.token_info.take() {
+            Some(mut info) => {
+                info.model_context_window = model_context_window;
+                info
+            }
+            None => {
+                let Some(model_context_window) = model_context_window else {
+                    return;
+                };
+                TokenUsageInfo {
+                    total_token_usage: TokenUsage::default(),
+                    last_token_usage: TokenUsage::default(),
+                    model_context_window: Some(model_context_window),
+                }
+            }
+        };
+
+        self.apply_token_info(info);
     }
 
     fn apply_token_info(&mut self, info: TokenUsageInfo) {
@@ -1778,6 +1980,7 @@ impl ChatWidget {
 
     fn on_server_overloaded_error(&mut self, message: String) {
         self.clear_review_loop_state();
+        self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
 
         let message = if message.trim().is_empty() {
@@ -1793,6 +1996,7 @@ impl ChatWidget {
 
     fn on_error(&mut self, message: String) {
         self.clear_review_loop_state();
+        self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
         self.add_to_history(history_cell::new_error_event(message));
         self.request_redraw();
@@ -1884,30 +2088,51 @@ impl ChatWidget {
         if reason == TurnAbortReason::Interrupted {
             self.clear_unified_exec_processes();
         }
-
+        let send_pending_steers_immediately = self.submit_pending_steers_after_interrupt;
+        self.submit_pending_steers_after_interrupt = false;
         if reason != TurnAbortReason::ReviewEnded {
-            self.add_to_history(history_cell::new_error_event(
-                "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
-            ));
+            if send_pending_steers_immediately {
+                self.add_to_history(history_cell::new_info_event(
+                    "Model interrupted to submit steer instructions.".to_owned(),
+                    None,
+                ));
+            } else {
+                self.add_to_history(history_cell::new_error_event(
+                    "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_owned(),
+                ));
+            }
         }
 
-        if let Some(combined) = self.drain_queued_messages_for_restore() {
+        // Core clears pending_input before emitting TurnAborted, so any unacknowledged steers
+        // still tracked here must be restored locally instead of waiting for a later commit.
+        if send_pending_steers_immediately {
+            let pending_steers: Vec<UserMessage> = self
+                .pending_steers
+                .drain(..)
+                .map(|pending| pending.user_message)
+                .collect();
+            if !pending_steers.is_empty() {
+                self.submit_user_message(merge_user_messages(pending_steers));
+            } else if let Some(combined) = self.drain_pending_messages_for_restore() {
+                self.restore_user_message_to_composer(combined);
+            }
+        } else if let Some(combined) = self.drain_pending_messages_for_restore() {
             self.restore_user_message_to_composer(combined);
-            self.refresh_queued_user_messages();
         }
+        self.refresh_pending_input_preview();
 
         self.request_redraw();
     }
 
-    /// Merge queued drafts (plus the current composer state) into a single message for restore.
+    /// Merge pending steers, queued drafts, and the current composer state into a single message.
     ///
-    /// Each queued draft numbers attachments from `[Image #1]`. When we concatenate drafts, we
-    /// must renumber placeholders in a stable order so the merged attachment list stays aligned
-    /// with the labels embedded in text. This helper drains the queue, remaps placeholders, and
-    /// fixes text element byte ranges as content is appended. Returns `None` when there is nothing
-    /// to restore.
-    fn drain_queued_messages_for_restore(&mut self) -> Option<UserMessage> {
-        if self.queued_user_messages.is_empty() {
+    /// Each pending message numbers attachments from `[Image #1]` relative to its own remote
+    /// images. When we concatenate multiple messages after interrupt, we must renumber local-image
+    /// placeholders in a stable order and rebase text element byte ranges so the restored composer
+    /// state stays aligned with the merged attachment list. Returns `None` when there is nothing to
+    /// restore.
+    fn drain_pending_messages_for_restore(&mut self) -> Option<UserMessage> {
+        if self.pending_steers.is_empty() && self.queued_user_messages.is_empty() {
             return None;
         }
 
@@ -1919,7 +2144,12 @@ impl ChatWidget {
             mention_bindings: self.bottom_pane.composer_mention_bindings(),
         };
 
-        let mut to_merge: Vec<UserMessage> = self.queued_user_messages.drain(..).collect();
+        let mut to_merge: Vec<UserMessage> = self
+            .pending_steers
+            .drain(..)
+            .map(|steer| steer.user_message)
+            .collect();
+        to_merge.extend(self.queued_user_messages.drain(..));
         if !existing_message.text.is_empty()
             || !existing_message.local_images.is_empty()
             || !existing_message.remote_image_urls.is_empty()
@@ -1927,42 +2157,7 @@ impl ChatWidget {
             to_merge.push(existing_message);
         }
 
-        let mut combined = UserMessage {
-            text: String::new(),
-            text_elements: Vec::new(),
-            local_images: Vec::new(),
-            remote_image_urls: Vec::new(),
-            mention_bindings: Vec::new(),
-        };
-        let mut combined_offset = 0usize;
-        let total_remote_images = to_merge
-            .iter()
-            .map(|message| message.remote_image_urls.len())
-            .sum::<usize>();
-        let mut next_image_label = total_remote_images + 1;
-
-        for (idx, message) in to_merge.into_iter().enumerate() {
-            if idx > 0 {
-                combined.text.push('\n');
-                combined_offset += 1;
-            }
-            let message = remap_placeholders_for_message(message, &mut next_image_label);
-            let base = combined_offset;
-            combined.text.push_str(&message.text);
-            combined_offset += message.text.len();
-            combined
-                .text_elements
-                .extend(message.text_elements.into_iter().map(|mut elem| {
-                    elem.byte_range.start += base;
-                    elem.byte_range.end += base;
-                    elem
-                }));
-            combined.local_images.extend(message.local_images);
-            combined.remote_image_urls.extend(message.remote_image_urls);
-            combined.mention_bindings.extend(message.mention_bindings);
-        }
-
-        Some(combined)
+        Some(merge_user_messages(to_merge))
     }
 
     fn restore_user_message_to_composer(&mut self, user_message: UserMessage) {
@@ -1981,6 +2176,89 @@ impl ChatWidget {
             local_image_paths,
             mention_bindings,
         );
+    }
+
+    pub(crate) fn capture_thread_input_state(&self) -> Option<ThreadInputState> {
+        let composer = ThreadComposerState {
+            text: self.bottom_pane.composer_text(),
+            text_elements: self.bottom_pane.composer_text_elements(),
+            local_images: self.bottom_pane.composer_local_images(),
+            remote_image_urls: self.bottom_pane.remote_image_urls(),
+            mention_bindings: self.bottom_pane.composer_mention_bindings(),
+            pending_pastes: self.bottom_pane.composer_pending_pastes(),
+        };
+        Some(ThreadInputState {
+            composer: composer.has_content().then_some(composer),
+            pending_steers: self
+                .pending_steers
+                .iter()
+                .map(|pending| pending.user_message.clone())
+                .collect(),
+            queued_user_messages: self.queued_user_messages.clone(),
+            current_collaboration_mode: self.current_collaboration_mode.clone(),
+            active_collaboration_mask: self.active_collaboration_mask.clone(),
+            agent_turn_running: self.agent_turn_running,
+        })
+    }
+
+    pub(crate) fn restore_thread_input_state(&mut self, input_state: Option<ThreadInputState>) {
+        if let Some(input_state) = input_state {
+            self.current_collaboration_mode = input_state.current_collaboration_mode;
+            self.active_collaboration_mask = input_state.active_collaboration_mask;
+            self.agent_turn_running = input_state.agent_turn_running;
+            self.update_collaboration_mode_indicator();
+            self.refresh_model_display();
+            if let Some(composer) = input_state.composer {
+                let local_image_paths = composer
+                    .local_images
+                    .into_iter()
+                    .map(|img| img.path)
+                    .collect();
+                self.set_remote_image_urls(composer.remote_image_urls);
+                self.bottom_pane.set_composer_text_with_mention_bindings(
+                    composer.text,
+                    composer.text_elements,
+                    local_image_paths,
+                    composer.mention_bindings,
+                );
+                self.bottom_pane
+                    .set_composer_pending_pastes(composer.pending_pastes);
+            } else {
+                self.set_remote_image_urls(Vec::new());
+                self.bottom_pane.set_composer_text_with_mention_bindings(
+                    String::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                self.bottom_pane.set_composer_pending_pastes(Vec::new());
+            }
+            self.pending_steers.clear();
+            self.queued_user_messages = input_state.pending_steers;
+            self.queued_user_messages
+                .extend(input_state.queued_user_messages);
+        } else {
+            self.agent_turn_running = false;
+            self.pending_steers.clear();
+            self.set_remote_image_urls(Vec::new());
+            self.bottom_pane.set_composer_text_with_mention_bindings(
+                String::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            self.bottom_pane.set_composer_pending_pastes(Vec::new());
+            self.queued_user_messages.clear();
+        }
+        self.turn_sleep_inhibitor
+            .set_turn_running(self.agent_turn_running);
+        self.update_task_running_state();
+        self.refresh_pending_input_preview();
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_queue_autosend_suppressed(&mut self, suppressed: bool) {
+        self.suppress_queue_autosend = suppressed;
     }
 
     fn on_plan_update(&mut self, update: UpdatePlanArgs) {
@@ -2017,6 +2295,14 @@ impl ChatWidget {
         self.defer_or_handle(
             |q| q.push_user_input(ev),
             |s| s.handle_request_user_input_now(ev2),
+        );
+    }
+
+    fn on_request_permissions(&mut self, ev: RequestPermissionsEvent) {
+        let ev2 = ev.clone();
+        self.defer_or_handle(
+            |q| q.push_request_permissions(ev),
+            |s| s.handle_request_permissions_now(ev2),
         );
     }
 
@@ -2121,6 +2407,20 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_view_image_tool_call(
             event.path,
             &self.config.cwd,
+        ));
+        self.request_redraw();
+    }
+
+    fn on_image_generation_begin(&mut self, _event: ImageGenerationBeginEvent) {
+        self.flush_answer_stream_with_separator();
+    }
+
+    fn on_image_generation_end(&mut self, event: ImageGenerationEndEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_image_generation_call(
+            event.call_id,
+            event.status,
+            event.revised_prompt,
         ));
         self.request_redraw();
     }
@@ -2369,6 +2669,15 @@ impl ChatWidget {
     /// returns once stream queues are idle. Final-answer completion (or absent
     /// phase for legacy models) clears the flag to preserve historical behavior.
     fn on_agent_message_item_completed(&mut self, item: AgentMessageItem) {
+        let mut message = String::new();
+        for content in &item.content {
+            match content {
+                AgentMessageContent::Text { text } => message.push_str(text),
+            }
+        }
+        self.finalize_completed_assistant_message(
+            (!message.is_empty()).then_some(message.as_str()),
+        );
         self.pending_status_indicator_restore = match item.phase {
             // Models that don't support preambles only output AgentMessageItems on turn completion.
             Some(MessagePhase::FinalAnswer) | None => false,
@@ -2689,15 +2998,21 @@ impl ChatWidget {
             server_name: ev.server_name.clone(),
         });
 
-        let request = ApprovalRequest::McpElicitation {
-            thread_id: self.thread_id.unwrap_or_default(),
-            thread_label: None,
-            server_name: ev.server_name,
-            request_id: ev.id,
-            message: ev.message,
-        };
-        self.bottom_pane
-            .push_approval_request(request, &self.config.features);
+        let thread_id = self.thread_id.unwrap_or_default();
+        if let Some(request) = McpServerElicitationFormRequest::from_event(thread_id, ev.clone()) {
+            self.bottom_pane
+                .push_mcp_server_elicitation_request(request);
+        } else {
+            let request = ApprovalRequest::McpElicitation {
+                thread_id,
+                thread_label: None,
+                server_name: ev.server_name,
+                request_id: ev.id,
+                message: ev.request.message().to_string(),
+            };
+            self.bottom_pane
+                .push_approval_request(request, &self.config.features);
+        }
         self.request_redraw();
     }
 
@@ -2707,9 +3022,36 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    pub(crate) fn push_mcp_server_elicitation_request(
+        &mut self,
+        request: McpServerElicitationFormRequest,
+    ) {
+        self.bottom_pane
+            .push_mcp_server_elicitation_request(request);
+        self.request_redraw();
+    }
+
     pub(crate) fn handle_request_user_input_now(&mut self, ev: RequestUserInputEvent) {
         self.flush_answer_stream_with_separator();
+        self.notify(Notification::UserInputRequested {
+            question_count: ev.questions.len(),
+            summary: Notification::user_input_request_summary(&ev.questions),
+        });
         self.bottom_pane.push_user_input_request(ev);
+        self.request_redraw();
+    }
+
+    pub(crate) fn handle_request_permissions_now(&mut self, ev: RequestPermissionsEvent) {
+        self.flush_answer_stream_with_separator();
+        let request = ApprovalRequest::Permissions {
+            thread_id: self.thread_id.unwrap_or_default(),
+            thread_label: None,
+            call_id: ev.call_id,
+            reason: ev.reason,
+            permissions: ev.permissions,
+        };
+        self.bottom_pane
+            .push_approval_request(request, &self.config.features);
         self.request_redraw();
     }
 
@@ -2840,7 +3182,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override,
             status_line_invalid_items_warned,
-            otel_manager,
+            session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -2899,7 +3241,7 @@ impl ChatWidget {
             active_collaboration_mask,
             auth_manager,
             models_manager,
-            otel_manager,
+            session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
@@ -2930,10 +3272,13 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_steers: VecDeque::new(),
+            submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -2984,6 +3329,7 @@ impl ChatWidget {
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(true);
+        widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
         widget.sync_review_loop_command_enabled();
         widget
@@ -3024,7 +3370,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override,
             status_line_invalid_items_warned,
-            otel_manager,
+            session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let mut config = config;
@@ -3082,7 +3428,7 @@ impl ChatWidget {
             active_collaboration_mask,
             auth_manager,
             models_manager,
-            otel_manager,
+            session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
@@ -3113,6 +3459,7 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
@@ -3121,6 +3468,8 @@ impl ChatWidget {
             plan_delta_buffer: String::new(),
             plan_item_active: false,
             queued_user_messages: VecDeque::new(),
+            pending_steers: VecDeque::new(),
+            submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
             show_welcome_banner: is_first_run,
             startup_tooltip_override,
@@ -3167,11 +3516,15 @@ impl ChatWidget {
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(true);
+        widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
         widget.sync_review_loop_command_enabled();
         widget
             .bottom_pane
             .set_queued_message_edit_binding(widget.queued_message_edit_binding);
+        widget
+            .bottom_pane
+            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
         widget
     }
@@ -3196,7 +3549,7 @@ impl ChatWidget {
             model,
             startup_tooltip_override: _,
             status_line_invalid_items_warned,
-            otel_manager,
+            session_telemetry,
         } = common;
         let model = model.filter(|m| !m.trim().is_empty());
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
@@ -3254,7 +3607,7 @@ impl ChatWidget {
             active_collaboration_mask,
             auth_manager,
             models_manager,
-            otel_manager,
+            session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
             token_info: None,
@@ -3285,10 +3638,13 @@ impl ChatWidget {
             current_status_header: String::from("Working"),
             retry_status_header: None,
             pending_status_indicator_restore: false,
+            suppress_queue_autosend: false,
             thread_id: None,
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            pending_steers: VecDeque::new(),
+            submit_pending_steers_after_interrupt: false,
             queued_message_edit_binding,
             show_welcome_banner: false,
             startup_tooltip_override: None,
@@ -3339,6 +3695,7 @@ impl ChatWidget {
             .bottom_pane
             .set_status_line_enabled(!widget.configured_status_line_items().is_empty());
         widget.bottom_pane.set_collaboration_modes_enabled(true);
+        widget.sync_fast_command_enabled();
         widget.sync_personality_command_enabled();
         widget.sync_review_loop_command_enabled();
         widget
@@ -3353,6 +3710,9 @@ impl ChatWidget {
                 ),
         );
         widget.update_collaboration_mode_indicator();
+        widget
+            .bottom_pane
+            .set_connectors_enabled(widget.config.features.enabled(Feature::Apps));
 
         widget
     }
@@ -3422,8 +3782,21 @@ impl ChatWidget {
         {
             if let Some(user_message) = self.queued_user_messages.pop_back() {
                 self.restore_user_message_to_composer(user_message);
-                self.refresh_queued_user_messages();
+                self.refresh_pending_input_preview();
                 self.request_redraw();
+            }
+            return;
+        }
+
+        if matches!(key_event.code, KeyCode::Esc)
+            && matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+            && !self.pending_steers.is_empty()
+            && self.bottom_pane.is_task_running()
+            && self.bottom_pane.no_modal_or_popup_active()
+        {
+            self.submit_pending_steers_after_interrupt = true;
+            if !self.submit_op(Op::Interrupt) {
+                self.submit_pending_steers_after_interrupt = false;
             }
             return;
         }
@@ -3457,6 +3830,12 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
                     };
+                    if user_message.text.is_empty()
+                        && user_message.local_images.is_empty()
+                        && user_message.remote_image_urls.is_empty()
+                    {
+                        return;
+                    }
                     let Some(user_message) =
                         self.maybe_defer_user_message_for_realtime(user_message)
                     else {
@@ -3641,11 +4020,20 @@ impl ChatWidget {
                 self.open_review_loop_popup(None);
             }
             SlashCommand::Rename => {
-                self.otel_manager.counter("codex.thread.rename", 1, &[]);
+                self.session_telemetry
+                    .counter("codex.thread.rename", 1, &[]);
                 self.show_rename_prompt();
             }
             SlashCommand::Model => {
                 self.open_model_popup();
+            }
+            SlashCommand::Fast => {
+                let next_tier = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                    None
+                } else {
+                    Some(ServiceTier::Fast)
+                };
+                self.set_service_tier_selection(next_tier);
             }
             SlashCommand::Realtime => {
                 if !self.realtime_conversation_enabled() {
@@ -3735,7 +4123,7 @@ impl ChatWidget {
                         return;
                     }
 
-                    self.otel_manager.counter(
+                    self.session_telemetry.counter(
                         "codex.windows_sandbox.setup_elevated_sandbox_command",
                         1,
                         &[],
@@ -3745,7 +4133,7 @@ impl ChatWidget {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = &self.otel_manager;
+                    let _ = &self.session_telemetry;
                     // Not supported; on non-Windows this command should never be reachable.
                 };
             }
@@ -3931,8 +4319,31 @@ impl ChatWidget {
 
         let trimmed = args.trim();
         match cmd {
+            SlashCommand::Fast => {
+                if trimmed.is_empty() {
+                    self.dispatch_command(cmd);
+                    return;
+                }
+                match trimmed.to_ascii_lowercase().as_str() {
+                    "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
+                    "off" => self.set_service_tier_selection(None),
+                    "status" => {
+                        let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast))
+                        {
+                            "on"
+                        } else {
+                            "off"
+                        };
+                        self.add_info_message(format!("Fast mode is {status}."), None);
+                    }
+                    _ => {
+                        self.add_error_message("Usage: /fast [on|off|status]".to_string());
+                    }
+                }
+            }
             SlashCommand::Rename if !trimmed.is_empty() => {
-                self.otel_manager.counter("codex.thread.rename", 1, &[]);
+                self.session_telemetry
+                    .counter("codex.thread.rename", 1, &[]);
                 let Some((prepared_args, _prepared_elements)) =
                     self.bottom_pane.prepare_inline_args_submission(false)
                 else {
@@ -4122,7 +4533,7 @@ impl ChatWidget {
             || self.review_loop_state.is_some()
         {
             self.queued_user_messages.push_back(user_message);
-            self.refresh_queued_user_messages();
+            self.refresh_pending_input_preview();
         } else {
             self.submit_user_message(user_message);
         }
@@ -4140,7 +4551,12 @@ impl ChatWidget {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);
-            self.refresh_queued_user_messages();
+            self.refresh_pending_input_preview();
+            return;
+        }
+        if self.is_review_mode {
+            self.queued_user_messages.push_back(user_message);
+            self.refresh_pending_input_preview();
             return;
         }
 
@@ -4167,6 +4583,7 @@ impl ChatWidget {
             return;
         }
 
+        let render_in_history = !self.agent_turn_running;
         let mut items: Vec<UserInput> = Vec::new();
 
         // Special-case: "!cmd" executes a local shell command instead of sending to the model.
@@ -4213,6 +4630,7 @@ impl ChatWidget {
             .collect();
         let mut skill_names_lower: HashSet<String> = HashSet::new();
         let mut selected_skill_paths: HashSet<PathBuf> = HashSet::new();
+        let mut selected_plugin_ids: HashSet<String> = HashSet::new();
 
         if let Some(skills) = self.bottom_pane.skills() {
             skill_names_lower = skills
@@ -4249,6 +4667,30 @@ impl ChatWidget {
                     name: skill.name.clone(),
                     path: skill.path_to_skills_md.clone(),
                 });
+            }
+        }
+
+        if let Some(plugins) = self.plugins_for_mentions() {
+            for binding in &mention_bindings {
+                let Some(plugin_config_name) = binding
+                    .path
+                    .strip_prefix("plugin://")
+                    .filter(|id| !id.is_empty())
+                else {
+                    continue;
+                };
+                if !selected_plugin_ids.insert(plugin_config_name.to_string()) {
+                    continue;
+                }
+                if let Some(plugin) = plugins
+                    .iter()
+                    .find(|plugin| plugin.config_name == plugin_config_name)
+                {
+                    items.push(UserInput::Mention {
+                        name: plugin.display_name.clone(),
+                        path: binding.path.clone(),
+                    });
+                }
             }
         }
 
@@ -4289,18 +4731,30 @@ impl ChatWidget {
 
         let effective_mode = self.effective_collaboration_mode();
         let collaboration_mode = collaboration_mode_override.or_else(|| {
-            self.collaboration_modes_enabled().then(|| {
-                self.active_collaboration_mask.as_ref().map_or_else(
-                    || effective_mode.clone(),
-                    |mask| effective_mode.apply_mask(mask),
-                )
-            })
+            if self.collaboration_modes_enabled() {
+                self.active_collaboration_mask
+                    .as_ref()
+                    .map(|_| effective_mode.clone())
+            } else {
+                None
+            }
+        });
+        let pending_steer = (!render_in_history).then(|| PendingSteer {
+            user_message: UserMessage {
+                text: text.clone(),
+                local_images: local_images.clone(),
+                remote_image_urls: remote_image_urls.clone(),
+                text_elements: text_elements.clone(),
+                mention_bindings: mention_bindings.clone(),
+            },
+            compare_key: Self::pending_steer_compare_key_from_items(&items),
         });
         let personality = self
             .config
             .personality
             .filter(|_| self.config.features.enabled(Feature::Personality))
             .filter(|_| self.current_model_supports_personality());
+        let service_tier = self.config.service_tier.map(Some);
         let op = Op::UserTurn {
             items,
             cwd: self.config.cwd.clone(),
@@ -4309,14 +4763,15 @@ impl ChatWidget {
             model: effective_mode.model().to_string(),
             effort: effective_mode.reasoning_effort(),
             summary: None,
+            service_tier,
             final_output_json_schema: None,
             collaboration_mode,
             personality,
         };
 
-        self.codex_op_tx.send(op).unwrap_or_else(|e| {
-            tracing::error!("failed to send message: {e}");
-        });
+        if !self.submit_op(op) {
+            return;
+        }
 
         // Persist the text to cross-session message history.
         if !text.is_empty() {
@@ -4335,8 +4790,14 @@ impl ChatWidget {
                 });
         }
 
+        if let Some(pending_steer) = pending_steer {
+            self.pending_steers.push_back(pending_steer);
+            self.saw_plan_item_this_turn = false;
+            self.refresh_pending_input_preview();
+        }
+
         // Show replayable user content in conversation history.
-        if !text.is_empty() {
+        if render_in_history && !text.is_empty() {
             let local_image_paths = local_images
                 .into_iter()
                 .map(|img| img.path)
@@ -4354,7 +4815,7 @@ impl ChatWidget {
                 local_image_paths,
                 remote_image_urls,
             ));
-        } else if !remote_image_urls.is_empty() {
+        } else if render_in_history && !remote_image_urls.is_empty() {
             self.last_rendered_user_message_event =
                 Some(Self::rendered_user_message_event_from_parts(
                     String::new(),
@@ -4467,9 +4928,18 @@ impl ChatWidget {
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::ThreadNameUpdated(e) => self.on_thread_name_updated(e),
-            EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
+            EventMsg::AgentMessage(AgentMessageEvent { .. })
+                if matches!(replay_kind, Some(ReplayKind::ThreadSnapshot))
+                    && !self.is_review_mode => {}
+            EventMsg::AgentMessage(AgentMessageEvent { message, .. })
+                if from_replay || self.is_review_mode =>
+            {
+                // TODO(ccunningham): stop relying on legacy AgentMessage in review mode,
+                // including thread-snapshot replay, and forward
+                // ItemCompleted(TurnItem::AgentMessage(_)) instead.
                 self.on_agent_message(message)
             }
+            EventMsg::AgentMessage(AgentMessageEvent { .. }) => {}
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 self.on_agent_message_delta(delta)
             }
@@ -4484,8 +4954,9 @@ impl ChatWidget {
                 self.on_agent_reasoning_final();
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TurnStarted(_) => {
+            EventMsg::TurnStarted(event) => {
                 if !is_resume_initial_replay {
+                    self.apply_turn_started_context_window(event.model_context_window);
                     self.on_task_started();
                 }
             }
@@ -4524,6 +4995,9 @@ impl ChatWidget {
                     self.on_interrupted_turn(ev.reason);
                 }
                 TurnAbortReason::Replaced => {
+                    self.submit_pending_steers_after_interrupt = false;
+                    self.pending_steers.clear();
+                    self.refresh_pending_input_preview();
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
                 }
                 TurnAbortReason::ReviewEnded => {
@@ -4544,6 +5018,9 @@ impl ChatWidget {
             EventMsg::RequestUserInput(ev) => {
                 self.on_request_user_input(ev);
             }
+            EventMsg::RequestPermissions(ev) => {
+                self.on_request_permissions(ev);
+            }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::TerminalInteraction(delta) => self.on_terminal_interaction(delta),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -4551,6 +5028,8 @@ impl ChatWidget {
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
             EventMsg::ViewImageToolCall(ev) => self.on_view_image_tool_call(ev),
+            EventMsg::ImageGenerationBegin(ev) => self.on_image_generation_begin(ev),
+            EventMsg::ImageGenerationEnd(ev) => self.on_image_generation_end(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
@@ -4642,6 +5121,42 @@ impl ChatWidget {
             }
             EventMsg::ItemCompleted(event) => {
                 let item = event.item;
+                if !from_replay && let codex_protocol::items::TurnItem::UserMessage(item) = &item {
+                    let EventMsg::UserMessage(event) = item.as_legacy_event() else {
+                        unreachable!("user message item should convert to a legacy user message");
+                    };
+                    let rendered = Self::rendered_user_message_event_from_event(&event);
+                    let compare_key = Self::pending_steer_compare_key_from_item(item);
+                    if self
+                        .pending_steers
+                        .front()
+                        .is_some_and(|pending| pending.compare_key == compare_key)
+                    {
+                        if let Some(pending) = self.pending_steers.pop_front() {
+                            self.refresh_pending_input_preview();
+                            let pending_event = UserMessageEvent {
+                                message: pending.user_message.text,
+                                images: Some(pending.user_message.remote_image_urls),
+                                local_images: pending
+                                    .user_message
+                                    .local_images
+                                    .into_iter()
+                                    .map(|image| image.path)
+                                    .collect(),
+                                text_elements: pending.user_message.text_elements,
+                            };
+                            self.on_user_message_event(pending_event);
+                        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
+                        {
+                            tracing::warn!(
+                                "pending steer matched compare key but queue was empty when rendering committed user message"
+                            );
+                            self.on_user_message_event(event);
+                        }
+                    } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
+                        self.on_user_message_event(event);
+                    }
+                }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
                     self.on_plan_item_completed(plan_item.text.clone());
                 }
@@ -4800,6 +5315,11 @@ impl ChatWidget {
         if !notification.allowed_for(&self.config.tui_notifications) {
             return;
         }
+        if let Some(existing) = self.pending_notification.as_ref()
+            && existing.priority() > notification.priority()
+        {
+            return;
+        }
         self.pending_notification = Some(notification);
         self.request_redraw();
     }
@@ -4824,7 +5344,10 @@ impl ChatWidget {
     }
 
     // If idle and there are queued inputs, submit exactly one to start the next turn.
-    fn maybe_send_next_queued_input(&mut self) {
+    pub(crate) fn maybe_send_next_queued_input(&mut self) {
+        if self.suppress_queue_autosend {
+            return;
+        }
         if self.bottom_pane.is_task_running() {
             return;
         }
@@ -4832,17 +5355,23 @@ impl ChatWidget {
             self.submit_user_message(user_message);
         }
         // Update the list to reflect the remaining queued messages (if any).
-        self.refresh_queued_user_messages();
+        self.refresh_pending_input_preview();
     }
 
-    /// Rebuild and update the queued user messages from the current queue.
-    fn refresh_queued_user_messages(&mut self) {
-        let messages: Vec<String> = self
+    /// Rebuild and update the bottom-pane pending-input preview.
+    fn refresh_pending_input_preview(&mut self) {
+        let queued_messages: Vec<String> = self
             .queued_user_messages
             .iter()
             .map(|m| m.text.clone())
             .collect();
-        self.bottom_pane.set_queued_user_messages(messages);
+        let pending_steers: Vec<String> = self
+            .pending_steers
+            .iter()
+            .map(|steer| steer.user_message.text.clone())
+            .collect();
+        self.bottom_pane
+            .set_pending_input_preview(queued_messages, pending_steers);
     }
 
     fn handle_review_loop_turn_complete(&mut self) -> bool {
@@ -4998,6 +5527,10 @@ impl ChatWidget {
         let configured_status_line_items = self.configured_status_line_items();
         let view = StatusLineSetupView::new(
             Some(configured_status_line_items.as_slice()),
+            StatusLinePreviewData::from_iter(StatusLineItem::iter().filter_map(|item| {
+                self.status_line_value_for_item(&item)
+                    .map(|value| (item, value))
+            })),
             self.app_event_tx.clone(),
         );
         self.bottom_pane.show_view(Box::new(view));
@@ -5178,6 +5711,13 @@ impl ChatWidget {
                 format_tokens_compact(self.status_line_total_usage().output_tokens)
             )),
             StatusLineItem::SessionId => self.thread_id.map(|id| id.to_string()),
+            StatusLineItem::FastMode => Some(
+                if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                    "Fast on".to_string()
+                } else {
+                    "Fast off".to_string()
+                },
+            ),
         }
     }
 
@@ -5429,6 +5969,7 @@ impl ChatWidget {
                 model: Some(switch_model_for_events.clone()),
                 effort: Some(Some(default_effort)),
                 summary: None,
+                service_tier: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -5548,6 +6089,7 @@ impl ChatWidget {
                         model: None,
                         effort: None,
                         summary: None,
+                        service_tier: None,
                         collaboration_mode: None,
                         windows_sandbox_level: None,
                         personality: Some(personality),
@@ -6085,6 +6627,9 @@ impl ChatWidget {
             ],
             ..Default::default()
         });
+        self.notify(Notification::PlanModePrompt {
+            title: PLAN_MODE_REASONING_SCOPE_TITLE.to_string(),
+        });
     }
 
     /// Open a popup to choose the reasoning effort (stage 2) for the given model.
@@ -6461,6 +7006,7 @@ impl ChatWidget {
                 model: None,
                 effort: None,
                 summary: None,
+                service_tier: None,
                 collaboration_mode: None,
                 personality: None,
             }));
@@ -6755,7 +7301,7 @@ impl ChatWidget {
             return;
         }
 
-        self.otel_manager
+        self.session_telemetry
             .counter("codex.windows_sandbox.elevated_prompt_shown", 1, &[]);
 
         let mut header = ColumnRenderable::new();
@@ -6766,10 +7312,10 @@ impl ChatWidget {
             .wrap(Wrap { trim: false }),
         ));
 
-        let accept_otel = self.otel_manager.clone();
-        let legacy_otel = self.otel_manager.clone();
+        let accept_otel = self.session_telemetry.clone();
+        let legacy_otel = self.session_telemetry.clone();
         let legacy_preset = preset.clone();
-        let quit_otel = self.otel_manager.clone();
+        let quit_otel = self.session_telemetry.clone();
         let items = vec![
             SelectionItem {
                 name: "Set up default sandbox (requires Administrator permissions)".to_string(),
@@ -6840,13 +7386,13 @@ impl ChatWidget {
 
         let elevated_preset = preset.clone();
         let legacy_preset = preset;
-        let quit_otel = self.otel_manager.clone();
+        let quit_otel = self.session_telemetry.clone();
         let items = vec![
             SelectionItem {
                 name: "Try setting up admin sandbox again".to_string(),
                 description: None,
                 actions: vec![Box::new({
-                    let otel = self.otel_manager.clone();
+                    let otel = self.session_telemetry.clone();
                     let preset = elevated_preset;
                     move |tx| {
                         otel.counter("codex.windows_sandbox.fallback_retry_elevated", 1, &[]);
@@ -6862,7 +7408,7 @@ impl ChatWidget {
                 name: "Use Codex with non-admin sandbox".to_string(),
                 description: None,
                 actions: vec![Box::new({
-                    let otel = self.otel_manager.clone();
+                    let otel = self.session_telemetry.clone();
                     let preset = legacy_preset;
                     move |tx| {
                         otel.counter("codex.windows_sandbox.fallback_use_legacy", 1, &[]);
@@ -6974,12 +7520,15 @@ impl ChatWidget {
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) {
-        if enabled {
-            self.config.features.enable(feature);
-        } else {
-            self.config.features.disable(feature);
+    pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) -> bool {
+        if let Err(err) = self.config.features.set_enabled(feature, enabled) {
+            tracing::warn!(
+                error = %err,
+                feature = feature.key(),
+                "failed to update constrained chat widget feature state"
+            );
         }
+        let enabled = self.config.features.enabled(feature);
         if feature == Feature::VoiceTranscription {
             self.bottom_pane.set_voice_transcription_enabled(enabled);
         }
@@ -6996,11 +7545,17 @@ impl ChatWidget {
                 self.reset_realtime_conversation_state();
             }
         }
+        if feature == Feature::FastMode {
+            self.sync_fast_command_enabled();
+        }
         if feature == Feature::Personality {
             self.sync_personality_command_enabled();
         }
         if feature == Feature::ReviewLoop {
             self.sync_review_loop_command_enabled();
+        }
+        if feature == Feature::Plugins {
+            self.refresh_plugin_mentions();
         }
         if feature == Feature::PreventIdleSleep {
             self.turn_sleep_inhibitor = SleepInhibitor::new(enabled);
@@ -7020,6 +7575,7 @@ impl ChatWidget {
                     ),
             );
         }
+        enabled
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
@@ -7081,6 +7637,28 @@ impl ChatWidget {
         self.config.personality = Some(personality);
     }
 
+    /// Set Fast mode in the widget's config copy.
+    pub(crate) fn set_service_tier(&mut self, service_tier: Option<ServiceTier>) {
+        self.config.service_tier = service_tier;
+    }
+
+    pub(crate) fn current_service_tier(&self) -> Option<ServiceTier> {
+        self.config.service_tier
+    }
+
+    pub(crate) fn should_show_fast_status(&self, service_tier: Option<ServiceTier>) -> bool {
+        matches!(service_tier, Some(ServiceTier::Fast))
+            && self
+                .auth_manager
+                .auth_cached()
+                .as_ref()
+                .is_some_and(CodexAuth::is_chatgpt_auth)
+    }
+
+    fn fast_mode_enabled(&self) -> bool {
+        self.config.features.enabled(Feature::FastMode)
+    }
+
     pub(crate) fn set_realtime_audio_device(
         &mut self,
         kind: RealtimeAudioDeviceKind,
@@ -7110,6 +7688,25 @@ impl ChatWidget {
         self.refresh_model_display();
     }
 
+    fn set_service_tier_selection(&mut self, service_tier: Option<ServiceTier>) {
+        self.set_service_tier(service_tier);
+        self.app_event_tx
+            .send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                cwd: None,
+                approval_policy: None,
+                sandbox_policy: None,
+                windows_sandbox_level: None,
+                model: None,
+                effort: None,
+                summary: None,
+                service_tier: Some(service_tier),
+                collaboration_mode: None,
+                personality: None,
+            }));
+        self.app_event_tx
+            .send(AppEvent::PersistServiceTierSelection { service_tier });
+    }
+
     pub(crate) fn current_model(&self) -> &str {
         if !self.collaboration_modes_enabled() {
             return self.current_collaboration_mode.model();
@@ -7134,6 +7731,11 @@ impl ChatWidget {
     fn current_realtime_audio_selection_label(&self, kind: RealtimeAudioDeviceKind) -> String {
         self.current_realtime_audio_device_name(kind)
             .unwrap_or_else(|| "System default".to_string())
+    }
+
+    fn sync_fast_command_enabled(&mut self) {
+        self.bottom_pane
+            .set_fast_command_enabled(self.fast_mode_enabled());
     }
 
     fn sync_personality_command_enabled(&mut self) {
@@ -7385,6 +7987,14 @@ impl ChatWidget {
         }
     }
 
+    fn plugins_for_mentions(&self) -> Option<&[codex_core::plugins::PluginCapabilitySummary]> {
+        if !self.config.features.enabled(Feature::Plugins) {
+            return None;
+        }
+
+        self.bottom_pane.plugins().map(Vec::as_slice)
+    }
+
     /// Build a placeholder header cell while the session is configuring.
     fn placeholder_session_header_cell(config: &Config) -> Box<dyn HistoryCell> {
         let placeholder_style = Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC);
@@ -7392,6 +8002,7 @@ impl ChatWidget {
             DEFAULT_MODEL_DISPLAY_NAME.to_string(),
             placeholder_style,
             None,
+            false,
             config.cwd.clone(),
             CODEX_CLI_VERSION,
         ))
@@ -7826,6 +8437,14 @@ impl ChatWidget {
     }
 
     #[cfg(test)]
+    pub(crate) fn queued_user_message_texts(&self) -> Vec<String> {
+        self.queued_user_messages
+            .iter()
+            .map(|message| message.text.clone())
+            .collect()
+    }
+
+    #[cfg(test)]
     pub(crate) fn pending_thread_approvals(&self) -> &[String] {
         self.bottom_pane.pending_thread_approvals()
     }
@@ -7875,6 +8494,7 @@ impl ChatWidget {
 
     fn on_list_skills(&mut self, ev: ListSkillsResponseEvent) {
         self.set_skills_from_response(&ev);
+        self.refresh_plugin_mentions();
     }
 
     pub(crate) fn on_connectors_loaded(
@@ -7956,6 +8576,19 @@ impl ChatWidget {
         self.refresh_connectors_popup_if_open(&snapshot.connectors);
         self.connectors_cache = ConnectorsCacheState::Ready(snapshot.clone());
         self.bottom_pane.set_connectors_snapshot(Some(snapshot));
+    }
+
+    fn refresh_plugin_mentions(&mut self) {
+        if !self.config.features.enabled(Feature::Plugins) {
+            self.bottom_pane.set_plugin_mentions(None);
+            return;
+        }
+
+        let plugins = PluginsManager::new(self.config.codex_home.clone())
+            .plugins_for_config(&self.config)
+            .capability_summaries()
+            .to_vec();
+        self.bottom_pane.set_plugin_mentions(Some(plugins));
     }
 
     pub(crate) fn open_review_popup(&mut self) {
@@ -8583,6 +9216,11 @@ impl ChatWidget {
         &self.config
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_line_text(&self) -> Option<String> {
+        self.bottom_pane.status_line_text()
+    }
+
     pub(crate) fn clear_token_usage(&mut self) {
         self.token_info = None;
     }
@@ -8656,11 +9294,28 @@ impl Renderable for ChatWidget {
     }
 }
 
+#[derive(Debug)]
 enum Notification {
-    AgentTurnComplete { response: String },
-    ExecApprovalRequested { command: String },
-    EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
-    ElicitationRequested { server_name: String },
+    AgentTurnComplete {
+        response: String,
+    },
+    ExecApprovalRequested {
+        command: String,
+    },
+    EditApprovalRequested {
+        cwd: PathBuf,
+        changes: Vec<PathBuf>,
+    },
+    ElicitationRequested {
+        server_name: String,
+    },
+    PlanModePrompt {
+        title: String,
+    },
+    UserInputRequested {
+        question_count: usize,
+        summary: Option<String>,
+    },
 }
 
 impl Notification {
@@ -8687,6 +9342,17 @@ impl Notification {
             Notification::ElicitationRequested { server_name } => {
                 format!("Approval requested by {server_name}")
             }
+            Notification::PlanModePrompt { title } => {
+                format!("Plan mode prompt: {title}")
+            }
+            Notification::UserInputRequested {
+                question_count,
+                summary,
+            } => match (*question_count, summary.as_deref()) {
+                (1, Some(summary)) => format!("Question requested: {summary}"),
+                (1, None) => "Question requested".to_string(),
+                (count, _) => format!("Questions requested: {count}"),
+            },
         }
     }
 
@@ -8696,6 +9362,19 @@ impl Notification {
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. }
             | Notification::ElicitationRequested { .. } => "approval-requested",
+            Notification::PlanModePrompt { .. } => "plan-mode-prompt",
+            Notification::UserInputRequested { .. } => "user-input-requested",
+        }
+    }
+
+    fn priority(&self) -> u8 {
+        match self {
+            Notification::AgentTurnComplete { .. } => 0,
+            Notification::ExecApprovalRequested { .. }
+            | Notification::EditApprovalRequested { .. }
+            | Notification::ElicitationRequested { .. }
+            | Notification::PlanModePrompt { .. }
+            | Notification::UserInputRequested { .. } => 1,
         }
     }
 
@@ -8719,6 +9398,22 @@ impl Notification {
             None
         } else {
             Some(truncate_text(trimmed, AGENT_NOTIFICATION_PREVIEW_GRAPHEMES))
+        }
+    }
+
+    fn user_input_request_summary(
+        questions: &[codex_protocol::request_user_input::RequestUserInputQuestion],
+    ) -> Option<String> {
+        let first_question = questions.first()?;
+        let summary = if first_question.header.trim().is_empty() {
+            first_question.question.trim()
+        } else {
+            first_question.header.trim()
+        };
+        if summary.is_empty() {
+            None
+        } else {
+            Some(truncate_text(summary, 30))
         }
     }
 }

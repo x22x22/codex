@@ -671,6 +671,7 @@ pub(crate) async fn route_outgoing_envelope(
 mod tests {
     use super::*;
     use crate::error_code::OVERLOADED_ERROR_CODE;
+    use codex_app_server_protocol::CommandExecutionRequestApprovalSkillMetadata;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use pretty_assertions::assert_eq;
     use serde_json::json;
@@ -744,6 +745,7 @@ mod tests {
             id: codex_app_server_protocol::RequestId::Integer(7),
             method: "config/read".to_string(),
             params: Some(json!({ "includeLayers": false })),
+            trace: None,
         });
         assert!(
             enqueue_incoming_message(&transport_event_tx, &writer_tx, connection_id, request).await
@@ -885,6 +887,7 @@ mod tests {
             id: codex_app_server_protocol::RequestId::Integer(7),
             method: "config/read".to_string(),
             params: Some(json!({ "includeLayers": false })),
+            trace: None,
         });
 
         let enqueue_result = tokio::time::timeout(
@@ -989,6 +992,9 @@ mod tests {
                                 macos: None,
                             },
                         ),
+                        skill_metadata: Some(CommandExecutionRequestApprovalSkillMetadata {
+                            path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
+                        }),
                         proposed_execpolicy_amendment: None,
                         proposed_network_policy_amendments: None,
                         available_decisions: None,
@@ -1004,6 +1010,7 @@ mod tests {
             .expect("request should be delivered to the connection");
         let json = serde_json::to_value(message).expect("request should serialize");
         assert_eq!(json["params"].get("additionalPermissions"), None);
+        assert_eq!(json["params"].get("skillMetadata"), None);
     }
 
     #[tokio::test]
@@ -1051,6 +1058,9 @@ mod tests {
                                 macos: None,
                             },
                         ),
+                        skill_metadata: Some(CommandExecutionRequestApprovalSkillMetadata {
+                            path_to_skills_md: PathBuf::from("/tmp/SKILLS.md"),
+                        }),
                         proposed_execpolicy_amendment: None,
                         proposed_network_policy_amendments: None,
                         available_decisions: None,
@@ -1075,6 +1085,12 @@ mod tests {
                     "write": null,
                 },
                 "macos": null,
+            })
+        );
+        assert_eq!(
+            json["params"]["skillMetadata"],
+            json!({
+                "pathToSkillsMd": "/tmp/SKILLS.md",
             })
         );
     }

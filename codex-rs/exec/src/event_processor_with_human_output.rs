@@ -448,6 +448,37 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_msg!(self, "🌐 Searched: {detail}");
                 }
             }
+            EventMsg::ImageGenerationBegin(generated) => {
+                ts_msg!(
+                    self,
+                    "{} {}",
+                    "image generation started".style(self.magenta),
+                    generated.call_id
+                );
+            }
+            EventMsg::ImageGenerationEnd(generated) => {
+                if !generated.result.is_empty()
+                    && !generated.result.starts_with("data:")
+                    && !generated.result.starts_with("http://")
+                    && !generated.result.starts_with("https://")
+                    && !generated.result.starts_with("file://")
+                {
+                    ts_msg!(
+                        self,
+                        "{} {} {}",
+                        "generated image".style(self.magenta),
+                        generated.call_id,
+                        generated.result.style(self.dimmed)
+                    );
+                } else {
+                    ts_msg!(
+                        self,
+                        "{} {}",
+                        "generated image".style(self.magenta),
+                        generated.call_id
+                    );
+                }
+            }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
                 auto_approved,
@@ -849,6 +880,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             | EventMsg::UndoStarted(_)
             | EventMsg::ThreadRolledBack(_)
             | EventMsg::RequestUserInput(_)
+            | EventMsg::RequestPermissions(_)
             | EventMsg::CollabResumeBegin(_)
             | EventMsg::CollabResumeEnd(_)
             | EventMsg::RealtimeConversationStarted(_)
@@ -930,6 +962,7 @@ impl EventProcessorWithHumanOutput {
                 | EventMsg::UndoStarted(_)
                 | EventMsg::ThreadRolledBack(_)
                 | EventMsg::RequestUserInput(_)
+                | EventMsg::RequestPermissions(_)
                 | EventMsg::DynamicToolCallRequest(_)
                 | EventMsg::DynamicToolCallResponse(_)
         )
