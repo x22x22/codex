@@ -1518,6 +1518,7 @@ mod tests {
                 ]),
                 macos_accessibility: true,
                 macos_calendar: true,
+                macos_chromium: false,
             }
         );
     }
