@@ -25,7 +25,6 @@ use codex_protocol::user_input::UserInput;
 use std::sync::Arc;
 use std::sync::Weak;
 use tokio::sync::watch;
-use tracing::debug;
 
 const AGENT_NAMES: &str = include_str!("agent_names.txt");
 const FORKED_SPAWN_AGENT_OUTPUT_MESSAGE: &str = "You are the newly spawned agent. The prior conversation history was forked from your parent agent. Treat the next user message as your new task, and use the forked history only as background context.";
@@ -438,14 +437,9 @@ impl AgentControl {
         tokio::spawn(async move {
             let status = match status_rx {
                 Some(mut status_rx) => {
-                    debug!(%child_thread_id, "subagent completion watcher attached");
                     let mut status = status_rx.borrow().clone();
                     while !is_final(&status) {
                         if status_rx.changed().await.is_err() {
-                            debug!(
-                                %child_thread_id,
-                                "subagent completion watcher lost status stream; reading latest status"
-                            );
                             status = control.get_status(child_thread_id).await;
                             break;
                         }
@@ -453,20 +447,9 @@ impl AgentControl {
                     }
                     status
                 }
-                None => {
-                    debug!(
-                        %child_thread_id,
-                        "subagent completion watcher could not subscribe; reading latest status"
-                    );
-                    control.get_status(child_thread_id).await
-                }
+                None => control.get_status(child_thread_id).await,
             };
             if !is_final(&status) {
-                debug!(
-                    %child_thread_id,
-                    ?status,
-                    "subagent completion watcher exiting before final status"
-                );
                 return;
             }
 
