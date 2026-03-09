@@ -28,6 +28,8 @@ brew install --cask codex
 
 Then simply run `codex` to get started.
 
+> Joke break: Why do developers like local coding agents? Because the bugs have nowhere to hide.
+
 <details>
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
 
