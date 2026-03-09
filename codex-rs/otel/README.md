@@ -8,6 +8,24 @@
 - Low-level metrics APIs via `codex_otel::metrics`.
 - Trace-context helpers via `codex_otel::trace_context` and crate-root re-exports.
 
+## Ownership rules
+
+`codex-otel` is intentionally split by telemetry family:
+
+- `SessionTelemetry` owns session-scoped business events that need shared
+  metadata and explicit log-only versus trace-safe field selection.
+- `metrics` owns low-level counters, histograms, and timers that do not need
+  session metadata.
+- `trace_context` owns W3C trace propagation and parent-setting helpers.
+- Domain-owned audit events may stay with the subsystem that emits them instead
+  of being forced through `SessionTelemetry`.
+
+Current example of a domain-owned audit emitter:
+
+- `codex-network-proxy` emits policy audit events on the
+  `codex_otel.network_proxy` target. See
+  `codex-rs/network-proxy/README.md` for the event family details.
+
 ## Tracing and logs
 
 Create an OTEL provider from `OtelSettings`. The provider also configures
@@ -48,6 +66,31 @@ if let Some(provider) = OtelProvider::from(&settings)? {
     registry.init();
 }
 ```
+
+## Target families and routing
+
+`codex-otel` reserves the following target families:
+
+- `codex_otel.log_only` for session events whose rich fields should stay on the
+  OTEL log lane only.
+- `codex_otel.trace_safe` for session events whose fields are safe to attach to
+  exported traces.
+- `codex_otel.<subsystem>` for approved domain-owned audit emitters such as
+  `codex_otel.network_proxy`.
+
+Current routing behavior:
+
+- Log export accepts any `codex_otel.*` target except the
+  `codex_otel.trace_safe` family.
+- Trace export accepts `codex_otel.trace_safe` events plus all spans.
+
+This means adding a new `codex_otel.<subsystem>` target is immediately
+export-visible on the OTEL log lane unless provider filters change. Treat new
+domain-owned targets as an explicit review point.
+
+This refactor does not make arbitrary spans trace-safe. Direct spans outside
+`SessionTelemetry` are still exported by the trace filter, so any span fields on
+those paths still need separate privacy review.
 
 ## SessionTelemetry (events)
 

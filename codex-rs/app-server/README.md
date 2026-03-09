@@ -15,6 +15,7 @@
 - [Skills](#skills)
 - [Apps](#apps)
 - [Auth endpoints](#auth-endpoints)
+- [Telemetry](#telemetry)
 - [Experimental API Opt-in](#experimental-api-opt-in)
 
 ## Protocol
@@ -185,7 +186,7 @@ Start a fresh thread when you need a new Codex conversation.
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
     "personality": "friendly",
-    "serviceName": "my_app_server_client", // optional metrics tag (`service_name`)
+    "serviceName": "desktop_app", // optional session-level metrics tag (`service_name`)
     // Experimental: requires opt-in
     "dynamicTools": [
         {
@@ -1250,6 +1251,43 @@ Field notes:
 - `usedPercent` is current usage within the OpenAI quota window.
 - `windowDurationMins` is the quota window length.
 - `resetsAt` is a Unix timestamp (seconds) for the next reset.
+
+## Telemetry
+
+`codex app-server` exposes a few different telemetry inputs, and they operate at
+different scopes:
+
+- Session-scoped metrics tags attached when a thread is created or resumed.
+- Connection-scoped client identity established during `initialize`.
+- Turn and request activity emitted by the app-server runtime itself.
+
+For crate-level OTEL routing, target families, and privacy boundaries, see
+`codex-rs/otel/README.md`.
+
+### Client-provided telemetry inputs
+
+- `thread/start.serviceName` sets the session-level `service_name` metrics tag.
+  Use this for the stable name of the integration or surface that owns the
+  thread, such as `desktop_app` or `codex_vscode`.
+- `initialize.clientInfo.name` identifies the app-server client on that
+  connection. This is used for request and session metadata, and it is also the
+  client identifier used for upstream compliance logging.
+- `initialize.clientInfo.version` records the client version for that
+  connection's request metadata.
+
+### Current attribution model
+
+`thread/start.serviceName` is not the same thing as the app-server client's
+identity. It feeds the existing session-scoped `service_name` metric dimension.
+
+App-server client identity comes from `initialize.clientInfo.name` on each
+connection. That signal is connection-scoped and is used by request/session
+telemetry emitted by the app-server runtime.
+
+Per-turn client attribution for turn-bound metrics such as TTFT and TTFM is a
+separate follow-up. Do not treat `serviceName` as if it already provides
+per-turn `client.name` attribution semantics.
+
 
 ## Experimental API Opt-in
 
