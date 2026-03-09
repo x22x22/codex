@@ -222,6 +222,10 @@ fn variant_serialized_name(variant: &syn::Variant, rename_all: Option<&str>) -> 
     if let Some(rename) = serde_rename(&variant.attrs) {
         return rename;
     }
+    // The experimental enum-variant registry has to record the wire name, not
+    // the Rust variant name, because schema/TS filtering later matches against
+    // serialized enum arms. For now we only need a small subset of serde's
+    // rename_all behavior, so keep this local mapping intentionally narrow.
     apply_rename_all(&variant.ident.to_string(), rename_all)
 }
 
