@@ -6,8 +6,8 @@ use crate::agent::status::is_final;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
-use crate::read_session_meta_line;
 use crate::rollout::RolloutRecorder;
+use crate::rollout::list::read_session_meta_line;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
@@ -240,7 +240,7 @@ impl AgentControl {
             }) => {
                 // Collab resume callers rebuild a placeholder ThreadSpawn source. Rehydrate the
                 // stored nickname/role from sqlite when available; otherwise leave both unset.
-                let (resumed_agent_nickname, resumed_agent_role) =
+                let (mut resumed_agent_nickname, mut resumed_agent_role) =
                     if let Some(state_db_ctx) = state_db::get_state_db(&config).await {
                         match state_db_ctx.get_thread(thread_id).await {
                             Ok(Some(metadata)) => (metadata.agent_nickname, metadata.agent_role),
