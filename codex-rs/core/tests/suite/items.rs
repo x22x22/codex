@@ -376,7 +376,7 @@ async fn agent_message_content_delta_has_item_metadata() -> anyhow::Result<()> {
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_message_item_added("msg-1", ""),
-        ev_output_text_delta("streamed response"),
+        ev_output_text_delta("msg-1", "streamed response"),
         ev_assistant_message("msg-1", "streamed response"),
         ev_completed("resp-1"),
     ]);
@@ -444,9 +444,9 @@ async fn interleaved_reasoning_and_assistant_streams_keep_item_ids_aligned() -> 
         ev_response_created("resp-1"),
         ev_reasoning_item_added("reasoning-1", &[""]),
         ev_message_item_added("msg-1", ""),
-        ev_reasoning_summary_text_delta("thinking"),
+        ev_reasoning_summary_text_delta("reasoning-1", "thinking"),
         ev_reasoning_item("reasoning-1", &["thinking"], &[]),
-        ev_output_text_delta("answer"),
+        ev_output_text_delta("msg-1", "answer"),
         ev_assistant_message("msg-1", "answer"),
         ev_completed("resp-1"),
     ]);
@@ -545,7 +545,7 @@ async fn plan_mode_emits_plan_item_from_proposed_plan_block() -> anyhow::Result<
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_message_item_added("msg-1", ""),
-        ev_output_text_delta(&full_message),
+        ev_output_text_delta("msg-1", &full_message),
         ev_assistant_message("msg-1", &full_message),
         ev_completed("resp-1"),
     ]);
@@ -621,7 +621,7 @@ async fn plan_mode_strips_plan_from_agent_messages() -> anyhow::Result<()> {
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_message_item_added("msg-1", ""),
-        ev_output_text_delta(&full_message),
+        ev_output_text_delta("msg-1", &full_message),
         ev_assistant_message("msg-1", &full_message),
         ev_completed("resp-1"),
     ]);
@@ -729,7 +729,7 @@ async fn plan_mode_streaming_citations_are_stripped_across_added_deltas_and_done
         ev_message_item_added("msg-1", added_text),
     ];
     for delta in deltas {
-        events.push(ev_output_text_delta(delta));
+        events.push(ev_output_text_delta("msg-1", delta));
     }
     events.push(ev_assistant_message("msg-1", &full_message));
     events.push(ev_completed("resp-1"));
@@ -915,7 +915,7 @@ async fn plan_mode_streaming_proposed_plan_tag_split_across_added_and_delta_is_p
         ev_message_item_added("msg-1", added_text),
     ];
     for delta in deltas {
-        events.push(ev_output_text_delta(delta));
+        events.push(ev_output_text_delta("msg-1", delta));
     }
     events.push(ev_assistant_message("msg-1", &full_message));
     events.push(ev_completed("resp-1"));
@@ -1028,7 +1028,7 @@ async fn plan_mode_handles_missing_plan_close_tag() -> anyhow::Result<()> {
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_message_item_added("msg-1", ""),
-        ev_output_text_delta(full_message),
+        ev_output_text_delta("msg-1", full_message),
         ev_assistant_message("msg-1", full_message),
         ev_completed("resp-1"),
     ]);
@@ -1114,7 +1114,7 @@ async fn reasoning_content_delta_has_item_metadata() -> anyhow::Result<()> {
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_reasoning_item_added("reasoning-1", &[""]),
-        ev_reasoning_summary_text_delta("step one"),
+        ev_reasoning_summary_text_delta("reasoning-1", "step one"),
         ev_reasoning_item("reasoning-1", &["step one"], &[]),
         ev_completed("resp-1"),
     ]);
@@ -1173,7 +1173,7 @@ async fn reasoning_raw_content_delta_respects_flag() -> anyhow::Result<()> {
     let stream = sse(vec![
         ev_response_created("resp-1"),
         ev_reasoning_item_added("reasoning-raw", &[""]),
-        ev_reasoning_text_delta("raw detail"),
+        ev_reasoning_text_delta("reasoning-raw", "raw detail"),
         ev_reasoning_item("reasoning-raw", &["complete"], &["raw detail"]),
         ev_completed("resp-1"),
     ]);
