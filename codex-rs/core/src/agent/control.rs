@@ -211,10 +211,22 @@ impl AgentControl {
         // to subscribe or drain this newly created thread.
         // TODO(jif) add helper for drain
         state.notify_thread_created(new_thread.thread_id);
+        let completion_status_rx = if matches!(
+            notification_source.as_ref(),
+            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }))
+        ) {
+            self.subscribe_status(new_thread.thread_id).await.ok()
+        } else {
+            None
+        };
 
-        self.maybe_start_completion_watcher(new_thread.thread_id, notification_source)
-            .await;
         self.send_input(new_thread.thread_id, items).await?;
+        self.maybe_start_completion_watcher(
+            new_thread.thread_id,
+            notification_source,
+            completion_status_rx,
+        )
+        .await;
 
         Ok(new_thread.thread_id)
     }
@@ -289,8 +301,12 @@ impl AgentControl {
         // Resumed threads are re-registered in-memory and need the same listener
         // attachment path as freshly spawned threads.
         state.notify_thread_created(resumed_thread.thread_id);
-        self.maybe_start_completion_watcher(resumed_thread.thread_id, Some(notification_source))
-            .await;
+        self.maybe_start_completion_watcher(
+            resumed_thread.thread_id,
+            Some(notification_source),
+            None,
+        )
+        .await;
 
         Ok(resumed_thread.thread_id)
     }
@@ -424,6 +440,7 @@ impl AgentControl {
         &self,
         child_thread_id: ThreadId,
         session_source: Option<SessionSource>,
+        status_rx: Option<watch::Receiver<AgentStatus>>,
     ) {
         let Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
@@ -432,7 +449,10 @@ impl AgentControl {
             return;
         };
 
-        let status_rx = self.subscribe_status(child_thread_id).await.ok();
+        let status_rx = match status_rx {
+            Some(status_rx) => Some(status_rx),
+            None => self.subscribe_status(child_thread_id).await.ok(),
+        };
         let control = self.clone();
         tokio::spawn(async move {
             let status = match status_rx {
@@ -1345,6 +1365,7 @@ mod tests {
                     agent_nickname: None,
                     agent_role: Some("explorer".to_string()),
                 })),
+                None,
             )
             .await;
 
