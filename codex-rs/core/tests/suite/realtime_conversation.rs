@@ -661,21 +661,23 @@ async fn conversation_uses_experimental_realtime_ws_backend_prompt_override() ->
 async fn conversation_uses_experimental_realtime_ws_startup_context_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_websocket_server(vec![
-        vec![],
-        vec![vec![json!({
-            "type": "session.updated",
-            "session": { "id": "sess_custom_context", "instructions": "prompt from config" }
-        })]],
-    ])
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_custom_context", "instructions": "prompt from config" }
+    })]]])
     .await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config.experimental_realtime_ws_backend_prompt = Some("prompt from config".to_string());
-        config.experimental_realtime_ws_startup_context =
-            Some("custom startup context".to_string());
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.experimental_realtime_ws_backend_prompt = Some("prompt from config".to_string());
+            config.experimental_realtime_ws_startup_context =
+                Some("custom startup context".to_string());
+        }
     });
-    let test = builder.build_with_websocket_server(&server).await?;
+    let test = builder.build_with_websocket_server(&startup_server).await?;
     seed_recent_thread(
         &test,
         "Recent work: cleaned up startup flows and reviewed websocket routing.",
@@ -685,7 +687,11 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
     .await?;
     fs::create_dir_all(test.workspace_path("docs"))?;
     fs::write(test.workspace_path("README.md"), "workspace marker")?;
-    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
+    assert!(
+        startup_server
+            .wait_for_handshakes(1, Duration::from_secs(2))
+            .await
+    );
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
@@ -695,7 +701,7 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
         .await?;
 
     let startup_context_request = wait_for_matching_websocket_request(
-        &server,
+        &realtime_server,
         "startup context request with instructions",
         |request| websocket_request_instructions(request).is_some(),
     )
@@ -707,7 +713,8 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
     assert!(!instructions.contains(STARTUP_CONTEXT_HEADER));
     assert!(!instructions.contains("## Machine / Workspace Map"));
 
-    server.shutdown().await;
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
     Ok(())
 }
 
@@ -715,20 +722,22 @@ async fn conversation_uses_experimental_realtime_ws_startup_context_override() -
 async fn conversation_disables_realtime_startup_context_with_empty_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_websocket_server(vec![
-        vec![],
-        vec![vec![json!({
-            "type": "session.updated",
-            "session": { "id": "sess_no_context", "instructions": "prompt from config" }
-        })]],
-    ])
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_no_context", "instructions": "prompt from config" }
+    })]]])
     .await;
 
-    let mut builder = test_codex().with_config(|config| {
-        config.experimental_realtime_ws_backend_prompt = Some("prompt from config".to_string());
-        config.experimental_realtime_ws_startup_context = Some(String::new());
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+            config.experimental_realtime_ws_backend_prompt = Some("prompt from config".to_string());
+            config.experimental_realtime_ws_startup_context = Some(String::new());
+        }
     });
-    let test = builder.build_with_websocket_server(&server).await?;
+    let test = builder.build_with_websocket_server(&startup_server).await?;
     seed_recent_thread(
         &test,
         "Recent work: cleaned up startup flows and reviewed websocket routing.",
@@ -738,7 +747,11 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
     .await?;
     fs::create_dir_all(test.workspace_path("docs"))?;
     fs::write(test.workspace_path("README.md"), "workspace marker")?;
-    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
+    assert!(
+        startup_server
+            .wait_for_handshakes(1, Duration::from_secs(2))
+            .await
+    );
 
     test.codex
         .submit(Op::RealtimeConversationStart(ConversationStartParams {
@@ -748,7 +761,7 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
         .await?;
 
     let startup_context_request = wait_for_matching_websocket_request(
-        &server,
+        &realtime_server,
         "startup context disable request with instructions",
         |request| websocket_request_instructions(request).is_some(),
     )
@@ -760,7 +773,8 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
     assert!(!instructions.contains(STARTUP_CONTEXT_HEADER));
     assert!(!instructions.contains("## Machine / Workspace Map"));
 
-    server.shutdown().await;
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
     Ok(())
 }
 
@@ -768,17 +782,20 @@ async fn conversation_disables_realtime_startup_context_with_empty_override() ->
 async fn conversation_start_injects_startup_context_from_thread_history() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_websocket_server(vec![
-        vec![],
-        vec![vec![json!({
-            "type": "session.updated",
-            "session": { "id": "sess_context", "instructions": "backend prompt" }
-        })]],
-    ])
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_context", "instructions": "backend prompt" }
+    })]]])
     .await;
 
-    let mut builder = test_codex();
-    let test = builder.build_with_websocket_server(&server).await?;
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build_with_websocket_server(&startup_server).await?;
     seed_recent_thread(
         &test,
         "Recent work: cleaned up startup flows and reviewed websocket routing.",
@@ -797,7 +814,7 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
         .await?;
 
     let startup_context_request = wait_for_matching_websocket_request(
-        &server,
+        &realtime_server,
         "startup context request with instructions",
         |request| websocket_request_instructions(request).is_some(),
     )
@@ -816,7 +833,8 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
     assert!(startup_context.contains("README.md"));
     assert!(!startup_context.contains(MEMORY_PROMPT_PHRASE));
 
-    server.shutdown().await;
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
     Ok(())
 }
 
@@ -824,17 +842,20 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
 async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_websocket_server(vec![
-        vec![],
-        vec![vec![json!({
-            "type": "session.updated",
-            "session": { "id": "sess_workspace", "instructions": "backend prompt" }
-        })]],
-    ])
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_workspace", "instructions": "backend prompt" }
+    })]]])
     .await;
 
-    let mut builder = test_codex();
-    let test = builder.build_with_websocket_server(&server).await?;
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build_with_websocket_server(&startup_server).await?;
     fs::create_dir_all(test.workspace_path("codex-rs/core"))?;
     fs::write(test.workspace_path("notes.txt"), "workspace marker")?;
 
@@ -846,7 +867,7 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
         .await?;
 
     let startup_context_request = wait_for_matching_websocket_request(
-        &server,
+        &realtime_server,
         "workspace-map startup context request with instructions",
         |request| websocket_request_instructions(request).is_some(),
     )
@@ -859,7 +880,8 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
     assert!(startup_context.contains("notes.txt"));
     assert!(startup_context.contains("codex-rs/"));
 
-    server.shutdown().await;
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
     Ok(())
 }
 
@@ -867,21 +889,24 @@ async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()
 async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let server = start_websocket_server(vec![
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![vec![
+        vec![json!({
+            "type": "session.updated",
+            "session": { "id": "sess_truncated", "instructions": "backend prompt" }
+        })],
         vec![],
-        vec![
-            vec![json!({
-                "type": "session.updated",
-                "session": { "id": "sess_truncated", "instructions": "backend prompt" }
-            })],
-            vec![],
-        ],
-    ])
+    ]]])
     .await;
 
     let oversized_summary = "recent work ".repeat(3_500);
-    let mut builder = test_codex();
-    let test = builder.build_with_websocket_server(&server).await?;
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build_with_websocket_server(&startup_server).await?;
     seed_recent_thread(&test, &oversized_summary, "summary", "oversized").await?;
     fs::write(test.workspace_path("marker.txt"), "marker")?;
 
@@ -893,7 +918,7 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
         .await?;
 
     let startup_context_request = wait_for_matching_websocket_request(
-        &server,
+        &realtime_server,
         "truncated startup context request with instructions",
         |request| websocket_request_instructions(request).is_some(),
     )
@@ -909,17 +934,19 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
         }))
         .await?;
 
-    let explicit_text_request =
-        wait_for_matching_websocket_request(&server, "explicit realtime text request", |request| {
-            websocket_request_text(request).as_deref() == Some("hello")
-        })
-        .await;
+    let explicit_text_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "explicit realtime text request",
+        |request| websocket_request_text(request).as_deref() == Some("hello"),
+    )
+    .await;
     assert_eq!(
         websocket_request_text(&explicit_text_request),
         Some("hello".to_string())
     );
 
-    server.shutdown().await;
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
     Ok(())
 }
 
