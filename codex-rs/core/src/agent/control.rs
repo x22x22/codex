@@ -6,6 +6,7 @@ use crate::agent::status::is_final;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_thread_path_by_id_str;
+use crate::read_session_meta_line;
 use crate::rollout::RolloutRecorder;
 use crate::session_prefix::format_subagent_context_line;
 use crate::session_prefix::format_subagent_notification_message;
@@ -227,6 +228,10 @@ impl AgentControl {
     ) -> CodexResult<ThreadId> {
         let state = self.upgrade()?;
         let mut reservation = self.state.reserve_spawn_slot(config.agent_max_threads)?;
+        let rollout_path =
+            find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
+                .await?
+                .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?;
         let session_source = match session_source {
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
                 parent_thread_id,
@@ -244,6 +249,20 @@ impl AgentControl {
                     } else {
                         (None, None)
                     };
+                if resumed_agent_nickname.is_none() || resumed_agent_role.is_none() {
+                    // Rollouts are the canonical source for thread-spawn metadata; use them to
+                    // heal partial sqlite rows during shutdown/resume races.
+                    if let Ok(meta_line) = read_session_meta_line(rollout_path.as_path()).await
+                        && let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+                            agent_nickname,
+                            agent_role,
+                            ..
+                        }) = meta_line.meta.source
+                    {
+                        resumed_agent_nickname = resumed_agent_nickname.or(agent_nickname);
+                        resumed_agent_role = resumed_agent_role.or(agent_role);
+                    }
+                }
                 let reserved_agent_nickname = resumed_agent_nickname
                     .as_deref()
                     .map(|agent_nickname| {
@@ -270,10 +289,6 @@ impl AgentControl {
         let inherited_shell_snapshot = self
             .inherited_shell_snapshot_for_source(&state, Some(&session_source))
             .await;
-        let rollout_path =
-            find_thread_path_by_id_str(config.codex_home.as_path(), &thread_id.to_string())
-                .await?
-                .ok_or_else(|| CodexErr::ThreadNotFound(thread_id))?;
 
         let resumed_thread = state
             .resume_thread_from_rollout_with_source(
@@ -1530,12 +1545,38 @@ mod tests {
         })
         .await
         .expect("child thread metadata should be persisted to sqlite before shutdown");
+        // Simulate the partial sqlite row we occasionally observe in CI and assert resume heals
+        // missing sub-agent metadata from the rollout itself.
+        let mut persisted_metadata = state_db
+            .get_thread(child_thread_id)
+            .await
+            .expect("sqlite metadata lookup should succeed")
+            .expect("child metadata should exist in sqlite");
+        persisted_metadata.agent_nickname = None;
+        state_db
+            .upsert_thread(&persisted_metadata)
+            .await
+            .expect("test setup should allow partial sqlite metadata");
 
         let _ = harness
             .control
             .shutdown_agent(child_thread_id)
             .await
             .expect("child shutdown should submit");
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let status = status_rx.borrow().clone();
+                if is_final(&status) {
+                    break;
+                }
+                status_rx
+                    .changed()
+                    .await
+                    .expect("child status should reach a final state before resume");
+            }
+        })
+        .await
+        .expect("child should finish shutting down before resume");
 
         let resumed_thread_id = harness
             .control
