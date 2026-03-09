@@ -289,7 +289,7 @@ fn build_server_side_compaction_replacement_history_keeps_current_turn_inputs() 
     let prior_snapshot = ghost_snapshot("ghost-before");
     let same_turn_snapshot = ghost_snapshot("ghost-during");
     let history_before_turn = vec![user_message("earlier"), prior_snapshot.clone()];
-    let initial_context = vec![
+    let turn_start_context_items = vec![
         developer_message("fresh permissions"),
         environment_context_message("/fresh"),
     ];
@@ -301,8 +301,8 @@ fn build_server_side_compaction_replacement_history_keeps_current_turn_inputs() 
     let current_history = vec![
         user_message("earlier"),
         prior_snapshot.clone(),
-        developer_message("stale permissions diff"),
-        environment_context_message("/stale"),
+        turn_start_context_items[0].clone(),
+        turn_start_context_items[1].clone(),
         current_turn_user.clone(),
         current_turn_tool_output.clone(),
         same_turn_snapshot.clone(),
@@ -313,7 +313,8 @@ fn build_server_side_compaction_replacement_history_keeps_current_turn_inputs() 
 
     let replacement_history = build_server_side_compaction_replacement_history(
         compaction_item.clone(),
-        initial_context.clone(),
+        &turn_start_context_items,
+        &turn_start_context_items,
         &history_before_turn,
         &current_history,
     );
@@ -321,9 +322,66 @@ fn build_server_side_compaction_replacement_history_keeps_current_turn_inputs() 
     assert_eq!(
         replacement_history,
         vec![
-            initial_context[0].clone(),
-            initial_context[1].clone(),
+            turn_start_context_items[0].clone(),
+            turn_start_context_items[1].clone(),
             current_turn_user,
+            current_turn_tool_output,
+            compaction_item,
+            prior_snapshot,
+            same_turn_snapshot,
+        ]
+    );
+}
+
+#[test]
+fn build_server_side_compaction_replacement_history_preserves_turn_scoped_injections() {
+    let prior_snapshot = ghost_snapshot("ghost-before");
+    let same_turn_snapshot = ghost_snapshot("ghost-during");
+    let history_before_turn = vec![user_message("earlier"), prior_snapshot.clone()];
+    let turn_start_context_items = vec![
+        developer_message("<model_switch>\nuse the new model"),
+        environment_context_message("/fresh"),
+    ];
+    let current_turn_user = user_message("current turn");
+    let skill_injection = skill_message(
+        "<skill>\n<name>demo</name>\n<path>/tmp/skills/demo/SKILL.md</path>\nbody\n</skill>",
+    );
+    let plugin_injection = developer_message("PLUGIN_HINT");
+    let current_turn_tool_output = ResponseItem::FunctionCallOutput {
+        call_id: "call-1".to_string(),
+        output: FunctionCallOutputPayload::from_text("tool result".to_string()),
+    };
+    let current_history = vec![
+        user_message("earlier"),
+        prior_snapshot.clone(),
+        turn_start_context_items[0].clone(),
+        turn_start_context_items[1].clone(),
+        current_turn_user.clone(),
+        skill_injection.clone(),
+        plugin_injection.clone(),
+        current_turn_tool_output.clone(),
+        same_turn_snapshot.clone(),
+    ];
+    let compaction_item = ResponseItem::Compaction {
+        encrypted_content: "INLINE_SUMMARY".to_string(),
+    };
+
+    let replacement_history = build_server_side_compaction_replacement_history(
+        compaction_item.clone(),
+        &turn_start_context_items,
+        &turn_start_context_items,
+        &history_before_turn,
+        &current_history,
+    );
+
+    assert_eq!(
+        replacement_history,
+        vec![
+            turn_start_context_items[0].clone(),
+            turn_start_context_items[1].clone(),
+            current_turn_user,
+            skill_injection,
+            plugin_injection,
             current_turn_tool_output,
             compaction_item,
             prior_snapshot,
@@ -337,7 +395,7 @@ fn build_server_side_compaction_replacement_history_replaces_prior_same_turn_sum
     let prior_snapshot = ghost_snapshot("ghost-before");
     let same_turn_snapshot = ghost_snapshot("ghost-during");
     let history_before_turn = vec![user_message("earlier"), prior_snapshot.clone()];
-    let initial_context = vec![
+    let turn_start_context_items = vec![
         developer_message("fresh permissions"),
         environment_context_message("/fresh"),
     ];
@@ -353,8 +411,8 @@ fn build_server_side_compaction_replacement_history_replaces_prior_same_turn_sum
         encrypted_content: "INLINE_SUMMARY_2".to_string(),
     };
     let current_history = vec![
-        initial_context[0].clone(),
-        initial_context[1].clone(),
+        turn_start_context_items[0].clone(),
+        turn_start_context_items[1].clone(),
         current_turn_user.clone(),
         current_turn_tool_output.clone(),
         prior_compaction,
@@ -364,7 +422,8 @@ fn build_server_side_compaction_replacement_history_replaces_prior_same_turn_sum
 
     let replacement_history = build_server_side_compaction_replacement_history(
         new_compaction.clone(),
-        initial_context.clone(),
+        &turn_start_context_items,
+        &turn_start_context_items,
         &history_before_turn,
         &current_history,
     );
@@ -372,8 +431,8 @@ fn build_server_side_compaction_replacement_history_replaces_prior_same_turn_sum
     assert_eq!(
         replacement_history,
         vec![
-            initial_context[0].clone(),
-            initial_context[1].clone(),
+            turn_start_context_items[0].clone(),
+            turn_start_context_items[1].clone(),
             current_turn_user,
             current_turn_tool_output,
             new_compaction,
@@ -387,7 +446,7 @@ fn build_server_side_compaction_replacement_history_replaces_prior_same_turn_sum
 fn build_server_side_compaction_replacement_history_replaces_prior_summary_with_empty_history() {
     let same_turn_snapshot = ghost_snapshot("ghost-during");
     let history_before_turn = Vec::new();
-    let initial_context = vec![
+    let turn_start_context_items = vec![
         developer_message("fresh permissions"),
         environment_context_message("/fresh"),
     ];
@@ -403,8 +462,8 @@ fn build_server_side_compaction_replacement_history_replaces_prior_summary_with_
         encrypted_content: "INLINE_SUMMARY_2".to_string(),
     };
     let current_history = vec![
-        initial_context[0].clone(),
-        initial_context[1].clone(),
+        turn_start_context_items[0].clone(),
+        turn_start_context_items[1].clone(),
         prior_compaction,
         current_turn_user.clone(),
         current_turn_tool_output.clone(),
@@ -413,7 +472,8 @@ fn build_server_side_compaction_replacement_history_replaces_prior_summary_with_
 
     let replacement_history = build_server_side_compaction_replacement_history(
         new_compaction.clone(),
-        initial_context.clone(),
+        &turn_start_context_items,
+        &turn_start_context_items,
         &history_before_turn,
         &current_history,
     );
@@ -421,8 +481,8 @@ fn build_server_side_compaction_replacement_history_replaces_prior_summary_with_
     assert_eq!(
         replacement_history,
         vec![
-            initial_context[0].clone(),
-            initial_context[1].clone(),
+            turn_start_context_items[0].clone(),
+            turn_start_context_items[1].clone(),
             current_turn_user,
             current_turn_tool_output,
             new_compaction,
