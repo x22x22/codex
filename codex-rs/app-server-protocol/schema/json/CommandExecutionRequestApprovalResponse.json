@@ -11,6 +11,31 @@
           "type": "string"
         },
         {
+          "additionalProperties": false,
+          "description": "User approved execution, but wants to replace the command before it runs.",
+          "properties": {
+            "acceptWithCommandOverride": {
+              "properties": {
+                "command": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "acceptWithCommandOverride"
+          ],
+          "title": "AcceptWithCommandOverrideCommandExecutionApprovalDecision",
+          "type": "object"
+        },
+        {
           "description": "User approved the command and future prompts in the same session-scoped approval cache should run without prompting.",
           "enum": [
             "acceptForSession"

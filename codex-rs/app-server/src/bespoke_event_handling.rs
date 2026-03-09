@@ -2256,6 +2256,10 @@ async fn on_command_execution_request_approval_response(
 
             let (decision, completion_status) = match decision {
                 CommandExecutionApprovalDecision::Accept => (ReviewDecision::Approved, None),
+                CommandExecutionApprovalDecision::AcceptWithCommandOverride { command } => (
+                    ReviewDecision::ApprovedWithCommandOverride { command },
+                    None,
+                ),
                 CommandExecutionApprovalDecision::AcceptForSession => {
                     (ReviewDecision::ApprovedForSession, None)
                 }

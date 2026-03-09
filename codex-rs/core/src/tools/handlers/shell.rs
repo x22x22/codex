@@ -389,10 +389,11 @@ impl ShellHandler {
                 sandbox_policy: turn.sandbox_policy.get(),
                 sandbox_permissions: exec_params.sandbox_permissions,
                 prefix_rule,
+                manual_tool_execution: false,
             })
             .await;
 
-        let req = ShellRequest {
+        let mut req = ShellRequest {
             command: exec_params.command.clone(),
             cwd: exec_params.cwd.clone(),
             timeout_ms: exec_params.expiration.timeout_ms(),
@@ -423,7 +424,7 @@ impl ShellHandler {
         let out = orchestrator
             .run(
                 &mut runtime,
-                &req,
+                &mut req,
                 &tool_ctx,
                 &turn,
                 turn.approval_policy.value(),

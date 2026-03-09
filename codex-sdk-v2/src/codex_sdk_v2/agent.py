@@ -6,51 +6,79 @@ import os
 from typing import Any
 
 from .app_server_client import JsonRpcNotification, JsonRpcServerRequest
+from .capabilities import Capability, DEFAULT_CAPABILITIES
 from .bridge import OpenAIResponsesBridge
 from .local_backend import LocalBackend, LocalBackendOptions, LocalSession
 from .manifest import Manifest
 from .task import Task
-from .tools import DEFAULT_TOOLS, Tool, builtin_tool_names, function_tools
+from .tools import Tool, builtin_tools, function_tools, tool_instruction_fragments
 
 
 @dataclass(slots=True)
 class Agent:
     manifest: Manifest
     model: str = "gpt-5.2-codex"
+    # Replaces Codex's composed base instructions for the thread. When set, this
+    # bypasses the Rust-side built-in capability prompt composition.
     base_instructions: str | None = None
+    # Additive developer-role instructions for the thread. These are composed
+    # together with capability- and FunctionTool-contributed instruction
+    # fragments and sent via `thread/start.developerInstructions`.
     developer_instructions: str | None = None
-    user_instructions: str | None = None
-    tools: tuple[Tool | type[Tool], ...] = field(default_factory=lambda: DEFAULT_TOOLS)
+    tools: tuple[Tool | type[Tool], ...] = field(default_factory=tuple)
+    capabilities: tuple[Capability, ...] = field(default_factory=lambda: DEFAULT_CAPABILITIES)
     backend: LocalBackend = field(default_factory=LocalBackend)
+    approval_policy: str | None = None
 
     async def start(
         self,
         *,
         backend_options: LocalBackendOptions | None = None,
         session: LocalSession | None = None,
-        bridge: OpenAIResponsesBridge | None = None,
     ) -> Task:
-        own_bridge = False
-        if bridge is None:
-            api_key = os.environ.get("OPENAI_API_KEY")
-            if not api_key:
-                raise RuntimeError("OPENAI_API_KEY must be set for the prototype bridge")
-            bridge = OpenAIResponsesBridge(api_key=api_key)
-            bridge.start()
-            own_bridge = True
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY must be set for the prototype bridge")
+        bridge = OpenAIResponsesBridge(api_key=api_key)
+        bridge.start()
 
-        builtin_tools = builtin_tool_names(self.tools)
-        resolved_function_tools = function_tools(self.tools)
+        manifest = self.manifest
+        for capability in self.capabilities:
+            manifest = capability.process_manifest(manifest)
+
+        resolved_tools: tuple[Tool | type[Tool], ...] = (
+            *(tool for capability in self.capabilities for tool in capability.tools()),
+            *self.tools,
+        )
+        builtin_tool_names, builtin_tool_policies = builtin_tools(resolved_tools)
+        resolved_function_tools = function_tools(resolved_tools)
+        tool_fragments = tool_instruction_fragments(resolved_tools)
+        capability_fragments = [
+            fragment
+            for capability in self.capabilities
+            if (fragment := capability.instructions()) is not None
+        ]
         dynamic_tools = [type(tool).dynamic_tool_spec() for tool in resolved_function_tools]
         function_tool_map = {
             type(tool).dynamic_tool_spec()["name"]: tool for tool in resolved_function_tools
         }
+        developer_instructions = self.developer_instructions
+        if capability_fragments or tool_fragments:
+            sections = [
+                fragment
+                for fragment in [
+                    developer_instructions,
+                    *capability_fragments,
+                    *tool_fragments,
+                ]
+                if fragment
+            ]
+            developer_instructions = "\n\n".join(sections) if sections else None
 
         if session is None:
             session = await self.backend.create_session(
-                manifest=self.manifest,
+                manifest=manifest,
                 options=backend_options,
-                delegation_bridge_url=bridge.bridge_url,
             )
         client = await session.start_app_server()
         await client.initialize(
@@ -58,20 +86,24 @@ class Agent:
             client_title="Codex SDK v2 Prototype",
             client_version="0.1.0",
         )
+        approval_policy = self.approval_policy
+        if approval_policy is None:
+            approval_policy = "on-request" if builtin_tool_names else "never"
         thread_start_params: dict[str, Any] = {
             "model": self.model,
             "cwd": str(session.workspace_root),
             "sandbox": "danger-full-access",
-            "approvalPolicy": "never",
+            "approvalPolicy": approval_policy,
             "config": {
                 "experimental_use_unified_exec_tool": True,
             },
             "baseInstructions": self.base_instructions,
-            "developerInstructions": self.developer_instructions,
+            "developerInstructions": developer_instructions,
             "sdkDelegation": {
                 "bridgeUrl": bridge.bridge_url,
             },
-            "builtinTools": builtin_tools,
+            "builtinTools": builtin_tool_names,
+            "manualToolExecution": bool(builtin_tool_names),
         }
         if dynamic_tools:
             thread_start_params["dynamicTools"] = dynamic_tools
@@ -104,12 +136,11 @@ class Agent:
             else:
                 deferred_messages.append(message)
         client.prepend_messages(deferred_messages)
-        task = Task(
+        return Task(
             session=session,
             thread_id=result["thread"]["id"],
             initial_thread_started=thread_started_notification.params,
-            prefix_user_instructions=self.user_instructions,
             function_tools=function_tool_map,
-            _owned_bridge=bridge if own_bridge else None,
+            builtin_tool_policies=builtin_tool_policies,
+            _owned_bridge=bridge,
         )
-        return task

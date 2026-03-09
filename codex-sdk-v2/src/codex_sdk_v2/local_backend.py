@@ -27,13 +27,11 @@ class LocalSession:
         app_server_binary: Path,
         app_server_args: tuple[str, ...],
         owned_workspace: bool,
-        delegation_bridge_url: str,
     ) -> None:
         self.workspace_root = workspace_root
         self.app_server_binary = app_server_binary
         self.app_server_args = app_server_args
         self.owned_workspace = owned_workspace
-        self.delegation_bridge_url = delegation_bridge_url
         self.app_server_process: asyncio.subprocess.Process | None = None
         self.app_server_client: AppServerClient | None = None
         self._stderr_task: asyncio.Task[None] | None = None
@@ -90,7 +88,6 @@ class LocalBackend:
         *,
         manifest: Manifest,
         options: LocalBackendOptions | None = None,
-        delegation_bridge_url: str,
     ) -> LocalSession:
         options = options or LocalBackendOptions()
         codex_binary = options.codex_binary or self.codex_binary
@@ -123,7 +120,6 @@ class LocalBackend:
             app_server_binary=codex_binary,
             app_server_args=app_server_args,
             owned_workspace=owned_workspace,
-            delegation_bridge_url=delegation_bridge_url,
         )
 
     @staticmethod

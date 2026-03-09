@@ -62,6 +62,7 @@ pub(crate) async fn run_codex_thread_interactive(
         Vec::new(),
         None,
         false,
+        false,
         None,
         None,
     )

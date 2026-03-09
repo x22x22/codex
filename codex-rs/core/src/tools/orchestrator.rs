@@ -100,7 +100,7 @@ impl ToolOrchestrator {
     pub async fn run<Rq, Out, T>(
         &mut self,
         tool: &mut T,
-        req: &Rq,
+        req: &mut Rq,
         tool_ctx: &ToolCtx,
         turn_ctx: &crate::codex::TurnContext,
         approval_policy: AskForApproval,
@@ -144,10 +144,11 @@ impl ToolOrchestrator {
                         return Err(ToolError::Rejected("rejected by user".to_string()));
                     }
                     ReviewDecision::Approved
+                    | ReviewDecision::ApprovedWithCommandOverride { .. }
                     | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                     | ReviewDecision::ApprovedForSession => {}
                     ReviewDecision::NetworkPolicyAmendment {
-                        network_policy_amendment,
+                        ref network_policy_amendment,
                     } => match network_policy_amendment.action {
                         NetworkPolicyRuleAction::Allow => {}
                         NetworkPolicyRuleAction::Deny => {
@@ -155,6 +156,7 @@ impl ToolOrchestrator {
                         }
                     },
                 }
+                tool.apply_approval_decision(req, &decision);
                 already_approved = true;
             }
         }
@@ -280,10 +282,11 @@ impl ToolOrchestrator {
                             return Err(ToolError::Rejected("rejected by user".to_string()));
                         }
                         ReviewDecision::Approved
+                        | ReviewDecision::ApprovedWithCommandOverride { .. }
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
                         | ReviewDecision::ApprovedForSession => {}
                         ReviewDecision::NetworkPolicyAmendment {
-                            network_policy_amendment,
+                            ref network_policy_amendment,
                         } => match network_policy_amendment.action {
                             NetworkPolicyRuleAction::Allow => {}
                             NetworkPolicyRuleAction::Deny => {
@@ -291,6 +294,7 @@ impl ToolOrchestrator {
                             }
                         },
                     }
+                    tool.apply_approval_decision(req, &decision);
                 }
 
                 let escalated_attempt = SandboxAttempt {

@@ -1,7 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, ClassVar, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, ClassVar, Mapping, Sequence
+
+if TYPE_CHECKING:
+    from .pending_tool_calls import PendingCommandExecution
+    from .pending_tool_calls import PendingFunctionToolCall
+    from .pending_tool_calls import ToolDecision
+
+if TYPE_CHECKING:
+    BuiltinApprovalPolicy = Callable[
+        [PendingCommandExecution],
+        Awaitable[ToolDecision | None] | ToolDecision | None,
+    ]
+else:
+    BuiltinApprovalPolicy = Callable[[Any], Awaitable[Any] | Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +26,15 @@ class Tool:
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class ConfiguredBuiltinTool(Tool):
+    tool_type: type["BuiltinTool"]
+    approval_policy: BuiltinApprovalPolicy | None = None
+
+    def builtin_spec(self) -> BuiltinToolSpec:
+        return self.tool_type.builtin_spec()
+
+
 class BuiltinTool(Tool):
     codex_builtin_tool: ClassVar[str]
 
@@ -22,6 +44,14 @@ class BuiltinTool(Tool):
         if not tool_name:
             raise TypeError(f"{cls.__name__} must define codex_builtin_tool")
         return BuiltinToolSpec(tool_name=tool_name)
+
+    @classmethod
+    def with_approval_policy(
+        cls,
+        *,
+        policy: BuiltinApprovalPolicy,
+    ) -> ConfiguredBuiltinTool:
+        return ConfiguredBuiltinTool(tool_type=cls, approval_policy=policy)
 
 
 class FunctionTool(Tool):
@@ -45,6 +75,12 @@ class FunctionTool(Tool):
             "description": description,
             "inputSchema": input_schema,
         }
+
+    async def approve(self, call: PendingFunctionToolCall) -> ToolDecision | None:
+        return None
+
+    def instructions(self) -> str | None:
+        return None
 
     async def run(self, arguments: Mapping[str, Any]) -> Any:
         raise NotImplementedError
@@ -184,18 +220,22 @@ ALL_BUILTIN_TOOLS: tuple[type[BuiltinTool], ...] = (
 )
 
 
-def builtin_tool_names(tools: Sequence[Tool | type[Tool]]) -> list[str]:
+def builtin_tools(tools: Sequence[Tool | type[Tool]]) -> tuple[list[str], dict[str, BuiltinApprovalPolicy]]:
     names: list[str] = []
+    policies: dict[str, BuiltinApprovalPolicy] = {}
     seen: set[str] = set()
     for tool in tools:
-        tool_type = tool if isinstance(tool, type) else type(tool)
-        if not issubclass(tool_type, BuiltinTool):
+        resolved = tool if isinstance(tool, ConfiguredBuiltinTool) else None
+        tool_type = resolved.tool_type if resolved is not None else tool if isinstance(tool, type) else type(tool)
+        if not isinstance(tool_type, type) or not issubclass(tool_type, BuiltinTool):
             continue
         name = tool_type.builtin_spec().tool_name
         if name not in seen:
             seen.add(name)
             names.append(name)
-    return names
+        if resolved is not None and resolved.approval_policy is not None:
+            policies[name] = resolved.approval_policy
+    return names, policies
 
 
 def function_tools(tools: Sequence[Tool | type[Tool]]) -> list[FunctionTool]:
@@ -203,10 +243,9 @@ def function_tools(tools: Sequence[Tool | type[Tool]]) -> list[FunctionTool]:
     seen: set[str] = set()
     builtin_names = {tool.builtin_spec().tool_name for tool in ALL_BUILTIN_TOOLS}
     for tool in tools:
-        if isinstance(tool, type):
-            tool_instance = tool()
-        else:
-            tool_instance = tool
+        if isinstance(tool, ConfiguredBuiltinTool):
+            continue
+        tool_instance = tool() if isinstance(tool, type) else tool
         if not isinstance(tool_instance, FunctionTool):
             continue
         tool_name = type(tool_instance).dynamic_tool_spec()["name"]
@@ -219,10 +258,26 @@ def function_tools(tools: Sequence[Tool | type[Tool]]) -> list[FunctionTool]:
     return resolved
 
 
+def tool_instruction_fragments(tools: Sequence[Tool | type[Tool]]) -> list[str]:
+    fragments: list[str] = []
+    seen: set[str] = set()
+
+    for tool in tools:
+        if isinstance(tool, ConfiguredBuiltinTool):
+            continue
+
+        tool_instance = tool() if isinstance(tool, type) else tool
+        if isinstance(tool_instance, FunctionTool):
+            fragment = tool_instance.instructions()
+            key = f"function:{type(tool_instance).dynamic_tool_spec()['name']}"
+            if fragment and key not in seen:
+                seen.add(key)
+                fragments.append(fragment)
+
+    return fragments
+
+
 DEFAULT_TOOLS: tuple[type[BuiltinTool], ...] = (
     ExecCommand,
     WriteStdin,
-    UpdatePlan,
-    ApplyPatch,
-    ViewImage,
 )

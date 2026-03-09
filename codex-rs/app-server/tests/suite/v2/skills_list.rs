@@ -242,6 +242,7 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
             ephemeral: None,
             dynamic_tools: None,
             builtin_tools: None,
+            manual_tool_execution: false,
             mock_experimental_field: None,
             experimental_raw_events: false,
             persist_extended_history: false,

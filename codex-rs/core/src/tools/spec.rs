@@ -74,6 +74,7 @@ pub(crate) struct ToolsConfig {
     pub agent_jobs_tools: bool,
     pub agent_jobs_worker_tools: bool,
     pub builtin_tools: Option<Vec<String>>,
+    pub manual_tool_execution: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -175,6 +176,7 @@ impl ToolsConfig {
             agent_jobs_tools: include_agent_jobs,
             agent_jobs_worker_tools,
             builtin_tools: None,
+            manual_tool_execution: false,
         }
     }
 
@@ -191,6 +193,30 @@ impl ToolsConfig {
     pub fn with_builtin_tools(mut self, builtin_tools: Option<Vec<String>>) -> Self {
         self.builtin_tools = builtin_tools;
         self
+    }
+
+    pub fn with_manual_tool_execution(mut self, manual_tool_execution: bool) -> Self {
+        self.manual_tool_execution = manual_tool_execution;
+        self
+    }
+
+    pub fn has_builtin_tool(&self, tool_name: &str) -> bool {
+        if let Some(builtin_tools) = &self.builtin_tools {
+            return builtin_tools.iter().any(|tool| tool == tool_name);
+        }
+
+        match tool_name {
+            "exec_command" | "write_stdin" => self.shell_type == ConfigShellToolType::UnifiedExec,
+            "update_plan" => true,
+            "request_user_input" => self.request_user_input,
+            "apply_patch" => self.apply_patch_tool_type.is_some(),
+            "search_tool_bm25" => self.search_tool,
+            "view_image" => true,
+            "spawn_agent" => self.collab_tools,
+            "spawn_agents_on_csv" => self.agent_jobs_tools,
+            "artifacts" => self.artifact_tools,
+            _ => self.experimental_supported_tools.iter().any(|tool| tool == tool_name),
+        }
     }
 }
 

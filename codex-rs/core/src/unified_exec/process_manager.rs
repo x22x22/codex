@@ -584,9 +584,10 @@ impl UnifiedExecProcessManager {
                 sandbox_policy: context.turn.sandbox_policy.get(),
                 sandbox_permissions: request.sandbox_permissions,
                 prefix_rule: request.prefix_rule.clone(),
+                manual_tool_execution: context.turn.tools_config.manual_tool_execution,
             })
             .await;
-        let req = UnifiedExecToolRequest {
+        let mut req = UnifiedExecToolRequest {
             command: request.command.clone(),
             cwd,
             env,
@@ -607,7 +608,7 @@ impl UnifiedExecProcessManager {
         orchestrator
             .run(
                 &mut runtime,
-                &req,
+                &mut req,
                 &tool_ctx,
                 &context.turn,
                 context.turn.approval_policy.value(),

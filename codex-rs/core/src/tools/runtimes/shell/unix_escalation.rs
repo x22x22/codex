@@ -452,6 +452,7 @@ impl CoreShellActionProvider {
                         .await?
                     {
                         ReviewDecision::Approved
+                        | ReviewDecision::ApprovedWithCommandOverride { .. }
                         | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                             if needs_escalation {
                                 EscalationDecision::escalate(escalation_execution.clone())
@@ -677,6 +678,7 @@ fn evaluate_intercepted_exec_policy(
             cmd,
             sandbox_permissions,
             used_complex_parsing,
+            false,
         )
     };
 

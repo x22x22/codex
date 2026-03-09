@@ -5254,6 +5254,31 @@
         },
         {
           "additionalProperties": false,
+          "description": "User has approved this command, but wants the agent to execute a replacement command instead of the originally proposed one.",
+          "properties": {
+            "approved_with_command_override": {
+              "properties": {
+                "command": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "command"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "approved_with_command_override"
+          ],
+          "title": "ApprovedWithCommandOverrideReviewDecision",
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "User has approved this command and wants to apply the proposed execpolicy amendment so future matching commands are permitted.",
           "properties": {
             "approved_execpolicy_amendment": {

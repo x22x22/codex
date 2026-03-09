@@ -129,7 +129,7 @@ impl ToolHandler for ApplyPatchHandler {
                         );
                         emitter.begin(event_ctx).await;
 
-                        let req = ApplyPatchRequest {
+                        let mut req = ApplyPatchRequest {
                             action: apply.action,
                             file_paths,
                             changes,
@@ -149,7 +149,7 @@ impl ToolHandler for ApplyPatchHandler {
                         let out = orchestrator
                             .run(
                                 &mut runtime,
-                                &req,
+                                &mut req,
                                 &tool_ctx,
                                 turn.as_ref(),
                                 turn.approval_policy.value(),
@@ -231,7 +231,7 @@ pub(crate) async fn intercept_apply_patch(
                     );
                     emitter.begin(event_ctx).await;
 
-                    let req = ApplyPatchRequest {
+                    let mut req = ApplyPatchRequest {
                         action: apply.action,
                         file_paths: approval_keys,
                         changes,
@@ -251,7 +251,7 @@ pub(crate) async fn intercept_apply_patch(
                     let out = orchestrator
                         .run(
                             &mut runtime,
-                            &req,
+                            &mut req,
                             &tool_ctx,
                             turn.as_ref(),
                             turn.approval_policy.value(),

@@ -134,7 +134,10 @@ async fn thread_start_builtin_tools_filters_model_requests() -> Result<()> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
             config: Some(HashMap::from([
-                ("experimental_use_unified_exec_tool".to_string(), json!(true)),
+                (
+                    "experimental_use_unified_exec_tool".to_string(),
+                    json!(true),
+                ),
                 ("include_apply_patch_tool".to_string(), json!(true)),
             ])),
             builtin_tools: Some(vec![
@@ -190,12 +193,7 @@ async fn thread_start_builtin_tools_filters_model_requests() -> Result<()> {
 
     assert_eq!(
         tool_names,
-        HashSet::from([
-            "exec_command",
-            "write_stdin",
-            "update_plan",
-            "view_image",
-        ])
+        HashSet::from(["exec_command", "write_stdin", "update_plan", "view_image",])
     );
 
     Ok(())

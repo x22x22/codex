@@ -144,6 +144,12 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         Some(req.exec_approval_requirement.clone())
     }
 
+    fn apply_approval_decision(&self, req: &mut UnifiedExecRequest, decision: &ReviewDecision) {
+        if let ReviewDecision::ApprovedWithCommandOverride { command } = decision {
+            req.command = command.clone();
+        }
+    }
+
     fn sandbox_mode_for_first_attempt(&self, req: &UnifiedExecRequest) -> SandboxOverride {
         sandbox_override_for_first_attempt(req.sandbox_permissions, &req.exec_approval_requirement)
     }

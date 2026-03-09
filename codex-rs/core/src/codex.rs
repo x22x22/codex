@@ -18,6 +18,7 @@ use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
 use crate::commit_attribution::commit_message_trailer_instruction;
+use crate::base_instructions::compose_base_instructions;
 use crate::compact;
 use crate::compact::InitialContextInjection;
 use crate::compact::run_inline_auto_compact_task;
@@ -357,6 +358,7 @@ impl Codex {
         agent_control: AgentControl,
         dynamic_tools: Vec<DynamicToolSpec>,
         builtin_tools: Option<Vec<String>>,
+        manual_tool_execution: bool,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
@@ -429,16 +431,24 @@ impl Codex {
             .get_default_model(&config.model, refresh_strategy)
             .await;
 
+        let model_info = models_manager.get_model_info(model.as_str(), &config).await;
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &config.features,
+            web_search_mode: config.web_search_request_mode.as_ref(),
+            session_source: session_source.clone(),
+        })
+        .with_builtin_tools(builtin_tools.clone())
+        .with_manual_tool_execution(manual_tool_execution);
         // Resolve base instructions for the session. Priority order:
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
-        // 3. base_instructions for current model
-        let model_info = models_manager.get_model_info(model.as_str(), &config).await;
+        // 3. composed base instructions for the current tool/capability set
         let base_instructions = config
             .base_instructions
             .clone()
             .or_else(|| conversation_history.get_base_instructions().map(|s| s.text))
-            .unwrap_or_else(|| model_info.get_model_instructions(config.personality));
+            .unwrap_or_else(|| compose_base_instructions(&tools_config));
 
         // Respect thread-start tools. When missing (resumed/forked threads), read from the db
         // first, then fall back to rollout-file tools.
@@ -499,6 +509,7 @@ impl Codex {
             session_source,
             dynamic_tools,
             builtin_tools,
+            manual_tool_execution,
             persist_extended_history,
             inherited_shell_snapshot,
         };
@@ -748,7 +759,8 @@ impl TurnContext {
         })
         .with_allow_login_shell(self.tools_config.allow_login_shell)
         .with_agent_roles(config.agent_roles.clone())
-        .with_builtin_tools(self.tools_config.builtin_tools.clone());
+        .with_builtin_tools(self.tools_config.builtin_tools.clone())
+        .with_manual_tool_execution(self.tools_config.manual_tool_execution);
 
         Self {
             sub_id: self.sub_id.clone(),
@@ -905,6 +917,7 @@ pub(crate) struct SessionConfiguration {
     session_source: SessionSource,
     dynamic_tools: Vec<DynamicToolSpec>,
     builtin_tools: Option<Vec<String>>,
+    manual_tool_execution: bool,
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
 }
@@ -1125,7 +1138,8 @@ impl Session {
         })
         .with_allow_login_shell(per_turn_config.permissions.allow_login_shell)
         .with_agent_roles(per_turn_config.agent_roles.clone())
-        .with_builtin_tools(session_configuration.builtin_tools.clone());
+        .with_builtin_tools(session_configuration.builtin_tools.clone())
+        .with_manual_tool_execution(session_configuration.manual_tool_execution);
 
         let cwd = session_configuration.cwd.clone();
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
@@ -4918,7 +4932,8 @@ async fn spawn_review_thread(
     })
     .with_allow_login_shell(config.permissions.allow_login_shell)
     .with_agent_roles(config.agent_roles.clone())
-    .with_builtin_tools(parent_turn_context.tools_config.builtin_tools.clone());
+    .with_builtin_tools(parent_turn_context.tools_config.builtin_tools.clone())
+    .with_manual_tool_execution(parent_turn_context.tools_config.manual_tool_execution);
 
     let review_prompt = resolved.prompt.clone();
     let provider = parent_turn_context.provider.clone();

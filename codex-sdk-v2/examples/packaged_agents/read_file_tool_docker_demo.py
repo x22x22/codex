@@ -28,10 +28,7 @@ async def main() -> None:
                     print(delta, end="", flush=True)
         print()
     finally:
-        bridge = getattr(task, "_owned_bridge", None)
-        await task.session.stop()
-        if bridge is not None:
-            bridge.shutdown()
+        await task.close()
 
 
 if __name__ == "__main__":

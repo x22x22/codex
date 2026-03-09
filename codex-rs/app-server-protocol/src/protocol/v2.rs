@@ -744,12 +744,15 @@ pub struct ConfigEdit {
     pub merge_strategy: MergeStrategy,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub enum CommandExecutionApprovalDecision {
     /// User approved the command.
     Accept,
+    /// User approved execution, but wants to replace the command before it runs.
+    #[experimental("item/commandExecution/requestApproval.overrideCommand")]
+    AcceptWithCommandOverride { command: Vec<String> },
     /// User approved the command and future prompts in the same session-scoped
     /// approval cache should run without prompting.
     AcceptForSession,
@@ -772,6 +775,9 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
     fn from(value: CoreReviewDecision) -> Self {
         match value {
             CoreReviewDecision::Approved => Self::Accept,
+            CoreReviewDecision::ApprovedWithCommandOverride { command } => {
+                Self::AcceptWithCommandOverride { command }
+            }
             CoreReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment,
             } => Self::AcceptWithExecpolicyAmendment {
@@ -1871,6 +1877,10 @@ pub struct ThreadStartParams {
     #[experimental("thread/start.builtinTools")]
     #[ts(optional = nullable)]
     pub builtin_tools: Option<Vec<String>>,
+    /// If true, require host-visible approval before executing built-in tools.
+    #[experimental("thread/start.manualToolExecution")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_tool_execution: bool,
     /// Test-only experimental field used to validate experimental gating and
     /// schema filtering behavior in a stable way.
     #[experimental("thread/start.mockExperimentalField")]
@@ -5616,6 +5626,38 @@ mod tests {
                 }),
             );
         assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn thread_start_params_round_trip_manual_tool_execution() {
+        let params: ThreadStartParams =
+            serde_json::from_value(json!({ "manualToolExecution": true }))
+                .expect("params should deserialize");
+        assert!(params.manual_tool_execution);
+
+        let serialized = serde_json::to_value(&params).expect("params should serialize");
+        let mut expected =
+            serde_json::to_value(ThreadStartParams::default()).expect("params should serialize");
+        expected
+            .as_object_mut()
+            .expect("serialized params should be an object")
+            .insert("manualToolExecution".to_string(), json!(true));
+        assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn command_execution_request_approval_response_round_trip_command_override() {
+        let response = CommandExecutionRequestApprovalResponse {
+            decision: CommandExecutionApprovalDecision::AcceptWithCommandOverride {
+                command: vec!["ls".to_string(), "-la".to_string()],
+            },
+        };
+
+        let json = serde_json::to_value(&response).expect("serialize response");
+        let parsed: CommandExecutionRequestApprovalResponse =
+            serde_json::from_value(json).expect("deserialize response");
+
+        assert_eq!(parsed, response);
     }
 
     #[test]

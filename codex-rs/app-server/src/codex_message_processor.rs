@@ -1605,6 +1605,7 @@ impl CodexMessageProcessor {
             developer_instructions,
             dynamic_tools,
             builtin_tools,
+            manual_tool_execution,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
             personality,
@@ -1650,6 +1651,7 @@ impl CodexMessageProcessor {
                 typesafe_overrides,
                 dynamic_tools,
                 builtin_tools,
+                manual_tool_execution,
                 persist_extended_history,
                 service_name,
                 experimental_raw_events,
@@ -1669,6 +1671,7 @@ impl CodexMessageProcessor {
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         builtin_tools: Option<Vec<String>>,
+        manual_tool_execution: bool,
         persist_extended_history: bool,
         service_name: Option<String>,
         experimental_raw_events: bool,
@@ -1743,6 +1746,7 @@ impl CodexMessageProcessor {
                 config,
                 core_dynamic_tools,
                 builtin_tools,
+                manual_tool_execution,
                 persist_extended_history,
                 service_name,
             )
@@ -6933,8 +6937,7 @@ fn validate_builtin_tools(tools: &[String]) -> Result<(), String> {
         }
         if name != tool {
             return Err(format!(
-                "builtin tool name has leading/trailing whitespace: {}",
-                tool
+                "builtin tool name has leading/trailing whitespace: {tool}"
             ));
         }
         if !seen.insert(name.to_string()) {

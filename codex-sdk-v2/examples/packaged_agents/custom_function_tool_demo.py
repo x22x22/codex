@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 
-from codex_sdk_v2 import Agent, FunctionTool, LocalBackendOptions, Manifest
+from codex_sdk_v2 import Agent, ApproveDecision, FunctionTool, LocalBackendOptions, Manifest
 
 
 class LookupRefundStatus(FunctionTool):
@@ -17,6 +17,9 @@ class LookupRefundStatus(FunctionTool):
         "required": ["taxpayer_id"],
         "additionalProperties": False,
     }
+
+    async def approve(self, call) -> ApproveDecision:
+        return ApproveDecision()
 
     async def run(self, arguments: dict[str, object]) -> str:
         taxpayer_id = str(arguments["taxpayer_id"])
@@ -38,10 +41,7 @@ async def main() -> None:
         )
         print(text)
     finally:
-        bridge = getattr(task, "_owned_bridge", None)
-        await task.session.stop()
-        if bridge is not None:
-            bridge.shutdown()
+        await task.close()
 
 
 if __name__ == "__main__":

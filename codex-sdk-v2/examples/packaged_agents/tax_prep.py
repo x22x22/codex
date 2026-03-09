@@ -30,7 +30,7 @@ async def main() -> None:
             "output": Dir(),
         },
     )
-    agent = Agent(manifest=manifest, user_instructions=INSTRUCTIONS)
+    agent = Agent(manifest=manifest, developer_instructions=INSTRUCTIONS)
     task = await agent.start(backend_options=LocalBackendOptions())
     try:
         async for notification in task.run(
@@ -42,10 +42,7 @@ async def main() -> None:
                     print(delta, end="", flush=True)
         print()
     finally:
-        bridge = getattr(task, "_owned_bridge", None)
-        await task.session.stop()
-        if bridge is not None:
-            bridge.shutdown()
+        await task.close()
 
 
 if __name__ == "__main__":

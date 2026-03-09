@@ -2879,6 +2879,10 @@ pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.
     Approved,
 
+    /// User has approved this command, but wants the agent to execute a
+    /// replacement command instead of the originally proposed one.
+    ApprovedWithCommandOverride { command: Vec<String> },
+
     /// User has approved this command and wants to apply the proposed execpolicy
     /// amendment so future matching commands are permitted.
     ApprovedExecpolicyAmendment {
@@ -2912,6 +2916,7 @@ impl ReviewDecision {
     pub fn to_opaque_string(&self) -> &'static str {
         match self {
             ReviewDecision::Approved => "approved",
+            ReviewDecision::ApprovedWithCommandOverride { .. } => "approved_with_command_override",
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => "approved_with_amendment",
             ReviewDecision::ApprovedForSession => "approved_for_session",
             ReviewDecision::NetworkPolicyAmendment {
