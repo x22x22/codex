@@ -3841,13 +3841,11 @@ impl ChatWidget {
                     else {
                         return;
                     };
-                    // Submissions during active final-answer streaming can race with turn
-                    // completion and strand the UI in a running state. Queue those inputs instead
-                    // of injecting immediately; `on_task_complete()` drains this FIFO via
-                    // `maybe_send_next_queued_input()`, so no typed prompt is dropped.
+                    // Plan-mode streaming and review loops cannot accept a new user turn yet.
+                    // Final-answer streaming uses pending steers instead, so those should still
+                    // submit immediately and remain visible in the pending preview.
                     let should_submit_now = self.is_session_configured()
                         && !self.is_plan_streaming_in_tui()
-                        && self.stream_controller.is_none()
                         && self.review_loop_state.is_none();
                     if should_submit_now {
                         // Submitted is emitted when user submits.
