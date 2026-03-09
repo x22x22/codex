@@ -340,7 +340,6 @@ impl ShellHandler {
             &exec_params.cwd,
         )
         .map_err(FunctionCallError::RespondToModel)?;
-
         // Approval policy guard for explicit escalation in non-OnRequest modes.
         if exec_params.sandbox_permissions.requests_sandbox_override()
             && !matches!(

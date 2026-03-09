@@ -28,6 +28,7 @@ use codex_network_proxy::NetworkProxy;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
+use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 pub use codex_protocol::models::SandboxPermissions;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -161,6 +162,82 @@ pub(crate) fn normalize_additional_permissions(
             }),
         macos: additional_permissions.macos,
     })
+}
+
+pub(crate) fn merge_permission_profiles(
+    base: Option<&PermissionProfile>,
+    permissions: Option<&PermissionProfile>,
+) -> Option<PermissionProfile> {
+    let Some(permissions) = permissions else {
+        return base.cloned().filter(|profile| !profile.is_empty());
+    };
+
+    let merged = match base {
+        Some(base) => PermissionProfile {
+            network: merge_network_permissions(base.network.as_ref(), permissions.network.as_ref()),
+            file_system: merge_file_system_permissions(
+                base.file_system.as_ref(),
+                permissions.file_system.as_ref(),
+            ),
+            macos: merge_macos_seatbelt_profile_extensions(
+                base.macos.as_ref(),
+                permissions.macos.as_ref(),
+            ),
+        },
+        None => permissions.clone(),
+    };
+
+    (!merged.is_empty()).then_some(merged)
+}
+
+fn merge_network_permissions(
+    base: Option<&NetworkPermissions>,
+    permissions: Option<&NetworkPermissions>,
+) -> Option<NetworkPermissions> {
+    match (base, permissions) {
+        (Some(base), Some(permissions)) => Some(NetworkPermissions {
+            enabled: Some(base.enabled == Some(true) || permissions.enabled == Some(true)),
+        })
+        .filter(|profile| !profile.is_empty()),
+        (Some(base), None) => Some(base.clone()).filter(|profile| !profile.is_empty()),
+        (None, Some(permissions)) => {
+            Some(permissions.clone()).filter(|profile| !profile.is_empty())
+        }
+        (None, None) => None,
+    }
+}
+
+fn merge_file_system_permissions(
+    base: Option<&FileSystemPermissions>,
+    permissions: Option<&FileSystemPermissions>,
+) -> Option<FileSystemPermissions> {
+    let merge_paths = |base: Option<&Vec<AbsolutePathBuf>>,
+                       permissions: Option<&Vec<AbsolutePathBuf>>|
+     -> Option<Vec<AbsolutePathBuf>> {
+        match (base, permissions) {
+            (Some(base), Some(permissions)) => Some(dedup_absolute_paths(
+                base.iter()
+                    .chain(permissions.iter())
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )),
+            (Some(base), None) => Some(base.clone()),
+            (None, Some(permissions)) => Some(permissions.clone()),
+            (None, None) => None,
+        }
+    };
+
+    let merged = match (base, permissions) {
+        (Some(base), Some(permissions)) => FileSystemPermissions {
+            read: merge_paths(base.read.as_ref(), permissions.read.as_ref()),
+            write: merge_paths(base.write.as_ref(), permissions.write.as_ref()),
+        },
+        (Some(base), None) => base.clone(),
+        (None, Some(permissions)) => permissions.clone(),
+        (None, None) => return None,
+    };
+
+    (!merged.is_empty()).then_some(merged)
 }
 
 fn normalize_permission_paths(
@@ -588,6 +665,7 @@ mod tests {
     use super::EffectiveSandboxPermissions;
     use super::SandboxManager;
     use super::merge_file_system_policy_with_additional_permissions;
+    use super::merge_permission_profiles;
     use super::normalize_additional_permissions;
     use super::sandbox_policy_with_additional_permissions;
     use super::should_require_platform_sandbox;
@@ -768,6 +846,57 @@ mod tests {
                 read: Some(vec![path.clone()]),
                 write: Some(vec![path]),
             })
+        );
+    }
+
+    #[test]
+    fn merge_permission_profiles_unions_network_and_file_system_permissions() {
+        let temp_dir = TempDir::new().expect("create temp dir");
+        let root = AbsolutePathBuf::from_absolute_path(
+            canonicalize(temp_dir.path()).expect("canonicalize temp dir"),
+        )
+        .expect("absolute temp dir");
+        let base_read = root.join("base-read").expect("base read path");
+        let shared_write = root.join("shared-write").expect("shared write path");
+        let extra_read = root.join("extra-read").expect("extra read path");
+        let extra_write = root.join("extra-write").expect("extra write path");
+
+        let merged = merge_permission_profiles(
+            Some(&PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(false),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![base_read.clone()]),
+                    write: Some(vec![shared_write.clone()]),
+                }),
+                ..Default::default()
+            }),
+            Some(&PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![base_read.clone(), extra_read.clone()]),
+                    write: Some(vec![shared_write.clone(), extra_write.clone()]),
+                }),
+                ..Default::default()
+            }),
+        )
+        .expect("merged permissions");
+
+        assert_eq!(
+            merged,
+            PermissionProfile {
+                network: Some(NetworkPermissions {
+                    enabled: Some(true),
+                }),
+                file_system: Some(FileSystemPermissions {
+                    read: Some(vec![base_read, extra_read]),
+                    write: Some(vec![shared_write, extra_write]),
+                }),
+                ..Default::default()
+            }
         );
     }
 
