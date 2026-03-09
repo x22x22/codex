@@ -266,7 +266,7 @@ async fn unicode_output(login: bool) -> anyhow::Result<()> {
     mount_shell_responses_with_timeout(
         &harness,
         call_id,
-        "git -c alias.say='!printf \"%s\" \"naïve_café\"' say",
+        "echo 'naïve_café'",
         Some(login),
         MEDIUM_TIMEOUT,
     )
