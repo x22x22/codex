@@ -21,6 +21,27 @@ The result is a successful prototype, with one important caveat:
 
 The current transport is still bridge-based delegation, not the final event-by-event host-delegation model from the RFC.
 
+### Prototype architecture
+
+```mermaid
+flowchart LR
+    subgraph Host["Host SDK"]
+        SDK["AgentSDKv2"]
+        Bridge["Host Responses bridge"]
+        Provider["Upstream provider"]
+    end
+
+    subgraph Runtime["Runtime"]
+        AppServer["Codex app-server"]
+        Codex["Codex runtime"]
+    end
+
+    SDK --> AppServer
+    AppServer --> Codex
+    Codex --> Bridge
+    Bridge --> Provider
+```
+
 ## 2. Changes made in Codex
 
 To support the prototype, Codex needed a handful of structural changes.
@@ -55,6 +76,22 @@ In the prototype:
 - the host bridge then makes the real upstream HTTP request, injects `Authorization`, and streams the provider response bytes back down to Codex unchanged
 
 So the host really is performing the upstream HTTP request in this prototype, but Codex still thinks it is talking to a Responses-compatible HTTP endpoint. The transport contract is still HTTP proxying, not app-server-level request delegation.
+
+```mermaid
+sequenceDiagram
+    participant SDK as "Host SDK"
+    participant Codex as "Codex runtime"
+    participant Bridge as "Host bridge"
+    participant Provider as "Model provider"
+
+    SDK->>Codex: thread/start + sdkDelegation.bridgeUrl
+    SDK->>Codex: turn/start
+    Codex->>Bridge: HTTP POST /v1/responses
+    Bridge->>Provider: HTTP POST /v1/responses + auth
+    Provider-->>Bridge: streaming response
+    Bridge-->>Codex: streaming response
+    Codex-->>SDK: app-server events + tool pause-points
+```
 
 ### Built-in tool selection and host-visible control flow
 
@@ -184,6 +221,23 @@ That future-state is what unlocks:
 - a better multi-container story because the host is in the loop at the app-server event layer rather than only behind an HTTP shim
 
 This is the most important architectural gap to close.
+
+```mermaid
+sequenceDiagram
+    participant SDK as "Host SDK"
+    participant AppServer as "Codex app-server"
+    participant Codex as "Codex runtime"
+    participant Provider as "Model provider"
+
+    SDK->>AppServer: thread/start
+    SDK->>AppServer: turn/start
+    AppServer->>SDK: model/request
+    SDK->>Provider: provider request + auth
+    Provider-->>SDK: streaming provider events
+    SDK-->>AppServer: model/streamEvent*
+    AppServer->>Codex: normalized turn progression
+    Codex-->>SDK: tool approvals / pending tool calls / output
+```
 
 ### Generate typed SDK protocol models
 
@@ -381,6 +435,19 @@ Deliverables:
 - migration strategy from Universal Computer package users
 - load, reliability, and recovery testing
 - documentation and support model
+
+### Roadmap at a glance
+
+```mermaid
+flowchart LR
+    P1["Phase 1<br/>Architecture + protocol contracts"]
+    P2["Phase 2<br/>Full delegation transport"]
+    P3["Phase 3<br/>Host-owned rollout + resume"]
+    P4["Phase 4<br/>Capabilities + backend generalization"]
+    P5["Phase 5<br/>Multi-provider + hardening"]
+
+    P1 --> P2 --> P3 --> P4 --> P5
+```
 
 ## Final assessment
 
