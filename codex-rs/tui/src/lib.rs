@@ -1024,6 +1024,29 @@ pub(crate) fn cwds_differ(current_cwd: &Path, session_cwd: &Path) -> bool {
     }
 }
 
+#[cfg(test)]
+fn repo_roots_match(a: &Path, b: &Path) -> bool {
+    repo_root_matches(get_git_repo_root(a), get_git_repo_root(b))
+}
+
+fn repo_root_matches(
+    selected_repo_root: Option<PathBuf>,
+    session_repo_root: Option<PathBuf>,
+) -> bool {
+    match (selected_repo_root, session_repo_root) {
+        (Some(selected_repo_root), Some(session_repo_root)) => match (
+            path_utils::normalize_for_path_comparison(&selected_repo_root),
+            path_utils::normalize_for_path_comparison(&session_repo_root),
+        ) {
+            (Ok(selected_repo_root), Ok(session_repo_root)) => {
+                selected_repo_root == session_repo_root
+            }
+            _ => selected_repo_root == session_repo_root,
+        },
+        _ => false,
+    }
+}
+
 pub(crate) enum ResolveCwdOutcome {
     Continue(Option<PathBuf>),
     Exit,
@@ -1043,6 +1066,7 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     let Some(history_cwd) = read_session_cwd(config, thread_id, path).await else {
         return Ok(ResolveCwdOutcome::Continue(None));
     };
+    let session_repo_root = get_git_repo_root(&history_cwd);
     let selected_cwd = if allow_prompt && cwds_differ(current_cwd, &history_cwd) {
         let selection_outcome =
             cwd_prompt::run_cwd_selection_prompt(tui, action, current_cwd, &history_cwd).await?;
@@ -1054,6 +1078,8 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
     } else {
         history_cwd
     };
+    let selected_cwd_matches_session_repo =
+        repo_root_matches(get_git_repo_root(&selected_cwd), session_repo_root);
 
     let session_branch = read_session_meta_line(path)
         .await
@@ -1062,7 +1088,7 @@ pub(crate) async fn resolve_cwd_for_resume_or_fork(
         .filter(|branch| !branch.is_empty());
     if allow_prompt
         && let Some(session_branch) = session_branch
-        && get_git_repo_root(&selected_cwd).is_some()
+        && selected_cwd_matches_session_repo
     {
         let current_branch = current_branch_name(&selected_cwd).await;
         if current_branch.as_deref() != Some(session_branch.as_str()) {
@@ -1417,6 +1443,24 @@ mod tests {
             .expect("expected cwd");
         assert_eq!(session_cwd, latest);
         assert!(cwds_differ(&current, &session_cwd));
+        Ok(())
+    }
+
+    #[test]
+    fn repo_roots_match_only_for_same_repo() -> std::io::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let repo_a = temp_dir.path().join("repo-a");
+        let repo_b = temp_dir.path().join("repo-b");
+        let repo_a_nested = repo_a.join("nested");
+        let repo_b_nested = repo_b.join("nested");
+        std::fs::create_dir_all(repo_a.join(".git"))?;
+        std::fs::create_dir_all(repo_b.join(".git"))?;
+        std::fs::create_dir_all(&repo_a_nested)?;
+        std::fs::create_dir_all(&repo_b_nested)?;
+
+        assert!(repo_roots_match(&repo_a, &repo_a_nested));
+        assert!(!repo_roots_match(&repo_a_nested, &repo_b_nested));
+        assert!(!repo_roots_match(&repo_a, temp_dir.path()));
         Ok(())
     }
 
