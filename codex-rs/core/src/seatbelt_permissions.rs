@@ -112,6 +112,14 @@ pub(crate) fn build_seatbelt_extensions(
             "(allow mach-lookup\n  (global-name-prefix \"org.chromium.Chromium.MachPortRendezvousServer.\"))"
                 .to_string(),
         );
+        clauses.push(
+            "(allow mach-register\n  (global-name-prefix \"org.chromium.crashpad.child_port_handshake.\"))"
+                .to_string(),
+        );
+        clauses.push(
+            "(allow mach-lookup\n  (global-name-prefix \"org.chromium.crashpad.child_port_handshake.\"))"
+                .to_string(),
+        );
     }
 
     if clauses.is_empty() {
@@ -227,7 +235,7 @@ mod tests {
     }
 
     #[test]
-    fn chromium_rendezvous_emits_scoped_mach_rules() {
+    fn chromium_permissions_emit_scoped_mach_rules() {
         let policy = build_seatbelt_extensions(&MacOsSeatbeltProfileExtensions {
             macos_chromium: true,
             ..Default::default()
@@ -238,6 +246,11 @@ mod tests {
             policy
                 .policy
                 .contains("org.chromium.Chromium.MachPortRendezvousServer.")
+        );
+        assert!(
+            policy
+                .policy
+                .contains("org.chromium.crashpad.child_port_handshake.")
         );
     }
 
