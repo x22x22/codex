@@ -11561,7 +11561,8 @@
       "HookEventName": {
         "enum": [
           "sessionStart",
-          "stop"
+          "stop",
+          "afterToolUse"
         ],
         "type": "string"
       },

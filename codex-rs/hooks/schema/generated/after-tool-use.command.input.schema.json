@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+    "NullableString": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "properties": {
+    "call_id": {
+      "type": "string"
+    },
+    "cwd": {
+      "type": "string"
+    },
+    "duration_ms": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "executed": {
+      "type": "boolean"
+    },
+    "hook_event_name": {
+      "const": "AfterToolUse",
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "mutating": {
+      "type": "boolean"
+    },
+    "output_preview": {
+      "type": "string"
+    },
+    "permission_mode": {
+      "enum": [
+        "default",
+        "acceptEdits",
+        "plan",
+        "dontAsk",
+        "bypassPermissions"
+      ],
+      "type": "string"
+    },
+    "sandbox": {
+      "type": "string"
+    },
+    "sandbox_policy": {
+      "type": "string"
+    },
+    "session_id": {
+      "type": "string"
+    },
+    "success": {
+      "type": "boolean"
+    },
+    "tool_name": {
+      "type": "string"
+    },
+    "transcript_path": {
+      "$ref": "#/definitions/NullableString"
+    },
+    "turn_id": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "call_id",
+    "cwd",
+    "duration_ms",
+    "executed",
+    "hook_event_name",
+    "model",
+    "mutating",
+    "output_preview",
+    "permission_mode",
+    "sandbox",
+    "sandbox_policy",
+    "session_id",
+    "success",
+    "tool_name",
+    "transcript_path",
+    "turn_id"
+  ],
+  "title": "after-tool-use.command.input",
+  "type": "object"
+}

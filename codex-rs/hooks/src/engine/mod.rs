@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use codex_config::ConfigLayerStack;
 use codex_protocol::protocol::HookRunSummary;
 
+use crate::events::after_tool_use::AfterToolUseOutcome;
+use crate::events::after_tool_use::AfterToolUseRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
@@ -46,6 +48,7 @@ impl ConfiguredHandler {
         match self.event_name {
             codex_protocol::protocol::HookEventName::SessionStart => "session-start",
             codex_protocol::protocol::HookEventName::Stop => "stop",
+            codex_protocol::protocol::HookEventName::AfterToolUse => "after-tool-use",
         }
     }
 }
@@ -105,5 +108,19 @@ impl ClaudeHooksEngine {
 
     pub(crate) async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         crate::events::stop::run(&self.handlers, &self.shell, request).await
+    }
+
+    pub(crate) fn preview_after_tool_use(
+        &self,
+        request: &AfterToolUseRequest,
+    ) -> Vec<HookRunSummary> {
+        crate::events::after_tool_use::preview(&self.handlers, request)
+    }
+
+    pub(crate) async fn run_after_tool_use(
+        &self,
+        request: AfterToolUseRequest,
+    ) -> AfterToolUseOutcome {
+        crate::events::after_tool_use::run(&self.handlers, &self.shell, request).await
     }
 }

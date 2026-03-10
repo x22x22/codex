@@ -13,6 +13,7 @@ use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
+use codex_hooks::AfterToolUseRequest;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
 use codex_hooks::HookPayload;
@@ -497,6 +498,50 @@ async fn dispatch_after_tool_use_hook(
                 )));
             }
         }
+    }
+
+    let sandbox = sandbox_tag(
+        &turn.sandbox_policy,
+        turn.windows_sandbox_level,
+        turn.features.enabled(Feature::UseLinuxSandboxBwrap),
+    )
+    .to_string();
+    let permission_mode = match turn.approval_policy.value() {
+        crate::protocol::AskForApproval::Never => "bypassPermissions",
+        crate::protocol::AskForApproval::UnlessTrusted
+        | crate::protocol::AskForApproval::OnFailure
+        | crate::protocol::AskForApproval::OnRequest
+        | crate::protocol::AskForApproval::Reject(_) => "default",
+    }
+    .to_string();
+    let after_tool_use_request = AfterToolUseRequest {
+        session_id: session.conversation_id,
+        turn_id: turn.sub_id.clone(),
+        call_id: invocation.call_id.clone(),
+        tool_name: invocation.tool_name.clone(),
+        cwd: turn.cwd.clone(),
+        transcript_path: session.current_rollout_path().await,
+        model: turn.model_info.slug.clone(),
+        permission_mode,
+        executed: dispatch.executed,
+        success: dispatch.success,
+        duration_ms: u64::try_from(dispatch.duration.as_millis()).unwrap_or(u64::MAX),
+        mutating: dispatch.mutating,
+        sandbox,
+        sandbox_policy: sandbox_policy_tag(&turn.sandbox_policy).to_string(),
+        output_preview: dispatch.output_preview.clone(),
+    };
+    let after_tool_use_outcome = session
+        .hooks()
+        .run_after_tool_use(after_tool_use_request)
+        .await;
+    if after_tool_use_outcome.should_stop {
+        let reason = after_tool_use_outcome
+            .stop_reason
+            .unwrap_or_else(|| "after_tool_use hook stopped the operation".to_string());
+        return Some(FunctionCallError::Fatal(format!(
+            "after_tool_use hook stopped the operation: {reason}"
+        )));
     }
 
     None

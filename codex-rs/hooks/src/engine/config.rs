@@ -12,6 +12,8 @@ pub(crate) struct HookEvents {
     pub session_start: Vec<MatcherGroup>,
     #[serde(rename = "Stop", default)]
     pub stop: Vec<MatcherGroup>,
+    #[serde(rename = "AfterToolUse", default)]
+    pub after_tool_use: Vec<MatcherGroup>,
 }
 
 #[derive(Debug, Default, Deserialize)]
