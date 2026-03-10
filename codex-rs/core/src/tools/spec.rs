@@ -26,6 +26,7 @@ use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ConfigShellToolType;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
@@ -718,7 +719,7 @@ fn create_collab_input_items_schema() -> JsonSchema {
     }
 }
 
-fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
+fn create_spawn_agent_tool(config: &ToolsConfig, available_models: &[ModelPreset]) -> ToolSpec {
     let properties = BTreeMap::from([
         (
             "message".to_string(),
@@ -739,6 +740,24 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             },
         ),
         (
+            "model".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional model slug for the spawned agent. Must match one of the visible models listed in this tool description."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "reasoning_effort".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional reasoning effort override for the spawned agent. If `model` is omitted, this is validated against the inherited parent model."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
             "fork_context".to_string(),
             JsonSchema::Boolean {
                 description: Some(
@@ -749,12 +768,14 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
         ),
     ]);
 
-    ToolSpec::Function(ResponsesApiTool {
-        name: "spawn_agent".to_string(),
-        description: r#"Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
+    let description = format!(
+        r#"Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with the agent. This spawn_agent tool gives you access to smaller and more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below when using it.
+
+### Available models
+{}
 
 ### When to delegate vs. do the subtask yourself
-- First, quickly analyze the overall user task and form a succinct high-level plan. Identify which tasks are immediate blockers on the critical path, and which tasks are sidecar tasks that are needed but can run in parallel without blocking the next local step. As part of that plan, explicitly decide what immediate task you should do locally right now. Do this planning step before delegating to agents so you do not hand off the immediate blocking task to a submodel and then waste time waiting on it.
+- First, quickly analyze the overall user task and form a succinct high-level plan. Identify which tasks are immediate blockers on the critical path, and which tasks are sidecar tasks that are needed and can run in parallel without blocking the next local step. As part of that plan, explicitly decide what immediate task you should do locally right now. Do this planning step before delegating to agents so you do not hand off the immediate blocking task to a submodel and then waste time waiting on it.
 - Use the smaller subagent when a subtask is easy enough for it to handle and can run in parallel with your local work. Prefer delegating concrete, bounded sidecar tasks that materially advance the main task without blocking your immediate next local step.
 - Do not delegate urgent blocking work when your immediate next step depends on that result. If the very next action is blocked on that task, the main rollout should usually do it locally to keep the critical path moving.
 - Keep work local when the subtask is too difficult to delegate well and when it is tightly coupled, urgent, or likely to block your immediate next step.
@@ -780,8 +801,13 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
 - Run multiple independent information-seeking subtasks in parallel when you have distinct questions that can be answered independently.
 - Split implementation into disjoint codebase slices and spawn multiple agents for them in parallel when the write scopes do not overlap.
 - Delegate verification only when it can run in parallel with ongoing implementation and is likely to catch a concrete risk before final integration.
-- The key is to find opportunities to spawn multiple independent subtasks in parallel within the same round, while ensuring each subtask is well-defined, self-contained, and materially advances the main task."#
-            .to_string(),
+- The key is to find opportunities to spawn multiple independent subtasks in parallel within the same round, while ensuring each subtask is well-defined, self-contained, and materially advances the main task."#,
+        format_spawn_agent_model_catalog(available_models),
+    );
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "spawn_agent".to_string(),
+        description,
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -789,6 +815,43 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             additional_properties: Some(false.into()),
         },
     })
+}
+
+fn format_spawn_agent_model_catalog(available_models: &[ModelPreset]) -> String {
+    if available_models.is_empty() {
+        return "No visible models are currently available.".to_string();
+    }
+
+    available_models
+        .iter()
+        .filter(|model| model.show_in_picker)
+        .map(format_spawn_agent_model_entry)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_spawn_agent_model_entry(model: &ModelPreset) -> String {
+    let reasoning_efforts = model
+        .supported_reasoning_efforts
+        .iter()
+        .map(|effort| {
+            let default_suffix = if effort.effort == model.default_reasoning_effort {
+                " (default)"
+            } else {
+                ""
+            };
+            format!(
+                "`{}`{}: {}",
+                effort.effort, default_suffix, effort.description
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    format!(
+        "- `{}` ({}) — {} Supported reasoning efforts: {}",
+        model.model, model.display_name, model.description, reasoning_efforts
+    )
 }
 
 fn create_spawn_agents_on_csv_tool() -> ToolSpec {
@@ -1807,6 +1870,16 @@ pub(crate) fn build_specs(
     app_tools: Option<HashMap<String, ToolInfo>>,
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
+    build_specs_with_available_models(config, mcp_tools, app_tools, dynamic_tools, &[])
+}
+
+pub(crate) fn build_specs_with_available_models(
+    config: &ToolsConfig,
+    mcp_tools: Option<HashMap<String, rmcp::model::Tool>>,
+    app_tools: Option<HashMap<String, ToolInfo>>,
+    dynamic_tools: &[DynamicToolSpec],
+    available_models: &[ModelPreset],
+) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::ArtifactsHandler;
     use crate::tools::handlers::DynamicToolHandler;
@@ -2019,7 +2092,7 @@ pub(crate) fn build_specs(
 
     if config.collab_tools {
         let multi_agent_handler = Arc::new(MultiAgentHandler);
-        builder.push_spec(create_spawn_agent_tool(config));
+        builder.push_spec(create_spawn_agent_tool(config, available_models));
         builder.push_spec(create_send_input_tool());
         builder.push_spec(create_resume_agent_tool());
         builder.push_spec(create_wait_tool());
@@ -2084,6 +2157,7 @@ mod tests {
     use crate::config::test_config;
     use crate::models_manager::manager::ModelsManager;
     use crate::models_manager::model_info::with_config_overrides;
+    use crate::test_support::all_model_presets;
     use crate::tools::registry::ConfiguredToolSpec;
     use codex_protocol::openai_models::InputModality;
     use codex_protocol::openai_models::ModelInfo;
@@ -2422,6 +2496,71 @@ mod tests {
                 default_mode_request_user_input: true,
             })
         );
+    }
+
+    #[test]
+    fn spawn_agent_tool_schema_includes_model_overrides() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Collab);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+
+        let tool = create_spawn_agent_tool(&tools_config, all_model_presets().as_slice());
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+            panic!("expected function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("expected object schema");
+        };
+
+        assert!(properties.contains_key("model"));
+        assert!(properties.contains_key("reasoning_effort"));
+    }
+
+    #[test]
+    fn spawn_agent_tool_description_includes_visible_models_only() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::Collab);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let all_models = all_model_presets();
+        let visible_model = all_models
+            .iter()
+            .find(|model| model.show_in_picker)
+            .expect("expected a visible model")
+            .clone();
+        let hidden_model = all_models
+            .iter()
+            .find(|model| !model.show_in_picker)
+            .expect("expected a hidden model")
+            .clone();
+
+        let tool = create_spawn_agent_tool(
+            &tools_config,
+            &[visible_model.clone(), hidden_model.clone()],
+        );
+        let ToolSpec::Function(ResponsesApiTool { description, .. }) = tool else {
+            panic!("expected function tool");
+        };
+
+        assert!(description.contains("### Available models"));
+        assert!(description.contains(&format!("`{}`", visible_model.model)));
+        assert!(description.contains(&visible_model.description));
+        assert!(!description.contains(&format!("`{}`", hidden_model.model)));
     }
 
     #[test]
