@@ -38,6 +38,7 @@ use serde::Serialize;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
@@ -96,6 +97,8 @@ pub(crate) struct ToolsConfig {
     shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_backend: UnifiedExecBackendConfig,
     pub allow_login_shell: bool,
+    pub requested_builtin_tools: Option<Vec<String>>,
+    pub manual_tool_execution: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
     pub web_search_config: Option<WebSearchConfig>,
@@ -204,6 +207,8 @@ impl ToolsConfig {
             shell_command_backend,
             unified_exec_backend,
             allow_login_shell: true,
+            requested_builtin_tools: None,
+            manual_tool_execution: false,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
             web_search_config: None,
@@ -236,6 +241,16 @@ impl ToolsConfig {
         self
     }
 
+    pub fn with_builtin_tools(mut self, builtin_tools: Option<Vec<String>>) -> Self {
+        self.requested_builtin_tools = builtin_tools;
+        self
+    }
+
+    pub fn with_manual_tool_execution(mut self, manual_tool_execution: bool) -> Self {
+        self.manual_tool_execution = manual_tool_execution;
+        self
+    }
+
     pub fn with_web_search_config(mut self, web_search_config: Option<WebSearchConfig>) -> Self {
         self.web_search_config = web_search_config;
         self
@@ -246,6 +261,78 @@ impl ToolsConfig {
         nested.code_mode_enabled = false;
         nested
     }
+
+    pub fn builtin_tool_enabled(&self, tool_name: &str) -> bool {
+        self.requested_builtin_tools
+            .as_ref()
+            .is_none_or(|requested| requested.iter().any(|name| name == tool_name))
+    }
+
+    pub fn should_force_manual_tool_execution(&self) -> bool {
+        self.manual_tool_execution
+    }
+}
+
+fn builtin_tool_names() -> BTreeSet<&'static str> {
+    BTreeSet::from([
+        "apply_patch",
+        "artifacts",
+        "close_agent",
+        "code_mode",
+        "container.exec",
+        "exec_command",
+        "grep_files",
+        "image_generation",
+        "js_repl",
+        "js_repl_reset",
+        "list_dir",
+        "list_mcp_resource_templates",
+        "list_mcp_resources",
+        "local_shell",
+        "read_file",
+        "read_mcp_resource",
+        "report_agent_job_result",
+        "request_permissions",
+        "request_user_input",
+        "resume_agent",
+        "search_tool_bm25",
+        "send_input",
+        "shell",
+        "shell_command",
+        "spawn_agent",
+        "spawn_agents_on_csv",
+        "test_sync_tool",
+        "update_plan",
+        "view_image",
+        "wait",
+        "web_search",
+        "write_stdin",
+    ])
+}
+
+pub fn validate_builtin_tools_request(requested_builtin_tools: &[String]) -> Result<(), String> {
+    let known_names = builtin_tool_names();
+    let invalid_names = requested_builtin_tools
+        .iter()
+        .filter(|name| !known_names.contains(name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !invalid_names.is_empty() {
+        return Err(format!(
+            "unknown builtin tool name(s): {}",
+            invalid_names.join(", ")
+        ));
+    }
+    if requested_builtin_tools
+        .iter()
+        .any(|name| name == "write_stdin")
+        && !requested_builtin_tools
+            .iter()
+            .any(|name| name == "exec_command")
+    {
+        return Err("builtinTools cannot enable write_stdin without exec_command".to_string());
+    }
+    Ok(())
 }
 
 fn supports_image_generation(model_info: &ModelInfo) -> bool {
@@ -2146,10 +2233,10 @@ pub(crate) fn build_specs(
 
     if config.shell_type != ConfigShellToolType::Disabled {
         // Always register shell aliases so older prompts remain compatible.
-        builder.register_handler("shell", shell_handler.clone());
-        builder.register_handler("container.exec", shell_handler.clone());
-        builder.register_handler("local_shell", shell_handler);
-        builder.register_handler("shell_command", shell_command_handler);
+        builder.register_builtin_handler("shell", shell_handler.clone());
+        builder.register_builtin_handler("container.exec", shell_handler.clone());
+        builder.register_builtin_handler("local_shell", shell_handler);
+        builder.register_builtin_handler("shell_command", shell_command_handler);
     }
 
     if mcp_tools.is_some() {
@@ -2253,7 +2340,7 @@ pub(crate) fn build_specs(
                 );
             }
         }
-        builder.register_handler("apply_patch", apply_patch_handler);
+        builder.register_builtin_handler("apply_patch", apply_patch_handler);
     }
 
     if config
@@ -3983,6 +4070,51 @@ mod tests {
         assert!(description.contains("(None currently enabled)"));
         assert!(description.contains("available apps."));
         assert!(!description.contains("{{app_names}}"));
+    }
+
+    #[test]
+    fn builtin_tools_allowlist_reports_enabled_builtin_names() {
+        let features = Features::with_defaults();
+        let model_info = model_info_from_models_json("gpt-5-codex");
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        })
+        .with_builtin_tools(Some(vec!["apply_patch".to_string()]));
+
+        assert!(tools_config.builtin_tool_enabled("apply_patch"));
+        assert!(!tools_config.builtin_tool_enabled("update_plan"));
+        assert!(!tools_config.builtin_tool_enabled("request_user_input"));
+    }
+
+    #[test]
+    fn validate_builtin_tools_request_rejects_invalid_name() {
+        assert_eq!(
+            validate_builtin_tools_request(&["not_a_tool".to_string()]),
+            Err("unknown builtin tool name(s): not_a_tool".to_string())
+        );
+    }
+
+    #[test]
+    fn validate_builtin_tools_request_accepts_alias_names() {
+        assert_eq!(
+            validate_builtin_tools_request(&[
+                "shell".to_string(),
+                "local_shell".to_string(),
+                "container.exec".to_string(),
+            ]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validate_builtin_tools_request_requires_exec_for_write_stdin() {
+        assert_eq!(
+            validate_builtin_tools_request(&["write_stdin".to_string()]),
+            Err("builtinTools cannot enable write_stdin without exec_command".to_string())
+        );
     }
 
     #[test]

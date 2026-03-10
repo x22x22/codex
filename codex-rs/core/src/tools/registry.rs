@@ -123,11 +123,18 @@ where
 
 pub struct ToolRegistry {
     handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
+    builtin_handler_names: std::collections::HashSet<String>,
 }
 
 impl ToolRegistry {
-    fn new(handlers: HashMap<String, Arc<dyn AnyToolHandler>>) -> Self {
-        Self { handlers }
+    fn new(
+        handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
+        builtin_handler_names: std::collections::HashSet<String>,
+    ) -> Self {
+        Self {
+            handlers,
+            builtin_handler_names,
+        }
     }
 
     fn handler(&self, name: &str) -> Option<Arc<dyn AnyToolHandler>> {
@@ -147,6 +154,16 @@ impl ToolRegistry {
         invocation: ToolInvocation,
     ) -> Result<AnyToolResult, FunctionCallError> {
         let tool_name = invocation.tool_name.clone();
+        if self.builtin_handler_names.contains(tool_name.as_str())
+            && !invocation
+                .turn
+                .tools_config
+                .builtin_tool_enabled(tool_name.as_str())
+        {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "unsupported call: {tool_name}"
+            )));
+        }
         let call_id_owned = invocation.call_id.clone();
         let otel = invocation.turn.session_telemetry.clone();
         let payload_for_response = invocation.payload.clone();
@@ -301,19 +318,22 @@ impl ToolRegistry {
 pub struct ConfiguredToolSpec {
     pub spec: ToolSpec,
     pub supports_parallel_tool_calls: bool,
+    pub builtin: bool,
 }
 
 impl ConfiguredToolSpec {
-    pub fn new(spec: ToolSpec, supports_parallel_tool_calls: bool) -> Self {
+    pub fn new(spec: ToolSpec, supports_parallel_tool_calls: bool, builtin: bool) -> Self {
         Self {
             spec,
             supports_parallel_tool_calls,
+            builtin,
         }
     }
 }
 
 pub struct ToolRegistryBuilder {
     handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
+    builtin_handler_names: std::collections::HashSet<String>,
     specs: Vec<ConfiguredToolSpec>,
 }
 
@@ -321,6 +341,7 @@ impl ToolRegistryBuilder {
     pub fn new() -> Self {
         Self {
             handlers: HashMap::new(),
+            builtin_handler_names: std::collections::HashSet::new(),
             specs: Vec::new(),
         }
     }
@@ -334,8 +355,27 @@ impl ToolRegistryBuilder {
         spec: ToolSpec,
         supports_parallel_tool_calls: bool,
     ) {
-        self.specs
-            .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
+        self.specs.push(ConfiguredToolSpec::new(
+            spec,
+            supports_parallel_tool_calls,
+            false,
+        ));
+    }
+
+    pub fn push_builtin_spec(&mut self, spec: ToolSpec) {
+        self.push_builtin_spec_with_parallel_support(spec, false);
+    }
+
+    pub fn push_builtin_spec_with_parallel_support(
+        &mut self,
+        spec: ToolSpec,
+        supports_parallel_tool_calls: bool,
+    ) {
+        self.specs.push(ConfiguredToolSpec::new(
+            spec,
+            supports_parallel_tool_calls,
+            true,
+        ));
     }
 
     pub fn register_handler<H>(&mut self, name: impl Into<String>, handler: Arc<H>)
@@ -351,6 +391,15 @@ impl ToolRegistryBuilder {
         {
             warn!("overwriting handler for tool {name}");
         }
+    }
+
+    pub fn register_builtin_handler<H>(&mut self, name: impl Into<String>, handler: Arc<H>)
+    where
+        H: ToolHandler + 'static,
+    {
+        let name = name.into();
+        self.builtin_handler_names.insert(name.clone());
+        self.register_handler(name, handler);
     }
 
     // TODO(jif) for dynamic tools.
@@ -372,7 +421,7 @@ impl ToolRegistryBuilder {
     // }
 
     pub fn build(self) -> (Vec<ConfiguredToolSpec>, ToolRegistry) {
-        let registry = ToolRegistry::new(self.handlers);
+        let registry = ToolRegistry::new(self.handlers, self.builtin_handler_names);
         (self.specs, registry)
     }
 }
