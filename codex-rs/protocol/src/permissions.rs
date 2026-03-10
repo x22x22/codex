@@ -188,12 +188,13 @@ impl FileSystemSandboxPolicy {
 
                 match &entry.path {
                     FileSystemPath::Path { .. } => true,
-                    FileSystemPath::Special { value } => !matches!(
-                        value,
-                        FileSystemSpecialPath::Root
-                            | FileSystemSpecialPath::Minimal
-                            | FileSystemSpecialPath::Unknown { .. }
-                    ),
+                    FileSystemPath::Special { value } => match value {
+                        FileSystemSpecialPath::Root => entry.access == FileSystemAccessMode::None,
+                        FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => {
+                            false
+                        }
+                        _ => true,
+                    },
                 }
             })
     }
@@ -397,11 +398,19 @@ impl FileSystemSandboxPolicy {
             return Vec::new();
         }
 
+        let root = AbsolutePathBuf::from_absolute_path(cwd)
+            .ok()
+            .map(|cwd| absolute_root_path_for_cwd(&cwd));
+
         dedup_absolute_paths(
             self.resolved_entries_with_cwd(cwd)
                 .iter()
                 .filter(|entry| entry.access == FileSystemAccessMode::None)
                 .filter(|entry| !self.can_read_path_with_cwd(entry.path.as_path(), cwd))
+                // Restricted policies already deny reads outside explicit allow roots,
+                // so materializing the filesystem root here would erase narrower
+                // readable carveouts when downstream sandboxes apply deny masks last.
+                .filter(|entry| root.as_ref() != Some(&entry.path))
                 .map(|entry| entry.path.clone())
                 .collect(),
         )
@@ -1059,6 +1068,60 @@ mod tests {
         );
         assert!(
             policy.needs_direct_runtime_enforcement(NetworkSandboxPolicy::Restricted, cwd.path(),)
+        );
+    }
+
+    #[test]
+    fn root_deny_does_not_materialize_as_unreadable_root() {
+        let cwd = TempDir::new().expect("tempdir");
+        let docs =
+            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::None,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: docs.clone() },
+                access: FileSystemAccessMode::Read,
+            },
+        ]);
+
+        assert_eq!(
+            policy.resolve_access_with_cwd(docs.as_path(), cwd.path()),
+            FileSystemAccessMode::Read
+        );
+        assert_eq!(policy.get_readable_roots_with_cwd(cwd.path()), vec![docs]);
+        assert!(policy.get_unreadable_roots_with_cwd(cwd.path()).is_empty());
+    }
+
+    #[test]
+    fn duplicate_root_deny_prevents_full_disk_write_access() {
+        let cwd = TempDir::new().expect("tempdir");
+        let root = AbsolutePathBuf::from_absolute_path(cwd.path())
+            .map(|cwd| absolute_root_path_for_cwd(&cwd))
+            .expect("resolve filesystem root");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::None,
+            },
+        ]);
+
+        assert!(!policy.has_full_disk_write_access());
+        assert_eq!(
+            policy.resolve_access_with_cwd(root.as_path(), cwd.path()),
+            FileSystemAccessMode::None
         );
     }
 }
