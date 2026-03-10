@@ -14,6 +14,10 @@ struct Args {
     #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
     prettier: Option<PathBuf>,
 
+    /// Optional path to the Ruff executable to format generated Python files.
+    #[arg(long = "ruff", value_name = "RUFF_BIN")]
+    ruff: Option<PathBuf>,
+
     /// Include experimental API methods and fields in generated fixtures.
     #[arg(long = "experimental")]
     experimental: bool,
@@ -29,6 +33,7 @@ fn main() -> Result<()> {
     codex_app_server_protocol::write_schema_fixtures_with_options(
         &schema_root,
         args.prettier.as_deref(),
+        args.ruff.as_deref(),
         codex_app_server_protocol::SchemaFixtureOptions {
             experimental_api: args.experimental,
         },

@@ -2,12 +2,9 @@
 #   filename:  codex_app_server_protocol.python.schemas.json
 
 from __future__ import annotations
-
-from enum import StrEnum
+from pydantic import BaseModel as _BaseModel, ConfigDict, Field, RootModel
 from typing import Any, Literal
-
-from pydantic import BaseModel as _BaseModel
-from pydantic import ConfigDict, Field, RootModel
+from enum import StrEnum
 
 
 class BaseModel(_BaseModel):
@@ -18,29 +15,179 @@ class CodexAppServerProtocol(BaseModel):
     pass
 
 
-class RequestId(RootModel[str | int]):
-    root: str | int = Field(..., title='RequestId')
+class AbsolutePathBuf(RootModel[str]):
+    root: str = Field(
+        ...,
+        description="A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
+    )
 
 
-class JSONRPCErrorError(BaseModel):
-    code: int
-    data: Any | None = None
-    message: str
+class AccountLoginCompletedNotification(BaseModel):
+    error: str | None = None
+    login_id: str | None = Field(default=None, alias="loginId")
+    success: bool
 
 
-class JSONRPCNotification(BaseModel):
-    method: str
-    params: Any | None = None
+class AdditionalFileSystemPermissions(BaseModel):
+    read: list[AbsolutePathBuf] | None = None
+    write: list[AbsolutePathBuf] | None = None
 
 
-class JSONRPCResponse(BaseModel):
-    id: RequestId
-    result: Any
+class AdditionalNetworkPermissions(BaseModel):
+    enabled: bool | None = None
 
 
-class W3cTraceContext(BaseModel):
-    traceparent: str | None = None
-    tracestate: str | None = None
+class TextAgentMessageContentType(RootModel[Literal["Text"]]):
+    root: Literal["Text"] = Field(..., title="TextAgentMessageContentType")
+
+
+class TextAgentMessageContent(BaseModel):
+    text: str
+    type: TextAgentMessageContentType = Field(..., title="TextAgentMessageContentType")
+
+
+class AgentMessageContent(RootModel[TextAgentMessageContent]):
+    root: TextAgentMessageContent
+
+
+class AgentMessageDeltaNotification(BaseModel):
+    delta: str
+    item_id: str = Field(..., alias="itemId")
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class CompletedAgentStatus(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    completed: str | None
+
+
+class ErroredAgentStatus(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    errored: str
+
+
+class AgentStatus(
+    RootModel[
+        Literal["pending_init"]
+        | Literal["running"]
+        | CompletedAgentStatus
+        | ErroredAgentStatus
+        | Literal["shutdown"]
+        | Literal["not_found"]
+    ]
+):
+    root: (
+        Literal["pending_init"]
+        | Literal["running"]
+        | CompletedAgentStatus
+        | ErroredAgentStatus
+        | Literal["shutdown"]
+        | Literal["not_found"]
+    ) = Field(..., description="Agent lifecycle status, derived from emitted events.")
+
+
+class AppBranding(BaseModel):
+    category: str | None = None
+    developer: str | None = None
+    is_discoverable_app: bool = Field(..., alias="isDiscoverableApp")
+    privacy_policy: str | None = Field(default=None, alias="privacyPolicy")
+    terms_of_service: str | None = Field(default=None, alias="termsOfService")
+    website: str | None = None
+
+
+class AppReview(BaseModel):
+    status: str
+
+
+class AppScreenshot(BaseModel):
+    file_id: str | None = Field(default=None, alias="fileId")
+    url: str | None = None
+    user_prompt: str = Field(..., alias="userPrompt")
+
+
+class AppsListParams(BaseModel):
+    cursor: str | None = Field(
+        default=None,
+        description="Opaque pagination cursor returned by a previous call.",
+    )
+    force_refetch: bool | None = Field(
+        default=None,
+        alias="forceRefetch",
+        description="When true, bypass app caches and fetch the latest data from sources.",
+    )
+    limit: int | None = Field(
+        default=None,
+        description="Optional page size; defaults to a reasonable server-side value.",
+        ge=0,
+    )
+    thread_id: str | None = Field(
+        default=None,
+        alias="threadId",
+        description="Optional thread id used to evaluate app feature gating from that thread's config.",
+    )
+
+
+class AskForApproval1(StrEnum):
+    untrusted = "untrusted"
+    on_failure = "on-failure"
+    on_request = "on-request"
+    never = "never"
+
+
+class Reject(BaseModel):
+    mcp_elicitations: bool
+    rules: bool
+    sandbox_approval: bool
+
+
+class RejectAskForApproval(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    reject: Reject
+
+
+class AskForApproval(RootModel[AskForApproval1 | RejectAskForApproval]):
+    root: AskForApproval1 | RejectAskForApproval
+
+
+class AuthMode(
+    RootModel[Literal["apikey"] | Literal["chatgpt"] | Literal["chatgptAuthTokens"]]
+):
+    root: Literal["apikey"] | Literal["chatgpt"] | Literal["chatgptAuthTokens"] = Field(
+        ..., description="Authentication mode for OpenAI-backed providers."
+    )
+
+
+class ByteRange(BaseModel):
+    end: int = Field(..., ge=0)
+    start: int = Field(..., ge=0)
+
+
+class CallToolResult(BaseModel):
+    field_meta: Any | None = Field(None, alias="_meta")
+    content: list[Any]
+    is_error: bool | None = Field(default=None, alias="isError")
+    structured_content: Any | None = Field(None, alias="structuredContent")
+
+
+class CancelLoginAccountParams(BaseModel):
+    login_id: str = Field(..., alias="loginId")
+
+
+class ChatgptAuthTokensRefreshReason(RootModel[Literal["unauthorized"]]):
+    root: Literal["unauthorized"]
+
+
+class ChatgptAuthTokensRefreshResponse(BaseModel):
+    access_token: str = Field(..., alias="accessToken")
+    chatgpt_account_id: str = Field(..., alias="chatgptAccountId")
+    chatgpt_plan_type: str | None = Field(default=None, alias="chatgptPlanType")
 
 
 class ClientInfo(BaseModel):
@@ -49,3046 +196,363 @@ class ClientInfo(BaseModel):
     version: str
 
 
-class FuzzyFileSearchParams(BaseModel):
-    cancellation_token: str | None = Field(default=None, alias='cancellationToken')
-    query: str
-    roots: list[str]
-
-
-class ChatgptAuthTokensRefreshResponse(BaseModel):
-    access_token: str = Field(..., alias='accessToken')
-    chatgpt_account_id: str = Field(..., alias='chatgptAccountId')
-    chatgpt_plan_type: str | None = Field(default=None, alias='chatgptPlanType')
-
-
-class InitializeCapabilities(BaseModel):
-    experimental_api: bool | None = Field(
-        default=False,
-        alias='experimentalApi',
-        description='Opt into receiving experimental API methods and fields.',
-    )
-    opt_out_notification_methods: list[str] | None = Field(
-        default=None,
-        alias='optOutNotificationMethods',
-        description='Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).',
-    )
-
-
-class InitializeParams(BaseModel):
-    capabilities: InitializeCapabilities | None = None
-    client_info: ClientInfo = Field(..., alias='clientInfo')
-
-
-class InitializeClientRequestMethod(RootModel[Literal['initialize']]):
-    root: Literal['initialize'] = Field(..., title='InitializeClientRequestMethod')
-
-
-class InitializeClientRequest(BaseModel):
-    id: RequestId
-    method: InitializeClientRequestMethod = Field(
-        ..., title='InitializeClientRequestMethod'
-    )
-    params: InitializeParams
-
-
-class ThreadStartClientRequestMethod(RootModel[Literal['thread/start']]):
-    root: Literal['thread/start'] = Field(..., title='Thread/startClientRequestMethod')
-
-
-class ThreadResumeClientRequestMethod(RootModel[Literal['thread/resume']]):
-    root: Literal['thread/resume'] = Field(
-        ..., title='Thread/resumeClientRequestMethod'
-    )
-
-
-class ThreadForkClientRequestMethod(RootModel[Literal['thread/fork']]):
-    root: Literal['thread/fork'] = Field(..., title='Thread/forkClientRequestMethod')
-
-
-class ThreadArchiveClientRequestMethod(RootModel[Literal['thread/archive']]):
-    root: Literal['thread/archive'] = Field(
-        ..., title='Thread/archiveClientRequestMethod'
-    )
-
-
-class ThreadUnsubscribeClientRequestMethod(RootModel[Literal['thread/unsubscribe']]):
-    root: Literal['thread/unsubscribe'] = Field(
-        ..., title='Thread/unsubscribeClientRequestMethod'
-    )
-
-
-class ThreadNameSetClientRequestMethod(RootModel[Literal['thread/name/set']]):
-    root: Literal['thread/name/set'] = Field(
-        ..., title='Thread/name/setClientRequestMethod'
-    )
-
-
-class ThreadMetadataUpdateClientRequestMethod(
-    RootModel[Literal['thread/metadata/update']]
-):
-    root: Literal['thread/metadata/update'] = Field(
-        ..., title='Thread/metadata/updateClientRequestMethod'
-    )
-
-
-class ThreadUnarchiveClientRequestMethod(RootModel[Literal['thread/unarchive']]):
-    root: Literal['thread/unarchive'] = Field(
-        ..., title='Thread/unarchiveClientRequestMethod'
-    )
-
-
-class ThreadCompactStartClientRequestMethod(RootModel[Literal['thread/compact/start']]):
-    root: Literal['thread/compact/start'] = Field(
-        ..., title='Thread/compact/startClientRequestMethod'
-    )
-
-
-class ThreadRollbackClientRequestMethod(RootModel[Literal['thread/rollback']]):
-    root: Literal['thread/rollback'] = Field(
-        ..., title='Thread/rollbackClientRequestMethod'
-    )
-
-
-class ThreadListClientRequestMethod(RootModel[Literal['thread/list']]):
-    root: Literal['thread/list'] = Field(..., title='Thread/listClientRequestMethod')
-
-
-class ThreadLoadedListClientRequestMethod(RootModel[Literal['thread/loaded/list']]):
-    root: Literal['thread/loaded/list'] = Field(
-        ..., title='Thread/loaded/listClientRequestMethod'
-    )
-
-
-class ThreadReadClientRequestMethod(RootModel[Literal['thread/read']]):
-    root: Literal['thread/read'] = Field(..., title='Thread/readClientRequestMethod')
-
-
-class SkillsListClientRequestMethod(RootModel[Literal['skills/list']]):
-    root: Literal['skills/list'] = Field(..., title='Skills/listClientRequestMethod')
-
-
-class PluginListClientRequestMethod(RootModel[Literal['plugin/list']]):
-    root: Literal['plugin/list'] = Field(..., title='Plugin/listClientRequestMethod')
-
-
-class SkillsRemoteListClientRequestMethod(RootModel[Literal['skills/remote/list']]):
-    root: Literal['skills/remote/list'] = Field(
-        ..., title='Skills/remote/listClientRequestMethod'
-    )
-
-
-class SkillsRemoteExportClientRequestMethod(RootModel[Literal['skills/remote/export']]):
-    root: Literal['skills/remote/export'] = Field(
-        ..., title='Skills/remote/exportClientRequestMethod'
-    )
-
-
-class AppListClientRequestMethod(RootModel[Literal['app/list']]):
-    root: Literal['app/list'] = Field(..., title='App/listClientRequestMethod')
-
-
-class SkillsConfigWriteClientRequestMethod(RootModel[Literal['skills/config/write']]):
-    root: Literal['skills/config/write'] = Field(
-        ..., title='Skills/config/writeClientRequestMethod'
-    )
-
-
-class PluginInstallClientRequestMethod(RootModel[Literal['plugin/install']]):
-    root: Literal['plugin/install'] = Field(
-        ..., title='Plugin/installClientRequestMethod'
-    )
-
-
-class TurnStartClientRequestMethod(RootModel[Literal['turn/start']]):
-    root: Literal['turn/start'] = Field(..., title='Turn/startClientRequestMethod')
-
-
-class TurnSteerClientRequestMethod(RootModel[Literal['turn/steer']]):
-    root: Literal['turn/steer'] = Field(..., title='Turn/steerClientRequestMethod')
-
-
-class TurnInterruptClientRequestMethod(RootModel[Literal['turn/interrupt']]):
-    root: Literal['turn/interrupt'] = Field(
-        ..., title='Turn/interruptClientRequestMethod'
-    )
-
-
-class ReviewStartClientRequestMethod(RootModel[Literal['review/start']]):
-    root: Literal['review/start'] = Field(..., title='Review/startClientRequestMethod')
-
-
-class ModelListClientRequestMethod(RootModel[Literal['model/list']]):
-    root: Literal['model/list'] = Field(..., title='Model/listClientRequestMethod')
-
-
-class ExperimentalFeatureListClientRequestMethod(
-    RootModel[Literal['experimentalFeature/list']]
-):
-    root: Literal['experimentalFeature/list'] = Field(
-        ..., title='ExperimentalFeature/listClientRequestMethod'
-    )
-
-
-class McpServerOauthLoginClientRequestMethod(
-    RootModel[Literal['mcpServer/oauth/login']]
-):
-    root: Literal['mcpServer/oauth/login'] = Field(
-        ..., title='McpServer/oauth/loginClientRequestMethod'
-    )
-
-
-class ConfigMcpServerReloadClientRequestMethod(
-    RootModel[Literal['config/mcpServer/reload']]
-):
-    root: Literal['config/mcpServer/reload'] = Field(
-        ..., title='Config/mcpServer/reloadClientRequestMethod'
-    )
-
-
-class ConfigMcpServerReloadClientRequest(BaseModel):
-    id: RequestId
-    method: ConfigMcpServerReloadClientRequestMethod = Field(
-        ..., title='Config/mcpServer/reloadClientRequestMethod'
-    )
-    params: None = None
-
-
-class McpServerStatusListClientRequestMethod(
-    RootModel[Literal['mcpServerStatus/list']]
-):
-    root: Literal['mcpServerStatus/list'] = Field(
-        ..., title='McpServerStatus/listClientRequestMethod'
-    )
-
-
-class WindowsSandboxSetupStartClientRequestMethod(
-    RootModel[Literal['windowsSandbox/setupStart']]
-):
-    root: Literal['windowsSandbox/setupStart'] = Field(
-        ..., title='WindowsSandbox/setupStartClientRequestMethod'
-    )
-
-
-class AccountLoginStartClientRequestMethod(RootModel[Literal['account/login/start']]):
-    root: Literal['account/login/start'] = Field(
-        ..., title='Account/login/startClientRequestMethod'
-    )
-
-
-class AccountLoginCancelClientRequestMethod(RootModel[Literal['account/login/cancel']]):
-    root: Literal['account/login/cancel'] = Field(
-        ..., title='Account/login/cancelClientRequestMethod'
-    )
-
-
-class AccountLogoutClientRequestMethod(RootModel[Literal['account/logout']]):
-    root: Literal['account/logout'] = Field(
-        ..., title='Account/logoutClientRequestMethod'
-    )
-
-
-class AccountLogoutClientRequest(BaseModel):
-    id: RequestId
-    method: AccountLogoutClientRequestMethod = Field(
-        ..., title='Account/logoutClientRequestMethod'
-    )
-    params: None = None
-
-
-class AccountRateLimitsReadClientRequestMethod(
-    RootModel[Literal['account/rateLimits/read']]
-):
-    root: Literal['account/rateLimits/read'] = Field(
-        ..., title='Account/rateLimits/readClientRequestMethod'
-    )
-
-
-class AccountRateLimitsReadClientRequest(BaseModel):
-    id: RequestId
-    method: AccountRateLimitsReadClientRequestMethod = Field(
-        ..., title='Account/rateLimits/readClientRequestMethod'
-    )
-    params: None = None
-
-
-class FeedbackUploadClientRequestMethod(RootModel[Literal['feedback/upload']]):
-    root: Literal['feedback/upload'] = Field(
-        ..., title='Feedback/uploadClientRequestMethod'
-    )
-
-
-class CommandExecClientRequestMethod(RootModel[Literal['command/exec']]):
-    root: Literal['command/exec'] = Field(..., title='Command/execClientRequestMethod')
-
-
-class CommandExecWriteClientRequestMethod(RootModel[Literal['command/exec/write']]):
-    root: Literal['command/exec/write'] = Field(
-        ..., title='Command/exec/writeClientRequestMethod'
-    )
-
-
-class CommandExecTerminateClientRequestMethod(
-    RootModel[Literal['command/exec/terminate']]
-):
-    root: Literal['command/exec/terminate'] = Field(
-        ..., title='Command/exec/terminateClientRequestMethod'
-    )
-
-
-class CommandExecResizeClientRequestMethod(RootModel[Literal['command/exec/resize']]):
-    root: Literal['command/exec/resize'] = Field(
-        ..., title='Command/exec/resizeClientRequestMethod'
-    )
-
-
-class ConfigReadClientRequestMethod(RootModel[Literal['config/read']]):
-    root: Literal['config/read'] = Field(..., title='Config/readClientRequestMethod')
-
-
-class ExternalAgentConfigDetectClientRequestMethod(
-    RootModel[Literal['externalAgentConfig/detect']]
-):
-    root: Literal['externalAgentConfig/detect'] = Field(
-        ..., title='ExternalAgentConfig/detectClientRequestMethod'
-    )
-
-
-class ExternalAgentConfigImportClientRequestMethod(
-    RootModel[Literal['externalAgentConfig/import']]
-):
-    root: Literal['externalAgentConfig/import'] = Field(
-        ..., title='ExternalAgentConfig/importClientRequestMethod'
-    )
-
-
-class ConfigValueWriteClientRequestMethod(RootModel[Literal['config/value/write']]):
-    root: Literal['config/value/write'] = Field(
-        ..., title='Config/value/writeClientRequestMethod'
-    )
-
-
-class ConfigBatchWriteClientRequestMethod(RootModel[Literal['config/batchWrite']]):
-    root: Literal['config/batchWrite'] = Field(
-        ..., title='Config/batchWriteClientRequestMethod'
-    )
-
-
-class ConfigRequirementsReadClientRequestMethod(
-    RootModel[Literal['configRequirements/read']]
-):
-    root: Literal['configRequirements/read'] = Field(
-        ..., title='ConfigRequirements/readClientRequestMethod'
-    )
-
-
-class ConfigRequirementsReadClientRequest(BaseModel):
-    id: RequestId
-    method: ConfigRequirementsReadClientRequestMethod = Field(
-        ..., title='ConfigRequirements/readClientRequestMethod'
-    )
-    params: None = None
-
-
-class AccountReadClientRequestMethod(RootModel[Literal['account/read']]):
-    root: Literal['account/read'] = Field(..., title='Account/readClientRequestMethod')
-
-
-class FuzzyFileSearchClientRequestMethod(RootModel[Literal['fuzzyFileSearch']]):
-    root: Literal['fuzzyFileSearch'] = Field(
-        ..., title='FuzzyFileSearchClientRequestMethod'
-    )
-
-
-class FuzzyFileSearchClientRequest(BaseModel):
-    id: RequestId
-    method: FuzzyFileSearchClientRequestMethod = Field(
-        ..., title='FuzzyFileSearchClientRequestMethod'
-    )
-    params: FuzzyFileSearchParams
-
-
-class AdditionalNetworkPermissions(BaseModel):
-    enabled: bool | None = None
-
-
-class ChatgptAuthTokensRefreshReason(RootModel[Literal['unauthorized']]):
-    root: Literal['unauthorized']
-
-
-class AcceptWithExecpolicyAmendment(BaseModel):
-    execpolicy_amendment: list[str]
-
-
-class AcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    accept_with_execpolicy_amendment: AcceptWithExecpolicyAmendment = Field(
-        ..., alias='acceptWithExecpolicyAmendment'
-    )
-
-
-class CommandExecutionRequestApprovalSkillMetadata(BaseModel):
-    path_to_skills_md: str = Field(..., alias='pathToSkillsMd')
-
-
-class DynamicToolCallParams(BaseModel):
-    arguments: Any
-    call_id: str = Field(..., alias='callId')
-    thread_id: str = Field(..., alias='threadId')
-    tool: str
-    turn_id: str = Field(..., alias='turnId')
-
-
-class AddFileChangeType(RootModel[Literal['add']]):
-    root: Literal['add'] = Field(..., title='AddFileChangeType')
-
-
-class AddFileChange(BaseModel):
-    content: str
-    type: AddFileChangeType = Field(..., title='AddFileChangeType')
-
-
-class DeleteFileChangeType(RootModel[Literal['delete']]):
-    root: Literal['delete'] = Field(..., title='DeleteFileChangeType')
-
-
-class DeleteFileChange(BaseModel):
-    content: str
-    type: DeleteFileChangeType = Field(..., title='DeleteFileChangeType')
-
-
-class UpdateFileChangeType(RootModel[Literal['update']]):
-    root: Literal['update'] = Field(..., title='UpdateFileChangeType')
-
-
-class UpdateFileChange(BaseModel):
-    move_path: str | None = None
-    type: UpdateFileChangeType = Field(..., title='UpdateFileChangeType')
-    unified_diff: str
-
-
-class FileChange(RootModel[AddFileChange | DeleteFileChange | UpdateFileChange]):
-    root: AddFileChange | DeleteFileChange | UpdateFileChange
-
-
-class FileChangeRequestApprovalParams(BaseModel):
-    grant_root: str | None = Field(
-        default=None,
-        alias='grantRoot',
-        description='[UNSTABLE] When set, the agent is asking the user to allow writes under this root for the remainder of the session (unclear if this is honored today).',
-    )
-    item_id: str = Field(..., alias='itemId')
-    reason: str | None = Field(
-        default=None,
-        description='Optional explanatory reason (e.g. request for extra write access).',
-    )
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
-
-
-class MacOsAutomationPermission1(StrEnum):
-    none = 'none'
-    all = 'all'
-
-
-class BundleIdsMacOsAutomationPermission(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    bundle_ids: list[str]
-
-
-class MacOsAutomationPermission(
-    RootModel[MacOsAutomationPermission1 | BundleIdsMacOsAutomationPermission]
-):
-    root: MacOsAutomationPermission1 | BundleIdsMacOsAutomationPermission
-
-
-class MacOsPreferencesPermission(StrEnum):
-    none = 'none'
-    read_only = 'read_only'
-    read_write = 'read_write'
-
-
-class McpElicitationArrayType(RootModel[Literal['array']]):
-    root: Literal['array']
-
-
-class McpElicitationBooleanType(RootModel[Literal['boolean']]):
-    root: Literal['boolean']
-
-
-class McpElicitationConstOption(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    const: str
-    title: str
-
-
-class McpElicitationNumberType(StrEnum):
-    number = 'number'
-    integer = 'integer'
-
-
-class McpElicitationObjectType(RootModel[Literal['object']]):
-    root: Literal['object']
-
-
-class McpElicitationStringFormat(StrEnum):
-    email = 'email'
-    uri = 'uri'
-    date = 'date'
-    date_time = 'date-time'
-
-
-class McpElicitationStringType(RootModel[Literal['string']]):
-    root: Literal['string']
-
-
-class McpElicitationTitledEnumItems(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    any_of: list[McpElicitationConstOption] = Field(..., alias='anyOf')
-
-
-class McpElicitationTitledMultiSelectEnumSchema(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    default: list[str] | None = None
-    description: str | None = None
-    items: McpElicitationTitledEnumItems
-    max_items: int | None = Field(default=None, alias='maxItems', ge=0)
-    min_items: int | None = Field(default=None, alias='minItems', ge=0)
-    title: str | None = None
-    type: McpElicitationArrayType
-
-
-class McpElicitationTitledSingleSelectEnumSchema(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    default: str | None = None
-    description: str | None = None
-    one_of: list[McpElicitationConstOption] = Field(..., alias='oneOf')
-    title: str | None = None
-    type: McpElicitationStringType
-
-
-class McpElicitationUntitledEnumItems(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    enum: list[str]
-    type: McpElicitationStringType
-
-
-class McpElicitationUntitledMultiSelectEnumSchema(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    default: list[str] | None = None
-    description: str | None = None
-    items: McpElicitationUntitledEnumItems
-    max_items: int | None = Field(default=None, alias='maxItems', ge=0)
-    min_items: int | None = Field(default=None, alias='minItems', ge=0)
-    title: str | None = None
-    type: McpElicitationArrayType
-
-
-class McpElicitationUntitledSingleSelectEnumSchema(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    default: str | None = None
-    description: str | None = None
-    enum: list[str]
-    title: str | None = None
-    type: McpElicitationStringType
-
-
-class McpServerElicitationRequestParams2(BaseModel):
-    server_name: str = Field(..., alias='serverName')
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str | None = Field(
-        default=None,
-        alias='turnId',
-        description='Active Codex turn when this elicitation was observed, if app-server could correlate one.\n\nThis is nullable because MCP models elicitation as a standalone server-to-client request identified by the MCP server request id. It may be triggered during a turn, but turn context is app-server correlation rather than part of the protocol identity of the elicitation itself.',
-    )
-    field_meta: Any | None = Field(None, alias='_meta')
-    elicitation_id: str = Field(..., alias='elicitationId')
-    message: str
-    mode: Literal['url']
-    url: str
-
-
-class NetworkApprovalProtocol(StrEnum):
-    http = 'http'
-    https = 'https'
-    socks5_tcp = 'socks5Tcp'
-    socks5_udp = 'socks5Udp'
-
-
-class NetworkPolicyRuleAction(StrEnum):
-    allow = 'allow'
-    deny = 'deny'
-
-
-class ReadParsedCommandType(RootModel[Literal['read']]):
-    root: Literal['read'] = Field(..., title='ReadParsedCommandType')
-
-
-class ReadParsedCommand(BaseModel):
-    cmd: str
-    name: str
-    path: str = Field(
-        ...,
-        description='(Best effort) Path to the file being read by the command. When possible, this is an absolute path, though when relative, it should be resolved against the `cwd`` that will be used to run the command to derive the absolute path.',
-    )
-    type: ReadParsedCommandType = Field(..., title='ReadParsedCommandType')
-
-
-class ListFilesParsedCommandType(RootModel[Literal['list_files']]):
-    root: Literal['list_files'] = Field(..., title='ListFilesParsedCommandType')
-
-
-class ListFilesParsedCommand(BaseModel):
-    cmd: str
-    path: str | None = None
-    type: ListFilesParsedCommandType = Field(..., title='ListFilesParsedCommandType')
-
-
-class SearchParsedCommandType(RootModel[Literal['search']]):
-    root: Literal['search'] = Field(..., title='SearchParsedCommandType')
-
-
-class SearchParsedCommand(BaseModel):
-    cmd: str
-    path: str | None = None
-    query: str | None = None
-    type: SearchParsedCommandType = Field(..., title='SearchParsedCommandType')
-
-
-class UnknownParsedCommandType(RootModel[Literal['unknown']]):
-    root: Literal['unknown'] = Field(..., title='UnknownParsedCommandType')
-
-
-class UnknownParsedCommand(BaseModel):
-    cmd: str
-    type: UnknownParsedCommandType = Field(..., title='UnknownParsedCommandType')
-
-
-class ParsedCommand(
-    RootModel[
-        ReadParsedCommand
-        | ListFilesParsedCommand
-        | SearchParsedCommand
-        | UnknownParsedCommand
-    ]
-):
-    root: (
-        ReadParsedCommand
-        | ListFilesParsedCommand
-        | SearchParsedCommand
-        | UnknownParsedCommand
-    )
-
-
-class ToolRequestUserInputOption(BaseModel):
-    description: str
-    label: str
-
-
-class ToolRequestUserInputQuestion(BaseModel):
-    header: str
-    id: str
-    is_other: bool | None = Field(default=False, alias='isOther')
-    is_secret: bool | None = Field(default=False, alias='isSecret')
-    options: list[ToolRequestUserInputOption] | None = None
-    question: str
-
-
-class ItemCommandExecutionRequestApprovalServerRequestMethod(
-    RootModel[Literal['item/commandExecution/requestApproval']]
-):
-    root: Literal['item/commandExecution/requestApproval'] = Field(
-        ..., title='Item/commandExecution/requestApprovalServerRequestMethod'
-    )
-
-
-class ItemFileChangeRequestApprovalServerRequestMethod(
-    RootModel[Literal['item/fileChange/requestApproval']]
-):
-    root: Literal['item/fileChange/requestApproval'] = Field(
-        ..., title='Item/fileChange/requestApprovalServerRequestMethod'
-    )
-
-
-class ItemFileChangeRequestApprovalServerRequest(BaseModel):
-    id: RequestId
-    method: ItemFileChangeRequestApprovalServerRequestMethod = Field(
-        ..., title='Item/fileChange/requestApprovalServerRequestMethod'
-    )
-    params: FileChangeRequestApprovalParams
-
-
-class ItemToolRequestUserInputServerRequestMethod(
-    RootModel[Literal['item/tool/requestUserInput']]
-):
-    root: Literal['item/tool/requestUserInput'] = Field(
-        ..., title='Item/tool/requestUserInputServerRequestMethod'
-    )
-
-
-class McpServerElicitationRequestServerRequestMethod(
-    RootModel[Literal['mcpServer/elicitation/request']]
-):
-    root: Literal['mcpServer/elicitation/request'] = Field(
-        ..., title='McpServer/elicitation/requestServerRequestMethod'
-    )
-
-
-class ItemPermissionsRequestApprovalServerRequestMethod(
-    RootModel[Literal['item/permissions/requestApproval']]
-):
-    root: Literal['item/permissions/requestApproval'] = Field(
-        ..., title='Item/permissions/requestApprovalServerRequestMethod'
-    )
-
-
-class ItemToolCallServerRequestMethod(RootModel[Literal['item/tool/call']]):
-    root: Literal['item/tool/call'] = Field(
-        ..., title='Item/tool/callServerRequestMethod'
-    )
-
-
-class ItemToolCallServerRequest(BaseModel):
-    id: RequestId
-    method: ItemToolCallServerRequestMethod = Field(
-        ..., title='Item/tool/callServerRequestMethod'
-    )
-    params: DynamicToolCallParams
-
-
-class AccountChatgptAuthTokensRefreshServerRequestMethod(
-    RootModel[Literal['account/chatgptAuthTokens/refresh']]
-):
-    root: Literal['account/chatgptAuthTokens/refresh'] = Field(
-        ..., title='Account/chatgptAuthTokens/refreshServerRequestMethod'
-    )
-
-
-class ApplyPatchApprovalServerRequestMethod(RootModel[Literal['applyPatchApproval']]):
-    root: Literal['applyPatchApproval'] = Field(
-        ..., title='ApplyPatchApprovalServerRequestMethod'
-    )
-
-
-class ExecCommandApprovalServerRequestMethod(RootModel[Literal['execCommandApproval']]):
-    root: Literal['execCommandApproval'] = Field(
-        ..., title='ExecCommandApprovalServerRequestMethod'
-    )
-
-
-class InitializedClientNotificationMethod(RootModel[Literal['initialized']]):
-    root: Literal['initialized'] = Field(
-        ..., title='InitializedClientNotificationMethod'
+class InitializedClientNotificationMethod(RootModel[Literal["initialized"]]):
+    root: Literal["initialized"] = Field(
+        ..., title="InitializedClientNotificationMethod"
     )
 
 
 class InitializedClientNotification(BaseModel):
     method: InitializedClientNotificationMethod = Field(
-        ..., title='InitializedClientNotificationMethod'
+        ..., title="InitializedClientNotificationMethod"
     )
 
 
 class ClientNotification(RootModel[InitializedClientNotification]):
-    root: InitializedClientNotification = Field(..., title='ClientNotification')
+    root: InitializedClientNotification = Field(..., title="ClientNotification")
 
 
-class Indice(RootModel[int]):
-    root: int = Field(..., ge=0)
+class InitializeClientRequestMethod(RootModel[Literal["initialize"]]):
+    root: Literal["initialize"] = Field(..., title="InitializeClientRequestMethod")
 
 
-class FuzzyFileSearchResult(BaseModel):
-    file_name: str
-    indices: list[Indice] | None = None
-    path: str
-    root: str
-    score: int = Field(..., ge=0)
+class ThreadStartClientRequestMethod(RootModel[Literal["thread/start"]]):
+    root: Literal["thread/start"] = Field(..., title="Thread/startClientRequestMethod")
 
 
-class FuzzyFileSearchSessionCompletedNotification(BaseModel):
-    session_id: str = Field(..., alias='sessionId')
-
-
-class FuzzyFileSearchSessionUpdatedNotification(BaseModel):
-    files: list[FuzzyFileSearchResult]
-    query: str
-    session_id: str = Field(..., alias='sessionId')
-
-
-class ErrorServerNotificationMethod(RootModel[Literal['error']]):
-    root: Literal['error'] = Field(..., title='ErrorServerNotificationMethod')
-
-
-class ThreadStartedServerNotificationMethod(RootModel[Literal['thread/started']]):
-    root: Literal['thread/started'] = Field(
-        ..., title='Thread/startedServerNotificationMethod'
+class ThreadResumeClientRequestMethod(RootModel[Literal["thread/resume"]]):
+    root: Literal["thread/resume"] = Field(
+        ..., title="Thread/resumeClientRequestMethod"
     )
 
 
-class ThreadStatusChangedServerNotificationMethod(
-    RootModel[Literal['thread/status/changed']]
+class ThreadForkClientRequestMethod(RootModel[Literal["thread/fork"]]):
+    root: Literal["thread/fork"] = Field(..., title="Thread/forkClientRequestMethod")
+
+
+class ThreadArchiveClientRequestMethod(RootModel[Literal["thread/archive"]]):
+    root: Literal["thread/archive"] = Field(
+        ..., title="Thread/archiveClientRequestMethod"
+    )
+
+
+class ThreadUnsubscribeClientRequestMethod(RootModel[Literal["thread/unsubscribe"]]):
+    root: Literal["thread/unsubscribe"] = Field(
+        ..., title="Thread/unsubscribeClientRequestMethod"
+    )
+
+
+class ThreadNameSetClientRequestMethod(RootModel[Literal["thread/name/set"]]):
+    root: Literal["thread/name/set"] = Field(
+        ..., title="Thread/name/setClientRequestMethod"
+    )
+
+
+class ThreadMetadataUpdateClientRequestMethod(
+    RootModel[Literal["thread/metadata/update"]]
 ):
-    root: Literal['thread/status/changed'] = Field(
-        ..., title='Thread/status/changedServerNotificationMethod'
+    root: Literal["thread/metadata/update"] = Field(
+        ..., title="Thread/metadata/updateClientRequestMethod"
     )
 
 
-class ThreadArchivedServerNotificationMethod(RootModel[Literal['thread/archived']]):
-    root: Literal['thread/archived'] = Field(
-        ..., title='Thread/archivedServerNotificationMethod'
+class ThreadUnarchiveClientRequestMethod(RootModel[Literal["thread/unarchive"]]):
+    root: Literal["thread/unarchive"] = Field(
+        ..., title="Thread/unarchiveClientRequestMethod"
     )
 
 
-class ThreadUnarchivedServerNotificationMethod(RootModel[Literal['thread/unarchived']]):
-    root: Literal['thread/unarchived'] = Field(
-        ..., title='Thread/unarchivedServerNotificationMethod'
+class ThreadCompactStartClientRequestMethod(RootModel[Literal["thread/compact/start"]]):
+    root: Literal["thread/compact/start"] = Field(
+        ..., title="Thread/compact/startClientRequestMethod"
     )
 
 
-class ThreadClosedServerNotificationMethod(RootModel[Literal['thread/closed']]):
-    root: Literal['thread/closed'] = Field(
-        ..., title='Thread/closedServerNotificationMethod'
+class ThreadRollbackClientRequestMethod(RootModel[Literal["thread/rollback"]]):
+    root: Literal["thread/rollback"] = Field(
+        ..., title="Thread/rollbackClientRequestMethod"
     )
 
 
-class SkillsChangedServerNotificationMethod(RootModel[Literal['skills/changed']]):
-    root: Literal['skills/changed'] = Field(
-        ..., title='Skills/changedServerNotificationMethod'
+class ThreadListClientRequestMethod(RootModel[Literal["thread/list"]]):
+    root: Literal["thread/list"] = Field(..., title="Thread/listClientRequestMethod")
+
+
+class ThreadLoadedListClientRequestMethod(RootModel[Literal["thread/loaded/list"]]):
+    root: Literal["thread/loaded/list"] = Field(
+        ..., title="Thread/loaded/listClientRequestMethod"
     )
 
 
-class ThreadNameUpdatedServerNotificationMethod(
-    RootModel[Literal['thread/name/updated']]
+class ThreadReadClientRequestMethod(RootModel[Literal["thread/read"]]):
+    root: Literal["thread/read"] = Field(..., title="Thread/readClientRequestMethod")
+
+
+class SkillsListClientRequestMethod(RootModel[Literal["skills/list"]]):
+    root: Literal["skills/list"] = Field(..., title="Skills/listClientRequestMethod")
+
+
+class PluginListClientRequestMethod(RootModel[Literal["plugin/list"]]):
+    root: Literal["plugin/list"] = Field(..., title="Plugin/listClientRequestMethod")
+
+
+class SkillsRemoteListClientRequestMethod(RootModel[Literal["skills/remote/list"]]):
+    root: Literal["skills/remote/list"] = Field(
+        ..., title="Skills/remote/listClientRequestMethod"
+    )
+
+
+class SkillsRemoteExportClientRequestMethod(RootModel[Literal["skills/remote/export"]]):
+    root: Literal["skills/remote/export"] = Field(
+        ..., title="Skills/remote/exportClientRequestMethod"
+    )
+
+
+class AppListClientRequestMethod(RootModel[Literal["app/list"]]):
+    root: Literal["app/list"] = Field(..., title="App/listClientRequestMethod")
+
+
+class SkillsConfigWriteClientRequestMethod(RootModel[Literal["skills/config/write"]]):
+    root: Literal["skills/config/write"] = Field(
+        ..., title="Skills/config/writeClientRequestMethod"
+    )
+
+
+class PluginInstallClientRequestMethod(RootModel[Literal["plugin/install"]]):
+    root: Literal["plugin/install"] = Field(
+        ..., title="Plugin/installClientRequestMethod"
+    )
+
+
+class TurnStartClientRequestMethod(RootModel[Literal["turn/start"]]):
+    root: Literal["turn/start"] = Field(..., title="Turn/startClientRequestMethod")
+
+
+class TurnSteerClientRequestMethod(RootModel[Literal["turn/steer"]]):
+    root: Literal["turn/steer"] = Field(..., title="Turn/steerClientRequestMethod")
+
+
+class TurnInterruptClientRequestMethod(RootModel[Literal["turn/interrupt"]]):
+    root: Literal["turn/interrupt"] = Field(
+        ..., title="Turn/interruptClientRequestMethod"
+    )
+
+
+class ReviewStartClientRequestMethod(RootModel[Literal["review/start"]]):
+    root: Literal["review/start"] = Field(..., title="Review/startClientRequestMethod")
+
+
+class ModelListClientRequestMethod(RootModel[Literal["model/list"]]):
+    root: Literal["model/list"] = Field(..., title="Model/listClientRequestMethod")
+
+
+class ExperimentalFeatureListClientRequestMethod(
+    RootModel[Literal["experimentalFeature/list"]]
 ):
-    root: Literal['thread/name/updated'] = Field(
-        ..., title='Thread/name/updatedServerNotificationMethod'
+    root: Literal["experimentalFeature/list"] = Field(
+        ..., title="ExperimentalFeature/listClientRequestMethod"
     )
 
 
-class ThreadTokenUsageUpdatedServerNotificationMethod(
-    RootModel[Literal['thread/tokenUsage/updated']]
+class McpServerOauthLoginClientRequestMethod(
+    RootModel[Literal["mcpServer/oauth/login"]]
 ):
-    root: Literal['thread/tokenUsage/updated'] = Field(
-        ..., title='Thread/tokenUsage/updatedServerNotificationMethod'
+    root: Literal["mcpServer/oauth/login"] = Field(
+        ..., title="McpServer/oauth/loginClientRequestMethod"
     )
 
 
-class TurnStartedServerNotificationMethod(RootModel[Literal['turn/started']]):
-    root: Literal['turn/started'] = Field(
-        ..., title='Turn/startedServerNotificationMethod'
-    )
-
-
-class TurnCompletedServerNotificationMethod(RootModel[Literal['turn/completed']]):
-    root: Literal['turn/completed'] = Field(
-        ..., title='Turn/completedServerNotificationMethod'
-    )
-
-
-class TurnDiffUpdatedServerNotificationMethod(RootModel[Literal['turn/diff/updated']]):
-    root: Literal['turn/diff/updated'] = Field(
-        ..., title='Turn/diff/updatedServerNotificationMethod'
-    )
-
-
-class TurnPlanUpdatedServerNotificationMethod(RootModel[Literal['turn/plan/updated']]):
-    root: Literal['turn/plan/updated'] = Field(
-        ..., title='Turn/plan/updatedServerNotificationMethod'
-    )
-
-
-class ItemStartedServerNotificationMethod(RootModel[Literal['item/started']]):
-    root: Literal['item/started'] = Field(
-        ..., title='Item/startedServerNotificationMethod'
-    )
-
-
-class ItemCompletedServerNotificationMethod(RootModel[Literal['item/completed']]):
-    root: Literal['item/completed'] = Field(
-        ..., title='Item/completedServerNotificationMethod'
-    )
-
-
-class ItemAgentMessageDeltaServerNotificationMethod(
-    RootModel[Literal['item/agentMessage/delta']]
+class ConfigMcpServerReloadClientRequestMethod(
+    RootModel[Literal["config/mcpServer/reload"]]
 ):
-    root: Literal['item/agentMessage/delta'] = Field(
-        ..., title='Item/agentMessage/deltaServerNotificationMethod'
+    root: Literal["config/mcpServer/reload"] = Field(
+        ..., title="Config/mcpServer/reloadClientRequestMethod"
     )
 
 
-class ItemPlanDeltaServerNotificationMethod(RootModel[Literal['item/plan/delta']]):
-    root: Literal['item/plan/delta'] = Field(
-        ..., title='Item/plan/deltaServerNotificationMethod'
-    )
-
-
-class CommandExecOutputDeltaServerNotificationMethod(
-    RootModel[Literal['command/exec/outputDelta']]
+class McpServerStatusListClientRequestMethod(
+    RootModel[Literal["mcpServerStatus/list"]]
 ):
-    root: Literal['command/exec/outputDelta'] = Field(
-        ..., title='Command/exec/outputDeltaServerNotificationMethod'
+    root: Literal["mcpServerStatus/list"] = Field(
+        ..., title="McpServerStatus/listClientRequestMethod"
     )
 
 
-class ItemCommandExecutionOutputDeltaServerNotificationMethod(
-    RootModel[Literal['item/commandExecution/outputDelta']]
+class WindowsSandboxSetupStartClientRequestMethod(
+    RootModel[Literal["windowsSandbox/setupStart"]]
 ):
-    root: Literal['item/commandExecution/outputDelta'] = Field(
-        ..., title='Item/commandExecution/outputDeltaServerNotificationMethod'
+    root: Literal["windowsSandbox/setupStart"] = Field(
+        ..., title="WindowsSandbox/setupStartClientRequestMethod"
     )
 
 
-class ItemCommandExecutionTerminalInteractionServerNotificationMethod(
-    RootModel[Literal['item/commandExecution/terminalInteraction']]
+class AccountLoginStartClientRequestMethod(RootModel[Literal["account/login/start"]]):
+    root: Literal["account/login/start"] = Field(
+        ..., title="Account/login/startClientRequestMethod"
+    )
+
+
+class AccountLoginCancelClientRequestMethod(RootModel[Literal["account/login/cancel"]]):
+    root: Literal["account/login/cancel"] = Field(
+        ..., title="Account/login/cancelClientRequestMethod"
+    )
+
+
+class AccountLogoutClientRequestMethod(RootModel[Literal["account/logout"]]):
+    root: Literal["account/logout"] = Field(
+        ..., title="Account/logoutClientRequestMethod"
+    )
+
+
+class AccountRateLimitsReadClientRequestMethod(
+    RootModel[Literal["account/rateLimits/read"]]
 ):
-    root: Literal['item/commandExecution/terminalInteraction'] = Field(
-        ..., title='Item/commandExecution/terminalInteractionServerNotificationMethod'
+    root: Literal["account/rateLimits/read"] = Field(
+        ..., title="Account/rateLimits/readClientRequestMethod"
     )
 
 
-class ItemFileChangeOutputDeltaServerNotificationMethod(
-    RootModel[Literal['item/fileChange/outputDelta']]
+class FeedbackUploadClientRequestMethod(RootModel[Literal["feedback/upload"]]):
+    root: Literal["feedback/upload"] = Field(
+        ..., title="Feedback/uploadClientRequestMethod"
+    )
+
+
+class CommandExecClientRequestMethod(RootModel[Literal["command/exec"]]):
+    root: Literal["command/exec"] = Field(..., title="Command/execClientRequestMethod")
+
+
+class CommandExecWriteClientRequestMethod(RootModel[Literal["command/exec/write"]]):
+    root: Literal["command/exec/write"] = Field(
+        ..., title="Command/exec/writeClientRequestMethod"
+    )
+
+
+class CommandExecTerminateClientRequestMethod(
+    RootModel[Literal["command/exec/terminate"]]
 ):
-    root: Literal['item/fileChange/outputDelta'] = Field(
-        ..., title='Item/fileChange/outputDeltaServerNotificationMethod'
+    root: Literal["command/exec/terminate"] = Field(
+        ..., title="Command/exec/terminateClientRequestMethod"
     )
 
 
-class ServerRequestResolvedServerNotificationMethod(
-    RootModel[Literal['serverRequest/resolved']]
+class CommandExecResizeClientRequestMethod(RootModel[Literal["command/exec/resize"]]):
+    root: Literal["command/exec/resize"] = Field(
+        ..., title="Command/exec/resizeClientRequestMethod"
+    )
+
+
+class ConfigReadClientRequestMethod(RootModel[Literal["config/read"]]):
+    root: Literal["config/read"] = Field(..., title="Config/readClientRequestMethod")
+
+
+class ExternalAgentConfigDetectClientRequestMethod(
+    RootModel[Literal["externalAgentConfig/detect"]]
 ):
-    root: Literal['serverRequest/resolved'] = Field(
-        ..., title='ServerRequest/resolvedServerNotificationMethod'
+    root: Literal["externalAgentConfig/detect"] = Field(
+        ..., title="ExternalAgentConfig/detectClientRequestMethod"
     )
 
 
-class ItemMcpToolCallProgressServerNotificationMethod(
-    RootModel[Literal['item/mcpToolCall/progress']]
+class ExternalAgentConfigImportClientRequestMethod(
+    RootModel[Literal["externalAgentConfig/import"]]
 ):
-    root: Literal['item/mcpToolCall/progress'] = Field(
-        ..., title='Item/mcpToolCall/progressServerNotificationMethod'
+    root: Literal["externalAgentConfig/import"] = Field(
+        ..., title="ExternalAgentConfig/importClientRequestMethod"
     )
 
 
-class McpServerOauthLoginCompletedServerNotificationMethod(
-    RootModel[Literal['mcpServer/oauthLogin/completed']]
+class ConfigValueWriteClientRequestMethod(RootModel[Literal["config/value/write"]]):
+    root: Literal["config/value/write"] = Field(
+        ..., title="Config/value/writeClientRequestMethod"
+    )
+
+
+class ConfigBatchWriteClientRequestMethod(RootModel[Literal["config/batchWrite"]]):
+    root: Literal["config/batchWrite"] = Field(
+        ..., title="Config/batchWriteClientRequestMethod"
+    )
+
+
+class ConfigRequirementsReadClientRequestMethod(
+    RootModel[Literal["configRequirements/read"]]
 ):
-    root: Literal['mcpServer/oauthLogin/completed'] = Field(
-        ..., title='McpServer/oauthLogin/completedServerNotificationMethod'
+    root: Literal["configRequirements/read"] = Field(
+        ..., title="ConfigRequirements/readClientRequestMethod"
     )
 
 
-class AccountUpdatedServerNotificationMethod(RootModel[Literal['account/updated']]):
-    root: Literal['account/updated'] = Field(
-        ..., title='Account/updatedServerNotificationMethod'
-    )
-
-
-class AccountRateLimitsUpdatedServerNotificationMethod(
-    RootModel[Literal['account/rateLimits/updated']]
-):
-    root: Literal['account/rateLimits/updated'] = Field(
-        ..., title='Account/rateLimits/updatedServerNotificationMethod'
-    )
-
-
-class AppListUpdatedServerNotificationMethod(RootModel[Literal['app/list/updated']]):
-    root: Literal['app/list/updated'] = Field(
-        ..., title='App/list/updatedServerNotificationMethod'
-    )
-
-
-class ItemReasoningSummaryTextDeltaServerNotificationMethod(
-    RootModel[Literal['item/reasoning/summaryTextDelta']]
-):
-    root: Literal['item/reasoning/summaryTextDelta'] = Field(
-        ..., title='Item/reasoning/summaryTextDeltaServerNotificationMethod'
-    )
-
-
-class ItemReasoningSummaryPartAddedServerNotificationMethod(
-    RootModel[Literal['item/reasoning/summaryPartAdded']]
-):
-    root: Literal['item/reasoning/summaryPartAdded'] = Field(
-        ..., title='Item/reasoning/summaryPartAddedServerNotificationMethod'
-    )
-
-
-class ItemReasoningTextDeltaServerNotificationMethod(
-    RootModel[Literal['item/reasoning/textDelta']]
-):
-    root: Literal['item/reasoning/textDelta'] = Field(
-        ..., title='Item/reasoning/textDeltaServerNotificationMethod'
-    )
-
-
-class ThreadCompactedServerNotificationMethod(RootModel[Literal['thread/compacted']]):
-    root: Literal['thread/compacted'] = Field(
-        ..., title='Thread/compactedServerNotificationMethod'
-    )
-
-
-class ModelReroutedServerNotificationMethod(RootModel[Literal['model/rerouted']]):
-    root: Literal['model/rerouted'] = Field(
-        ..., title='Model/reroutedServerNotificationMethod'
-    )
-
-
-class DeprecationNoticeServerNotificationMethod(
-    RootModel[Literal['deprecationNotice']]
-):
-    root: Literal['deprecationNotice'] = Field(
-        ..., title='DeprecationNoticeServerNotificationMethod'
-    )
-
-
-class ConfigWarningServerNotificationMethod(RootModel[Literal['configWarning']]):
-    root: Literal['configWarning'] = Field(
-        ..., title='ConfigWarningServerNotificationMethod'
-    )
-
-
-class FuzzyFileSearchSessionUpdatedServerNotificationMethod(
-    RootModel[Literal['fuzzyFileSearch/sessionUpdated']]
-):
-    root: Literal['fuzzyFileSearch/sessionUpdated'] = Field(
-        ..., title='FuzzyFileSearch/sessionUpdatedServerNotificationMethod'
-    )
-
-
-class FuzzyFileSearchSessionUpdatedServerNotification(BaseModel):
-    method: FuzzyFileSearchSessionUpdatedServerNotificationMethod = Field(
-        ..., title='FuzzyFileSearch/sessionUpdatedServerNotificationMethod'
-    )
-    params: FuzzyFileSearchSessionUpdatedNotification
-
-
-class FuzzyFileSearchSessionCompletedServerNotificationMethod(
-    RootModel[Literal['fuzzyFileSearch/sessionCompleted']]
-):
-    root: Literal['fuzzyFileSearch/sessionCompleted'] = Field(
-        ..., title='FuzzyFileSearch/sessionCompletedServerNotificationMethod'
-    )
-
-
-class FuzzyFileSearchSessionCompletedServerNotification(BaseModel):
-    method: FuzzyFileSearchSessionCompletedServerNotificationMethod = Field(
-        ..., title='FuzzyFileSearch/sessionCompletedServerNotificationMethod'
-    )
-    params: FuzzyFileSearchSessionCompletedNotification
-
-
-class ThreadRealtimeStartedServerNotificationMethod(
-    RootModel[Literal['thread/realtime/started']]
-):
-    root: Literal['thread/realtime/started'] = Field(
-        ..., title='Thread/realtime/startedServerNotificationMethod'
-    )
-
-
-class ThreadRealtimeItemAddedServerNotificationMethod(
-    RootModel[Literal['thread/realtime/itemAdded']]
-):
-    root: Literal['thread/realtime/itemAdded'] = Field(
-        ..., title='Thread/realtime/itemAddedServerNotificationMethod'
-    )
-
-
-class ThreadRealtimeOutputAudioDeltaServerNotificationMethod(
-    RootModel[Literal['thread/realtime/outputAudio/delta']]
-):
-    root: Literal['thread/realtime/outputAudio/delta'] = Field(
-        ..., title='Thread/realtime/outputAudio/deltaServerNotificationMethod'
-    )
-
-
-class ThreadRealtimeErrorServerNotificationMethod(
-    RootModel[Literal['thread/realtime/error']]
-):
-    root: Literal['thread/realtime/error'] = Field(
-        ..., title='Thread/realtime/errorServerNotificationMethod'
-    )
-
-
-class ThreadRealtimeClosedServerNotificationMethod(
-    RootModel[Literal['thread/realtime/closed']]
-):
-    root: Literal['thread/realtime/closed'] = Field(
-        ..., title='Thread/realtime/closedServerNotificationMethod'
-    )
-
-
-class WindowsWorldWritableWarningServerNotificationMethod(
-    RootModel[Literal['windows/worldWritableWarning']]
-):
-    root: Literal['windows/worldWritableWarning'] = Field(
-        ..., title='Windows/worldWritableWarningServerNotificationMethod'
-    )
-
-
-class WindowsSandboxSetupCompletedServerNotificationMethod(
-    RootModel[Literal['windowsSandbox/setupCompleted']]
-):
-    root: Literal['windowsSandbox/setupCompleted'] = Field(
-        ..., title='WindowsSandbox/setupCompletedServerNotificationMethod'
-    )
-
-
-class AccountLoginCompletedServerNotificationMethod(
-    RootModel[Literal['account/login/completed']]
-):
-    root: Literal['account/login/completed'] = Field(
-        ..., title='Account/login/completedServerNotificationMethod'
-    )
-
-
-class TextAgentMessageContentType(RootModel[Literal['Text']]):
-    root: Literal['Text'] = Field(..., title='TextAgentMessageContentType')
-
-
-class TextAgentMessageContent(BaseModel):
-    text: str
-    type: TextAgentMessageContentType = Field(..., title='TextAgentMessageContentType')
-
-
-class AgentMessageContent(RootModel[TextAgentMessageContent]):
-    root: TextAgentMessageContent
-
-
-class CompletedAgentStatus(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    completed: str | None
-
-
-class ErroredAgentStatus(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    errored: str
-
-
-class AgentStatus(
-    RootModel[
-        Literal['pending_init']
-        | Literal['running']
-        | CompletedAgentStatus
-        | ErroredAgentStatus
-        | Literal['shutdown']
-        | Literal['not_found']
-    ]
-):
-    root: (
-        Literal['pending_init']
-        | Literal['running']
-        | CompletedAgentStatus
-        | ErroredAgentStatus
-        | Literal['shutdown']
-        | Literal['not_found']
-    ) = Field(..., description='Agent lifecycle status, derived from emitted events.')
-
-
-class CallToolResult(BaseModel):
-    field_meta: Any | None = Field(None, alias='_meta')
-    content: list[Any]
-    is_error: bool | None = Field(default=None, alias='isError')
-    structured_content: Any | None = Field(None, alias='structuredContent')
-
-
-class CustomPrompt(BaseModel):
-    argument_hint: str | None = None
-    content: str
-    description: str | None = None
-    name: str
-    path: str
-
-
-class Duration(BaseModel):
-    nanos: int = Field(..., ge=0)
-    secs: int = Field(..., ge=0)
-
-
-class ElicitationRequest1(BaseModel):
-    field_meta: Any | None = Field(None, alias='_meta')
-    message: str
-    mode: Literal['form']
-    requested_schema: Any
-
-
-class ElicitationRequest2(BaseModel):
-    field_meta: Any | None = Field(None, alias='_meta')
-    elicitation_id: str
-    message: str
-    mode: Literal['url']
-    url: str
-
-
-class ElicitationRequest(RootModel[ElicitationRequest1 | ElicitationRequest2]):
-    root: ElicitationRequest1 | ElicitationRequest2
-
-
-class ExecApprovalRequestSkillMetadata(BaseModel):
-    path_to_skills_md: str
-
-
-class ExecCommandSource(StrEnum):
-    agent = 'agent'
-    user_shell = 'user_shell'
-    unified_exec_startup = 'unified_exec_startup'
-    unified_exec_interaction = 'unified_exec_interaction'
-
-
-class ExecCommandStatus(StrEnum):
-    completed = 'completed'
-    failed = 'failed'
-    declined = 'declined'
-
-
-class ExecOutputStream(StrEnum):
-    stdout = 'stdout'
-    stderr = 'stderr'
-
-
-class HistoryEntry(BaseModel):
-    conversation_id: str
-    text: str
-    ts: int = Field(..., ge=0)
-
-
-class MacOsSeatbeltProfileExtensions(BaseModel):
-    macos_accessibility: bool | None = False
-    macos_automation: MacOsAutomationPermission | None = Field(
-        default_factory=lambda: MacOsAutomationPermission('none')
-    )
-    macos_calendar: bool | None = False
-    macos_preferences: MacOsPreferencesPermission | None = 'read_only'
-
-
-class McpInvocation(BaseModel):
-    arguments: Any | None = Field(
-        default=None, description='Arguments to the tool call.'
-    )
-    server: str = Field(
-        ..., description='Name of the MCP server as defined in the config.'
-    )
-    tool: str = Field(..., description='Name of the tool as given by the MCP server.')
-
-
-class McpStartupFailure(BaseModel):
-    error: str
-    server: str
-
-
-class StartingMcpStartupStatus(BaseModel):
-    state: Literal['starting']
-
-
-class ReadyMcpStartupStatus(BaseModel):
-    state: Literal['ready']
-
-
-class McpStartupStatus1(BaseModel):
-    error: str
-    state: Literal['failed']
-
-
-class CancelledMcpStartupStatus(BaseModel):
-    state: Literal['cancelled']
-
-
-class McpStartupStatus(
-    RootModel[
-        StartingMcpStartupStatus
-        | ReadyMcpStartupStatus
-        | McpStartupStatus1
-        | CancelledMcpStartupStatus
-    ]
-):
-    root: (
-        StartingMcpStartupStatus
-        | ReadyMcpStartupStatus
-        | McpStartupStatus1
-        | CancelledMcpStartupStatus
-    )
-
-
-class NetworkPermissions(BaseModel):
-    enabled: bool | None = None
-
-
-class RealtimeAudioFrame(BaseModel):
-    data: str
-    num_channels: int = Field(..., ge=0)
-    sample_rate: int = Field(..., ge=0)
-    samples_per_channel: int | None = Field(default=None, ge=0)
-
-
-class SessionUpdated(BaseModel):
-    instructions: str | None = None
-    session_id: str
-
-
-class SessionUpdatedRealtimeEvent(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    session_updated: SessionUpdated = Field(..., alias='SessionUpdated')
-
-
-class AudioOutRealtimeEvent(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    audio_out: RealtimeAudioFrame = Field(..., alias='AudioOut')
-
-
-class ConversationItemAddedRealtimeEvent(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    conversation_item_added: Any = Field(..., alias='ConversationItemAdded')
-
-
-class ConversationItemDone(BaseModel):
-    item_id: str
-
-
-class ConversationItemDoneRealtimeEvent(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    conversation_item_done: ConversationItemDone = Field(
-        ..., alias='ConversationItemDone'
-    )
-
-
-class ErrorRealtimeEvent(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    error: str = Field(..., alias='Error')
-
-
-class RealtimeHandoffMessage(BaseModel):
-    role: str
-    text: str
-
-
-class RealtimeHandoffRequested(BaseModel):
-    handoff_id: str
-    input_transcript: str
-    item_id: str
-    messages: list[RealtimeHandoffMessage]
-
-
-class RejectConfig(BaseModel):
-    mcp_elicitations: bool = Field(..., description='Reject MCP elicitation prompts.')
-    rules: bool = Field(
-        ..., description='Reject prompts triggered by execpolicy `prompt` rules.'
-    )
-    sandbox_approval: bool = Field(
-        ..., description='Reject approval prompts related to sandbox escalation.'
-    )
-
-
-class RequestUserInputQuestionOption(BaseModel):
-    description: str
-    label: str
-
-
-class OkResultOfCallToolResultOrString(BaseModel):
-    ok: CallToolResult = Field(..., alias='Ok')
-
-
-class ErrResultOfCallToolResultOrString(BaseModel):
-    err: str = Field(..., alias='Err')
-
-
-class ResultOfCallToolResultOrString(
-    RootModel[OkResultOfCallToolResultOrString | ErrResultOfCallToolResultOrString]
-):
-    root: OkResultOfCallToolResultOrString | ErrResultOfCallToolResultOrString
-
-
-class ApprovedExecpolicyAmendment(BaseModel):
-    proposed_execpolicy_amendment: list[str]
-
-
-class ApprovedExecpolicyAmendmentReviewDecision(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    approved_execpolicy_amendment: ApprovedExecpolicyAmendment
-
-
-class ReviewLineRange(BaseModel):
-    end: int = Field(..., ge=0)
-    start: int = Field(..., ge=0)
-
-
-class SessionNetworkProxyRuntime(BaseModel):
-    http_addr: str
-    socks_addr: str
-
-
-class StepStatus(StrEnum):
-    pending = 'pending'
-    in_progress = 'in_progress'
-    completed = 'completed'
-
-
-class TokenUsage(BaseModel):
-    cached_input_tokens: int
-    input_tokens: int
-    output_tokens: int
-    reasoning_output_tokens: int
-    total_tokens: int
-
-
-class TokenUsageInfo(BaseModel):
-    last_token_usage: TokenUsage
-    model_context_window: int | None = None
-    total_token_usage: TokenUsage
-
-
-class TurnAbortReason(StrEnum):
-    interrupted = 'interrupted'
-    replaced = 'replaced'
-    review_ended = 'review_ended'
-
-
-class UserMessageTurnItemType(RootModel[Literal['UserMessage']]):
-    root: Literal['UserMessage'] = Field(..., title='UserMessageTurnItemType')
-
-
-class AgentMessageTurnItemType(RootModel[Literal['AgentMessage']]):
-    root: Literal['AgentMessage'] = Field(..., title='AgentMessageTurnItemType')
-
-
-class PlanTurnItemType(RootModel[Literal['Plan']]):
-    root: Literal['Plan'] = Field(..., title='PlanTurnItemType')
-
-
-class PlanTurnItem(BaseModel):
-    id: str
-    text: str
-    type: PlanTurnItemType = Field(..., title='PlanTurnItemType')
-
-
-class ReasoningTurnItemType(RootModel[Literal['Reasoning']]):
-    root: Literal['Reasoning'] = Field(..., title='ReasoningTurnItemType')
-
-
-class ReasoningTurnItem(BaseModel):
-    id: str
-    raw_content: list[str] | None = []
-    summary_text: list[str]
-    type: ReasoningTurnItemType = Field(..., title='ReasoningTurnItemType')
-
-
-class WebSearchTurnItemType(RootModel[Literal['WebSearch']]):
-    root: Literal['WebSearch'] = Field(..., title='WebSearchTurnItemType')
-
-
-class ImageGenerationTurnItemType(RootModel[Literal['ImageGeneration']]):
-    root: Literal['ImageGeneration'] = Field(..., title='ImageGenerationTurnItemType')
-
-
-class ImageGenerationTurnItem(BaseModel):
-    id: str
-    result: str
-    revised_prompt: str | None = None
-    saved_path: str | None = None
-    status: str
-    type: ImageGenerationTurnItemType = Field(..., title='ImageGenerationTurnItemType')
-
-
-class ContextCompactionTurnItemType(RootModel[Literal['ContextCompaction']]):
-    root: Literal['ContextCompaction'] = Field(
-        ..., title='ContextCompactionTurnItemType'
-    )
-
-
-class ContextCompactionTurnItem(BaseModel):
-    id: str
-    type: ContextCompactionTurnItemType = Field(
-        ..., title='ContextCompactionTurnItemType'
-    )
-
-
-class ErrorEventMsgType(RootModel[Literal['error']]):
-    root: Literal['error'] = Field(..., title='ErrorEventMsgType')
-
-
-class WarningEventMsgType(RootModel[Literal['warning']]):
-    root: Literal['warning'] = Field(..., title='WarningEventMsgType')
-
-
-class WarningEventMsg(BaseModel):
-    message: str
-    type: WarningEventMsgType = Field(..., title='WarningEventMsgType')
-
-
-class RealtimeConversationStartedEventMsgType(
-    RootModel[Literal['realtime_conversation_started']]
-):
-    root: Literal['realtime_conversation_started'] = Field(
-        ..., title='RealtimeConversationStartedEventMsgType'
-    )
-
-
-class RealtimeConversationStartedEventMsg(BaseModel):
-    session_id: str | None = None
-    type: RealtimeConversationStartedEventMsgType = Field(
-        ..., title='RealtimeConversationStartedEventMsgType'
-    )
-
-
-class RealtimeConversationRealtimeEventMsgType(
-    RootModel[Literal['realtime_conversation_realtime']]
-):
-    root: Literal['realtime_conversation_realtime'] = Field(
-        ..., title='RealtimeConversationRealtimeEventMsgType'
-    )
-
-
-class RealtimeConversationClosedEventMsgType(
-    RootModel[Literal['realtime_conversation_closed']]
-):
-    root: Literal['realtime_conversation_closed'] = Field(
-        ..., title='RealtimeConversationClosedEventMsgType'
-    )
-
-
-class RealtimeConversationClosedEventMsg(BaseModel):
-    reason: str | None = None
-    type: RealtimeConversationClosedEventMsgType = Field(
-        ..., title='RealtimeConversationClosedEventMsgType'
-    )
-
-
-class ModelRerouteEventMsgType(RootModel[Literal['model_reroute']]):
-    root: Literal['model_reroute'] = Field(..., title='ModelRerouteEventMsgType')
-
-
-class ContextCompactedEventMsgType(RootModel[Literal['context_compacted']]):
-    root: Literal['context_compacted'] = Field(
-        ..., title='ContextCompactedEventMsgType'
-    )
-
-
-class ContextCompactedEventMsg(BaseModel):
-    type: ContextCompactedEventMsgType = Field(
-        ..., title='ContextCompactedEventMsgType'
-    )
-
-
-class ThreadRolledBackEventMsgType(RootModel[Literal['thread_rolled_back']]):
-    root: Literal['thread_rolled_back'] = Field(
-        ..., title='ThreadRolledBackEventMsgType'
-    )
-
-
-class ThreadRolledBackEventMsg(BaseModel):
-    num_turns: int = Field(
-        ..., description='Number of user turns that were removed from context.', ge=0
-    )
-    type: ThreadRolledBackEventMsgType = Field(
-        ..., title='ThreadRolledBackEventMsgType'
-    )
-
-
-class TaskStartedEventMsgType(RootModel[Literal['task_started']]):
-    root: Literal['task_started'] = Field(..., title='TaskStartedEventMsgType')
-
-
-class TaskCompleteEventMsgType(RootModel[Literal['task_complete']]):
-    root: Literal['task_complete'] = Field(..., title='TaskCompleteEventMsgType')
-
-
-class TaskCompleteEventMsg(BaseModel):
-    last_agent_message: str | None = None
-    turn_id: str
-    type: TaskCompleteEventMsgType = Field(..., title='TaskCompleteEventMsgType')
-
-
-class TokenCountEventMsgType(RootModel[Literal['token_count']]):
-    root: Literal['token_count'] = Field(..., title='TokenCountEventMsgType')
-
-
-class AgentMessageEventMsgType(RootModel[Literal['agent_message']]):
-    root: Literal['agent_message'] = Field(..., title='AgentMessageEventMsgType')
-
-
-class UserMessageEventMsgType(RootModel[Literal['user_message']]):
-    root: Literal['user_message'] = Field(..., title='UserMessageEventMsgType')
-
-
-class AgentMessageDeltaEventMsgType(RootModel[Literal['agent_message_delta']]):
-    root: Literal['agent_message_delta'] = Field(
-        ..., title='AgentMessageDeltaEventMsgType'
-    )
-
-
-class AgentMessageDeltaEventMsg(BaseModel):
-    delta: str
-    type: AgentMessageDeltaEventMsgType = Field(
-        ..., title='AgentMessageDeltaEventMsgType'
-    )
-
-
-class AgentReasoningEventMsgType(RootModel[Literal['agent_reasoning']]):
-    root: Literal['agent_reasoning'] = Field(..., title='AgentReasoningEventMsgType')
-
-
-class AgentReasoningEventMsg(BaseModel):
-    text: str
-    type: AgentReasoningEventMsgType = Field(..., title='AgentReasoningEventMsgType')
-
-
-class AgentReasoningDeltaEventMsgType(RootModel[Literal['agent_reasoning_delta']]):
-    root: Literal['agent_reasoning_delta'] = Field(
-        ..., title='AgentReasoningDeltaEventMsgType'
-    )
-
-
-class AgentReasoningDeltaEventMsg(BaseModel):
-    delta: str
-    type: AgentReasoningDeltaEventMsgType = Field(
-        ..., title='AgentReasoningDeltaEventMsgType'
-    )
-
-
-class AgentReasoningRawContentEventMsgType(
-    RootModel[Literal['agent_reasoning_raw_content']]
-):
-    root: Literal['agent_reasoning_raw_content'] = Field(
-        ..., title='AgentReasoningRawContentEventMsgType'
-    )
-
-
-class AgentReasoningRawContentEventMsg(BaseModel):
-    text: str
-    type: AgentReasoningRawContentEventMsgType = Field(
-        ..., title='AgentReasoningRawContentEventMsgType'
-    )
-
-
-class AgentReasoningRawContentDeltaEventMsgType(
-    RootModel[Literal['agent_reasoning_raw_content_delta']]
-):
-    root: Literal['agent_reasoning_raw_content_delta'] = Field(
-        ..., title='AgentReasoningRawContentDeltaEventMsgType'
-    )
-
-
-class AgentReasoningRawContentDeltaEventMsg(BaseModel):
-    delta: str
-    type: AgentReasoningRawContentDeltaEventMsgType = Field(
-        ..., title='AgentReasoningRawContentDeltaEventMsgType'
-    )
-
-
-class AgentReasoningSectionBreakEventMsgType(
-    RootModel[Literal['agent_reasoning_section_break']]
-):
-    root: Literal['agent_reasoning_section_break'] = Field(
-        ..., title='AgentReasoningSectionBreakEventMsgType'
-    )
-
-
-class AgentReasoningSectionBreakEventMsg(BaseModel):
-    item_id: str | None = ''
-    summary_index: int | None = 0
-    type: AgentReasoningSectionBreakEventMsgType = Field(
-        ..., title='AgentReasoningSectionBreakEventMsgType'
-    )
-
-
-class SessionConfiguredEventMsgType(RootModel[Literal['session_configured']]):
-    root: Literal['session_configured'] = Field(
-        ..., title='SessionConfiguredEventMsgType'
-    )
-
-
-class ThreadNameUpdatedEventMsgType(RootModel[Literal['thread_name_updated']]):
-    root: Literal['thread_name_updated'] = Field(
-        ..., title='ThreadNameUpdatedEventMsgType'
-    )
-
-
-class McpStartupUpdateEventMsgType(RootModel[Literal['mcp_startup_update']]):
-    root: Literal['mcp_startup_update'] = Field(
-        ..., title='McpStartupUpdateEventMsgType'
-    )
-
-
-class McpStartupUpdateEventMsg(BaseModel):
-    server: str = Field(..., description='Server name being started.')
-    status: McpStartupStatus = Field(..., description='Current startup status.')
-    type: McpStartupUpdateEventMsgType = Field(
-        ..., title='McpStartupUpdateEventMsgType'
-    )
-
-
-class McpStartupCompleteEventMsgType(RootModel[Literal['mcp_startup_complete']]):
-    root: Literal['mcp_startup_complete'] = Field(
-        ..., title='McpStartupCompleteEventMsgType'
-    )
-
-
-class McpStartupCompleteEventMsg(BaseModel):
-    cancelled: list[str]
-    failed: list[McpStartupFailure]
-    ready: list[str]
-    type: McpStartupCompleteEventMsgType = Field(
-        ..., title='McpStartupCompleteEventMsgType'
-    )
-
-
-class McpToolCallBeginEventMsgType(RootModel[Literal['mcp_tool_call_begin']]):
-    root: Literal['mcp_tool_call_begin'] = Field(
-        ..., title='McpToolCallBeginEventMsgType'
-    )
-
-
-class McpToolCallBeginEventMsg(BaseModel):
-    call_id: str = Field(
-        ...,
-        description='Identifier so this can be paired with the McpToolCallEnd event.',
-    )
-    invocation: McpInvocation
-    type: McpToolCallBeginEventMsgType = Field(
-        ..., title='McpToolCallBeginEventMsgType'
-    )
-
-
-class McpToolCallEndEventMsgType(RootModel[Literal['mcp_tool_call_end']]):
-    root: Literal['mcp_tool_call_end'] = Field(..., title='McpToolCallEndEventMsgType')
-
-
-class McpToolCallEndEventMsg(BaseModel):
-    call_id: str = Field(
-        ...,
-        description='Identifier for the corresponding McpToolCallBegin that finished.',
-    )
-    duration: Duration
-    invocation: McpInvocation
-    result: ResultOfCallToolResultOrString = Field(
-        ..., description='Result of the tool call. Note this could be an error.'
-    )
-    type: McpToolCallEndEventMsgType = Field(..., title='McpToolCallEndEventMsgType')
-
-
-class WebSearchBeginEventMsgType(RootModel[Literal['web_search_begin']]):
-    root: Literal['web_search_begin'] = Field(..., title='WebSearchBeginEventMsgType')
-
-
-class WebSearchBeginEventMsg(BaseModel):
-    call_id: str
-    type: WebSearchBeginEventMsgType = Field(..., title='WebSearchBeginEventMsgType')
-
-
-class WebSearchEndEventMsgType(RootModel[Literal['web_search_end']]):
-    root: Literal['web_search_end'] = Field(..., title='WebSearchEndEventMsgType')
-
-
-class ImageGenerationBeginEventMsgType(RootModel[Literal['image_generation_begin']]):
-    root: Literal['image_generation_begin'] = Field(
-        ..., title='ImageGenerationBeginEventMsgType'
-    )
-
-
-class ImageGenerationBeginEventMsg(BaseModel):
-    call_id: str
-    type: ImageGenerationBeginEventMsgType = Field(
-        ..., title='ImageGenerationBeginEventMsgType'
-    )
-
-
-class ImageGenerationEndEventMsgType(RootModel[Literal['image_generation_end']]):
-    root: Literal['image_generation_end'] = Field(
-        ..., title='ImageGenerationEndEventMsgType'
-    )
-
-
-class ImageGenerationEndEventMsg(BaseModel):
-    call_id: str
-    result: str
-    revised_prompt: str | None = None
-    saved_path: str | None = None
-    status: str
-    type: ImageGenerationEndEventMsgType = Field(
-        ..., title='ImageGenerationEndEventMsgType'
-    )
-
-
-class ExecCommandBeginEventMsgType(RootModel[Literal['exec_command_begin']]):
-    root: Literal['exec_command_begin'] = Field(
-        ..., title='ExecCommandBeginEventMsgType'
-    )
-
-
-class ExecCommandBeginEventMsg(BaseModel):
-    call_id: str = Field(
-        ...,
-        description='Identifier so this can be paired with the ExecCommandEnd event.',
-    )
-    command: list[str] = Field(..., description='The command to be executed.')
-    cwd: str = Field(
-        ...,
-        description="The command's working directory if not the default cwd for the agent.",
-    )
-    interaction_input: str | None = Field(
-        default=None,
-        description='Raw input sent to a unified exec session (if this is an interaction event).',
-    )
-    parsed_cmd: list[ParsedCommand]
-    process_id: str | None = Field(
-        default=None,
-        description='Identifier for the underlying PTY process (when available).',
-    )
-    source: ExecCommandSource | None = Field(
-        default='agent',
-        description='Where the command originated. Defaults to Agent for backward compatibility.',
-    )
-    turn_id: str = Field(..., description='Turn ID that this command belongs to.')
-    type: ExecCommandBeginEventMsgType = Field(
-        ..., title='ExecCommandBeginEventMsgType'
-    )
-
-
-class ExecCommandOutputDeltaEventMsgType(
-    RootModel[Literal['exec_command_output_delta']]
-):
-    root: Literal['exec_command_output_delta'] = Field(
-        ..., title='ExecCommandOutputDeltaEventMsgType'
-    )
-
-
-class ExecCommandOutputDeltaEventMsg(BaseModel):
-    call_id: str = Field(
-        ..., description='Identifier for the ExecCommandBegin that produced this chunk.'
-    )
-    chunk: str = Field(
-        ..., description='Raw bytes from the stream (may not be valid UTF-8).'
-    )
-    stream: ExecOutputStream = Field(
-        ..., description='Which stream produced this chunk.'
-    )
-    type: ExecCommandOutputDeltaEventMsgType = Field(
-        ..., title='ExecCommandOutputDeltaEventMsgType'
-    )
-
-
-class TerminalInteractionEventMsgType(RootModel[Literal['terminal_interaction']]):
-    root: Literal['terminal_interaction'] = Field(
-        ..., title='TerminalInteractionEventMsgType'
-    )
-
-
-class TerminalInteractionEventMsg(BaseModel):
-    call_id: str = Field(
-        ..., description='Identifier for the ExecCommandBegin that produced this chunk.'
-    )
-    process_id: str = Field(
-        ..., description='Process id associated with the running command.'
-    )
-    stdin: str = Field(..., description='Stdin sent to the running session.')
-    type: TerminalInteractionEventMsgType = Field(
-        ..., title='TerminalInteractionEventMsgType'
-    )
-
-
-class ExecCommandEndEventMsgType(RootModel[Literal['exec_command_end']]):
-    root: Literal['exec_command_end'] = Field(..., title='ExecCommandEndEventMsgType')
-
-
-class ExecCommandEndEventMsg(BaseModel):
-    aggregated_output: str | None = Field(
-        default='', description='Captured aggregated output'
-    )
-    call_id: str = Field(
-        ..., description='Identifier for the ExecCommandBegin that finished.'
-    )
-    command: list[str] = Field(..., description='The command that was executed.')
-    cwd: str = Field(
-        ...,
-        description="The command's working directory if not the default cwd for the agent.",
-    )
-    duration: Duration = Field(
-        ..., description='The duration of the command execution.'
-    )
-    exit_code: int = Field(..., description="The command's exit code.")
-    formatted_output: str = Field(
-        ..., description='Formatted output from the command, as seen by the model.'
-    )
-    interaction_input: str | None = Field(
-        default=None,
-        description='Raw input sent to a unified exec session (if this is an interaction event).',
-    )
-    parsed_cmd: list[ParsedCommand]
-    process_id: str | None = Field(
-        default=None,
-        description='Identifier for the underlying PTY process (when available).',
-    )
-    source: ExecCommandSource | None = Field(
-        default='agent',
-        description='Where the command originated. Defaults to Agent for backward compatibility.',
-    )
-    status: ExecCommandStatus = Field(
-        ..., description='Completion status for this command execution.'
-    )
-    stderr: str = Field(..., description='Captured stderr')
-    stdout: str = Field(..., description='Captured stdout')
-    turn_id: str = Field(..., description='Turn ID that this command belongs to.')
-    type: ExecCommandEndEventMsgType = Field(..., title='ExecCommandEndEventMsgType')
-
-
-class ViewImageToolCallEventMsgType(RootModel[Literal['view_image_tool_call']]):
-    root: Literal['view_image_tool_call'] = Field(
-        ..., title='ViewImageToolCallEventMsgType'
-    )
-
-
-class ViewImageToolCallEventMsg(BaseModel):
-    call_id: str = Field(..., description='Identifier for the originating tool call.')
-    path: str = Field(..., description='Local filesystem path provided to the tool.')
-    type: ViewImageToolCallEventMsgType = Field(
-        ..., title='ViewImageToolCallEventMsgType'
-    )
-
-
-class ExecApprovalRequestEventMsgType(RootModel[Literal['exec_approval_request']]):
-    root: Literal['exec_approval_request'] = Field(
-        ..., title='ExecApprovalRequestEventMsgType'
-    )
-
-
-class RequestPermissionsEventMsgType(RootModel[Literal['request_permissions']]):
-    root: Literal['request_permissions'] = Field(
-        ..., title='RequestPermissionsEventMsgType'
-    )
-
-
-class RequestUserInputEventMsgType(RootModel[Literal['request_user_input']]):
-    root: Literal['request_user_input'] = Field(
-        ..., title='RequestUserInputEventMsgType'
-    )
-
-
-class DynamicToolCallRequestEventMsgType(
-    RootModel[Literal['dynamic_tool_call_request']]
-):
-    root: Literal['dynamic_tool_call_request'] = Field(
-        ..., title='DynamicToolCallRequestEventMsgType'
-    )
-
-
-class DynamicToolCallRequestEventMsg(BaseModel):
-    arguments: Any
-    call_id: str = Field(..., alias='callId')
-    tool: str
-    turn_id: str = Field(..., alias='turnId')
-    type: DynamicToolCallRequestEventMsgType = Field(
-        ..., title='DynamicToolCallRequestEventMsgType'
-    )
-
-
-class DynamicToolCallResponseEventMsgType(
-    RootModel[Literal['dynamic_tool_call_response']]
-):
-    root: Literal['dynamic_tool_call_response'] = Field(
-        ..., title='DynamicToolCallResponseEventMsgType'
-    )
-
-
-class ElicitationRequestEventMsgType(RootModel[Literal['elicitation_request']]):
-    root: Literal['elicitation_request'] = Field(
-        ..., title='ElicitationRequestEventMsgType'
-    )
-
-
-class ElicitationRequestEventMsg(BaseModel):
-    id: RequestId
-    request: ElicitationRequest
-    server_name: str
-    turn_id: str | None = Field(
-        default=None,
-        description='Turn ID that this elicitation belongs to, when known.',
-    )
-    type: ElicitationRequestEventMsgType = Field(
-        ..., title='ElicitationRequestEventMsgType'
-    )
-
-
-class ApplyPatchApprovalRequestEventMsgType(
-    RootModel[Literal['apply_patch_approval_request']]
-):
-    root: Literal['apply_patch_approval_request'] = Field(
-        ..., title='ApplyPatchApprovalRequestEventMsgType'
-    )
-
-
-class ApplyPatchApprovalRequestEventMsg(BaseModel):
-    call_id: str = Field(
-        ...,
-        description='Responses API call id for the associated patch apply call, if available.',
-    )
-    changes: dict[str, FileChange]
-    grant_root: str | None = Field(
-        default=None,
-        description='When set, the agent is asking the user to allow writes under this root for the remainder of the session.',
-    )
-    reason: str | None = Field(
-        default=None,
-        description='Optional explanatory reason (e.g. request for extra write access).',
-    )
-    turn_id: str | None = Field(
-        default='',
-        description='Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility with older senders.',
-    )
-    type: ApplyPatchApprovalRequestEventMsgType = Field(
-        ..., title='ApplyPatchApprovalRequestEventMsgType'
-    )
-
-
-class DeprecationNoticeEventMsgType(RootModel[Literal['deprecation_notice']]):
-    root: Literal['deprecation_notice'] = Field(
-        ..., title='DeprecationNoticeEventMsgType'
-    )
-
-
-class DeprecationNoticeEventMsg(BaseModel):
-    details: str | None = Field(
-        default=None,
-        description='Optional extra guidance, such as migration steps or rationale.',
-    )
-    summary: str = Field(..., description='Concise summary of what is deprecated.')
-    type: DeprecationNoticeEventMsgType = Field(
-        ..., title='DeprecationNoticeEventMsgType'
-    )
-
-
-class BackgroundEventEventMsgType(RootModel[Literal['background_event']]):
-    root: Literal['background_event'] = Field(..., title='BackgroundEventEventMsgType')
-
-
-class BackgroundEventEventMsg(BaseModel):
-    message: str
-    type: BackgroundEventEventMsgType = Field(..., title='BackgroundEventEventMsgType')
-
-
-class UndoStartedEventMsgType(RootModel[Literal['undo_started']]):
-    root: Literal['undo_started'] = Field(..., title='UndoStartedEventMsgType')
-
-
-class UndoStartedEventMsg(BaseModel):
-    message: str | None = None
-    type: UndoStartedEventMsgType = Field(..., title='UndoStartedEventMsgType')
-
-
-class UndoCompletedEventMsgType(RootModel[Literal['undo_completed']]):
-    root: Literal['undo_completed'] = Field(..., title='UndoCompletedEventMsgType')
-
-
-class UndoCompletedEventMsg(BaseModel):
-    message: str | None = None
-    success: bool
-    type: UndoCompletedEventMsgType = Field(..., title='UndoCompletedEventMsgType')
-
-
-class StreamErrorEventMsgType(RootModel[Literal['stream_error']]):
-    root: Literal['stream_error'] = Field(..., title='StreamErrorEventMsgType')
-
-
-class PatchApplyBeginEventMsgType(RootModel[Literal['patch_apply_begin']]):
-    root: Literal['patch_apply_begin'] = Field(..., title='PatchApplyBeginEventMsgType')
-
-
-class PatchApplyBeginEventMsg(BaseModel):
-    auto_approved: bool = Field(
-        ...,
-        description='If true, there was no ApplyPatchApprovalRequest for this patch.',
-    )
-    call_id: str = Field(
-        ...,
-        description='Identifier so this can be paired with the PatchApplyEnd event.',
-    )
-    changes: dict[str, FileChange] = Field(
-        ..., description='The changes to be applied.'
-    )
-    turn_id: str | None = Field(
-        default='',
-        description='Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility.',
-    )
-    type: PatchApplyBeginEventMsgType = Field(..., title='PatchApplyBeginEventMsgType')
-
-
-class PatchApplyEndEventMsgType(RootModel[Literal['patch_apply_end']]):
-    root: Literal['patch_apply_end'] = Field(..., title='PatchApplyEndEventMsgType')
-
-
-class TurnDiffEventMsgType(RootModel[Literal['turn_diff']]):
-    root: Literal['turn_diff'] = Field(..., title='TurnDiffEventMsgType')
-
-
-class TurnDiffEventMsg(BaseModel):
-    type: TurnDiffEventMsgType = Field(..., title='TurnDiffEventMsgType')
-    unified_diff: str
-
-
-class GetHistoryEntryResponseEventMsgType(
-    RootModel[Literal['get_history_entry_response']]
-):
-    root: Literal['get_history_entry_response'] = Field(
-        ..., title='GetHistoryEntryResponseEventMsgType'
-    )
-
-
-class GetHistoryEntryResponseEventMsg(BaseModel):
-    entry: HistoryEntry | None = Field(
-        default=None,
-        description='The entry at the requested offset, if available and parseable.',
-    )
-    log_id: int = Field(..., ge=0)
-    offset: int = Field(..., ge=0)
-    type: GetHistoryEntryResponseEventMsgType = Field(
-        ..., title='GetHistoryEntryResponseEventMsgType'
-    )
-
-
-class McpListToolsResponseEventMsgType(RootModel[Literal['mcp_list_tools_response']]):
-    root: Literal['mcp_list_tools_response'] = Field(
-        ..., title='McpListToolsResponseEventMsgType'
-    )
-
-
-class ListCustomPromptsResponseEventMsgType(
-    RootModel[Literal['list_custom_prompts_response']]
-):
-    root: Literal['list_custom_prompts_response'] = Field(
-        ..., title='ListCustomPromptsResponseEventMsgType'
-    )
-
-
-class ListCustomPromptsResponseEventMsg(BaseModel):
-    custom_prompts: list[CustomPrompt]
-    type: ListCustomPromptsResponseEventMsgType = Field(
-        ..., title='ListCustomPromptsResponseEventMsgType'
-    )
-
-
-class ListSkillsResponseEventMsgType(RootModel[Literal['list_skills_response']]):
-    root: Literal['list_skills_response'] = Field(
-        ..., title='ListSkillsResponseEventMsgType'
-    )
-
-
-class ListRemoteSkillsResponseEventMsgType(
-    RootModel[Literal['list_remote_skills_response']]
-):
-    root: Literal['list_remote_skills_response'] = Field(
-        ..., title='ListRemoteSkillsResponseEventMsgType'
-    )
-
-
-class RemoteSkillDownloadedEventMsgType(RootModel[Literal['remote_skill_downloaded']]):
-    root: Literal['remote_skill_downloaded'] = Field(
-        ..., title='RemoteSkillDownloadedEventMsgType'
-    )
-
-
-class RemoteSkillDownloadedEventMsg(BaseModel):
-    id: str
-    name: str
-    path: str
-    type: RemoteSkillDownloadedEventMsgType = Field(
-        ..., title='RemoteSkillDownloadedEventMsgType'
-    )
-
-
-class SkillsUpdateAvailableEventMsgType(RootModel[Literal['skills_update_available']]):
-    root: Literal['skills_update_available'] = Field(
-        ..., title='SkillsUpdateAvailableEventMsgType'
-    )
-
-
-class SkillsUpdateAvailableEventMsg(BaseModel):
-    type: SkillsUpdateAvailableEventMsgType = Field(
-        ..., title='SkillsUpdateAvailableEventMsgType'
-    )
-
-
-class PlanUpdateEventMsgType(RootModel[Literal['plan_update']]):
-    root: Literal['plan_update'] = Field(..., title='PlanUpdateEventMsgType')
-
-
-class TurnAbortedEventMsgType(RootModel[Literal['turn_aborted']]):
-    root: Literal['turn_aborted'] = Field(..., title='TurnAbortedEventMsgType')
-
-
-class TurnAbortedEventMsg(BaseModel):
-    reason: TurnAbortReason
-    turn_id: str | None = None
-    type: TurnAbortedEventMsgType = Field(..., title='TurnAbortedEventMsgType')
-
-
-class ShutdownCompleteEventMsgType(RootModel[Literal['shutdown_complete']]):
-    root: Literal['shutdown_complete'] = Field(
-        ..., title='ShutdownCompleteEventMsgType'
-    )
-
-
-class ShutdownCompleteEventMsg(BaseModel):
-    type: ShutdownCompleteEventMsgType = Field(
-        ..., title='ShutdownCompleteEventMsgType'
-    )
-
-
-class EnteredReviewModeEventMsgType(RootModel[Literal['entered_review_mode']]):
-    root: Literal['entered_review_mode'] = Field(
-        ..., title='EnteredReviewModeEventMsgType'
-    )
-
-
-class ExitedReviewModeEventMsgType(RootModel[Literal['exited_review_mode']]):
-    root: Literal['exited_review_mode'] = Field(
-        ..., title='ExitedReviewModeEventMsgType'
-    )
-
-
-class RawResponseItemEventMsgType(RootModel[Literal['raw_response_item']]):
-    root: Literal['raw_response_item'] = Field(..., title='RawResponseItemEventMsgType')
-
-
-class ItemStartedEventMsgType(RootModel[Literal['item_started']]):
-    root: Literal['item_started'] = Field(..., title='ItemStartedEventMsgType')
-
-
-class ItemCompletedEventMsgType(RootModel[Literal['item_completed']]):
-    root: Literal['item_completed'] = Field(..., title='ItemCompletedEventMsgType')
-
-
-class AgentMessageContentDeltaEventMsgType(
-    RootModel[Literal['agent_message_content_delta']]
-):
-    root: Literal['agent_message_content_delta'] = Field(
-        ..., title='AgentMessageContentDeltaEventMsgType'
-    )
-
-
-class AgentMessageContentDeltaEventMsg(BaseModel):
-    delta: str
-    item_id: str
-    thread_id: str
-    turn_id: str
-    type: AgentMessageContentDeltaEventMsgType = Field(
-        ..., title='AgentMessageContentDeltaEventMsgType'
-    )
-
-
-class PlanDeltaEventMsgType(RootModel[Literal['plan_delta']]):
-    root: Literal['plan_delta'] = Field(..., title='PlanDeltaEventMsgType')
-
-
-class PlanDeltaEventMsg(BaseModel):
-    delta: str
-    item_id: str
-    thread_id: str
-    turn_id: str
-    type: PlanDeltaEventMsgType = Field(..., title='PlanDeltaEventMsgType')
-
-
-class ReasoningContentDeltaEventMsgType(RootModel[Literal['reasoning_content_delta']]):
-    root: Literal['reasoning_content_delta'] = Field(
-        ..., title='ReasoningContentDeltaEventMsgType'
-    )
-
-
-class ReasoningContentDeltaEventMsg(BaseModel):
-    delta: str
-    item_id: str
-    summary_index: int | None = 0
-    thread_id: str
-    turn_id: str
-    type: ReasoningContentDeltaEventMsgType = Field(
-        ..., title='ReasoningContentDeltaEventMsgType'
-    )
-
-
-class ReasoningRawContentDeltaEventMsgType(
-    RootModel[Literal['reasoning_raw_content_delta']]
-):
-    root: Literal['reasoning_raw_content_delta'] = Field(
-        ..., title='ReasoningRawContentDeltaEventMsgType'
-    )
-
-
-class ReasoningRawContentDeltaEventMsg(BaseModel):
-    content_index: int | None = 0
-    delta: str
-    item_id: str
-    thread_id: str
-    turn_id: str
-    type: ReasoningRawContentDeltaEventMsgType = Field(
-        ..., title='ReasoningRawContentDeltaEventMsgType'
-    )
-
-
-class CollabAgentSpawnBeginEventMsgType(RootModel[Literal['collab_agent_spawn_begin']]):
-    root: Literal['collab_agent_spawn_begin'] = Field(
-        ..., title='CollabAgentSpawnBeginEventMsgType'
-    )
-
-
-class CollabAgentSpawnEndEventMsgType(RootModel[Literal['collab_agent_spawn_end']]):
-    root: Literal['collab_agent_spawn_end'] = Field(
-        ..., title='CollabAgentSpawnEndEventMsgType'
-    )
-
-
-class CollabAgentInteractionBeginEventMsgType(
-    RootModel[Literal['collab_agent_interaction_begin']]
-):
-    root: Literal['collab_agent_interaction_begin'] = Field(
-        ..., title='CollabAgentInteractionBeginEventMsgType'
-    )
-
-
-class CollabAgentInteractionEndEventMsgType(
-    RootModel[Literal['collab_agent_interaction_end']]
-):
-    root: Literal['collab_agent_interaction_end'] = Field(
-        ..., title='CollabAgentInteractionEndEventMsgType'
-    )
-
-
-class CollabWaitingBeginEventMsgType(RootModel[Literal['collab_waiting_begin']]):
-    root: Literal['collab_waiting_begin'] = Field(
-        ..., title='CollabWaitingBeginEventMsgType'
-    )
-
-
-class CollabWaitingEndEventMsgType(RootModel[Literal['collab_waiting_end']]):
-    root: Literal['collab_waiting_end'] = Field(
-        ..., title='CollabWaitingEndEventMsgType'
-    )
-
-
-class CollabCloseBeginEventMsgType(RootModel[Literal['collab_close_begin']]):
-    root: Literal['collab_close_begin'] = Field(
-        ..., title='CollabCloseBeginEventMsgType'
-    )
-
-
-class CollabCloseEndEventMsgType(RootModel[Literal['collab_close_end']]):
-    root: Literal['collab_close_end'] = Field(..., title='CollabCloseEndEventMsgType')
-
-
-class CollabResumeBeginEventMsgType(RootModel[Literal['collab_resume_begin']]):
-    root: Literal['collab_resume_begin'] = Field(
-        ..., title='CollabResumeBeginEventMsgType'
-    )
-
-
-class CollabResumeEndEventMsgType(RootModel[Literal['collab_resume_end']]):
-    root: Literal['collab_resume_end'] = Field(..., title='CollabResumeEndEventMsgType')
-
-
-class GrantedMacOsPermissions(BaseModel):
-    accessibility: bool | None = None
-    automations: MacOsAutomationPermission | None = None
-    calendar: bool | None = None
-    preferences: MacOsPreferencesPermission | None = None
-
-
-class InitializeResponse(BaseModel):
-    user_agent: str = Field(..., alias='userAgent')
-
-
-class FuzzyFileSearchResponse(BaseModel):
-    files: list[FuzzyFileSearchResult]
-
-
-class FileChangeApprovalDecision(
-    RootModel[
-        Literal['accept']
-        | Literal['acceptForSession']
-        | Literal['decline']
-        | Literal['cancel']
-    ]
-):
-    root: (
-        Literal['accept']
-        | Literal['acceptForSession']
-        | Literal['decline']
-        | Literal['cancel']
-    )
-
-
-class FileChangeRequestApprovalResponse(BaseModel):
-    decision: FileChangeApprovalDecision
-
-
-class ToolRequestUserInputAnswer(BaseModel):
-    answers: list[str]
-
-
-class ToolRequestUserInputResponse(BaseModel):
-    answers: dict[str, ToolRequestUserInputAnswer]
-
-
-class McpServerElicitationAction(StrEnum):
-    accept = 'accept'
-    decline = 'decline'
-    cancel = 'cancel'
-
-
-class McpServerElicitationRequestResponse(BaseModel):
-    field_meta: Any | None = Field(
-        default=None,
-        alias='_meta',
-        description='Optional client metadata for form-mode action handling.',
-    )
-    action: McpServerElicitationAction
-    content: Any | None = Field(
-        default=None,
-        description='Structured user input for accepted elicitations, mirroring RMCP `CreateElicitationResult`.\n\nThis is nullable because decline/cancel responses have no content.',
-    )
-
-
-class NotLoadedThreadStatusType(RootModel[Literal['notLoaded']]):
-    root: Literal['notLoaded'] = Field(..., title='NotLoadedThreadStatusType')
-
-
-class NotLoadedThreadStatus(BaseModel):
-    type: NotLoadedThreadStatusType = Field(..., title='NotLoadedThreadStatusType')
-
-
-class IdleThreadStatusType(RootModel[Literal['idle']]):
-    root: Literal['idle'] = Field(..., title='IdleThreadStatusType')
-
-
-class IdleThreadStatus(BaseModel):
-    type: IdleThreadStatusType = Field(..., title='IdleThreadStatusType')
-
-
-class SystemErrorThreadStatusType(RootModel[Literal['systemError']]):
-    root: Literal['systemError'] = Field(..., title='SystemErrorThreadStatusType')
-
-
-class SystemErrorThreadStatus(BaseModel):
-    type: SystemErrorThreadStatusType = Field(..., title='SystemErrorThreadStatusType')
-
-
-class ActiveThreadStatusType(RootModel[Literal['active']]):
-    root: Literal['active'] = Field(..., title='ActiveThreadStatusType')
-
-
-class ThreadActiveFlag(StrEnum):
-    waiting_on_approval = 'waitingOnApproval'
-    waiting_on_user_input = 'waitingOnUserInput'
-
-
-class ReasoningSummaryPartAddedNotification(BaseModel):
-    item_id: str = Field(..., alias='itemId')
-    summary_index: int = Field(..., alias='summaryIndex')
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
-
-
-class UserMessageThreadItemType(RootModel[Literal['userMessage']]):
-    root: Literal['userMessage'] = Field(..., title='UserMessageThreadItemType')
-
-
-class AgentMessageThreadItemType(RootModel[Literal['agentMessage']]):
-    root: Literal['agentMessage'] = Field(..., title='AgentMessageThreadItemType')
-
-
-class PlanThreadItemType(RootModel[Literal['plan']]):
-    root: Literal['plan'] = Field(..., title='PlanThreadItemType')
-
-
-class PlanThreadItem(BaseModel):
-    id: str
-    text: str
-    type: PlanThreadItemType = Field(..., title='PlanThreadItemType')
-
-
-class ReasoningThreadItemType(RootModel[Literal['reasoning']]):
-    root: Literal['reasoning'] = Field(..., title='ReasoningThreadItemType')
-
-
-class ReasoningThreadItem(BaseModel):
-    content: list[str] | None = []
-    id: str
-    summary: list[str] | None = []
-    type: ReasoningThreadItemType = Field(..., title='ReasoningThreadItemType')
-
-
-class CommandExecutionThreadItemType(RootModel[Literal['commandExecution']]):
-    root: Literal['commandExecution'] = Field(
-        ..., title='CommandExecutionThreadItemType'
-    )
-
-
-class FileChangeThreadItemType(RootModel[Literal['fileChange']]):
-    root: Literal['fileChange'] = Field(..., title='FileChangeThreadItemType')
-
-
-class McpToolCallThreadItemType(RootModel[Literal['mcpToolCall']]):
-    root: Literal['mcpToolCall'] = Field(..., title='McpToolCallThreadItemType')
-
-
-class DynamicToolCallThreadItemType(RootModel[Literal['dynamicToolCall']]):
-    root: Literal['dynamicToolCall'] = Field(..., title='DynamicToolCallThreadItemType')
-
-
-class CollabAgentToolCallThreadItemType(RootModel[Literal['collabAgentToolCall']]):
-    root: Literal['collabAgentToolCall'] = Field(
-        ..., title='CollabAgentToolCallThreadItemType'
-    )
-
-
-class WebSearchThreadItemType(RootModel[Literal['webSearch']]):
-    root: Literal['webSearch'] = Field(..., title='WebSearchThreadItemType')
-
-
-class ImageViewThreadItemType(RootModel[Literal['imageView']]):
-    root: Literal['imageView'] = Field(..., title='ImageViewThreadItemType')
-
-
-class ImageViewThreadItem(BaseModel):
-    id: str
-    path: str
-    type: ImageViewThreadItemType = Field(..., title='ImageViewThreadItemType')
-
-
-class ImageGenerationThreadItemType(RootModel[Literal['imageGeneration']]):
-    root: Literal['imageGeneration'] = Field(..., title='ImageGenerationThreadItemType')
-
-
-class ImageGenerationThreadItem(BaseModel):
-    id: str
-    result: str
-    revised_prompt: str | None = Field(default=None, alias='revisedPrompt')
-    status: str
-    type: ImageGenerationThreadItemType = Field(
-        ..., title='ImageGenerationThreadItemType'
-    )
-
-
-class EnteredReviewModeThreadItemType(RootModel[Literal['enteredReviewMode']]):
-    root: Literal['enteredReviewMode'] = Field(
-        ..., title='EnteredReviewModeThreadItemType'
-    )
-
-
-class EnteredReviewModeThreadItem(BaseModel):
-    id: str
-    review: str
-    type: EnteredReviewModeThreadItemType = Field(
-        ..., title='EnteredReviewModeThreadItemType'
-    )
-
-
-class ExitedReviewModeThreadItemType(RootModel[Literal['exitedReviewMode']]):
-    root: Literal['exitedReviewMode'] = Field(
-        ..., title='ExitedReviewModeThreadItemType'
-    )
-
-
-class ExitedReviewModeThreadItem(BaseModel):
-    id: str
-    review: str
-    type: ExitedReviewModeThreadItemType = Field(
-        ..., title='ExitedReviewModeThreadItemType'
-    )
-
-
-class ContextCompactionThreadItemType(RootModel[Literal['contextCompaction']]):
-    root: Literal['contextCompaction'] = Field(
-        ..., title='ContextCompactionThreadItemType'
-    )
-
-
-class ContextCompactionThreadItem(BaseModel):
-    id: str
-    type: ContextCompactionThreadItemType = Field(
-        ..., title='ContextCompactionThreadItemType'
-    )
-
-
-class CollabAgentToolCallStatus(StrEnum):
-    in_progress = 'inProgress'
-    completed = 'completed'
-    failed = 'failed'
-
-
-class InputTextDynamicToolCallOutputContentItemType(RootModel[Literal['inputText']]):
-    root: Literal['inputText'] = Field(
-        ..., title='InputTextDynamicToolCallOutputContentItemType'
-    )
-
-
-class InputTextDynamicToolCallOutputContentItem(BaseModel):
-    text: str
-    type: InputTextDynamicToolCallOutputContentItemType = Field(
-        ..., title='InputTextDynamicToolCallOutputContentItemType'
-    )
-
-
-class InputImageDynamicToolCallOutputContentItemType(RootModel[Literal['inputImage']]):
-    root: Literal['inputImage'] = Field(
-        ..., title='InputImageDynamicToolCallOutputContentItemType'
-    )
-
-
-class InputImageDynamicToolCallOutputContentItem(BaseModel):
-    image_url: str = Field(..., alias='imageUrl')
-    type: InputImageDynamicToolCallOutputContentItemType = Field(
-        ..., title='InputImageDynamicToolCallOutputContentItemType'
-    )
-
-
-class DynamicToolCallOutputContentItem(
-    RootModel[
-        InputTextDynamicToolCallOutputContentItem
-        | InputImageDynamicToolCallOutputContentItem
-    ]
-):
-    root: (
-        InputTextDynamicToolCallOutputContentItem
-        | InputImageDynamicToolCallOutputContentItem
-    )
-
-
-class MessagePhase(RootModel[Literal['commentary'] | Literal['final_answer']]):
-    root: Literal['commentary'] | Literal['final_answer'] = Field(
-        ...,
-        description='Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as "phase unknown" and keep compatibility behavior for legacy models.',
-    )
-
-
-class McpToolCallError(BaseModel):
-    message: str
-
-
-class McpToolCallStatus(StrEnum):
-    in_progress = 'inProgress'
-    completed = 'completed'
-    failed = 'failed'
-
-
-class DynamicToolCallStatus(StrEnum):
-    in_progress = 'inProgress'
-    completed = 'completed'
-    failed = 'failed'
-
-
-class CollabAgentStatus(StrEnum):
-    pending_init = 'pendingInit'
-    running = 'running'
-    completed = 'completed'
-    errored = 'errored'
-    shutdown = 'shutdown'
-    not_found = 'notFound'
-
-
-class ReadCommandActionType(RootModel[Literal['read']]):
-    root: Literal['read'] = Field(..., title='ReadCommandActionType')
-
-
-class ReadCommandAction(BaseModel):
-    command: str
-    name: str
-    path: str
-    type: ReadCommandActionType = Field(..., title='ReadCommandActionType')
-
-
-class ListFilesCommandActionType(RootModel[Literal['listFiles']]):
-    root: Literal['listFiles'] = Field(..., title='ListFilesCommandActionType')
-
-
-class ListFilesCommandAction(BaseModel):
-    command: str
-    path: str | None = None
-    type: ListFilesCommandActionType = Field(..., title='ListFilesCommandActionType')
-
-
-class SearchCommandActionType(RootModel[Literal['search']]):
-    root: Literal['search'] = Field(..., title='SearchCommandActionType')
-
-
-class SearchCommandAction(BaseModel):
-    command: str
-    path: str | None = None
-    query: str | None = None
-    type: SearchCommandActionType = Field(..., title='SearchCommandActionType')
-
-
-class UnknownCommandActionType(RootModel[Literal['unknown']]):
-    root: Literal['unknown'] = Field(..., title='UnknownCommandActionType')
-
-
-class UnknownCommandAction(BaseModel):
-    command: str
-    type: UnknownCommandActionType = Field(..., title='UnknownCommandActionType')
-
-
-class CommandAction(
-    RootModel[
-        ReadCommandAction
-        | ListFilesCommandAction
-        | SearchCommandAction
-        | UnknownCommandAction
-    ]
-):
-    root: (
-        ReadCommandAction
-        | ListFilesCommandAction
-        | SearchCommandAction
-        | UnknownCommandAction
-    )
-
-
-class CollabAgentTool(StrEnum):
-    spawn_agent = 'spawnAgent'
-    send_input = 'sendInput'
-    resume_agent = 'resumeAgent'
-    wait = 'wait'
-    close_agent = 'closeAgent'
-
-
-class CommandExecutionStatus(StrEnum):
-    in_progress = 'inProgress'
-    completed = 'completed'
-    failed = 'failed'
-    declined = 'declined'
-
-
-class TextUserInputType(RootModel[Literal['text']]):
-    root: Literal['text'] = Field(..., title='TextUserInputType')
-
-
-class ImageUserInputType(RootModel[Literal['image']]):
-    root: Literal['image'] = Field(..., title='ImageUserInputType')
-
-
-class ImageUserInput(BaseModel):
-    type: ImageUserInputType = Field(..., title='ImageUserInputType')
-    url: str
-
-
-class LocalImageUserInputType(RootModel[Literal['localImage']]):
-    root: Literal['localImage'] = Field(..., title='LocalImageUserInputType')
-
-
-class LocalImageUserInput(BaseModel):
-    path: str
-    type: LocalImageUserInputType = Field(..., title='LocalImageUserInputType')
-
-
-class SkillUserInputType(RootModel[Literal['skill']]):
-    root: Literal['skill'] = Field(..., title='SkillUserInputType')
-
-
-class SkillUserInput(BaseModel):
-    name: str
-    path: str
-    type: SkillUserInputType = Field(..., title='SkillUserInputType')
-
-
-class MentionUserInputType(RootModel[Literal['mention']]):
-    root: Literal['mention'] = Field(..., title='MentionUserInputType')
-
-
-class MentionUserInput(BaseModel):
-    name: str
-    path: str
-    type: MentionUserInputType = Field(..., title='MentionUserInputType')
-
-
-class ByteRange(BaseModel):
-    end: int = Field(..., ge=0)
-    start: int = Field(..., ge=0)
+class AccountReadClientRequestMethod(RootModel[Literal["account/read"]]):
+    root: Literal["account/read"] = Field(..., title="Account/readClientRequestMethod")
 
 
-class PatchApplyStatus(StrEnum):
-    in_progress = 'inProgress'
-    completed = 'completed'
-    failed = 'failed'
-    declined = 'declined'
-
-
-class SearchWebSearchActionType(RootModel[Literal['search']]):
-    root: Literal['search'] = Field(..., title='SearchWebSearchActionType')
-
-
-class SearchWebSearchAction(BaseModel):
-    queries: list[str] | None = None
-    query: str | None = None
-    type: SearchWebSearchActionType = Field(..., title='SearchWebSearchActionType')
-
-
-class OpenPageWebSearchActionType(RootModel[Literal['openPage']]):
-    root: Literal['openPage'] = Field(..., title='OpenPageWebSearchActionType')
-
-
-class OpenPageWebSearchAction(BaseModel):
-    type: OpenPageWebSearchActionType = Field(..., title='OpenPageWebSearchActionType')
-    url: str | None = None
-
-
-class FindInPageWebSearchActionType(RootModel[Literal['findInPage']]):
-    root: Literal['findInPage'] = Field(..., title='FindInPageWebSearchActionType')
-
-
-class FindInPageWebSearchAction(BaseModel):
-    pattern: str | None = None
-    type: FindInPageWebSearchActionType = Field(
-        ..., title='FindInPageWebSearchActionType'
-    )
-    url: str | None = None
-
-
-class OtherWebSearchActionType(RootModel[Literal['other']]):
-    root: Literal['other'] = Field(..., title='OtherWebSearchActionType')
-
-
-class OtherWebSearchAction(BaseModel):
-    type: OtherWebSearchActionType = Field(..., title='OtherWebSearchActionType')
-
-
-class WebSearchAction(
-    RootModel[
-        SearchWebSearchAction
-        | OpenPageWebSearchAction
-        | FindInPageWebSearchAction
-        | OtherWebSearchAction
-    ]
-):
-    root: (
-        SearchWebSearchAction
-        | OpenPageWebSearchAction
-        | FindInPageWebSearchAction
-        | OtherWebSearchAction
-    )
-
-
-class AddPatchChangeKindType(RootModel[Literal['add']]):
-    root: Literal['add'] = Field(..., title='AddPatchChangeKindType')
-
-
-class AddPatchChangeKind(BaseModel):
-    type: AddPatchChangeKindType = Field(..., title='AddPatchChangeKindType')
-
-
-class DeletePatchChangeKindType(RootModel[Literal['delete']]):
-    root: Literal['delete'] = Field(..., title='DeletePatchChangeKindType')
-
-
-class DeletePatchChangeKind(BaseModel):
-    type: DeletePatchChangeKindType = Field(..., title='DeletePatchChangeKindType')
-
-
-class UpdatePatchChangeKindType(RootModel[Literal['update']]):
-    root: Literal['update'] = Field(..., title='UpdatePatchChangeKindType')
-
-
-class UpdatePatchChangeKind(BaseModel):
-    move_path: str | None = None
-    type: UpdatePatchChangeKindType = Field(..., title='UpdatePatchChangeKindType')
-
-
-class PatchChangeKind(
-    RootModel[AddPatchChangeKind | DeletePatchChangeKind | UpdatePatchChangeKind]
-):
-    root: AddPatchChangeKind | DeletePatchChangeKind | UpdatePatchChangeKind
-
-
-class McpToolCallResult(BaseModel):
-    content: list[Any]
-    structured_content: Any | None = Field(None, alias='structuredContent')
-
-
-class CommandExecTerminalSize(BaseModel):
-    cols: int = Field(..., description='Terminal width in character cells.', ge=0)
-    rows: int = Field(..., description='Terminal height in character cells.', ge=0)
-
-
-class ModelListParams(BaseModel):
-    cursor: str | None = Field(
-        default=None,
-        description='Opaque pagination cursor returned by a previous call.',
-    )
-    include_hidden: bool | None = Field(
-        default=None,
-        alias='includeHidden',
-        description='When true, include models that are hidden from the default picker list.',
-    )
-    limit: int | None = Field(
-        default=None,
-        description='Optional page size; defaults to a reasonable server-side value.',
-        ge=0,
-    )
-
-
-class AbsolutePathBuf(RootModel[str]):
-    root: str = Field(
-        ...,
-        description='A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.',
-    )
-
-
-class ModeKind(StrEnum):
-    plan = 'plan'
-    default = 'default'
-
-
-class McpServerOauthLoginParams(BaseModel):
-    name: str
-    scopes: list[str] | None = None
-    timeout_secs: int | None = Field(default=None, alias='timeoutSecs')
-
-
-class AgentMessageDeltaNotification(BaseModel):
-    delta: str
-    item_id: str = Field(..., alias='itemId')
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
-
-
-class SkillsChangedNotification(BaseModel):
-    pass
-
-
-class AppsListParams(BaseModel):
-    cursor: str | None = Field(
-        default=None,
-        description='Opaque pagination cursor returned by a previous call.',
+class FuzzyFileSearchClientRequestMethod(RootModel[Literal["fuzzyFileSearch"]]):
+    root: Literal["fuzzyFileSearch"] = Field(
+        ..., title="FuzzyFileSearchClientRequestMethod"
     )
-    force_refetch: bool | None = Field(
-        default=None,
-        alias='forceRefetch',
-        description='When true, bypass app caches and fetch the latest data from sources.',
-    )
-    limit: int | None = Field(
-        default=None,
-        description='Optional page size; defaults to a reasonable server-side value.',
-        ge=0,
-    )
-    thread_id: str | None = Field(
-        default=None,
-        alias='threadId',
-        description="Optional thread id used to evaluate app feature gating from that thread's config.",
-    )
-
-
-class CreditsSnapshot(BaseModel):
-    balance: str | None = None
-    has_credits: bool = Field(..., alias='hasCredits')
-    unlimited: bool
-
-
-class RateLimitWindow(BaseModel):
-    resets_at: int | None = Field(default=None, alias='resetsAt')
-    used_percent: int = Field(..., alias='usedPercent')
-    window_duration_mins: int | None = Field(default=None, alias='windowDurationMins')
-
-
-class PlanType(StrEnum):
-    free = 'free'
-    go = 'go'
-    plus = 'plus'
-    pro = 'pro'
-    team = 'team'
-    business = 'business'
-    enterprise = 'enterprise'
-    edu = 'edu'
-    unknown = 'unknown'
 
 
 class CodexErrorInfo1(StrEnum):
-    context_window_exceeded = 'contextWindowExceeded'
-    usage_limit_exceeded = 'usageLimitExceeded'
-    server_overloaded = 'serverOverloaded'
-    internal_server_error = 'internalServerError'
-    unauthorized = 'unauthorized'
-    bad_request = 'badRequest'
-    thread_rollback_failed = 'threadRollbackFailed'
-    sandbox_error = 'sandboxError'
-    other = 'other'
+    context_window_exceeded = "contextWindowExceeded"
+    usage_limit_exceeded = "usageLimitExceeded"
+    server_overloaded = "serverOverloaded"
+    internal_server_error = "internalServerError"
+    unauthorized = "unauthorized"
+    bad_request = "badRequest"
+    thread_rollback_failed = "threadRollbackFailed"
+    sandbox_error = "sandboxError"
+    other = "other"
 
 
 class HttpConnectionFailed(BaseModel):
-    http_status_code: int | None = Field(default=None, alias='httpStatusCode', ge=0)
+    http_status_code: int | None = Field(default=None, alias="httpStatusCode", ge=0)
 
 
 class HttpConnectionFailedCodexErrorInfo(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     http_connection_failed: HttpConnectionFailed = Field(
-        ..., alias='httpConnectionFailed'
+        ..., alias="httpConnectionFailed"
     )
 
 
 class ResponseStreamConnectionFailed(BaseModel):
-    http_status_code: int | None = Field(default=None, alias='httpStatusCode', ge=0)
+    http_status_code: int | None = Field(default=None, alias="httpStatusCode", ge=0)
 
 
 class ResponseStreamConnectionFailedCodexErrorInfo(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     response_stream_connection_failed: ResponseStreamConnectionFailed = Field(
-        ..., alias='responseStreamConnectionFailed'
+        ..., alias="responseStreamConnectionFailed"
     )
 
 
 class ResponseStreamDisconnected(BaseModel):
-    http_status_code: int | None = Field(default=None, alias='httpStatusCode', ge=0)
+    http_status_code: int | None = Field(default=None, alias="httpStatusCode", ge=0)
 
 
 class ResponseStreamDisconnectedCodexErrorInfo(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     response_stream_disconnected: ResponseStreamDisconnected = Field(
-        ..., alias='responseStreamDisconnected'
+        ..., alias="responseStreamDisconnected"
     )
 
 
 class ResponseTooManyFailedAttempts(BaseModel):
-    http_status_code: int | None = Field(default=None, alias='httpStatusCode', ge=0)
+    http_status_code: int | None = Field(default=None, alias="httpStatusCode", ge=0)
 
 
 class ResponseTooManyFailedAttemptsCodexErrorInfo(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     response_too_many_failed_attempts: ResponseTooManyFailedAttempts = Field(
-        ..., alias='responseTooManyFailedAttempts'
+        ..., alias="responseTooManyFailedAttempts"
     )
 
 
@@ -3109,148 +573,1374 @@ class CodexErrorInfo(
         | ResponseTooManyFailedAttemptsCodexErrorInfo
     ) = Field(
         ...,
-        description='This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.',
+        description="This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
     )
 
 
-class WindowsWorldWritableWarningNotification(BaseModel):
-    extra_count: int = Field(..., alias='extraCount', ge=0)
-    failed_scan: bool = Field(..., alias='failedScan')
-    sample_paths: list[str] = Field(..., alias='samplePaths')
+class CollabAgentStatus(StrEnum):
+    pending_init = "pendingInit"
+    running = "running"
+    completed = "completed"
+    errored = "errored"
+    shutdown = "shutdown"
+    not_found = "notFound"
 
 
-class ThreadLoadedListParams(BaseModel):
-    cursor: str | None = Field(
-        default=None,
-        description='Opaque pagination cursor returned by a previous call.',
+class CollabAgentTool(StrEnum):
+    spawn_agent = "spawnAgent"
+    send_input = "sendInput"
+    resume_agent = "resumeAgent"
+    wait = "wait"
+    close_agent = "closeAgent"
+
+
+class CollabAgentToolCallStatus(StrEnum):
+    in_progress = "inProgress"
+    completed = "completed"
+    failed = "failed"
+
+
+class ReadCommandActionType(RootModel[Literal["read"]]):
+    root: Literal["read"] = Field(..., title="ReadCommandActionType")
+
+
+class ReadCommandAction(BaseModel):
+    command: str
+    name: str
+    path: str
+    type: ReadCommandActionType = Field(..., title="ReadCommandActionType")
+
+
+class ListFilesCommandActionType(RootModel[Literal["listFiles"]]):
+    root: Literal["listFiles"] = Field(..., title="ListFilesCommandActionType")
+
+
+class ListFilesCommandAction(BaseModel):
+    command: str
+    path: str | None = None
+    type: ListFilesCommandActionType = Field(..., title="ListFilesCommandActionType")
+
+
+class SearchCommandActionType(RootModel[Literal["search"]]):
+    root: Literal["search"] = Field(..., title="SearchCommandActionType")
+
+
+class SearchCommandAction(BaseModel):
+    command: str
+    path: str | None = None
+    query: str | None = None
+    type: SearchCommandActionType = Field(..., title="SearchCommandActionType")
+
+
+class UnknownCommandActionType(RootModel[Literal["unknown"]]):
+    root: Literal["unknown"] = Field(..., title="UnknownCommandActionType")
+
+
+class UnknownCommandAction(BaseModel):
+    command: str
+    type: UnknownCommandActionType = Field(..., title="UnknownCommandActionType")
+
+
+class CommandAction(
+    RootModel[
+        ReadCommandAction
+        | ListFilesCommandAction
+        | SearchCommandAction
+        | UnknownCommandAction
+    ]
+):
+    root: (
+        ReadCommandAction
+        | ListFilesCommandAction
+        | SearchCommandAction
+        | UnknownCommandAction
     )
-    limit: int | None = Field(
-        default=None, description='Optional page size; defaults to no limit.', ge=0
+
+
+class CommandExecOutputStream(RootModel[Literal["stdout"] | Literal["stderr"]]):
+    root: Literal["stdout"] | Literal["stderr"] = Field(
+        ..., description="Stream label for `command/exec/outputDelta` notifications."
     )
 
 
-class ThreadRealtimeAudioChunk(BaseModel):
-    data: str
-    num_channels: int = Field(..., alias='numChannels', ge=0)
-    sample_rate: int = Field(..., alias='sampleRate', ge=0)
-    samples_per_channel: int | None = Field(
-        default=None, alias='samplesPerChannel', ge=0
-    )
-
-
-class TurnError(BaseModel):
-    additional_details: str | None = Field(default=None, alias='additionalDetails')
-    codex_error_info: CodexErrorInfo | None = Field(
-        default=None, alias='codexErrorInfo'
-    )
-    message: str
-
-
-class TurnStatus(StrEnum):
-    completed = 'completed'
-    interrupted = 'interrupted'
-    failed = 'failed'
-    in_progress = 'inProgress'
-
-
-class SessionSource1(StrEnum):
-    cli = 'cli'
-    vscode = 'vscode'
-    exec = 'exec'
-    app_server = 'appServer'
-    unknown = 'unknown'
-
-
-class SubAgentSource1(StrEnum):
-    review = 'review'
-    compact = 'compact'
-    memory_consolidation = 'memory_consolidation'
-
-
-class OtherSubAgentSource(BaseModel):
-    model_config = ConfigDict(
-        extra='forbid',
-    )
-    other: str
-
-
-class ThreadId(RootModel[str]):
-    root: str
-
-
-class GitInfo(BaseModel):
-    branch: str | None = None
-    origin_url: str | None = Field(default=None, alias='originUrl')
-    sha: str | None = None
-
-
-class ExternalAgentConfigMigrationItemType(StrEnum):
-    agents_md = 'AGENTS_MD'
-    config = 'CONFIG'
-    skills = 'SKILLS'
-    mcp_server_config = 'MCP_SERVER_CONFIG'
-
-
-class SkillsListExtraRootsForCwd(BaseModel):
-    cwd: str
-    extra_user_roots: list[str] = Field(..., alias='extraUserRoots')
+class CommandExecTerminalSize(BaseModel):
+    cols: int = Field(..., description="Terminal width in character cells.", ge=0)
+    rows: int = Field(..., description="Terminal height in character cells.", ge=0)
 
 
 class CommandExecTerminateParams(BaseModel):
     process_id: str = Field(
         ...,
-        alias='processId',
-        description='Client-supplied, connection-scoped `processId` from the original `command/exec` request.',
+        alias="processId",
+        description="Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
     )
 
 
-class ApiKeyv2LoginAccountParamsType(RootModel[Literal['apiKey']]):
-    root: Literal['apiKey'] = Field(..., title='ApiKeyv2::LoginAccountParamsType')
+class CommandExecWriteParams(BaseModel):
+    close_stdin: bool | None = Field(
+        default=None,
+        alias="closeStdin",
+        description="Close stdin after writing `deltaBase64`, if present.",
+    )
+    delta_base64: str | None = Field(
+        default=None,
+        alias="deltaBase64",
+        description="Optional base64-encoded stdin bytes to write.",
+    )
+    process_id: str = Field(
+        ...,
+        alias="processId",
+        description="Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+    )
+
+
+class AcceptWithExecpolicyAmendment(BaseModel):
+    execpolicy_amendment: list[str]
+
+
+class AcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    accept_with_execpolicy_amendment: AcceptWithExecpolicyAmendment = Field(
+        ..., alias="acceptWithExecpolicyAmendment"
+    )
+
+
+class CommandExecutionOutputDeltaNotification(BaseModel):
+    delta: str
+    item_id: str = Field(..., alias="itemId")
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class CommandExecutionRequestApprovalSkillMetadata(BaseModel):
+    path_to_skills_md: str = Field(..., alias="pathToSkillsMd")
+
+
+class CommandExecutionStatus(StrEnum):
+    in_progress = "inProgress"
+    completed = "completed"
+    failed = "failed"
+    declined = "declined"
+
+
+class ConfigReadParams(BaseModel):
+    cwd: str | None = Field(
+        default=None,
+        description="Optional working directory to resolve project config layers. If specified, return the effective config as seen from that directory (i.e., including any project layers between `cwd` and the project/repo root).",
+    )
+    include_layers: bool | None = Field(default=False, alias="includeLayers")
+
+
+class InputTextContentItemType(RootModel[Literal["input_text"]]):
+    root: Literal["input_text"] = Field(..., title="InputTextContentItemType")
+
+
+class InputTextContentItem(BaseModel):
+    text: str
+    type: InputTextContentItemType = Field(..., title="InputTextContentItemType")
+
+
+class InputImageContentItemType(RootModel[Literal["input_image"]]):
+    root: Literal["input_image"] = Field(..., title="InputImageContentItemType")
+
+
+class InputImageContentItem(BaseModel):
+    image_url: str
+    type: InputImageContentItemType = Field(..., title="InputImageContentItemType")
+
+
+class OutputTextContentItemType(RootModel[Literal["output_text"]]):
+    root: Literal["output_text"] = Field(..., title="OutputTextContentItemType")
+
+
+class OutputTextContentItem(BaseModel):
+    text: str
+    type: OutputTextContentItemType = Field(..., title="OutputTextContentItemType")
+
+
+class ContentItem(
+    RootModel[InputTextContentItem | InputImageContentItem | OutputTextContentItem]
+):
+    root: InputTextContentItem | InputImageContentItem | OutputTextContentItem
+
+
+class ContextCompactedNotification(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class CreditsSnapshot(BaseModel):
+    balance: str | None = None
+    has_credits: bool = Field(..., alias="hasCredits")
+    unlimited: bool
+
+
+class CustomPrompt(BaseModel):
+    argument_hint: str | None = None
+    content: str
+    description: str | None = None
+    name: str
+    path: str
+
+
+class DeprecationNoticeNotification(BaseModel):
+    details: str | None = Field(
+        default=None,
+        description="Optional extra guidance, such as migration steps or rationale.",
+    )
+    summary: str = Field(..., description="Concise summary of what is deprecated.")
+
+
+class Duration(BaseModel):
+    nanos: int = Field(..., ge=0)
+    secs: int = Field(..., ge=0)
+
+
+class InputTextDynamicToolCallOutputContentItemType(RootModel[Literal["inputText"]]):
+    root: Literal["inputText"] = Field(
+        ..., title="InputTextDynamicToolCallOutputContentItemType"
+    )
+
+
+class InputTextDynamicToolCallOutputContentItem(BaseModel):
+    text: str
+    type: InputTextDynamicToolCallOutputContentItemType = Field(
+        ..., title="InputTextDynamicToolCallOutputContentItemType"
+    )
+
+
+class InputImageDynamicToolCallOutputContentItemType(RootModel[Literal["inputImage"]]):
+    root: Literal["inputImage"] = Field(
+        ..., title="InputImageDynamicToolCallOutputContentItemType"
+    )
+
+
+class InputImageDynamicToolCallOutputContentItem(BaseModel):
+    image_url: str = Field(..., alias="imageUrl")
+    type: InputImageDynamicToolCallOutputContentItemType = Field(
+        ..., title="InputImageDynamicToolCallOutputContentItemType"
+    )
+
+
+class DynamicToolCallOutputContentItem(
+    RootModel[
+        InputTextDynamicToolCallOutputContentItem
+        | InputImageDynamicToolCallOutputContentItem
+    ]
+):
+    root: (
+        InputTextDynamicToolCallOutputContentItem
+        | InputImageDynamicToolCallOutputContentItem
+    )
+
+
+class DynamicToolCallParams(BaseModel):
+    arguments: Any
+    call_id: str = Field(..., alias="callId")
+    thread_id: str = Field(..., alias="threadId")
+    tool: str
+    turn_id: str = Field(..., alias="turnId")
+
+
+class DynamicToolCallResponse(BaseModel):
+    content_items: list[DynamicToolCallOutputContentItem] = Field(
+        ..., alias="contentItems"
+    )
+    success: bool
+
+
+class DynamicToolCallStatus(StrEnum):
+    in_progress = "inProgress"
+    completed = "completed"
+    failed = "failed"
+
+
+class ElicitationRequest1(BaseModel):
+    field_meta: Any | None = Field(None, alias="_meta")
+    message: str
+    mode: Literal["form"]
+    requested_schema: Any
+
+
+class ElicitationRequest2(BaseModel):
+    field_meta: Any | None = Field(None, alias="_meta")
+    elicitation_id: str
+    message: str
+    mode: Literal["url"]
+    url: str
+
+
+class ElicitationRequest(RootModel[ElicitationRequest1 | ElicitationRequest2]):
+    root: ElicitationRequest1 | ElicitationRequest2
+
+
+class ErrorEventMsgType(RootModel[Literal["error"]]):
+    root: Literal["error"] = Field(..., title="ErrorEventMsgType")
+
+
+class ErrorEventMsg(BaseModel):
+    codex_error_info: CodexErrorInfo | None = None
+    message: str
+    type: ErrorEventMsgType = Field(..., title="ErrorEventMsgType")
+
+
+class WarningEventMsgType(RootModel[Literal["warning"]]):
+    root: Literal["warning"] = Field(..., title="WarningEventMsgType")
+
+
+class WarningEventMsg(BaseModel):
+    message: str
+    type: WarningEventMsgType = Field(..., title="WarningEventMsgType")
+
+
+class RealtimeConversationStartedEventMsgType(
+    RootModel[Literal["realtime_conversation_started"]]
+):
+    root: Literal["realtime_conversation_started"] = Field(
+        ..., title="RealtimeConversationStartedEventMsgType"
+    )
+
+
+class RealtimeConversationStartedEventMsg(BaseModel):
+    session_id: str | None = None
+    type: RealtimeConversationStartedEventMsgType = Field(
+        ..., title="RealtimeConversationStartedEventMsgType"
+    )
+
+
+class RealtimeConversationRealtimeEventMsgType(
+    RootModel[Literal["realtime_conversation_realtime"]]
+):
+    root: Literal["realtime_conversation_realtime"] = Field(
+        ..., title="RealtimeConversationRealtimeEventMsgType"
+    )
+
+
+class RealtimeConversationClosedEventMsgType(
+    RootModel[Literal["realtime_conversation_closed"]]
+):
+    root: Literal["realtime_conversation_closed"] = Field(
+        ..., title="RealtimeConversationClosedEventMsgType"
+    )
+
+
+class RealtimeConversationClosedEventMsg(BaseModel):
+    reason: str | None = None
+    type: RealtimeConversationClosedEventMsgType = Field(
+        ..., title="RealtimeConversationClosedEventMsgType"
+    )
+
+
+class ModelRerouteEventMsgType(RootModel[Literal["model_reroute"]]):
+    root: Literal["model_reroute"] = Field(..., title="ModelRerouteEventMsgType")
+
+
+class ContextCompactedEventMsgType(RootModel[Literal["context_compacted"]]):
+    root: Literal["context_compacted"] = Field(
+        ..., title="ContextCompactedEventMsgType"
+    )
+
+
+class ContextCompactedEventMsg(BaseModel):
+    type: ContextCompactedEventMsgType = Field(
+        ..., title="ContextCompactedEventMsgType"
+    )
+
+
+class ThreadRolledBackEventMsgType(RootModel[Literal["thread_rolled_back"]]):
+    root: Literal["thread_rolled_back"] = Field(
+        ..., title="ThreadRolledBackEventMsgType"
+    )
+
+
+class ThreadRolledBackEventMsg(BaseModel):
+    num_turns: int = Field(
+        ..., description="Number of user turns that were removed from context.", ge=0
+    )
+    type: ThreadRolledBackEventMsgType = Field(
+        ..., title="ThreadRolledBackEventMsgType"
+    )
+
+
+class TaskStartedEventMsgType(RootModel[Literal["task_started"]]):
+    root: Literal["task_started"] = Field(..., title="TaskStartedEventMsgType")
+
+
+class TaskCompleteEventMsgType(RootModel[Literal["task_complete"]]):
+    root: Literal["task_complete"] = Field(..., title="TaskCompleteEventMsgType")
+
+
+class TaskCompleteEventMsg(BaseModel):
+    last_agent_message: str | None = None
+    turn_id: str
+    type: TaskCompleteEventMsgType = Field(..., title="TaskCompleteEventMsgType")
+
+
+class TokenCountEventMsgType(RootModel[Literal["token_count"]]):
+    root: Literal["token_count"] = Field(..., title="TokenCountEventMsgType")
+
+
+class AgentMessageEventMsgType(RootModel[Literal["agent_message"]]):
+    root: Literal["agent_message"] = Field(..., title="AgentMessageEventMsgType")
+
+
+class UserMessageEventMsgType(RootModel[Literal["user_message"]]):
+    root: Literal["user_message"] = Field(..., title="UserMessageEventMsgType")
+
+
+class AgentMessageDeltaEventMsgType(RootModel[Literal["agent_message_delta"]]):
+    root: Literal["agent_message_delta"] = Field(
+        ..., title="AgentMessageDeltaEventMsgType"
+    )
+
+
+class AgentMessageDeltaEventMsg(BaseModel):
+    delta: str
+    type: AgentMessageDeltaEventMsgType = Field(
+        ..., title="AgentMessageDeltaEventMsgType"
+    )
+
+
+class AgentReasoningEventMsgType(RootModel[Literal["agent_reasoning"]]):
+    root: Literal["agent_reasoning"] = Field(..., title="AgentReasoningEventMsgType")
+
+
+class AgentReasoningEventMsg(BaseModel):
+    text: str
+    type: AgentReasoningEventMsgType = Field(..., title="AgentReasoningEventMsgType")
+
+
+class AgentReasoningDeltaEventMsgType(RootModel[Literal["agent_reasoning_delta"]]):
+    root: Literal["agent_reasoning_delta"] = Field(
+        ..., title="AgentReasoningDeltaEventMsgType"
+    )
+
+
+class AgentReasoningDeltaEventMsg(BaseModel):
+    delta: str
+    type: AgentReasoningDeltaEventMsgType = Field(
+        ..., title="AgentReasoningDeltaEventMsgType"
+    )
+
+
+class AgentReasoningRawContentEventMsgType(
+    RootModel[Literal["agent_reasoning_raw_content"]]
+):
+    root: Literal["agent_reasoning_raw_content"] = Field(
+        ..., title="AgentReasoningRawContentEventMsgType"
+    )
+
+
+class AgentReasoningRawContentEventMsg(BaseModel):
+    text: str
+    type: AgentReasoningRawContentEventMsgType = Field(
+        ..., title="AgentReasoningRawContentEventMsgType"
+    )
+
+
+class AgentReasoningRawContentDeltaEventMsgType(
+    RootModel[Literal["agent_reasoning_raw_content_delta"]]
+):
+    root: Literal["agent_reasoning_raw_content_delta"] = Field(
+        ..., title="AgentReasoningRawContentDeltaEventMsgType"
+    )
+
+
+class AgentReasoningRawContentDeltaEventMsg(BaseModel):
+    delta: str
+    type: AgentReasoningRawContentDeltaEventMsgType = Field(
+        ..., title="AgentReasoningRawContentDeltaEventMsgType"
+    )
+
+
+class AgentReasoningSectionBreakEventMsgType(
+    RootModel[Literal["agent_reasoning_section_break"]]
+):
+    root: Literal["agent_reasoning_section_break"] = Field(
+        ..., title="AgentReasoningSectionBreakEventMsgType"
+    )
+
+
+class AgentReasoningSectionBreakEventMsg(BaseModel):
+    item_id: str | None = ""
+    summary_index: int | None = 0
+    type: AgentReasoningSectionBreakEventMsgType = Field(
+        ..., title="AgentReasoningSectionBreakEventMsgType"
+    )
+
+
+class SessionConfiguredEventMsgType(RootModel[Literal["session_configured"]]):
+    root: Literal["session_configured"] = Field(
+        ..., title="SessionConfiguredEventMsgType"
+    )
+
+
+class ThreadNameUpdatedEventMsgType(RootModel[Literal["thread_name_updated"]]):
+    root: Literal["thread_name_updated"] = Field(
+        ..., title="ThreadNameUpdatedEventMsgType"
+    )
+
+
+class McpStartupUpdateEventMsgType(RootModel[Literal["mcp_startup_update"]]):
+    root: Literal["mcp_startup_update"] = Field(
+        ..., title="McpStartupUpdateEventMsgType"
+    )
+
+
+class McpStartupCompleteEventMsgType(RootModel[Literal["mcp_startup_complete"]]):
+    root: Literal["mcp_startup_complete"] = Field(
+        ..., title="McpStartupCompleteEventMsgType"
+    )
+
+
+class McpToolCallBeginEventMsgType(RootModel[Literal["mcp_tool_call_begin"]]):
+    root: Literal["mcp_tool_call_begin"] = Field(
+        ..., title="McpToolCallBeginEventMsgType"
+    )
+
+
+class McpToolCallEndEventMsgType(RootModel[Literal["mcp_tool_call_end"]]):
+    root: Literal["mcp_tool_call_end"] = Field(..., title="McpToolCallEndEventMsgType")
+
+
+class WebSearchBeginEventMsgType(RootModel[Literal["web_search_begin"]]):
+    root: Literal["web_search_begin"] = Field(..., title="WebSearchBeginEventMsgType")
+
+
+class WebSearchBeginEventMsg(BaseModel):
+    call_id: str
+    type: WebSearchBeginEventMsgType = Field(..., title="WebSearchBeginEventMsgType")
+
+
+class WebSearchEndEventMsgType(RootModel[Literal["web_search_end"]]):
+    root: Literal["web_search_end"] = Field(..., title="WebSearchEndEventMsgType")
+
+
+class ImageGenerationBeginEventMsgType(RootModel[Literal["image_generation_begin"]]):
+    root: Literal["image_generation_begin"] = Field(
+        ..., title="ImageGenerationBeginEventMsgType"
+    )
+
+
+class ImageGenerationBeginEventMsg(BaseModel):
+    call_id: str
+    type: ImageGenerationBeginEventMsgType = Field(
+        ..., title="ImageGenerationBeginEventMsgType"
+    )
+
+
+class ImageGenerationEndEventMsgType(RootModel[Literal["image_generation_end"]]):
+    root: Literal["image_generation_end"] = Field(
+        ..., title="ImageGenerationEndEventMsgType"
+    )
+
+
+class ImageGenerationEndEventMsg(BaseModel):
+    call_id: str
+    result: str
+    revised_prompt: str | None = None
+    saved_path: str | None = None
+    status: str
+    type: ImageGenerationEndEventMsgType = Field(
+        ..., title="ImageGenerationEndEventMsgType"
+    )
+
+
+class ExecCommandBeginEventMsgType(RootModel[Literal["exec_command_begin"]]):
+    root: Literal["exec_command_begin"] = Field(
+        ..., title="ExecCommandBeginEventMsgType"
+    )
+
+
+class ExecCommandOutputDeltaEventMsgType(
+    RootModel[Literal["exec_command_output_delta"]]
+):
+    root: Literal["exec_command_output_delta"] = Field(
+        ..., title="ExecCommandOutputDeltaEventMsgType"
+    )
+
+
+class TerminalInteractionEventMsgType(RootModel[Literal["terminal_interaction"]]):
+    root: Literal["terminal_interaction"] = Field(
+        ..., title="TerminalInteractionEventMsgType"
+    )
+
+
+class TerminalInteractionEventMsg(BaseModel):
+    call_id: str = Field(
+        ..., description="Identifier for the ExecCommandBegin that produced this chunk."
+    )
+    process_id: str = Field(
+        ..., description="Process id associated with the running command."
+    )
+    stdin: str = Field(..., description="Stdin sent to the running session.")
+    type: TerminalInteractionEventMsgType = Field(
+        ..., title="TerminalInteractionEventMsgType"
+    )
+
+
+class ExecCommandEndEventMsgType(RootModel[Literal["exec_command_end"]]):
+    root: Literal["exec_command_end"] = Field(..., title="ExecCommandEndEventMsgType")
+
+
+class ViewImageToolCallEventMsgType(RootModel[Literal["view_image_tool_call"]]):
+    root: Literal["view_image_tool_call"] = Field(
+        ..., title="ViewImageToolCallEventMsgType"
+    )
+
+
+class ViewImageToolCallEventMsg(BaseModel):
+    call_id: str = Field(..., description="Identifier for the originating tool call.")
+    path: str = Field(..., description="Local filesystem path provided to the tool.")
+    type: ViewImageToolCallEventMsgType = Field(
+        ..., title="ViewImageToolCallEventMsgType"
+    )
+
+
+class ExecApprovalRequestEventMsgType(RootModel[Literal["exec_approval_request"]]):
+    root: Literal["exec_approval_request"] = Field(
+        ..., title="ExecApprovalRequestEventMsgType"
+    )
+
+
+class RequestPermissionsEventMsgType(RootModel[Literal["request_permissions"]]):
+    root: Literal["request_permissions"] = Field(
+        ..., title="RequestPermissionsEventMsgType"
+    )
+
+
+class RequestUserInputEventMsgType(RootModel[Literal["request_user_input"]]):
+    root: Literal["request_user_input"] = Field(
+        ..., title="RequestUserInputEventMsgType"
+    )
+
+
+class DynamicToolCallRequestEventMsgType(
+    RootModel[Literal["dynamic_tool_call_request"]]
+):
+    root: Literal["dynamic_tool_call_request"] = Field(
+        ..., title="DynamicToolCallRequestEventMsgType"
+    )
+
+
+class DynamicToolCallRequestEventMsg(BaseModel):
+    arguments: Any
+    call_id: str = Field(..., alias="callId")
+    tool: str
+    turn_id: str = Field(..., alias="turnId")
+    type: DynamicToolCallRequestEventMsgType = Field(
+        ..., title="DynamicToolCallRequestEventMsgType"
+    )
+
+
+class DynamicToolCallResponseEventMsgType(
+    RootModel[Literal["dynamic_tool_call_response"]]
+):
+    root: Literal["dynamic_tool_call_response"] = Field(
+        ..., title="DynamicToolCallResponseEventMsgType"
+    )
+
+
+class DynamicToolCallResponseEventMsg(BaseModel):
+    arguments: Any = Field(..., description="Dynamic tool call arguments.")
+    call_id: str = Field(
+        ..., description="Identifier for the corresponding DynamicToolCallRequest."
+    )
+    content_items: list[DynamicToolCallOutputContentItem] = Field(
+        ..., description="Dynamic tool response content items."
+    )
+    duration: Duration = Field(
+        ..., description="The duration of the dynamic tool call."
+    )
+    error: str | None = Field(
+        default=None,
+        description="Optional error text when the tool call failed before producing a response.",
+    )
+    success: bool = Field(..., description="Whether the tool call succeeded.")
+    tool: str = Field(..., description="Dynamic tool name.")
+    turn_id: str = Field(
+        ..., description="Turn ID that this dynamic tool call belongs to."
+    )
+    type: DynamicToolCallResponseEventMsgType = Field(
+        ..., title="DynamicToolCallResponseEventMsgType"
+    )
+
+
+class ElicitationRequestEventMsgType(RootModel[Literal["elicitation_request"]]):
+    root: Literal["elicitation_request"] = Field(
+        ..., title="ElicitationRequestEventMsgType"
+    )
+
+
+class ApplyPatchApprovalRequestEventMsgType(
+    RootModel[Literal["apply_patch_approval_request"]]
+):
+    root: Literal["apply_patch_approval_request"] = Field(
+        ..., title="ApplyPatchApprovalRequestEventMsgType"
+    )
+
+
+class DeprecationNoticeEventMsgType(RootModel[Literal["deprecation_notice"]]):
+    root: Literal["deprecation_notice"] = Field(
+        ..., title="DeprecationNoticeEventMsgType"
+    )
+
+
+class DeprecationNoticeEventMsg(BaseModel):
+    details: str | None = Field(
+        default=None,
+        description="Optional extra guidance, such as migration steps or rationale.",
+    )
+    summary: str = Field(..., description="Concise summary of what is deprecated.")
+    type: DeprecationNoticeEventMsgType = Field(
+        ..., title="DeprecationNoticeEventMsgType"
+    )
+
+
+class BackgroundEventEventMsgType(RootModel[Literal["background_event"]]):
+    root: Literal["background_event"] = Field(..., title="BackgroundEventEventMsgType")
+
+
+class BackgroundEventEventMsg(BaseModel):
+    message: str
+    type: BackgroundEventEventMsgType = Field(..., title="BackgroundEventEventMsgType")
+
+
+class UndoStartedEventMsgType(RootModel[Literal["undo_started"]]):
+    root: Literal["undo_started"] = Field(..., title="UndoStartedEventMsgType")
+
+
+class UndoStartedEventMsg(BaseModel):
+    message: str | None = None
+    type: UndoStartedEventMsgType = Field(..., title="UndoStartedEventMsgType")
+
+
+class UndoCompletedEventMsgType(RootModel[Literal["undo_completed"]]):
+    root: Literal["undo_completed"] = Field(..., title="UndoCompletedEventMsgType")
+
+
+class UndoCompletedEventMsg(BaseModel):
+    message: str | None = None
+    success: bool
+    type: UndoCompletedEventMsgType = Field(..., title="UndoCompletedEventMsgType")
+
+
+class StreamErrorEventMsgType(RootModel[Literal["stream_error"]]):
+    root: Literal["stream_error"] = Field(..., title="StreamErrorEventMsgType")
+
+
+class StreamErrorEventMsg(BaseModel):
+    additional_details: str | None = Field(
+        default=None,
+        description="Optional details about the underlying stream failure (often the same human-readable message that is surfaced as the terminal error if retries are exhausted).",
+    )
+    codex_error_info: CodexErrorInfo | None = None
+    message: str
+    type: StreamErrorEventMsgType = Field(..., title="StreamErrorEventMsgType")
+
+
+class PatchApplyBeginEventMsgType(RootModel[Literal["patch_apply_begin"]]):
+    root: Literal["patch_apply_begin"] = Field(..., title="PatchApplyBeginEventMsgType")
+
+
+class PatchApplyEndEventMsgType(RootModel[Literal["patch_apply_end"]]):
+    root: Literal["patch_apply_end"] = Field(..., title="PatchApplyEndEventMsgType")
+
+
+class TurnDiffEventMsgType(RootModel[Literal["turn_diff"]]):
+    root: Literal["turn_diff"] = Field(..., title="TurnDiffEventMsgType")
+
+
+class TurnDiffEventMsg(BaseModel):
+    type: TurnDiffEventMsgType = Field(..., title="TurnDiffEventMsgType")
+    unified_diff: str
+
+
+class GetHistoryEntryResponseEventMsgType(
+    RootModel[Literal["get_history_entry_response"]]
+):
+    root: Literal["get_history_entry_response"] = Field(
+        ..., title="GetHistoryEntryResponseEventMsgType"
+    )
+
+
+class McpListToolsResponseEventMsgType(RootModel[Literal["mcp_list_tools_response"]]):
+    root: Literal["mcp_list_tools_response"] = Field(
+        ..., title="McpListToolsResponseEventMsgType"
+    )
+
+
+class ListCustomPromptsResponseEventMsgType(
+    RootModel[Literal["list_custom_prompts_response"]]
+):
+    root: Literal["list_custom_prompts_response"] = Field(
+        ..., title="ListCustomPromptsResponseEventMsgType"
+    )
+
+
+class ListCustomPromptsResponseEventMsg(BaseModel):
+    custom_prompts: list[CustomPrompt]
+    type: ListCustomPromptsResponseEventMsgType = Field(
+        ..., title="ListCustomPromptsResponseEventMsgType"
+    )
+
+
+class ListSkillsResponseEventMsgType(RootModel[Literal["list_skills_response"]]):
+    root: Literal["list_skills_response"] = Field(
+        ..., title="ListSkillsResponseEventMsgType"
+    )
+
+
+class ListRemoteSkillsResponseEventMsgType(
+    RootModel[Literal["list_remote_skills_response"]]
+):
+    root: Literal["list_remote_skills_response"] = Field(
+        ..., title="ListRemoteSkillsResponseEventMsgType"
+    )
+
+
+class RemoteSkillDownloadedEventMsgType(RootModel[Literal["remote_skill_downloaded"]]):
+    root: Literal["remote_skill_downloaded"] = Field(
+        ..., title="RemoteSkillDownloadedEventMsgType"
+    )
+
+
+class RemoteSkillDownloadedEventMsg(BaseModel):
+    id: str
+    name: str
+    path: str
+    type: RemoteSkillDownloadedEventMsgType = Field(
+        ..., title="RemoteSkillDownloadedEventMsgType"
+    )
+
+
+class SkillsUpdateAvailableEventMsgType(RootModel[Literal["skills_update_available"]]):
+    root: Literal["skills_update_available"] = Field(
+        ..., title="SkillsUpdateAvailableEventMsgType"
+    )
+
+
+class SkillsUpdateAvailableEventMsg(BaseModel):
+    type: SkillsUpdateAvailableEventMsgType = Field(
+        ..., title="SkillsUpdateAvailableEventMsgType"
+    )
+
+
+class PlanUpdateEventMsgType(RootModel[Literal["plan_update"]]):
+    root: Literal["plan_update"] = Field(..., title="PlanUpdateEventMsgType")
+
+
+class TurnAbortedEventMsgType(RootModel[Literal["turn_aborted"]]):
+    root: Literal["turn_aborted"] = Field(..., title="TurnAbortedEventMsgType")
+
+
+class ShutdownCompleteEventMsgType(RootModel[Literal["shutdown_complete"]]):
+    root: Literal["shutdown_complete"] = Field(
+        ..., title="ShutdownCompleteEventMsgType"
+    )
+
+
+class ShutdownCompleteEventMsg(BaseModel):
+    type: ShutdownCompleteEventMsgType = Field(
+        ..., title="ShutdownCompleteEventMsgType"
+    )
+
+
+class EnteredReviewModeEventMsgType(RootModel[Literal["entered_review_mode"]]):
+    root: Literal["entered_review_mode"] = Field(
+        ..., title="EnteredReviewModeEventMsgType"
+    )
+
+
+class ExitedReviewModeEventMsgType(RootModel[Literal["exited_review_mode"]]):
+    root: Literal["exited_review_mode"] = Field(
+        ..., title="ExitedReviewModeEventMsgType"
+    )
+
+
+class RawResponseItemEventMsgType(RootModel[Literal["raw_response_item"]]):
+    root: Literal["raw_response_item"] = Field(..., title="RawResponseItemEventMsgType")
+
+
+class ItemStartedEventMsgType(RootModel[Literal["item_started"]]):
+    root: Literal["item_started"] = Field(..., title="ItemStartedEventMsgType")
+
+
+class ItemCompletedEventMsgType(RootModel[Literal["item_completed"]]):
+    root: Literal["item_completed"] = Field(..., title="ItemCompletedEventMsgType")
+
+
+class AgentMessageContentDeltaEventMsgType(
+    RootModel[Literal["agent_message_content_delta"]]
+):
+    root: Literal["agent_message_content_delta"] = Field(
+        ..., title="AgentMessageContentDeltaEventMsgType"
+    )
+
+
+class AgentMessageContentDeltaEventMsg(BaseModel):
+    delta: str
+    item_id: str
+    thread_id: str
+    turn_id: str
+    type: AgentMessageContentDeltaEventMsgType = Field(
+        ..., title="AgentMessageContentDeltaEventMsgType"
+    )
+
+
+class PlanDeltaEventMsgType(RootModel[Literal["plan_delta"]]):
+    root: Literal["plan_delta"] = Field(..., title="PlanDeltaEventMsgType")
+
+
+class PlanDeltaEventMsg(BaseModel):
+    delta: str
+    item_id: str
+    thread_id: str
+    turn_id: str
+    type: PlanDeltaEventMsgType = Field(..., title="PlanDeltaEventMsgType")
+
+
+class ReasoningContentDeltaEventMsgType(RootModel[Literal["reasoning_content_delta"]]):
+    root: Literal["reasoning_content_delta"] = Field(
+        ..., title="ReasoningContentDeltaEventMsgType"
+    )
+
+
+class ReasoningContentDeltaEventMsg(BaseModel):
+    delta: str
+    item_id: str
+    summary_index: int | None = 0
+    thread_id: str
+    turn_id: str
+    type: ReasoningContentDeltaEventMsgType = Field(
+        ..., title="ReasoningContentDeltaEventMsgType"
+    )
+
+
+class ReasoningRawContentDeltaEventMsgType(
+    RootModel[Literal["reasoning_raw_content_delta"]]
+):
+    root: Literal["reasoning_raw_content_delta"] = Field(
+        ..., title="ReasoningRawContentDeltaEventMsgType"
+    )
+
+
+class ReasoningRawContentDeltaEventMsg(BaseModel):
+    content_index: int | None = 0
+    delta: str
+    item_id: str
+    thread_id: str
+    turn_id: str
+    type: ReasoningRawContentDeltaEventMsgType = Field(
+        ..., title="ReasoningRawContentDeltaEventMsgType"
+    )
+
+
+class CollabAgentSpawnBeginEventMsgType(RootModel[Literal["collab_agent_spawn_begin"]]):
+    root: Literal["collab_agent_spawn_begin"] = Field(
+        ..., title="CollabAgentSpawnBeginEventMsgType"
+    )
+
+
+class CollabAgentSpawnEndEventMsgType(RootModel[Literal["collab_agent_spawn_end"]]):
+    root: Literal["collab_agent_spawn_end"] = Field(
+        ..., title="CollabAgentSpawnEndEventMsgType"
+    )
+
+
+class CollabAgentInteractionBeginEventMsgType(
+    RootModel[Literal["collab_agent_interaction_begin"]]
+):
+    root: Literal["collab_agent_interaction_begin"] = Field(
+        ..., title="CollabAgentInteractionBeginEventMsgType"
+    )
+
+
+class CollabAgentInteractionEndEventMsgType(
+    RootModel[Literal["collab_agent_interaction_end"]]
+):
+    root: Literal["collab_agent_interaction_end"] = Field(
+        ..., title="CollabAgentInteractionEndEventMsgType"
+    )
+
+
+class CollabWaitingBeginEventMsgType(RootModel[Literal["collab_waiting_begin"]]):
+    root: Literal["collab_waiting_begin"] = Field(
+        ..., title="CollabWaitingBeginEventMsgType"
+    )
+
+
+class CollabWaitingEndEventMsgType(RootModel[Literal["collab_waiting_end"]]):
+    root: Literal["collab_waiting_end"] = Field(
+        ..., title="CollabWaitingEndEventMsgType"
+    )
+
+
+class CollabCloseBeginEventMsgType(RootModel[Literal["collab_close_begin"]]):
+    root: Literal["collab_close_begin"] = Field(
+        ..., title="CollabCloseBeginEventMsgType"
+    )
+
+
+class CollabCloseEndEventMsgType(RootModel[Literal["collab_close_end"]]):
+    root: Literal["collab_close_end"] = Field(..., title="CollabCloseEndEventMsgType")
+
+
+class CollabResumeBeginEventMsgType(RootModel[Literal["collab_resume_begin"]]):
+    root: Literal["collab_resume_begin"] = Field(
+        ..., title="CollabResumeBeginEventMsgType"
+    )
+
+
+class CollabResumeEndEventMsgType(RootModel[Literal["collab_resume_end"]]):
+    root: Literal["collab_resume_end"] = Field(..., title="CollabResumeEndEventMsgType")
+
+
+class ExecApprovalRequestSkillMetadata(BaseModel):
+    path_to_skills_md: str
+
+
+class ExecCommandSource(StrEnum):
+    agent = "agent"
+    user_shell = "user_shell"
+    unified_exec_startup = "unified_exec_startup"
+    unified_exec_interaction = "unified_exec_interaction"
+
+
+class ExecCommandStatus(StrEnum):
+    completed = "completed"
+    failed = "failed"
+    declined = "declined"
+
+
+class ExecOutputStream(StrEnum):
+    stdout = "stdout"
+    stderr = "stderr"
+
+
+class ExperimentalFeatureListParams(BaseModel):
+    cursor: str | None = Field(
+        default=None,
+        description="Opaque pagination cursor returned by a previous call.",
+    )
+    limit: int | None = Field(
+        default=None,
+        description="Optional page size; defaults to a reasonable server-side value.",
+        ge=0,
+    )
+
+
+class ExternalAgentConfigDetectParams(BaseModel):
+    cwds: list[str] | None = Field(
+        default=None,
+        description="Zero or more working directories to include for repo-scoped detection.",
+    )
+    include_home: bool | None = Field(
+        default=None,
+        alias="includeHome",
+        description="If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
+    )
+
+
+class ExternalAgentConfigMigrationItemType(StrEnum):
+    agents_md = "AGENTS_MD"
+    config = "CONFIG"
+    skills = "SKILLS"
+    mcp_server_config = "MCP_SERVER_CONFIG"
+
+
+class FeedbackUploadParams(BaseModel):
+    classification: str
+    extra_log_files: list[str] | None = Field(default=None, alias="extraLogFiles")
+    include_logs: bool = Field(..., alias="includeLogs")
+    reason: str | None = None
+    thread_id: str | None = Field(default=None, alias="threadId")
+
+
+class AddFileChangeType(RootModel[Literal["add"]]):
+    root: Literal["add"] = Field(..., title="AddFileChangeType")
+
+
+class AddFileChange(BaseModel):
+    content: str
+    type: AddFileChangeType = Field(..., title="AddFileChangeType")
+
+
+class DeleteFileChangeType(RootModel[Literal["delete"]]):
+    root: Literal["delete"] = Field(..., title="DeleteFileChangeType")
+
+
+class DeleteFileChange(BaseModel):
+    content: str
+    type: DeleteFileChangeType = Field(..., title="DeleteFileChangeType")
+
+
+class UpdateFileChangeType(RootModel[Literal["update"]]):
+    root: Literal["update"] = Field(..., title="UpdateFileChangeType")
+
+
+class UpdateFileChange(BaseModel):
+    move_path: str | None = None
+    type: UpdateFileChangeType = Field(..., title="UpdateFileChangeType")
+    unified_diff: str
+
+
+class FileChange(RootModel[AddFileChange | DeleteFileChange | UpdateFileChange]):
+    root: AddFileChange | DeleteFileChange | UpdateFileChange
+
+
+class FileChangeApprovalDecision(
+    RootModel[
+        Literal["accept"]
+        | Literal["acceptForSession"]
+        | Literal["decline"]
+        | Literal["cancel"]
+    ]
+):
+    root: (
+        Literal["accept"]
+        | Literal["acceptForSession"]
+        | Literal["decline"]
+        | Literal["cancel"]
+    )
+
+
+class FileChangeOutputDeltaNotification(BaseModel):
+    delta: str
+    item_id: str = Field(..., alias="itemId")
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class FileChangeRequestApprovalParams(BaseModel):
+    grant_root: str | None = Field(
+        default=None,
+        alias="grantRoot",
+        description="[UNSTABLE] When set, the agent is asking the user to allow writes under this root for the remainder of the session (unclear if this is honored today).",
+    )
+    item_id: str = Field(..., alias="itemId")
+    reason: str | None = Field(
+        default=None,
+        description="Optional explanatory reason (e.g. request for extra write access).",
+    )
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class FileChangeRequestApprovalResponse(BaseModel):
+    decision: FileChangeApprovalDecision
+
+
+class FileSystemPermissions(BaseModel):
+    read: list[AbsolutePathBuf] | None = None
+    write: list[AbsolutePathBuf] | None = None
+
+
+class InputTextFunctionCallOutputContentItemType(RootModel[Literal["input_text"]]):
+    root: Literal["input_text"] = Field(
+        ..., title="InputTextFunctionCallOutputContentItemType"
+    )
+
+
+class InputTextFunctionCallOutputContentItem(BaseModel):
+    text: str
+    type: InputTextFunctionCallOutputContentItemType = Field(
+        ..., title="InputTextFunctionCallOutputContentItemType"
+    )
+
+
+class InputImageFunctionCallOutputContentItemType(RootModel[Literal["input_image"]]):
+    root: Literal["input_image"] = Field(
+        ..., title="InputImageFunctionCallOutputContentItemType"
+    )
+
+
+class FuzzyFileSearchParams(BaseModel):
+    cancellation_token: str | None = Field(default=None, alias="cancellationToken")
+    query: str
+    roots: list[str]
+
+
+class Indice(RootModel[int]):
+    root: int = Field(..., ge=0)
+
+
+class FuzzyFileSearchResult(BaseModel):
+    file_name: str
+    indices: list[Indice] | None = None
+    path: str
+    root: str
+    score: int = Field(..., ge=0)
+
+
+class FuzzyFileSearchSessionCompletedNotification(BaseModel):
+    session_id: str = Field(..., alias="sessionId")
+
+
+class FuzzyFileSearchSessionUpdatedNotification(BaseModel):
+    files: list[FuzzyFileSearchResult]
+    query: str
+    session_id: str = Field(..., alias="sessionId")
+
+
+class GetAccountParams(BaseModel):
+    refresh_token: bool | None = Field(
+        default=False,
+        alias="refreshToken",
+        description="When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.",
+    )
+
+
+class GhostCommit(BaseModel):
+    id: str
+    parent: str | None = None
+    preexisting_untracked_dirs: list[str]
+    preexisting_untracked_files: list[str]
+
+
+class GitInfo(BaseModel):
+    branch: str | None = None
+    origin_url: str | None = Field(default=None, alias="originUrl")
+    sha: str | None = None
+
+
+class HazelnutScope(StrEnum):
+    example = "example"
+    workspace_shared = "workspace-shared"
+    all_shared = "all-shared"
+    personal = "personal"
+
+
+class HistoryEntry(BaseModel):
+    conversation_id: str
+    text: str
+    ts: int = Field(..., ge=0)
+
+
+class ImageDetail(StrEnum):
+    auto = "auto"
+    low = "low"
+    high = "high"
+    original = "original"
+
+
+class InitializeCapabilities(BaseModel):
+    experimental_api: bool | None = Field(
+        default=False,
+        alias="experimentalApi",
+        description="Opt into receiving experimental API methods and fields.",
+    )
+    opt_out_notification_methods: list[str] | None = Field(
+        default=None,
+        alias="optOutNotificationMethods",
+        description="Exact notification method names that should be suppressed for this connection (for example `codex/event/session_configured`).",
+    )
+
+
+class InitializeParams(BaseModel):
+    capabilities: InitializeCapabilities | None = None
+    client_info: ClientInfo = Field(..., alias="clientInfo")
+
+
+class InitializeResponse(BaseModel):
+    user_agent: str = Field(..., alias="userAgent")
+
+
+class JSONRPCErrorError(BaseModel):
+    code: int
+    data: Any | None = None
+    message: str
+
+
+class JSONRPCNotification(BaseModel):
+    method: str
+    params: Any | None = None
+
+
+class ListMcpServerStatusParams(BaseModel):
+    cursor: str | None = Field(
+        default=None,
+        description="Opaque pagination cursor returned by a previous call.",
+    )
+    limit: int | None = Field(
+        default=None,
+        description="Optional page size; defaults to a server-defined value.",
+        ge=0,
+    )
+
+
+class ExecLocalShellActionType(RootModel[Literal["exec"]]):
+    root: Literal["exec"] = Field(..., title="ExecLocalShellActionType")
+
+
+class ExecLocalShellAction(BaseModel):
+    command: list[str]
+    env: dict[str, Any] | None = None
+    timeout_ms: int | None = Field(default=None, ge=0)
+    type: ExecLocalShellActionType = Field(..., title="ExecLocalShellActionType")
+    user: str | None = None
+    working_directory: str | None = None
+
+
+class LocalShellAction(RootModel[ExecLocalShellAction]):
+    root: ExecLocalShellAction
+
+
+class LocalShellStatus(StrEnum):
+    completed = "completed"
+    in_progress = "in_progress"
+    incomplete = "incomplete"
+
+
+class ApiKeyv2LoginAccountParamsType(RootModel[Literal["apiKey"]]):
+    root: Literal["apiKey"] = Field(..., title="ApiKeyv2::LoginAccountParamsType")
 
 
 class ApiKeyv2LoginAccountParams(BaseModel):
-    api_key: str = Field(..., alias='apiKey')
+    api_key: str = Field(..., alias="apiKey")
     type: ApiKeyv2LoginAccountParamsType = Field(
-        ..., title='ApiKeyv2::LoginAccountParamsType'
+        ..., title="ApiKeyv2::LoginAccountParamsType"
     )
 
 
-class Chatgptv2LoginAccountParamsType(RootModel[Literal['chatgpt']]):
-    root: Literal['chatgpt'] = Field(..., title='Chatgptv2::LoginAccountParamsType')
+class Chatgptv2LoginAccountParamsType(RootModel[Literal["chatgpt"]]):
+    root: Literal["chatgpt"] = Field(..., title="Chatgptv2::LoginAccountParamsType")
 
 
 class Chatgptv2LoginAccountParams(BaseModel):
     type: Chatgptv2LoginAccountParamsType = Field(
-        ..., title='Chatgptv2::LoginAccountParamsType'
+        ..., title="Chatgptv2::LoginAccountParamsType"
     )
 
 
 class ChatgptAuthTokensv2LoginAccountParamsType(
-    RootModel[Literal['chatgptAuthTokens']]
+    RootModel[Literal["chatgptAuthTokens"]]
 ):
-    root: Literal['chatgptAuthTokens'] = Field(
-        ..., title='ChatgptAuthTokensv2::LoginAccountParamsType'
+    root: Literal["chatgptAuthTokens"] = Field(
+        ..., title="ChatgptAuthTokensv2::LoginAccountParamsType"
     )
 
 
 class ChatgptAuthTokensv2LoginAccountParams(BaseModel):
     access_token: str = Field(
         ...,
-        alias='accessToken',
-        description='Access token (JWT) supplied by the client. This token is used for backend API requests and email extraction.',
+        alias="accessToken",
+        description="Access token (JWT) supplied by the client. This token is used for backend API requests and email extraction.",
     )
     chatgpt_account_id: str = Field(
         ...,
-        alias='chatgptAccountId',
-        description='Workspace/account identifier supplied by the client.',
+        alias="chatgptAccountId",
+        description="Workspace/account identifier supplied by the client.",
     )
     chatgpt_plan_type: str | None = Field(
         default=None,
-        alias='chatgptPlanType',
-        description='Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.',
+        alias="chatgptPlanType",
+        description="Optional plan type supplied by the client.\n\nWhen `null`, Codex attempts to derive the plan type from access-token claims. If unavailable, the plan defaults to `unknown`.",
     )
     type: ChatgptAuthTokensv2LoginAccountParamsType = Field(
-        ..., title='ChatgptAuthTokensv2::LoginAccountParamsType'
+        ..., title="ChatgptAuthTokensv2::LoginAccountParamsType"
     )
 
 
@@ -3265,229 +1955,508 @@ class LoginAccountParams(
         ApiKeyv2LoginAccountParams
         | Chatgptv2LoginAccountParams
         | ChatgptAuthTokensv2LoginAccountParams
-    ) = Field(..., title='LoginAccountParams')
+    ) = Field(..., title="LoginAccountParams")
 
 
-class SandboxMode(StrEnum):
-    read_only = 'read-only'
-    workspace_write = 'workspace-write'
-    danger_full_access = 'danger-full-access'
+class MacOsAutomationPermission1(StrEnum):
+    none = "none"
+    all = "all"
 
 
-class AskForApproval1(StrEnum):
-    untrusted = 'untrusted'
-    on_failure = 'on-failure'
-    on_request = 'on-request'
-    never = 'never'
-
-
-class Reject(BaseModel):
-    mcp_elicitations: bool
-    rules: bool
-    sandbox_approval: bool
-
-
-class RejectAskForApproval(BaseModel):
+class BundleIdsMacOsAutomationPermission(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
-    reject: Reject
+    bundle_ids: list[str]
 
 
-class AskForApproval(RootModel[AskForApproval1 | RejectAskForApproval]):
-    root: AskForApproval1 | RejectAskForApproval
+class MacOsAutomationPermission(
+    RootModel[MacOsAutomationPermission1 | BundleIdsMacOsAutomationPermission]
+):
+    root: MacOsAutomationPermission1 | BundleIdsMacOsAutomationPermission
 
 
-class ServiceTier(StrEnum):
-    fast = 'fast'
-    flex = 'flex'
+class MacOsPreferencesPermission(StrEnum):
+    none = "none"
+    read_only = "read_only"
+    read_write = "read_write"
 
 
-class DeprecationNoticeNotification(BaseModel):
-    details: str | None = Field(
+class MacOsSeatbeltProfileExtensions(BaseModel):
+    macos_accessibility: bool | None = False
+    macos_automation: MacOsAutomationPermission | None = Field(
+        default_factory=lambda: MacOsAutomationPermission("none")
+    )
+    macos_calendar: bool | None = False
+    macos_preferences: MacOsPreferencesPermission | None = "read_only"
+
+
+class McpAuthStatus(StrEnum):
+    unsupported = "unsupported"
+    not_logged_in = "notLoggedIn"
+    bearer_token = "bearerToken"
+    o_auth = "oAuth"
+
+
+class McpElicitationArrayType(RootModel[Literal["array"]]):
+    root: Literal["array"]
+
+
+class McpElicitationBooleanType(RootModel[Literal["boolean"]]):
+    root: Literal["boolean"]
+
+
+class McpElicitationConstOption(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    const: str
+    title: str
+
+
+class McpElicitationNumberType(StrEnum):
+    number = "number"
+    integer = "integer"
+
+
+class McpElicitationObjectType(RootModel[Literal["object"]]):
+    root: Literal["object"]
+
+
+class McpElicitationStringFormat(StrEnum):
+    email = "email"
+    uri = "uri"
+    date = "date"
+    date_time = "date-time"
+
+
+class McpElicitationStringType(RootModel[Literal["string"]]):
+    root: Literal["string"]
+
+
+class McpElicitationTitledEnumItems(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    any_of: list[McpElicitationConstOption] = Field(..., alias="anyOf")
+
+
+class McpElicitationTitledMultiSelectEnumSchema(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    default: list[str] | None = None
+    description: str | None = None
+    items: McpElicitationTitledEnumItems
+    max_items: int | None = Field(default=None, alias="maxItems", ge=0)
+    min_items: int | None = Field(default=None, alias="minItems", ge=0)
+    title: str | None = None
+    type: McpElicitationArrayType
+
+
+class McpElicitationTitledSingleSelectEnumSchema(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    default: str | None = None
+    description: str | None = None
+    one_of: list[McpElicitationConstOption] = Field(..., alias="oneOf")
+    title: str | None = None
+    type: McpElicitationStringType
+
+
+class McpElicitationUntitledEnumItems(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    enum: list[str]
+    type: McpElicitationStringType
+
+
+class McpElicitationUntitledMultiSelectEnumSchema(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    default: list[str] | None = None
+    description: str | None = None
+    items: McpElicitationUntitledEnumItems
+    max_items: int | None = Field(default=None, alias="maxItems", ge=0)
+    min_items: int | None = Field(default=None, alias="minItems", ge=0)
+    title: str | None = None
+    type: McpElicitationArrayType
+
+
+class McpElicitationUntitledSingleSelectEnumSchema(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    default: str | None = None
+    description: str | None = None
+    enum: list[str]
+    title: str | None = None
+    type: McpElicitationStringType
+
+
+class McpInvocation(BaseModel):
+    arguments: Any | None = Field(
+        default=None, description="Arguments to the tool call."
+    )
+    server: str = Field(
+        ..., description="Name of the MCP server as defined in the config."
+    )
+    tool: str = Field(..., description="Name of the tool as given by the MCP server.")
+
+
+class McpServerElicitationAction(StrEnum):
+    accept = "accept"
+    decline = "decline"
+    cancel = "cancel"
+
+
+class McpServerElicitationRequestParams2(BaseModel):
+    server_name: str = Field(..., alias="serverName")
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str | None = Field(
         default=None,
-        description='Optional extra guidance, such as migration steps or rationale.',
+        alias="turnId",
+        description="Active Codex turn when this elicitation was observed, if app-server could correlate one.\n\nThis is nullable because MCP models elicitation as a standalone server-to-client request identified by the MCP server request id. It may be triggered during a turn, but turn context is app-server correlation rather than part of the protocol identity of the elicitation itself.",
     )
-    summary: str = Field(..., description='Concise summary of what is deprecated.')
-
-
-class ThreadRealtimeErrorNotification(BaseModel):
+    field_meta: Any | None = Field(None, alias="_meta")
+    elicitation_id: str = Field(..., alias="elicitationId")
     message: str
-    thread_id: str = Field(..., alias='threadId')
+    mode: Literal["url"]
+    url: str
 
 
-class ServerRequestResolvedNotification(BaseModel):
-    request_id: RequestId = Field(..., alias='requestId')
-    thread_id: str = Field(..., alias='threadId')
-
-
-class SkillsConfigWriteParams(BaseModel):
-    enabled: bool
-    path: str
-
-
-class ThreadNameUpdatedNotification(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
-    thread_name: str | None = Field(default=None, alias='threadName')
-
-
-class ThreadArchivedNotification(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
-
-
-class GetAccountParams(BaseModel):
-    refresh_token: bool | None = Field(
-        default=False,
-        alias='refreshToken',
-        description='When `true`, requests a proactive token refresh before returning.\n\nIn managed auth mode this triggers the normal refresh-token flow. In external auth mode this flag is ignored. Clients should refresh tokens themselves and call `account/login/start` with `chatgptAuthTokens`.',
-    )
-
-
-class ErrorNotification(BaseModel):
-    error: TurnError
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
-    will_retry: bool = Field(..., alias='willRetry')
-
-
-class ThreadMetadataGitInfoUpdateParams(BaseModel):
-    branch: str | None = Field(
+class McpServerElicitationRequestResponse(BaseModel):
+    field_meta: Any | None = Field(
         default=None,
-        description='Omit to leave the stored branch unchanged, set to `null` to clear it, or provide a non-empty string to replace it.',
+        alias="_meta",
+        description="Optional client metadata for form-mode action handling.",
     )
-    origin_url: str | None = Field(
+    action: McpServerElicitationAction
+    content: Any | None = Field(
         default=None,
-        alias='originUrl',
-        description='Omit to leave the stored origin URL unchanged, set to `null` to clear it, or provide a non-empty string to replace it.',
-    )
-    sha: str | None = Field(
-        default=None,
-        description='Omit to leave the stored commit unchanged, set to `null` to clear it, or provide a non-empty string to replace it.',
+        description="Structured user input for accepted elicitations, mirroring RMCP `CreateElicitationResult`.\n\nThis is nullable because decline/cancel responses have no content.",
     )
 
 
-class Personality(StrEnum):
-    none = 'none'
-    friendly = 'friendly'
-    pragmatic = 'pragmatic'
+class McpServerOauthLoginCompletedNotification(BaseModel):
+    error: str | None = None
+    name: str
+    success: bool
 
 
-class ThreadRealtimeItemAddedNotification(BaseModel):
-    item: Any
-    thread_id: str = Field(..., alias='threadId')
+class McpServerOauthLoginParams(BaseModel):
+    name: str
+    scopes: list[str] | None = None
+    timeout_secs: int | None = Field(default=None, alias="timeoutSecs")
 
 
-class TokenUsageBreakdown(BaseModel):
-    cached_input_tokens: int = Field(..., alias='cachedInputTokens')
-    input_tokens: int = Field(..., alias='inputTokens')
-    output_tokens: int = Field(..., alias='outputTokens')
-    reasoning_output_tokens: int = Field(..., alias='reasoningOutputTokens')
-    total_tokens: int = Field(..., alias='totalTokens')
+class McpStartupFailure(BaseModel):
+    error: str
+    server: str
 
 
-class ThreadUnsubscribeParams(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
+class StartingMcpStartupStatus(BaseModel):
+    state: Literal["starting"]
 
 
-class ContextCompactedNotification(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
+class ReadyMcpStartupStatus(BaseModel):
+    state: Literal["ready"]
 
 
-class SkillsRemoteWriteParams(BaseModel):
-    hazelnut_id: str = Field(..., alias='hazelnutId')
+class McpStartupStatus1(BaseModel):
+    error: str
+    state: Literal["failed"]
 
 
-class FeedbackUploadParams(BaseModel):
-    classification: str
-    extra_log_files: list[str] | None = Field(default=None, alias='extraLogFiles')
-    include_logs: bool = Field(..., alias='includeLogs')
-    reason: str | None = None
-    thread_id: str | None = Field(default=None, alias='threadId')
+class CancelledMcpStartupStatus(BaseModel):
+    state: Literal["cancelled"]
+
+
+class McpStartupStatus(
+    RootModel[
+        StartingMcpStartupStatus
+        | ReadyMcpStartupStatus
+        | McpStartupStatus1
+        | CancelledMcpStartupStatus
+    ]
+):
+    root: (
+        StartingMcpStartupStatus
+        | ReadyMcpStartupStatus
+        | McpStartupStatus1
+        | CancelledMcpStartupStatus
+    )
+
+
+class McpToolCallError(BaseModel):
+    message: str
+
+
+class McpToolCallProgressNotification(BaseModel):
+    item_id: str = Field(..., alias="itemId")
+    message: str
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class McpToolCallResult(BaseModel):
+    content: list[Any]
+    structured_content: Any | None = Field(None, alias="structuredContent")
+
+
+class McpToolCallStatus(StrEnum):
+    in_progress = "inProgress"
+    completed = "completed"
+    failed = "failed"
 
 
 class MergeStrategy(StrEnum):
-    replace = 'replace'
-    upsert = 'upsert'
+    replace = "replace"
+    upsert = "upsert"
 
 
-class ThreadUnarchivedNotification(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
-
-
-class ReasoningEffort(StrEnum):
-    none = 'none'
-    minimal = 'minimal'
-    low = 'low'
-    medium = 'medium'
-    high = 'high'
-    xhigh = 'xhigh'
-
-
-class ReasoningSummary1(StrEnum):
-    auto = 'auto'
-    concise = 'concise'
-    detailed = 'detailed'
-
-
-class ReasoningSummary(RootModel[ReasoningSummary1 | Literal['none']]):
-    root: ReasoningSummary1 | Literal['none'] = Field(
+class MessagePhase(RootModel[Literal["commentary"] | Literal["final_answer"]]):
+    root: Literal["commentary"] | Literal["final_answer"] = Field(
         ...,
-        description="A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
+        description='Classifies an assistant message as interim commentary or final answer text.\n\nProviders do not emit this consistently, so callers must treat `None` as "phase unknown" and keep compatibility behavior for legacy models.',
     )
 
 
-class DangerFullAccessSandboxPolicyType(RootModel[Literal['dangerFullAccess']]):
-    root: Literal['dangerFullAccess'] = Field(
-        ..., title='DangerFullAccessSandboxPolicyType'
+class ModeKind(StrEnum):
+    plan = "plan"
+    default = "default"
+
+
+class ModelListParams(BaseModel):
+    cursor: str | None = Field(
+        default=None,
+        description="Opaque pagination cursor returned by a previous call.",
+    )
+    include_hidden: bool | None = Field(
+        default=None,
+        alias="includeHidden",
+        description="When true, include models that are hidden from the default picker list.",
+    )
+    limit: int | None = Field(
+        default=None,
+        description="Optional page size; defaults to a reasonable server-side value.",
+        ge=0,
     )
 
 
-class DangerFullAccessSandboxPolicy(BaseModel):
-    type: DangerFullAccessSandboxPolicyType = Field(
-        ..., title='DangerFullAccessSandboxPolicyType'
+class ModelRerouteReason(RootModel[Literal["highRiskCyberActivity"]]):
+    root: Literal["highRiskCyberActivity"]
+
+
+class ModelReroutedNotification(BaseModel):
+    from_model: str = Field(..., alias="fromModel")
+    reason: ModelRerouteReason
+    thread_id: str = Field(..., alias="threadId")
+    to_model: str = Field(..., alias="toModel")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class NetworkAccess(StrEnum):
+    restricted = "restricted"
+    enabled = "enabled"
+
+
+class NetworkApprovalProtocol(StrEnum):
+    http = "http"
+    https = "https"
+    socks5_tcp = "socks5Tcp"
+    socks5_udp = "socks5Udp"
+
+
+class NetworkPermissions(BaseModel):
+    enabled: bool | None = None
+
+
+class NetworkPolicyRuleAction(StrEnum):
+    allow = "allow"
+    deny = "deny"
+
+
+class ReadParsedCommandType(RootModel[Literal["read"]]):
+    root: Literal["read"] = Field(..., title="ReadParsedCommandType")
+
+
+class ReadParsedCommand(BaseModel):
+    cmd: str
+    name: str
+    path: str = Field(
+        ...,
+        description="(Best effort) Path to the file being read by the command. When possible, this is an absolute path, though when relative, it should be resolved against the `cwd`` that will be used to run the command to derive the absolute path.",
+    )
+    type: ReadParsedCommandType = Field(..., title="ReadParsedCommandType")
+
+
+class ListFilesParsedCommandType(RootModel[Literal["list_files"]]):
+    root: Literal["list_files"] = Field(..., title="ListFilesParsedCommandType")
+
+
+class ListFilesParsedCommand(BaseModel):
+    cmd: str
+    path: str | None = None
+    type: ListFilesParsedCommandType = Field(..., title="ListFilesParsedCommandType")
+
+
+class SearchParsedCommandType(RootModel[Literal["search"]]):
+    root: Literal["search"] = Field(..., title="SearchParsedCommandType")
+
+
+class SearchParsedCommand(BaseModel):
+    cmd: str
+    path: str | None = None
+    query: str | None = None
+    type: SearchParsedCommandType = Field(..., title="SearchParsedCommandType")
+
+
+class UnknownParsedCommandType(RootModel[Literal["unknown"]]):
+    root: Literal["unknown"] = Field(..., title="UnknownParsedCommandType")
+
+
+class UnknownParsedCommand(BaseModel):
+    cmd: str
+    type: UnknownParsedCommandType = Field(..., title="UnknownParsedCommandType")
+
+
+class ParsedCommand(
+    RootModel[
+        ReadParsedCommand
+        | ListFilesParsedCommand
+        | SearchParsedCommand
+        | UnknownParsedCommand
+    ]
+):
+    root: (
+        ReadParsedCommand
+        | ListFilesParsedCommand
+        | SearchParsedCommand
+        | UnknownParsedCommand
     )
 
 
-class ReadOnlySandboxPolicyType(RootModel[Literal['readOnly']]):
-    root: Literal['readOnly'] = Field(..., title='ReadOnlySandboxPolicyType')
+class PatchApplyStatus(StrEnum):
+    in_progress = "inProgress"
+    completed = "completed"
+    failed = "failed"
+    declined = "declined"
 
 
-class ExternalSandboxSandboxPolicyType(RootModel[Literal['externalSandbox']]):
-    root: Literal['externalSandbox'] = Field(
-        ..., title='ExternalSandboxSandboxPolicyType'
+class AddPatchChangeKindType(RootModel[Literal["add"]]):
+    root: Literal["add"] = Field(..., title="AddPatchChangeKindType")
+
+
+class AddPatchChangeKind(BaseModel):
+    type: AddPatchChangeKindType = Field(..., title="AddPatchChangeKindType")
+
+
+class DeletePatchChangeKindType(RootModel[Literal["delete"]]):
+    root: Literal["delete"] = Field(..., title="DeletePatchChangeKindType")
+
+
+class DeletePatchChangeKind(BaseModel):
+    type: DeletePatchChangeKindType = Field(..., title="DeletePatchChangeKindType")
+
+
+class UpdatePatchChangeKindType(RootModel[Literal["update"]]):
+    root: Literal["update"] = Field(..., title="UpdatePatchChangeKindType")
+
+
+class UpdatePatchChangeKind(BaseModel):
+    move_path: str | None = None
+    type: UpdatePatchChangeKindType = Field(..., title="UpdatePatchChangeKindType")
+
+
+class PatchChangeKind(
+    RootModel[AddPatchChangeKind | DeletePatchChangeKind | UpdatePatchChangeKind]
+):
+    root: AddPatchChangeKind | DeletePatchChangeKind | UpdatePatchChangeKind
+
+
+class PermissionProfile(BaseModel):
+    file_system: FileSystemPermissions | None = None
+    macos: MacOsSeatbeltProfileExtensions | None = None
+    network: NetworkPermissions | None = None
+
+
+class Personality(StrEnum):
+    none = "none"
+    friendly = "friendly"
+    pragmatic = "pragmatic"
+
+
+class PlanDeltaNotification(BaseModel):
+    delta: str
+    item_id: str = Field(..., alias="itemId")
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class PlanType(StrEnum):
+    free = "free"
+    go = "go"
+    plus = "plus"
+    pro = "pro"
+    team = "team"
+    business = "business"
+    enterprise = "enterprise"
+    edu = "edu"
+    unknown = "unknown"
+
+
+class PluginInstallParams(BaseModel):
+    marketplace_path: AbsolutePathBuf = Field(..., alias="marketplacePath")
+    plugin_name: str = Field(..., alias="pluginName")
+
+
+class PluginListParams(BaseModel):
+    cwds: list[AbsolutePathBuf] | None = Field(
+        default=None,
+        description="Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
     )
 
 
-class WorkspaceWriteSandboxPolicyType(RootModel[Literal['workspaceWrite']]):
-    root: Literal['workspaceWrite'] = Field(
-        ..., title='WorkspaceWriteSandboxPolicyType'
-    )
+class ProductSurface(StrEnum):
+    chatgpt = "chatgpt"
+    codex = "codex"
+    api = "api"
+    atlas = "atlas"
 
 
-class RestrictedReadOnlyAccessType(RootModel[Literal['restricted']]):
-    root: Literal['restricted'] = Field(..., title='RestrictedReadOnlyAccessType')
+class RateLimitWindow(BaseModel):
+    resets_at: int | None = Field(default=None, alias="resetsAt")
+    used_percent: int = Field(..., alias="usedPercent")
+    window_duration_mins: int | None = Field(default=None, alias="windowDurationMins")
+
+
+class RestrictedReadOnlyAccessType(RootModel[Literal["restricted"]]):
+    root: Literal["restricted"] = Field(..., title="RestrictedReadOnlyAccessType")
 
 
 class RestrictedReadOnlyAccess(BaseModel):
     include_platform_defaults: bool | None = Field(
-        default=True, alias='includePlatformDefaults'
+        default=True, alias="includePlatformDefaults"
     )
     readable_roots: list[AbsolutePathBuf] | None = Field(
-        default_factory=list, alias='readableRoots'
+        default_factory=list, alias="readableRoots"
     )
     type: RestrictedReadOnlyAccessType = Field(
-        ..., title='RestrictedReadOnlyAccessType'
+        ..., title="RestrictedReadOnlyAccessType"
     )
 
 
-class FullAccessReadOnlyAccessType(RootModel[Literal['fullAccess']]):
-    root: Literal['fullAccess'] = Field(..., title='FullAccessReadOnlyAccessType')
+class FullAccessReadOnlyAccessType(RootModel[Literal["fullAccess"]]):
+    root: Literal["fullAccess"] = Field(..., title="FullAccessReadOnlyAccessType")
 
 
 class FullAccessReadOnlyAccess(BaseModel):
     type: FullAccessReadOnlyAccessType = Field(
-        ..., title='FullAccessReadOnlyAccessType'
+        ..., title="FullAccessReadOnlyAccessType"
     )
 
 
@@ -3495,161 +2464,173 @@ class ReadOnlyAccess(RootModel[RestrictedReadOnlyAccess | FullAccessReadOnlyAcce
     root: RestrictedReadOnlyAccess | FullAccessReadOnlyAccess
 
 
-class NetworkAccess(StrEnum):
-    restricted = 'restricted'
-    enabled = 'enabled'
+class RealtimeAudioFrame(BaseModel):
+    data: str
+    num_channels: int = Field(..., ge=0)
+    sample_rate: int = Field(..., ge=0)
+    samples_per_channel: int | None = Field(default=None, ge=0)
 
 
-class TurnDiffUpdatedNotification(BaseModel):
-    diff: str
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
+class SessionUpdated(BaseModel):
+    instructions: str | None = None
+    session_id: str
 
 
-class WindowsSandboxSetupMode(StrEnum):
-    elevated = 'elevated'
-    unelevated = 'unelevated'
-
-
-class PluginInstallParams(BaseModel):
-    marketplace_path: AbsolutePathBuf = Field(..., alias='marketplacePath')
-    plugin_name: str = Field(..., alias='pluginName')
-
-
-class AccountLoginCompletedNotification(BaseModel):
-    error: str | None = None
-    login_id: str | None = Field(default=None, alias='loginId')
-    success: bool
-
-
-class CommandExecWriteParams(BaseModel):
-    close_stdin: bool | None = Field(
-        default=None,
-        alias='closeStdin',
-        description='Close stdin after writing `deltaBase64`, if present.',
+class SessionUpdatedRealtimeEvent(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
     )
-    delta_base64: str | None = Field(
-        default=None,
-        alias='deltaBase64',
-        description='Optional base64-encoded stdin bytes to write.',
+    session_updated: SessionUpdated = Field(..., alias="SessionUpdated")
+
+
+class AudioOutRealtimeEvent(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
     )
-    process_id: str = Field(
-        ...,
-        alias='processId',
-        description='Client-supplied, connection-scoped `processId` from the original `command/exec` request.',
+    audio_out: RealtimeAudioFrame = Field(..., alias="AudioOut")
+
+
+class ConversationItemAddedRealtimeEvent(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    conversation_item_added: Any = Field(..., alias="ConversationItemAdded")
+
+
+class ConversationItemDone(BaseModel):
+    item_id: str
+
+
+class ConversationItemDoneRealtimeEvent(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    conversation_item_done: ConversationItemDone = Field(
+        ..., alias="ConversationItemDone"
     )
 
 
-class AuthMode(
-    RootModel[Literal['apikey'] | Literal['chatgpt'] | Literal['chatgptAuthTokens']]
+class ErrorRealtimeEvent(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    error: str = Field(..., alias="Error")
+
+
+class RealtimeHandoffMessage(BaseModel):
+    role: str
+    text: str
+
+
+class RealtimeHandoffRequested(BaseModel):
+    handoff_id: str
+    input_transcript: str
+    item_id: str
+    messages: list[RealtimeHandoffMessage]
+
+
+class ReasoningEffort(StrEnum):
+    none = "none"
+    minimal = "minimal"
+    low = "low"
+    medium = "medium"
+    high = "high"
+    xhigh = "xhigh"
+
+
+class ReasoningTextReasoningItemContentType(RootModel[Literal["reasoning_text"]]):
+    root: Literal["reasoning_text"] = Field(
+        ..., title="ReasoningTextReasoningItemContentType"
+    )
+
+
+class ReasoningTextReasoningItemContent(BaseModel):
+    text: str
+    type: ReasoningTextReasoningItemContentType = Field(
+        ..., title="ReasoningTextReasoningItemContentType"
+    )
+
+
+class TextReasoningItemContentType(RootModel[Literal["text"]]):
+    root: Literal["text"] = Field(..., title="TextReasoningItemContentType")
+
+
+class TextReasoningItemContent(BaseModel):
+    text: str
+    type: TextReasoningItemContentType = Field(
+        ..., title="TextReasoningItemContentType"
+    )
+
+
+class ReasoningItemContent(
+    RootModel[ReasoningTextReasoningItemContent | TextReasoningItemContent]
 ):
-    root: Literal['apikey'] | Literal['chatgpt'] | Literal['chatgptAuthTokens'] = Field(
-        ..., description='Authentication mode for OpenAI-backed providers.'
+    root: ReasoningTextReasoningItemContent | TextReasoningItemContent
+
+
+class SummaryTextReasoningItemReasoningSummaryType(RootModel[Literal["summary_text"]]):
+    root: Literal["summary_text"] = Field(
+        ..., title="SummaryTextReasoningItemReasoningSummaryType"
     )
 
 
-class ThreadRollbackParams(BaseModel):
-    num_turns: int = Field(
+class SummaryTextReasoningItemReasoningSummary(BaseModel):
+    text: str
+    type: SummaryTextReasoningItemReasoningSummaryType = Field(
+        ..., title="SummaryTextReasoningItemReasoningSummaryType"
+    )
+
+
+class ReasoningItemReasoningSummary(
+    RootModel[SummaryTextReasoningItemReasoningSummary]
+):
+    root: SummaryTextReasoningItemReasoningSummary
+
+
+class ReasoningSummary1(StrEnum):
+    auto = "auto"
+    concise = "concise"
+    detailed = "detailed"
+
+
+class ReasoningSummary(RootModel[ReasoningSummary1 | Literal["none"]]):
+    root: ReasoningSummary1 | Literal["none"] = Field(
         ...,
-        alias='numTurns',
-        description="The number of turns to drop from the end of the thread. Must be >= 1.\n\nThis only modifies the thread's history and does not revert local file changes that have been made by the agent. Clients are responsible for reverting these changes.",
-        ge=0,
+        description="A summary of the reasoning performed by the model. This can be useful for debugging and understanding the model's reasoning process. See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries",
     )
-    thread_id: str = Field(..., alias='threadId')
+
+
+class ReasoningSummaryPartAddedNotification(BaseModel):
+    item_id: str = Field(..., alias="itemId")
+    summary_index: int = Field(..., alias="summaryIndex")
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
 
 
 class ReasoningSummaryTextDeltaNotification(BaseModel):
     delta: str
-    item_id: str = Field(..., alias='itemId')
-    summary_index: int = Field(..., alias='summaryIndex')
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
+    item_id: str = Field(..., alias="itemId")
+    summary_index: int = Field(..., alias="summaryIndex")
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
 
 
-class Tool(BaseModel):
-    field_meta: Any | None = Field(None, alias='_meta')
-    annotations: Any | None = None
-    description: str | None = None
-    icons: list[Any] | None = None
-    input_schema: Any = Field(..., alias='inputSchema')
-    name: str
-    output_schema: Any | None = Field(None, alias='outputSchema')
-    title: str | None = None
-
-
-class UncommittedChangesReviewTargetType(RootModel[Literal['uncommittedChanges']]):
-    root: Literal['uncommittedChanges'] = Field(
-        ..., title='UncommittedChangesReviewTargetType'
-    )
-
-
-class UncommittedChangesReviewTarget(BaseModel):
-    type: UncommittedChangesReviewTargetType = Field(
-        ..., title='UncommittedChangesReviewTargetType'
-    )
-
-
-class BaseBranchReviewTargetType(RootModel[Literal['baseBranch']]):
-    root: Literal['baseBranch'] = Field(..., title='BaseBranchReviewTargetType')
-
-
-class BaseBranchReviewTarget(BaseModel):
-    branch: str
-    type: BaseBranchReviewTargetType = Field(..., title='BaseBranchReviewTargetType')
-
-
-class CommitReviewTargetType(RootModel[Literal['commit']]):
-    root: Literal['commit'] = Field(..., title='CommitReviewTargetType')
-
-
-class CommitReviewTarget(BaseModel):
-    sha: str
-    title: str | None = Field(
-        default=None,
-        description='Optional human-readable label (e.g., commit subject) for UIs.',
-    )
-    type: CommitReviewTargetType = Field(..., title='CommitReviewTargetType')
-
-
-class CustomReviewTargetType(RootModel[Literal['custom']]):
-    root: Literal['custom'] = Field(..., title='CustomReviewTargetType')
-
-
-class CustomReviewTarget(BaseModel):
-    instructions: str
-    type: CustomReviewTargetType = Field(..., title='CustomReviewTargetType')
-
-
-class ReviewTarget(
-    RootModel[
-        UncommittedChangesReviewTarget
-        | BaseBranchReviewTarget
-        | CommitReviewTarget
-        | CustomReviewTarget
-    ]
-):
-    root: (
-        UncommittedChangesReviewTarget
-        | BaseBranchReviewTarget
-        | CommitReviewTarget
-        | CustomReviewTarget
-    )
-
-
-class ReviewDelivery(StrEnum):
-    inline = 'inline'
-    detached = 'detached'
-
-
-class ModelRerouteReason(RootModel[Literal['highRiskCyberActivity']]):
-    root: Literal['highRiskCyberActivity']
-
-
-class FileChangeOutputDeltaNotification(BaseModel):
+class ReasoningTextDeltaNotification(BaseModel):
+    content_index: int = Field(..., alias="contentIndex")
     delta: str
-    item_id: str = Field(..., alias='itemId')
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
+    item_id: str = Field(..., alias="itemId")
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class RejectConfig(BaseModel):
+    mcp_elicitations: bool = Field(..., description="Reject MCP elicitation prompts.")
+    rules: bool = Field(
+        ..., description="Reject prompts triggered by execpolicy `prompt` rules."
+    )
+    sandbox_approval: bool = Field(
+        ..., description="Reject approval prompts related to sandbox escalation."
+    )
 
 
 class RemoteSkillSummary(BaseModel):
@@ -3658,51 +2639,84 @@ class RemoteSkillSummary(BaseModel):
     name: str
 
 
-class ConfigValueWriteParams(BaseModel):
-    expected_version: str | None = Field(default=None, alias='expectedVersion')
-    file_path: str | None = Field(
+class RequestId(RootModel[str | int]):
+    root: str | int = Field(..., title="RequestId")
+
+
+class RequestUserInputQuestionOption(BaseModel):
+    description: str
+    label: str
+
+
+class Resource(BaseModel):
+    field_meta: Any | None = Field(None, alias="_meta")
+    annotations: Any | None = None
+    description: str | None = None
+    icons: list[Any] | None = None
+    mime_type: str | None = Field(default=None, alias="mimeType")
+    name: str
+    size: int | None = None
+    title: str | None = None
+    uri: str
+
+
+class ResourceTemplate(BaseModel):
+    annotations: Any | None = None
+    description: str | None = None
+    mime_type: str | None = Field(default=None, alias="mimeType")
+    name: str
+    title: str | None = None
+    uri_template: str = Field(..., alias="uriTemplate")
+
+
+class MessageResponseItemType(RootModel[Literal["message"]]):
+    root: Literal["message"] = Field(..., title="MessageResponseItemType")
+
+
+class MessageResponseItem(BaseModel):
+    content: list[ContentItem]
+    end_turn: bool | None = None
+    id: str | None = None
+    phase: MessagePhase | None = None
+    role: str
+    type: MessageResponseItemType = Field(..., title="MessageResponseItemType")
+
+
+class ReasoningResponseItemType(RootModel[Literal["reasoning"]]):
+    root: Literal["reasoning"] = Field(..., title="ReasoningResponseItemType")
+
+
+class ReasoningResponseItem(BaseModel):
+    content: list[ReasoningItemContent] | None = None
+    encrypted_content: str | None = None
+    id: str
+    summary: list[ReasoningItemReasoningSummary]
+    type: ReasoningResponseItemType = Field(..., title="ReasoningResponseItemType")
+
+
+class LocalShellCallResponseItemType(RootModel[Literal["local_shell_call"]]):
+    root: Literal["local_shell_call"] = Field(
+        ..., title="LocalShellCallResponseItemType"
+    )
+
+
+class LocalShellCallResponseItem(BaseModel):
+    action: LocalShellAction
+    call_id: str | None = Field(
+        default=None, description="Set when using the Responses API."
+    )
+    id: str | None = Field(
         default=None,
-        alias='filePath',
-        description="Path to the config file to write; defaults to the user's `config.toml` when omitted.",
+        description="Legacy id field retained for compatibility with older payloads.",
     )
-    key_path: str = Field(..., alias='keyPath')
-    merge_strategy: MergeStrategy = Field(..., alias='mergeStrategy')
-    value: Any
-
-
-class ThreadStartParams(BaseModel):
-    approval_policy: AskForApproval | None = Field(default=None, alias='approvalPolicy')
-    base_instructions: str | None = Field(default=None, alias='baseInstructions')
-    config: dict[str, Any] | None = None
-    cwd: str | None = None
-    developer_instructions: str | None = Field(
-        default=None, alias='developerInstructions'
-    )
-    service_tier: ServiceTier | None = Field(default=None, alias='serviceTier')
-    ephemeral: bool | None = None
-    sandbox: SandboxMode | None = None
-    personality: Personality | None = None
-    model: str | None = None
-    model_provider: str | None = Field(default=None, alias='modelProvider')
-    service_name: str | None = Field(default=None, alias='serviceName')
-
-
-class MessageResponseItemType(RootModel[Literal['message']]):
-    root: Literal['message'] = Field(..., title='MessageResponseItemType')
-
-
-class ReasoningResponseItemType(RootModel[Literal['reasoning']]):
-    root: Literal['reasoning'] = Field(..., title='ReasoningResponseItemType')
-
-
-class LocalShellCallResponseItemType(RootModel[Literal['local_shell_call']]):
-    root: Literal['local_shell_call'] = Field(
-        ..., title='LocalShellCallResponseItemType'
+    status: LocalShellStatus
+    type: LocalShellCallResponseItemType = Field(
+        ..., title="LocalShellCallResponseItemType"
     )
 
 
-class FunctionCallResponseItemType(RootModel[Literal['function_call']]):
-    root: Literal['function_call'] = Field(..., title='FunctionCallResponseItemType')
+class FunctionCallResponseItemType(RootModel[Literal["function_call"]]):
+    root: Literal["function_call"] = Field(..., title="FunctionCallResponseItemType")
 
 
 class FunctionCallResponseItem(BaseModel):
@@ -3711,19 +2725,19 @@ class FunctionCallResponseItem(BaseModel):
     id: str | None = None
     name: str
     type: FunctionCallResponseItemType = Field(
-        ..., title='FunctionCallResponseItemType'
+        ..., title="FunctionCallResponseItemType"
     )
 
 
-class FunctionCallOutputResponseItemType(RootModel[Literal['function_call_output']]):
-    root: Literal['function_call_output'] = Field(
-        ..., title='FunctionCallOutputResponseItemType'
+class FunctionCallOutputResponseItemType(RootModel[Literal["function_call_output"]]):
+    root: Literal["function_call_output"] = Field(
+        ..., title="FunctionCallOutputResponseItemType"
     )
 
 
-class CustomToolCallResponseItemType(RootModel[Literal['custom_tool_call']]):
-    root: Literal['custom_tool_call'] = Field(
-        ..., title='CustomToolCallResponseItemType'
+class CustomToolCallResponseItemType(RootModel[Literal["custom_tool_call"]]):
+    root: Literal["custom_tool_call"] = Field(
+        ..., title="CustomToolCallResponseItemType"
     )
 
 
@@ -3734,25 +2748,25 @@ class CustomToolCallResponseItem(BaseModel):
     name: str
     status: str | None = None
     type: CustomToolCallResponseItemType = Field(
-        ..., title='CustomToolCallResponseItemType'
+        ..., title="CustomToolCallResponseItemType"
     )
 
 
 class CustomToolCallOutputResponseItemType(
-    RootModel[Literal['custom_tool_call_output']]
+    RootModel[Literal["custom_tool_call_output"]]
 ):
-    root: Literal['custom_tool_call_output'] = Field(
-        ..., title='CustomToolCallOutputResponseItemType'
+    root: Literal["custom_tool_call_output"] = Field(
+        ..., title="CustomToolCallOutputResponseItemType"
     )
 
 
-class WebSearchCallResponseItemType(RootModel[Literal['web_search_call']]):
-    root: Literal['web_search_call'] = Field(..., title='WebSearchCallResponseItemType')
+class WebSearchCallResponseItemType(RootModel[Literal["web_search_call"]]):
+    root: Literal["web_search_call"] = Field(..., title="WebSearchCallResponseItemType")
 
 
-class ImageGenerationCallResponseItemType(RootModel[Literal['image_generation_call']]):
-    root: Literal['image_generation_call'] = Field(
-        ..., title='ImageGenerationCallResponseItemType'
+class ImageGenerationCallResponseItemType(RootModel[Literal["image_generation_call"]]):
+    root: Literal["image_generation_call"] = Field(
+        ..., title="ImageGenerationCallResponseItemType"
     )
 
 
@@ -3762,77 +2776,84 @@ class ImageGenerationCallResponseItem(BaseModel):
     revised_prompt: str | None = None
     status: str
     type: ImageGenerationCallResponseItemType = Field(
-        ..., title='ImageGenerationCallResponseItemType'
+        ..., title="ImageGenerationCallResponseItemType"
     )
 
 
-class GhostSnapshotResponseItemType(RootModel[Literal['ghost_snapshot']]):
-    root: Literal['ghost_snapshot'] = Field(..., title='GhostSnapshotResponseItemType')
+class GhostSnapshotResponseItemType(RootModel[Literal["ghost_snapshot"]]):
+    root: Literal["ghost_snapshot"] = Field(..., title="GhostSnapshotResponseItemType")
 
 
-class CompactionResponseItemType(RootModel[Literal['compaction']]):
-    root: Literal['compaction'] = Field(..., title='CompactionResponseItemType')
+class GhostSnapshotResponseItem(BaseModel):
+    ghost_commit: GhostCommit
+    type: GhostSnapshotResponseItemType = Field(
+        ..., title="GhostSnapshotResponseItemType"
+    )
+
+
+class CompactionResponseItemType(RootModel[Literal["compaction"]]):
+    root: Literal["compaction"] = Field(..., title="CompactionResponseItemType")
 
 
 class CompactionResponseItem(BaseModel):
     encrypted_content: str
-    type: CompactionResponseItemType = Field(..., title='CompactionResponseItemType')
+    type: CompactionResponseItemType = Field(..., title="CompactionResponseItemType")
 
 
-class OtherResponseItemType(RootModel[Literal['other']]):
-    root: Literal['other'] = Field(..., title='OtherResponseItemType')
+class OtherResponseItemType(RootModel[Literal["other"]]):
+    root: Literal["other"] = Field(..., title="OtherResponseItemType")
 
 
 class OtherResponseItem(BaseModel):
-    type: OtherResponseItemType = Field(..., title='OtherResponseItemType')
+    type: OtherResponseItemType = Field(..., title="OtherResponseItemType")
 
 
-class SearchResponsesApiWebSearchActionType(RootModel[Literal['search']]):
-    root: Literal['search'] = Field(..., title='SearchResponsesApiWebSearchActionType')
+class SearchResponsesApiWebSearchActionType(RootModel[Literal["search"]]):
+    root: Literal["search"] = Field(..., title="SearchResponsesApiWebSearchActionType")
 
 
 class SearchResponsesApiWebSearchAction(BaseModel):
     queries: list[str] | None = None
     query: str | None = None
     type: SearchResponsesApiWebSearchActionType = Field(
-        ..., title='SearchResponsesApiWebSearchActionType'
+        ..., title="SearchResponsesApiWebSearchActionType"
     )
 
 
-class OpenPageResponsesApiWebSearchActionType(RootModel[Literal['open_page']]):
-    root: Literal['open_page'] = Field(
-        ..., title='OpenPageResponsesApiWebSearchActionType'
+class OpenPageResponsesApiWebSearchActionType(RootModel[Literal["open_page"]]):
+    root: Literal["open_page"] = Field(
+        ..., title="OpenPageResponsesApiWebSearchActionType"
     )
 
 
 class OpenPageResponsesApiWebSearchAction(BaseModel):
     type: OpenPageResponsesApiWebSearchActionType = Field(
-        ..., title='OpenPageResponsesApiWebSearchActionType'
+        ..., title="OpenPageResponsesApiWebSearchActionType"
     )
     url: str | None = None
 
 
-class FindInPageResponsesApiWebSearchActionType(RootModel[Literal['find_in_page']]):
-    root: Literal['find_in_page'] = Field(
-        ..., title='FindInPageResponsesApiWebSearchActionType'
+class FindInPageResponsesApiWebSearchActionType(RootModel[Literal["find_in_page"]]):
+    root: Literal["find_in_page"] = Field(
+        ..., title="FindInPageResponsesApiWebSearchActionType"
     )
 
 
 class FindInPageResponsesApiWebSearchAction(BaseModel):
     pattern: str | None = None
     type: FindInPageResponsesApiWebSearchActionType = Field(
-        ..., title='FindInPageResponsesApiWebSearchActionType'
+        ..., title="FindInPageResponsesApiWebSearchActionType"
     )
     url: str | None = None
 
 
-class OtherResponsesApiWebSearchActionType(RootModel[Literal['other']]):
-    root: Literal['other'] = Field(..., title='OtherResponsesApiWebSearchActionType')
+class OtherResponsesApiWebSearchActionType(RootModel[Literal["other"]]):
+    root: Literal["other"] = Field(..., title="OtherResponsesApiWebSearchActionType")
 
 
 class OtherResponsesApiWebSearchAction(BaseModel):
     type: OtherResponsesApiWebSearchActionType = Field(
-        ..., title='OtherResponsesApiWebSearchActionType'
+        ..., title="OtherResponsesApiWebSearchActionType"
     )
 
 
@@ -3852,154 +2873,707 @@ class ResponsesApiWebSearchAction(
     )
 
 
-class LocalShellStatus(StrEnum):
-    completed = 'completed'
-    in_progress = 'in_progress'
-    incomplete = 'incomplete'
+class OkResultOfCallToolResultOrString(BaseModel):
+    ok: CallToolResult = Field(..., alias="Ok")
 
 
-class SummaryTextReasoningItemReasoningSummaryType(RootModel[Literal['summary_text']]):
-    root: Literal['summary_text'] = Field(
-        ..., title='SummaryTextReasoningItemReasoningSummaryType'
-    )
+class ErrResultOfCallToolResultOrString(BaseModel):
+    err: str = Field(..., alias="Err")
 
 
-class SummaryTextReasoningItemReasoningSummary(BaseModel):
-    text: str
-    type: SummaryTextReasoningItemReasoningSummaryType = Field(
-        ..., title='SummaryTextReasoningItemReasoningSummaryType'
-    )
-
-
-class ReasoningItemReasoningSummary(
-    RootModel[SummaryTextReasoningItemReasoningSummary]
+class ResultOfCallToolResultOrString(
+    RootModel[OkResultOfCallToolResultOrString | ErrResultOfCallToolResultOrString]
 ):
-    root: SummaryTextReasoningItemReasoningSummary
+    root: OkResultOfCallToolResultOrString | ErrResultOfCallToolResultOrString
 
 
-class InputTextContentItemType(RootModel[Literal['input_text']]):
-    root: Literal['input_text'] = Field(..., title='InputTextContentItemType')
+class ApprovedExecpolicyAmendment(BaseModel):
+    proposed_execpolicy_amendment: list[str]
 
 
-class InputTextContentItem(BaseModel):
-    text: str
-    type: InputTextContentItemType = Field(..., title='InputTextContentItemType')
+class ApprovedExecpolicyAmendmentReviewDecision(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    approved_execpolicy_amendment: ApprovedExecpolicyAmendment
 
 
-class InputImageContentItemType(RootModel[Literal['input_image']]):
-    root: Literal['input_image'] = Field(..., title='InputImageContentItemType')
+class ReviewDelivery(StrEnum):
+    inline = "inline"
+    detached = "detached"
 
 
-class InputImageContentItem(BaseModel):
-    image_url: str
-    type: InputImageContentItemType = Field(..., title='InputImageContentItemType')
+class ReviewLineRange(BaseModel):
+    end: int = Field(..., ge=0)
+    start: int = Field(..., ge=0)
 
 
-class OutputTextContentItemType(RootModel[Literal['output_text']]):
-    root: Literal['output_text'] = Field(..., title='OutputTextContentItemType')
+class UncommittedChangesReviewTargetType(RootModel[Literal["uncommittedChanges"]]):
+    root: Literal["uncommittedChanges"] = Field(
+        ..., title="UncommittedChangesReviewTargetType"
+    )
 
 
-class OutputTextContentItem(BaseModel):
-    text: str
-    type: OutputTextContentItemType = Field(..., title='OutputTextContentItemType')
+class UncommittedChangesReviewTarget(BaseModel):
+    type: UncommittedChangesReviewTargetType = Field(
+        ..., title="UncommittedChangesReviewTargetType"
+    )
 
 
-class ContentItem(
-    RootModel[InputTextContentItem | InputImageContentItem | OutputTextContentItem]
+class BaseBranchReviewTargetType(RootModel[Literal["baseBranch"]]):
+    root: Literal["baseBranch"] = Field(..., title="BaseBranchReviewTargetType")
+
+
+class BaseBranchReviewTarget(BaseModel):
+    branch: str
+    type: BaseBranchReviewTargetType = Field(..., title="BaseBranchReviewTargetType")
+
+
+class CommitReviewTargetType(RootModel[Literal["commit"]]):
+    root: Literal["commit"] = Field(..., title="CommitReviewTargetType")
+
+
+class CommitReviewTarget(BaseModel):
+    sha: str
+    title: str | None = Field(
+        default=None,
+        description="Optional human-readable label (e.g., commit subject) for UIs.",
+    )
+    type: CommitReviewTargetType = Field(..., title="CommitReviewTargetType")
+
+
+class CustomReviewTargetType(RootModel[Literal["custom"]]):
+    root: Literal["custom"] = Field(..., title="CustomReviewTargetType")
+
+
+class CustomReviewTarget(BaseModel):
+    instructions: str
+    type: CustomReviewTargetType = Field(..., title="CustomReviewTargetType")
+
+
+class ReviewTarget(
+    RootModel[
+        UncommittedChangesReviewTarget
+        | BaseBranchReviewTarget
+        | CommitReviewTarget
+        | CustomReviewTarget
+    ]
 ):
-    root: InputTextContentItem | InputImageContentItem | OutputTextContentItem
-
-
-class ReasoningTextReasoningItemContentType(RootModel[Literal['reasoning_text']]):
-    root: Literal['reasoning_text'] = Field(
-        ..., title='ReasoningTextReasoningItemContentType'
+    root: (
+        UncommittedChangesReviewTarget
+        | BaseBranchReviewTarget
+        | CommitReviewTarget
+        | CustomReviewTarget
     )
 
 
-class ReasoningTextReasoningItemContent(BaseModel):
-    text: str
-    type: ReasoningTextReasoningItemContentType = Field(
-        ..., title='ReasoningTextReasoningItemContentType'
+class SandboxMode(StrEnum):
+    read_only = "read-only"
+    workspace_write = "workspace-write"
+    danger_full_access = "danger-full-access"
+
+
+class DangerFullAccessSandboxPolicyType(RootModel[Literal["dangerFullAccess"]]):
+    root: Literal["dangerFullAccess"] = Field(
+        ..., title="DangerFullAccessSandboxPolicyType"
     )
 
 
-class TextReasoningItemContentType(RootModel[Literal['text']]):
-    root: Literal['text'] = Field(..., title='TextReasoningItemContentType')
-
-
-class TextReasoningItemContent(BaseModel):
-    text: str
-    type: TextReasoningItemContentType = Field(
-        ..., title='TextReasoningItemContentType'
+class DangerFullAccessSandboxPolicy(BaseModel):
+    type: DangerFullAccessSandboxPolicyType = Field(
+        ..., title="DangerFullAccessSandboxPolicyType"
     )
 
 
-class ReasoningItemContent(
-    RootModel[ReasoningTextReasoningItemContent | TextReasoningItemContent]
+class ReadOnlySandboxPolicyType(RootModel[Literal["readOnly"]]):
+    root: Literal["readOnly"] = Field(..., title="ReadOnlySandboxPolicyType")
+
+
+class ReadOnlySandboxPolicy(BaseModel):
+    access: ReadOnlyAccess | None = Field(
+        default_factory=lambda: ReadOnlyAccess({"type": "fullAccess"})
+    )
+    network_access: bool | None = Field(default=False, alias="networkAccess")
+    type: ReadOnlySandboxPolicyType = Field(..., title="ReadOnlySandboxPolicyType")
+
+
+class ExternalSandboxSandboxPolicyType(RootModel[Literal["externalSandbox"]]):
+    root: Literal["externalSandbox"] = Field(
+        ..., title="ExternalSandboxSandboxPolicyType"
+    )
+
+
+class ExternalSandboxSandboxPolicy(BaseModel):
+    network_access: NetworkAccess | None = Field(
+        default="restricted", alias="networkAccess"
+    )
+    type: ExternalSandboxSandboxPolicyType = Field(
+        ..., title="ExternalSandboxSandboxPolicyType"
+    )
+
+
+class WorkspaceWriteSandboxPolicyType(RootModel[Literal["workspaceWrite"]]):
+    root: Literal["workspaceWrite"] = Field(
+        ..., title="WorkspaceWriteSandboxPolicyType"
+    )
+
+
+class WorkspaceWriteSandboxPolicy(BaseModel):
+    exclude_slash_tmp: bool | None = Field(default=False, alias="excludeSlashTmp")
+    exclude_tmpdir_env_var: bool | None = Field(
+        default=False, alias="excludeTmpdirEnvVar"
+    )
+    network_access: bool | None = Field(default=False, alias="networkAccess")
+    read_only_access: ReadOnlyAccess | None = Field(
+        default_factory=lambda: ReadOnlyAccess({"type": "fullAccess"}),
+        alias="readOnlyAccess",
+    )
+    type: WorkspaceWriteSandboxPolicyType = Field(
+        ..., title="WorkspaceWriteSandboxPolicyType"
+    )
+    writable_roots: list[AbsolutePathBuf] | None = Field(
+        default_factory=list, alias="writableRoots"
+    )
+
+
+class SandboxPolicy(
+    RootModel[
+        DangerFullAccessSandboxPolicy
+        | ReadOnlySandboxPolicy
+        | ExternalSandboxSandboxPolicy
+        | WorkspaceWriteSandboxPolicy
+    ]
 ):
-    root: ReasoningTextReasoningItemContent | TextReasoningItemContent
-
-
-class ExecLocalShellActionType(RootModel[Literal['exec']]):
-    root: Literal['exec'] = Field(..., title='ExecLocalShellActionType')
-
-
-class ExecLocalShellAction(BaseModel):
-    command: list[str]
-    env: dict[str, Any] | None = None
-    timeout_ms: int | None = Field(default=None, ge=0)
-    type: ExecLocalShellActionType = Field(..., title='ExecLocalShellActionType')
-    user: str | None = None
-    working_directory: str | None = None
-
-
-class LocalShellAction(RootModel[ExecLocalShellAction]):
-    root: ExecLocalShellAction
-
-
-class GhostCommit(BaseModel):
-    id: str
-    parent: str | None = None
-    preexisting_untracked_dirs: list[str]
-    preexisting_untracked_files: list[str]
-
-
-class InputTextFunctionCallOutputContentItemType(RootModel[Literal['input_text']]):
-    root: Literal['input_text'] = Field(
-        ..., title='InputTextFunctionCallOutputContentItemType'
+    root: (
+        DangerFullAccessSandboxPolicy
+        | ReadOnlySandboxPolicy
+        | ExternalSandboxSandboxPolicy
+        | WorkspaceWriteSandboxPolicy
     )
 
 
-class InputTextFunctionCallOutputContentItem(BaseModel):
-    text: str
-    type: InputTextFunctionCallOutputContentItemType = Field(
-        ..., title='InputTextFunctionCallOutputContentItemType'
+class ErrorServerNotificationMethod(RootModel[Literal["error"]]):
+    root: Literal["error"] = Field(..., title="ErrorServerNotificationMethod")
+
+
+class ThreadStartedServerNotificationMethod(RootModel[Literal["thread/started"]]):
+    root: Literal["thread/started"] = Field(
+        ..., title="Thread/startedServerNotificationMethod"
     )
 
 
-class InputImageFunctionCallOutputContentItemType(RootModel[Literal['input_image']]):
-    root: Literal['input_image'] = Field(
-        ..., title='InputImageFunctionCallOutputContentItemType'
+class ThreadStatusChangedServerNotificationMethod(
+    RootModel[Literal["thread/status/changed"]]
+):
+    root: Literal["thread/status/changed"] = Field(
+        ..., title="Thread/status/changedServerNotificationMethod"
     )
 
 
-class ImageDetail(StrEnum):
-    auto = 'auto'
-    low = 'low'
-    high = 'high'
-    original = 'original'
+class ThreadArchivedServerNotificationMethod(RootModel[Literal["thread/archived"]]):
+    root: Literal["thread/archived"] = Field(
+        ..., title="Thread/archivedServerNotificationMethod"
+    )
 
 
-class ThreadRealtimeStartedNotification(BaseModel):
-    session_id: str | None = Field(default=None, alias='sessionId')
-    thread_id: str = Field(..., alias='threadId')
+class ThreadUnarchivedServerNotificationMethod(RootModel[Literal["thread/unarchived"]]):
+    root: Literal["thread/unarchived"] = Field(
+        ..., title="Thread/unarchivedServerNotificationMethod"
+    )
 
 
-class McpToolCallProgressNotification(BaseModel):
-    item_id: str = Field(..., alias='itemId')
-    message: str
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
+class ThreadClosedServerNotificationMethod(RootModel[Literal["thread/closed"]]):
+    root: Literal["thread/closed"] = Field(
+        ..., title="Thread/closedServerNotificationMethod"
+    )
+
+
+class SkillsChangedServerNotificationMethod(RootModel[Literal["skills/changed"]]):
+    root: Literal["skills/changed"] = Field(
+        ..., title="Skills/changedServerNotificationMethod"
+    )
+
+
+class ThreadNameUpdatedServerNotificationMethod(
+    RootModel[Literal["thread/name/updated"]]
+):
+    root: Literal["thread/name/updated"] = Field(
+        ..., title="Thread/name/updatedServerNotificationMethod"
+    )
+
+
+class ThreadTokenUsageUpdatedServerNotificationMethod(
+    RootModel[Literal["thread/tokenUsage/updated"]]
+):
+    root: Literal["thread/tokenUsage/updated"] = Field(
+        ..., title="Thread/tokenUsage/updatedServerNotificationMethod"
+    )
+
+
+class TurnStartedServerNotificationMethod(RootModel[Literal["turn/started"]]):
+    root: Literal["turn/started"] = Field(
+        ..., title="Turn/startedServerNotificationMethod"
+    )
+
+
+class TurnCompletedServerNotificationMethod(RootModel[Literal["turn/completed"]]):
+    root: Literal["turn/completed"] = Field(
+        ..., title="Turn/completedServerNotificationMethod"
+    )
+
+
+class TurnDiffUpdatedServerNotificationMethod(RootModel[Literal["turn/diff/updated"]]):
+    root: Literal["turn/diff/updated"] = Field(
+        ..., title="Turn/diff/updatedServerNotificationMethod"
+    )
+
+
+class TurnPlanUpdatedServerNotificationMethod(RootModel[Literal["turn/plan/updated"]]):
+    root: Literal["turn/plan/updated"] = Field(
+        ..., title="Turn/plan/updatedServerNotificationMethod"
+    )
+
+
+class ItemStartedServerNotificationMethod(RootModel[Literal["item/started"]]):
+    root: Literal["item/started"] = Field(
+        ..., title="Item/startedServerNotificationMethod"
+    )
+
+
+class ItemCompletedServerNotificationMethod(RootModel[Literal["item/completed"]]):
+    root: Literal["item/completed"] = Field(
+        ..., title="Item/completedServerNotificationMethod"
+    )
+
+
+class ItemAgentMessageDeltaServerNotificationMethod(
+    RootModel[Literal["item/agentMessage/delta"]]
+):
+    root: Literal["item/agentMessage/delta"] = Field(
+        ..., title="Item/agentMessage/deltaServerNotificationMethod"
+    )
+
+
+class ItemAgentMessageDeltaServerNotification(BaseModel):
+    method: ItemAgentMessageDeltaServerNotificationMethod = Field(
+        ..., title="Item/agentMessage/deltaServerNotificationMethod"
+    )
+    params: AgentMessageDeltaNotification
+
+
+class ItemPlanDeltaServerNotificationMethod(RootModel[Literal["item/plan/delta"]]):
+    root: Literal["item/plan/delta"] = Field(
+        ..., title="Item/plan/deltaServerNotificationMethod"
+    )
+
+
+class ItemPlanDeltaServerNotification(BaseModel):
+    method: ItemPlanDeltaServerNotificationMethod = Field(
+        ..., title="Item/plan/deltaServerNotificationMethod"
+    )
+    params: PlanDeltaNotification
+
+
+class CommandExecOutputDeltaServerNotificationMethod(
+    RootModel[Literal["command/exec/outputDelta"]]
+):
+    root: Literal["command/exec/outputDelta"] = Field(
+        ..., title="Command/exec/outputDeltaServerNotificationMethod"
+    )
+
+
+class ItemCommandExecutionOutputDeltaServerNotificationMethod(
+    RootModel[Literal["item/commandExecution/outputDelta"]]
+):
+    root: Literal["item/commandExecution/outputDelta"] = Field(
+        ..., title="Item/commandExecution/outputDeltaServerNotificationMethod"
+    )
+
+
+class ItemCommandExecutionOutputDeltaServerNotification(BaseModel):
+    method: ItemCommandExecutionOutputDeltaServerNotificationMethod = Field(
+        ..., title="Item/commandExecution/outputDeltaServerNotificationMethod"
+    )
+    params: CommandExecutionOutputDeltaNotification
+
+
+class ItemCommandExecutionTerminalInteractionServerNotificationMethod(
+    RootModel[Literal["item/commandExecution/terminalInteraction"]]
+):
+    root: Literal["item/commandExecution/terminalInteraction"] = Field(
+        ..., title="Item/commandExecution/terminalInteractionServerNotificationMethod"
+    )
+
+
+class ItemFileChangeOutputDeltaServerNotificationMethod(
+    RootModel[Literal["item/fileChange/outputDelta"]]
+):
+    root: Literal["item/fileChange/outputDelta"] = Field(
+        ..., title="Item/fileChange/outputDeltaServerNotificationMethod"
+    )
+
+
+class ItemFileChangeOutputDeltaServerNotification(BaseModel):
+    method: ItemFileChangeOutputDeltaServerNotificationMethod = Field(
+        ..., title="Item/fileChange/outputDeltaServerNotificationMethod"
+    )
+    params: FileChangeOutputDeltaNotification
+
+
+class ServerRequestResolvedServerNotificationMethod(
+    RootModel[Literal["serverRequest/resolved"]]
+):
+    root: Literal["serverRequest/resolved"] = Field(
+        ..., title="ServerRequest/resolvedServerNotificationMethod"
+    )
+
+
+class ItemMcpToolCallProgressServerNotificationMethod(
+    RootModel[Literal["item/mcpToolCall/progress"]]
+):
+    root: Literal["item/mcpToolCall/progress"] = Field(
+        ..., title="Item/mcpToolCall/progressServerNotificationMethod"
+    )
+
+
+class ItemMcpToolCallProgressServerNotification(BaseModel):
+    method: ItemMcpToolCallProgressServerNotificationMethod = Field(
+        ..., title="Item/mcpToolCall/progressServerNotificationMethod"
+    )
+    params: McpToolCallProgressNotification
+
+
+class McpServerOauthLoginCompletedServerNotificationMethod(
+    RootModel[Literal["mcpServer/oauthLogin/completed"]]
+):
+    root: Literal["mcpServer/oauthLogin/completed"] = Field(
+        ..., title="McpServer/oauthLogin/completedServerNotificationMethod"
+    )
+
+
+class McpServerOauthLoginCompletedServerNotification(BaseModel):
+    method: McpServerOauthLoginCompletedServerNotificationMethod = Field(
+        ..., title="McpServer/oauthLogin/completedServerNotificationMethod"
+    )
+    params: McpServerOauthLoginCompletedNotification
+
+
+class AccountUpdatedServerNotificationMethod(RootModel[Literal["account/updated"]]):
+    root: Literal["account/updated"] = Field(
+        ..., title="Account/updatedServerNotificationMethod"
+    )
+
+
+class AccountRateLimitsUpdatedServerNotificationMethod(
+    RootModel[Literal["account/rateLimits/updated"]]
+):
+    root: Literal["account/rateLimits/updated"] = Field(
+        ..., title="Account/rateLimits/updatedServerNotificationMethod"
+    )
+
+
+class AppListUpdatedServerNotificationMethod(RootModel[Literal["app/list/updated"]]):
+    root: Literal["app/list/updated"] = Field(
+        ..., title="App/list/updatedServerNotificationMethod"
+    )
+
+
+class ItemReasoningSummaryTextDeltaServerNotificationMethod(
+    RootModel[Literal["item/reasoning/summaryTextDelta"]]
+):
+    root: Literal["item/reasoning/summaryTextDelta"] = Field(
+        ..., title="Item/reasoning/summaryTextDeltaServerNotificationMethod"
+    )
+
+
+class ItemReasoningSummaryTextDeltaServerNotification(BaseModel):
+    method: ItemReasoningSummaryTextDeltaServerNotificationMethod = Field(
+        ..., title="Item/reasoning/summaryTextDeltaServerNotificationMethod"
+    )
+    params: ReasoningSummaryTextDeltaNotification
+
+
+class ItemReasoningSummaryPartAddedServerNotificationMethod(
+    RootModel[Literal["item/reasoning/summaryPartAdded"]]
+):
+    root: Literal["item/reasoning/summaryPartAdded"] = Field(
+        ..., title="Item/reasoning/summaryPartAddedServerNotificationMethod"
+    )
+
+
+class ItemReasoningSummaryPartAddedServerNotification(BaseModel):
+    method: ItemReasoningSummaryPartAddedServerNotificationMethod = Field(
+        ..., title="Item/reasoning/summaryPartAddedServerNotificationMethod"
+    )
+    params: ReasoningSummaryPartAddedNotification
+
+
+class ItemReasoningTextDeltaServerNotificationMethod(
+    RootModel[Literal["item/reasoning/textDelta"]]
+):
+    root: Literal["item/reasoning/textDelta"] = Field(
+        ..., title="Item/reasoning/textDeltaServerNotificationMethod"
+    )
+
+
+class ItemReasoningTextDeltaServerNotification(BaseModel):
+    method: ItemReasoningTextDeltaServerNotificationMethod = Field(
+        ..., title="Item/reasoning/textDeltaServerNotificationMethod"
+    )
+    params: ReasoningTextDeltaNotification
+
+
+class ThreadCompactedServerNotificationMethod(RootModel[Literal["thread/compacted"]]):
+    root: Literal["thread/compacted"] = Field(
+        ..., title="Thread/compactedServerNotificationMethod"
+    )
+
+
+class ThreadCompactedServerNotification(BaseModel):
+    method: ThreadCompactedServerNotificationMethod = Field(
+        ..., title="Thread/compactedServerNotificationMethod"
+    )
+    params: ContextCompactedNotification
+
+
+class ModelReroutedServerNotificationMethod(RootModel[Literal["model/rerouted"]]):
+    root: Literal["model/rerouted"] = Field(
+        ..., title="Model/reroutedServerNotificationMethod"
+    )
+
+
+class ModelReroutedServerNotification(BaseModel):
+    method: ModelReroutedServerNotificationMethod = Field(
+        ..., title="Model/reroutedServerNotificationMethod"
+    )
+    params: ModelReroutedNotification
+
+
+class DeprecationNoticeServerNotificationMethod(
+    RootModel[Literal["deprecationNotice"]]
+):
+    root: Literal["deprecationNotice"] = Field(
+        ..., title="DeprecationNoticeServerNotificationMethod"
+    )
+
+
+class DeprecationNoticeServerNotification(BaseModel):
+    method: DeprecationNoticeServerNotificationMethod = Field(
+        ..., title="DeprecationNoticeServerNotificationMethod"
+    )
+    params: DeprecationNoticeNotification
+
+
+class ConfigWarningServerNotificationMethod(RootModel[Literal["configWarning"]]):
+    root: Literal["configWarning"] = Field(
+        ..., title="ConfigWarningServerNotificationMethod"
+    )
+
+
+class FuzzyFileSearchSessionUpdatedServerNotificationMethod(
+    RootModel[Literal["fuzzyFileSearch/sessionUpdated"]]
+):
+    root: Literal["fuzzyFileSearch/sessionUpdated"] = Field(
+        ..., title="FuzzyFileSearch/sessionUpdatedServerNotificationMethod"
+    )
+
+
+class FuzzyFileSearchSessionUpdatedServerNotification(BaseModel):
+    method: FuzzyFileSearchSessionUpdatedServerNotificationMethod = Field(
+        ..., title="FuzzyFileSearch/sessionUpdatedServerNotificationMethod"
+    )
+    params: FuzzyFileSearchSessionUpdatedNotification
+
+
+class FuzzyFileSearchSessionCompletedServerNotificationMethod(
+    RootModel[Literal["fuzzyFileSearch/sessionCompleted"]]
+):
+    root: Literal["fuzzyFileSearch/sessionCompleted"] = Field(
+        ..., title="FuzzyFileSearch/sessionCompletedServerNotificationMethod"
+    )
+
+
+class FuzzyFileSearchSessionCompletedServerNotification(BaseModel):
+    method: FuzzyFileSearchSessionCompletedServerNotificationMethod = Field(
+        ..., title="FuzzyFileSearch/sessionCompletedServerNotificationMethod"
+    )
+    params: FuzzyFileSearchSessionCompletedNotification
+
+
+class ThreadRealtimeStartedServerNotificationMethod(
+    RootModel[Literal["thread/realtime/started"]]
+):
+    root: Literal["thread/realtime/started"] = Field(
+        ..., title="Thread/realtime/startedServerNotificationMethod"
+    )
+
+
+class ThreadRealtimeItemAddedServerNotificationMethod(
+    RootModel[Literal["thread/realtime/itemAdded"]]
+):
+    root: Literal["thread/realtime/itemAdded"] = Field(
+        ..., title="Thread/realtime/itemAddedServerNotificationMethod"
+    )
+
+
+class ThreadRealtimeOutputAudioDeltaServerNotificationMethod(
+    RootModel[Literal["thread/realtime/outputAudio/delta"]]
+):
+    root: Literal["thread/realtime/outputAudio/delta"] = Field(
+        ..., title="Thread/realtime/outputAudio/deltaServerNotificationMethod"
+    )
+
+
+class ThreadRealtimeErrorServerNotificationMethod(
+    RootModel[Literal["thread/realtime/error"]]
+):
+    root: Literal["thread/realtime/error"] = Field(
+        ..., title="Thread/realtime/errorServerNotificationMethod"
+    )
+
+
+class ThreadRealtimeClosedServerNotificationMethod(
+    RootModel[Literal["thread/realtime/closed"]]
+):
+    root: Literal["thread/realtime/closed"] = Field(
+        ..., title="Thread/realtime/closedServerNotificationMethod"
+    )
+
+
+class WindowsWorldWritableWarningServerNotificationMethod(
+    RootModel[Literal["windows/worldWritableWarning"]]
+):
+    root: Literal["windows/worldWritableWarning"] = Field(
+        ..., title="Windows/worldWritableWarningServerNotificationMethod"
+    )
+
+
+class WindowsSandboxSetupCompletedServerNotificationMethod(
+    RootModel[Literal["windowsSandbox/setupCompleted"]]
+):
+    root: Literal["windowsSandbox/setupCompleted"] = Field(
+        ..., title="WindowsSandbox/setupCompletedServerNotificationMethod"
+    )
+
+
+class AccountLoginCompletedServerNotificationMethod(
+    RootModel[Literal["account/login/completed"]]
+):
+    root: Literal["account/login/completed"] = Field(
+        ..., title="Account/login/completedServerNotificationMethod"
+    )
+
+
+class AccountLoginCompletedServerNotification(BaseModel):
+    method: AccountLoginCompletedServerNotificationMethod = Field(
+        ..., title="Account/login/completedServerNotificationMethod"
+    )
+    params: AccountLoginCompletedNotification
+
+
+class ItemCommandExecutionRequestApprovalServerRequestMethod(
+    RootModel[Literal["item/commandExecution/requestApproval"]]
+):
+    root: Literal["item/commandExecution/requestApproval"] = Field(
+        ..., title="Item/commandExecution/requestApprovalServerRequestMethod"
+    )
+
+
+class ItemFileChangeRequestApprovalServerRequestMethod(
+    RootModel[Literal["item/fileChange/requestApproval"]]
+):
+    root: Literal["item/fileChange/requestApproval"] = Field(
+        ..., title="Item/fileChange/requestApprovalServerRequestMethod"
+    )
+
+
+class ItemFileChangeRequestApprovalServerRequest(BaseModel):
+    id: RequestId
+    method: ItemFileChangeRequestApprovalServerRequestMethod = Field(
+        ..., title="Item/fileChange/requestApprovalServerRequestMethod"
+    )
+    params: FileChangeRequestApprovalParams
+
+
+class ItemToolRequestUserInputServerRequestMethod(
+    RootModel[Literal["item/tool/requestUserInput"]]
+):
+    root: Literal["item/tool/requestUserInput"] = Field(
+        ..., title="Item/tool/requestUserInputServerRequestMethod"
+    )
+
+
+class McpServerElicitationRequestServerRequestMethod(
+    RootModel[Literal["mcpServer/elicitation/request"]]
+):
+    root: Literal["mcpServer/elicitation/request"] = Field(
+        ..., title="McpServer/elicitation/requestServerRequestMethod"
+    )
+
+
+class ItemPermissionsRequestApprovalServerRequestMethod(
+    RootModel[Literal["item/permissions/requestApproval"]]
+):
+    root: Literal["item/permissions/requestApproval"] = Field(
+        ..., title="Item/permissions/requestApprovalServerRequestMethod"
+    )
+
+
+class ItemToolCallServerRequestMethod(RootModel[Literal["item/tool/call"]]):
+    root: Literal["item/tool/call"] = Field(
+        ..., title="Item/tool/callServerRequestMethod"
+    )
+
+
+class ItemToolCallServerRequest(BaseModel):
+    id: RequestId
+    method: ItemToolCallServerRequestMethod = Field(
+        ..., title="Item/tool/callServerRequestMethod"
+    )
+    params: DynamicToolCallParams
+
+
+class AccountChatgptAuthTokensRefreshServerRequestMethod(
+    RootModel[Literal["account/chatgptAuthTokens/refresh"]]
+):
+    root: Literal["account/chatgptAuthTokens/refresh"] = Field(
+        ..., title="Account/chatgptAuthTokens/refreshServerRequestMethod"
+    )
+
+
+class ApplyPatchApprovalServerRequestMethod(RootModel[Literal["applyPatchApproval"]]):
+    root: Literal["applyPatchApproval"] = Field(
+        ..., title="ApplyPatchApprovalServerRequestMethod"
+    )
+
+
+class ExecCommandApprovalServerRequestMethod(RootModel[Literal["execCommandApproval"]]):
+    root: Literal["execCommandApproval"] = Field(
+        ..., title="ExecCommandApprovalServerRequestMethod"
+    )
+
+
+class ServerRequestResolvedNotification(BaseModel):
+    request_id: RequestId = Field(..., alias="requestId")
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ServiceTier(StrEnum):
+    fast = "fast"
+    flex = "flex"
+
+
+class SessionNetworkProxyRuntime(BaseModel):
+    http_addr: str
+    socks_addr: str
+
+
+class SessionSource1(StrEnum):
+    cli = "cli"
+    vscode = "vscode"
+    exec = "exec"
+    app_server = "appServer"
+    unknown = "unknown"
 
 
 class SkillErrorInfo(BaseModel):
@@ -4007,20 +3581,20 @@ class SkillErrorInfo(BaseModel):
     path: str
 
 
-class SkillScope(StrEnum):
-    user = 'user'
-    repo = 'repo'
-    system = 'system'
-    admin = 'admin'
-
-
 class SkillInterface(BaseModel):
-    brand_color: str | None = Field(default=None, alias='brandColor')
-    default_prompt: str | None = Field(default=None, alias='defaultPrompt')
-    display_name: str | None = Field(default=None, alias='displayName')
-    icon_large: str | None = Field(default=None, alias='iconLarge')
-    icon_small: str | None = Field(default=None, alias='iconSmall')
-    short_description: str | None = Field(default=None, alias='shortDescription')
+    brand_color: str | None = Field(default=None, alias="brandColor")
+    default_prompt: str | None = Field(default=None, alias="defaultPrompt")
+    display_name: str | None = Field(default=None, alias="displayName")
+    icon_large: str | None = Field(default=None, alias="iconLarge")
+    icon_small: str | None = Field(default=None, alias="iconSmall")
+    short_description: str | None = Field(default=None, alias="shortDescription")
+
+
+class SkillScope(StrEnum):
+    user = "user"
+    repo = "repo"
+    system = "system"
+    admin = "admin"
 
 
 class SkillToolDependency(BaseModel):
@@ -4032,232 +3606,1974 @@ class SkillToolDependency(BaseModel):
     value: str
 
 
-class CommandExecOutputStream(RootModel[Literal['stdout'] | Literal['stderr']]):
-    root: Literal['stdout'] | Literal['stderr'] = Field(
-        ..., description='Stream label for `command/exec/outputDelta` notifications.'
-    )
+class SkillsChangedNotification(BaseModel):
+    pass
 
 
-class ExternalAgentConfigDetectParams(BaseModel):
+class SkillsConfigWriteParams(BaseModel):
+    enabled: bool
+    path: str
+
+
+class SkillsListExtraRootsForCwd(BaseModel):
+    cwd: str
+    extra_user_roots: list[str] = Field(..., alias="extraUserRoots")
+
+
+class SkillsListParams(BaseModel):
     cwds: list[str] | None = Field(
         default=None,
-        description='Zero or more working directories to include for repo-scoped detection.',
+        description="When empty, defaults to the current session working directory.",
     )
-    include_home: bool | None = Field(
+    force_reload: bool | None = Field(
         default=None,
-        alias='includeHome',
-        description="If true, include detection under the user's home (~/.claude, ~/.codex, etc.).",
+        alias="forceReload",
+        description="When true, bypass the skills cache and re-scan skills from disk.",
     )
-
-
-class McpAuthStatus(StrEnum):
-    unsupported = 'unsupported'
-    not_logged_in = 'notLoggedIn'
-    bearer_token = 'bearerToken'
-    o_auth = 'oAuth'
-
-
-class ConfigReadParams(BaseModel):
-    cwd: str | None = Field(
+    per_cwd_extra_user_roots: list[SkillsListExtraRootsForCwd] | None = Field(
         default=None,
-        description='Optional working directory to resolve project config layers. If specified, return the effective config as seen from that directory (i.e., including any project layers between `cwd` and the project/repo root).',
+        alias="perCwdExtraUserRoots",
+        description="Optional per-cwd extra roots to scan as user-scoped skills.",
     )
-    include_layers: bool | None = Field(default=False, alias='includeLayers')
 
 
-class ThreadUnarchiveParams(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
+class SkillsRemoteReadParams(BaseModel):
+    enabled: bool | None = False
+    hazelnut_scope: HazelnutScope | None = Field(
+        default="example", alias="hazelnutScope"
+    )
+    product_surface: ProductSurface | None = Field(
+        default="codex", alias="productSurface"
+    )
 
 
-class ThreadSourceKind(StrEnum):
-    cli = 'cli'
-    vscode = 'vscode'
-    exec = 'exec'
-    app_server = 'appServer'
-    sub_agent = 'subAgent'
-    sub_agent_review = 'subAgentReview'
-    sub_agent_compact = 'subAgentCompact'
-    sub_agent_thread_spawn = 'subAgentThreadSpawn'
-    sub_agent_other = 'subAgentOther'
-    unknown = 'unknown'
+class SkillsRemoteWriteParams(BaseModel):
+    hazelnut_id: str = Field(..., alias="hazelnutId")
 
 
-class ThreadSortKey(StrEnum):
-    created_at = 'created_at'
-    updated_at = 'updated_at'
+class StepStatus(StrEnum):
+    pending = "pending"
+    in_progress = "in_progress"
+    completed = "completed"
 
 
-class ListMcpServerStatusParams(BaseModel):
-    cursor: str | None = Field(
+class SubAgentSource1(StrEnum):
+    review = "review"
+    compact = "compact"
+    memory_consolidation = "memory_consolidation"
+
+
+class OtherSubAgentSource(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    other: str
+
+
+class TerminalInteractionNotification(BaseModel):
+    item_id: str = Field(..., alias="itemId")
+    process_id: str = Field(..., alias="processId")
+    stdin: str
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class TextElement(BaseModel):
+    byte_range: ByteRange = Field(
+        ...,
+        alias="byteRange",
+        description="Byte range in the parent `text` buffer that this element occupies.",
+    )
+    placeholder: str | None = Field(
         default=None,
-        description='Opaque pagination cursor returned by a previous call.',
-    )
-    limit: int | None = Field(
-        default=None,
-        description='Optional page size; defaults to a server-defined value.',
-        ge=0,
+        description="Optional human-readable placeholder for the element, displayed in the UI.",
     )
 
 
-class ThreadSetNameParams(BaseModel):
-    name: str
-    thread_id: str = Field(..., alias='threadId')
+class TextPosition(BaseModel):
+    column: int = Field(
+        ..., description="1-based column number (in Unicode scalar values).", ge=0
+    )
+    line: int = Field(..., description="1-based line number.", ge=0)
 
 
-class McpServerOauthLoginCompletedNotification(BaseModel):
-    error: str | None = None
-    name: str
-    success: bool
+class TextRange(BaseModel):
+    end: TextPosition
+    start: TextPosition
 
 
-class AppScreenshot(BaseModel):
-    file_id: str | None = Field(default=None, alias='fileId')
-    url: str | None = None
-    user_prompt: str = Field(..., alias='userPrompt')
-
-
-class AppReview(BaseModel):
-    status: str
-
-
-class AppBranding(BaseModel):
-    category: str | None = None
-    developer: str | None = None
-    is_discoverable_app: bool = Field(..., alias='isDiscoverableApp')
-    privacy_policy: str | None = Field(default=None, alias='privacyPolicy')
-    terms_of_service: str | None = Field(default=None, alias='termsOfService')
-    website: str | None = None
-
-
-class WindowsSandboxSetupCompletedNotification(BaseModel):
-    error: str | None = None
-    mode: WindowsSandboxSetupMode
-    success: bool
-
-
-class Resource(BaseModel):
-    field_meta: Any | None = Field(None, alias='_meta')
-    annotations: Any | None = None
-    description: str | None = None
-    icons: list[Any] | None = None
-    mime_type: str | None = Field(default=None, alias='mimeType')
-    name: str
-    size: int | None = None
-    title: str | None = None
-    uri: str
-
-
-class PlanDeltaNotification(BaseModel):
-    delta: str
-    item_id: str = Field(..., alias='itemId')
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
+class ThreadActiveFlag(StrEnum):
+    waiting_on_approval = "waitingOnApproval"
+    waiting_on_user_input = "waitingOnUserInput"
 
 
 class ThreadArchiveParams(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
+    thread_id: str = Field(..., alias="threadId")
 
 
-class ReasoningTextDeltaNotification(BaseModel):
-    content_index: int = Field(..., alias='contentIndex')
-    delta: str
-    item_id: str = Field(..., alias='itemId')
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
+class ThreadArchivedNotification(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
 
 
-class TurnPlanStepStatus(StrEnum):
-    pending = 'pending'
-    in_progress = 'inProgress'
-    completed = 'completed'
+class ThreadClosedNotification(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
 
 
-class TurnInterruptParams(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
+class ThreadCompactStartParams(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadForkParams(BaseModel):
+    approval_policy: AskForApproval | None = Field(default=None, alias="approvalPolicy")
+    base_instructions: str | None = Field(default=None, alias="baseInstructions")
+    config: dict[str, Any] | None = None
+    cwd: str | None = None
+    developer_instructions: str | None = Field(
+        default=None, alias="developerInstructions"
+    )
+    model: str | None = Field(
+        default=None,
+        description="Configuration overrides for the forked thread, if any.",
+    )
+    model_provider: str | None = Field(default=None, alias="modelProvider")
+    sandbox: SandboxMode | None = None
+    service_tier: ServiceTier | None = Field(default=None, alias="serviceTier")
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadId(RootModel[str]):
+    root: str
+
+
+class UserMessageThreadItemType(RootModel[Literal["userMessage"]]):
+    root: Literal["userMessage"] = Field(..., title="UserMessageThreadItemType")
+
+
+class AgentMessageThreadItemType(RootModel[Literal["agentMessage"]]):
+    root: Literal["agentMessage"] = Field(..., title="AgentMessageThreadItemType")
+
+
+class AgentMessageThreadItem(BaseModel):
+    id: str
+    phase: MessagePhase | None = None
+    text: str
+    type: AgentMessageThreadItemType = Field(..., title="AgentMessageThreadItemType")
+
+
+class PlanThreadItemType(RootModel[Literal["plan"]]):
+    root: Literal["plan"] = Field(..., title="PlanThreadItemType")
+
+
+class PlanThreadItem(BaseModel):
+    id: str
+    text: str
+    type: PlanThreadItemType = Field(..., title="PlanThreadItemType")
+
+
+class ReasoningThreadItemType(RootModel[Literal["reasoning"]]):
+    root: Literal["reasoning"] = Field(..., title="ReasoningThreadItemType")
+
+
+class ReasoningThreadItem(BaseModel):
+    content: list[str] | None = []
+    id: str
+    summary: list[str] | None = []
+    type: ReasoningThreadItemType = Field(..., title="ReasoningThreadItemType")
+
+
+class CommandExecutionThreadItemType(RootModel[Literal["commandExecution"]]):
+    root: Literal["commandExecution"] = Field(
+        ..., title="CommandExecutionThreadItemType"
+    )
+
+
+class CommandExecutionThreadItem(BaseModel):
+    aggregated_output: str | None = Field(
+        default=None,
+        alias="aggregatedOutput",
+        description="The command's output, aggregated from stdout and stderr.",
+    )
+    command: str = Field(..., description="The command to be executed.")
+    command_actions: list[CommandAction] = Field(
+        ...,
+        alias="commandActions",
+        description="A best-effort parsing of the command to understand the action(s) it will perform. This returns a list of CommandAction objects because a single shell command may be composed of many commands piped together.",
+    )
+    cwd: str = Field(..., description="The command's working directory.")
+    duration_ms: int | None = Field(
+        default=None,
+        alias="durationMs",
+        description="The duration of the command execution in milliseconds.",
+    )
+    exit_code: int | None = Field(
+        default=None, alias="exitCode", description="The command's exit code."
+    )
+    id: str
+    process_id: str | None = Field(
+        default=None,
+        alias="processId",
+        description="Identifier for the underlying PTY process (when available).",
+    )
+    status: CommandExecutionStatus
+    type: CommandExecutionThreadItemType = Field(
+        ..., title="CommandExecutionThreadItemType"
+    )
+
+
+class FileChangeThreadItemType(RootModel[Literal["fileChange"]]):
+    root: Literal["fileChange"] = Field(..., title="FileChangeThreadItemType")
+
+
+class McpToolCallThreadItemType(RootModel[Literal["mcpToolCall"]]):
+    root: Literal["mcpToolCall"] = Field(..., title="McpToolCallThreadItemType")
+
+
+class McpToolCallThreadItem(BaseModel):
+    arguments: Any
+    duration_ms: int | None = Field(
+        default=None,
+        alias="durationMs",
+        description="The duration of the MCP tool call in milliseconds.",
+    )
+    error: McpToolCallError | None = None
+    id: str
+    result: McpToolCallResult | None = None
+    server: str
+    status: McpToolCallStatus
+    tool: str
+    type: McpToolCallThreadItemType = Field(..., title="McpToolCallThreadItemType")
+
+
+class DynamicToolCallThreadItemType(RootModel[Literal["dynamicToolCall"]]):
+    root: Literal["dynamicToolCall"] = Field(..., title="DynamicToolCallThreadItemType")
+
+
+class DynamicToolCallThreadItem(BaseModel):
+    arguments: Any
+    content_items: list[DynamicToolCallOutputContentItem] | None = Field(
+        default=None, alias="contentItems"
+    )
+    duration_ms: int | None = Field(
+        default=None,
+        alias="durationMs",
+        description="The duration of the dynamic tool call in milliseconds.",
+    )
+    id: str
+    status: DynamicToolCallStatus
+    success: bool | None = None
+    tool: str
+    type: DynamicToolCallThreadItemType = Field(
+        ..., title="DynamicToolCallThreadItemType"
+    )
+
+
+class CollabAgentToolCallThreadItemType(RootModel[Literal["collabAgentToolCall"]]):
+    root: Literal["collabAgentToolCall"] = Field(
+        ..., title="CollabAgentToolCallThreadItemType"
+    )
+
+
+class WebSearchThreadItemType(RootModel[Literal["webSearch"]]):
+    root: Literal["webSearch"] = Field(..., title="WebSearchThreadItemType")
+
+
+class ImageViewThreadItemType(RootModel[Literal["imageView"]]):
+    root: Literal["imageView"] = Field(..., title="ImageViewThreadItemType")
+
+
+class ImageViewThreadItem(BaseModel):
+    id: str
+    path: str
+    type: ImageViewThreadItemType = Field(..., title="ImageViewThreadItemType")
+
+
+class ImageGenerationThreadItemType(RootModel[Literal["imageGeneration"]]):
+    root: Literal["imageGeneration"] = Field(..., title="ImageGenerationThreadItemType")
+
+
+class ImageGenerationThreadItem(BaseModel):
+    id: str
+    result: str
+    revised_prompt: str | None = Field(default=None, alias="revisedPrompt")
+    status: str
+    type: ImageGenerationThreadItemType = Field(
+        ..., title="ImageGenerationThreadItemType"
+    )
+
+
+class EnteredReviewModeThreadItemType(RootModel[Literal["enteredReviewMode"]]):
+    root: Literal["enteredReviewMode"] = Field(
+        ..., title="EnteredReviewModeThreadItemType"
+    )
+
+
+class EnteredReviewModeThreadItem(BaseModel):
+    id: str
+    review: str
+    type: EnteredReviewModeThreadItemType = Field(
+        ..., title="EnteredReviewModeThreadItemType"
+    )
+
+
+class ExitedReviewModeThreadItemType(RootModel[Literal["exitedReviewMode"]]):
+    root: Literal["exitedReviewMode"] = Field(
+        ..., title="ExitedReviewModeThreadItemType"
+    )
+
+
+class ExitedReviewModeThreadItem(BaseModel):
+    id: str
+    review: str
+    type: ExitedReviewModeThreadItemType = Field(
+        ..., title="ExitedReviewModeThreadItemType"
+    )
+
+
+class ContextCompactionThreadItemType(RootModel[Literal["contextCompaction"]]):
+    root: Literal["contextCompaction"] = Field(
+        ..., title="ContextCompactionThreadItemType"
+    )
+
+
+class ContextCompactionThreadItem(BaseModel):
+    id: str
+    type: ContextCompactionThreadItemType = Field(
+        ..., title="ContextCompactionThreadItemType"
+    )
+
+
+class ThreadLoadedListParams(BaseModel):
+    cursor: str | None = Field(
+        default=None,
+        description="Opaque pagination cursor returned by a previous call.",
+    )
+    limit: int | None = Field(
+        default=None, description="Optional page size; defaults to no limit.", ge=0
+    )
+
+
+class ThreadMetadataGitInfoUpdateParams(BaseModel):
+    branch: str | None = Field(
+        default=None,
+        description="Omit to leave the stored branch unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+    )
+    origin_url: str | None = Field(
+        default=None,
+        alias="originUrl",
+        description="Omit to leave the stored origin URL unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+    )
+    sha: str | None = Field(
+        default=None,
+        description="Omit to leave the stored commit unchanged, set to `null` to clear it, or provide a non-empty string to replace it.",
+    )
+
+
+class ThreadMetadataUpdateParams(BaseModel):
+    git_info: ThreadMetadataGitInfoUpdateParams | None = Field(
+        default=None,
+        alias="gitInfo",
+        description="Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value.",
+    )
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadNameUpdatedNotification(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
+    thread_name: str | None = Field(default=None, alias="threadName")
 
 
 class ThreadReadParams(BaseModel):
     include_turns: bool | None = Field(
         default=False,
-        alias='includeTurns',
-        description='When true, include turns and their items from rollout history.',
+        alias="includeTurns",
+        description="When true, include turns and their items from rollout history.",
     )
-    thread_id: str = Field(..., alias='threadId')
+    thread_id: str = Field(..., alias="threadId")
 
 
-class ExperimentalFeatureListParams(BaseModel):
-    cursor: str | None = Field(
-        default=None,
-        description='Opaque pagination cursor returned by a previous call.',
+class ThreadRealtimeAudioChunk(BaseModel):
+    data: str
+    num_channels: int = Field(..., alias="numChannels", ge=0)
+    sample_rate: int = Field(..., alias="sampleRate", ge=0)
+    samples_per_channel: int | None = Field(
+        default=None, alias="samplesPerChannel", ge=0
     )
-    limit: int | None = Field(
-        default=None,
-        description='Optional page size; defaults to a reasonable server-side value.',
-        ge=0,
-    )
-
-
-class HazelnutScope(StrEnum):
-    example = 'example'
-    workspace_shared = 'workspace-shared'
-    all_shared = 'all-shared'
-    personal = 'personal'
-
-
-class ProductSurface(StrEnum):
-    chatgpt = 'chatgpt'
-    codex = 'codex'
-    api = 'api'
-    atlas = 'atlas'
-
-
-class CancelLoginAccountParams(BaseModel):
-    login_id: str = Field(..., alias='loginId')
-
-
-class ThreadCompactStartParams(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
-
-
-class TextPosition(BaseModel):
-    column: int = Field(
-        ..., description='1-based column number (in Unicode scalar values).', ge=0
-    )
-    line: int = Field(..., description='1-based line number.', ge=0)
-
-
-class CommandExecutionOutputDeltaNotification(BaseModel):
-    delta: str
-    item_id: str = Field(..., alias='itemId')
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
-
-
-class ThreadClosedNotification(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
-
-
-class ResourceTemplate(BaseModel):
-    annotations: Any | None = None
-    description: str | None = None
-    mime_type: str | None = Field(default=None, alias='mimeType')
-    name: str
-    title: str | None = None
-    uri_template: str = Field(..., alias='uriTemplate')
-
-
-class TerminalInteractionNotification(BaseModel):
-    item_id: str = Field(..., alias='itemId')
-    process_id: str = Field(..., alias='processId')
-    stdin: str
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
 
 
 class ThreadRealtimeClosedNotification(BaseModel):
     reason: str | None = None
-    thread_id: str = Field(..., alias='threadId')
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadRealtimeErrorNotification(BaseModel):
+    message: str
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadRealtimeItemAddedNotification(BaseModel):
+    item: Any
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadRealtimeOutputAudioDeltaNotification(BaseModel):
+    audio: ThreadRealtimeAudioChunk
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadRealtimeStartedNotification(BaseModel):
+    session_id: str | None = Field(default=None, alias="sessionId")
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadResumeParams(BaseModel):
+    approval_policy: AskForApproval | None = Field(default=None, alias="approvalPolicy")
+    base_instructions: str | None = Field(default=None, alias="baseInstructions")
+    config: dict[str, Any] | None = None
+    cwd: str | None = None
+    developer_instructions: str | None = Field(
+        default=None, alias="developerInstructions"
+    )
+    model: str | None = Field(
+        default=None,
+        description="Configuration overrides for the resumed thread, if any.",
+    )
+    model_provider: str | None = Field(default=None, alias="modelProvider")
+    personality: Personality | None = None
+    sandbox: SandboxMode | None = None
+    service_tier: ServiceTier | None = Field(default=None, alias="serviceTier")
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadRollbackParams(BaseModel):
+    num_turns: int = Field(
+        ...,
+        alias="numTurns",
+        description="The number of turns to drop from the end of the thread. Must be >= 1.\n\nThis only modifies the thread's history and does not revert local file changes that have been made by the agent. Clients are responsible for reverting these changes.",
+        ge=0,
+    )
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadSetNameParams(BaseModel):
+    name: str
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadSortKey(StrEnum):
+    created_at = "created_at"
+    updated_at = "updated_at"
+
+
+class ThreadSourceKind(StrEnum):
+    cli = "cli"
+    vscode = "vscode"
+    exec = "exec"
+    app_server = "appServer"
+    sub_agent = "subAgent"
+    sub_agent_review = "subAgentReview"
+    sub_agent_compact = "subAgentCompact"
+    sub_agent_thread_spawn = "subAgentThreadSpawn"
+    sub_agent_other = "subAgentOther"
+    unknown = "unknown"
+
+
+class ThreadStartParams(BaseModel):
+    approval_policy: AskForApproval | None = Field(default=None, alias="approvalPolicy")
+    base_instructions: str | None = Field(default=None, alias="baseInstructions")
+    config: dict[str, Any] | None = None
+    cwd: str | None = None
+    developer_instructions: str | None = Field(
+        default=None, alias="developerInstructions"
+    )
+    ephemeral: bool | None = None
+    model: str | None = None
+    model_provider: str | None = Field(default=None, alias="modelProvider")
+    personality: Personality | None = None
+    sandbox: SandboxMode | None = None
+    service_name: str | None = Field(default=None, alias="serviceName")
+    service_tier: ServiceTier | None = Field(default=None, alias="serviceTier")
+
+
+class NotLoadedThreadStatusType(RootModel[Literal["notLoaded"]]):
+    root: Literal["notLoaded"] = Field(..., title="NotLoadedThreadStatusType")
+
+
+class NotLoadedThreadStatus(BaseModel):
+    type: NotLoadedThreadStatusType = Field(..., title="NotLoadedThreadStatusType")
+
+
+class IdleThreadStatusType(RootModel[Literal["idle"]]):
+    root: Literal["idle"] = Field(..., title="IdleThreadStatusType")
+
+
+class IdleThreadStatus(BaseModel):
+    type: IdleThreadStatusType = Field(..., title="IdleThreadStatusType")
+
+
+class SystemErrorThreadStatusType(RootModel[Literal["systemError"]]):
+    root: Literal["systemError"] = Field(..., title="SystemErrorThreadStatusType")
+
+
+class SystemErrorThreadStatus(BaseModel):
+    type: SystemErrorThreadStatusType = Field(..., title="SystemErrorThreadStatusType")
+
+
+class ActiveThreadStatusType(RootModel[Literal["active"]]):
+    root: Literal["active"] = Field(..., title="ActiveThreadStatusType")
+
+
+class ActiveThreadStatus(BaseModel):
+    active_flags: list[ThreadActiveFlag] = Field(..., alias="activeFlags")
+    type: ActiveThreadStatusType = Field(..., title="ActiveThreadStatusType")
+
+
+class ThreadStatus(
+    RootModel[
+        NotLoadedThreadStatus
+        | IdleThreadStatus
+        | SystemErrorThreadStatus
+        | ActiveThreadStatus
+    ]
+):
+    root: (
+        NotLoadedThreadStatus
+        | IdleThreadStatus
+        | SystemErrorThreadStatus
+        | ActiveThreadStatus
+    )
+
+
+class ThreadStatusChangedNotification(BaseModel):
+    status: ThreadStatus
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadUnarchiveParams(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadUnarchivedNotification(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
+
+
+class ThreadUnsubscribeParams(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
+
+
+class TokenUsage(BaseModel):
+    cached_input_tokens: int
+    input_tokens: int
+    output_tokens: int
+    reasoning_output_tokens: int
+    total_tokens: int
+
+
+class TokenUsageBreakdown(BaseModel):
+    cached_input_tokens: int = Field(..., alias="cachedInputTokens")
+    input_tokens: int = Field(..., alias="inputTokens")
+    output_tokens: int = Field(..., alias="outputTokens")
+    reasoning_output_tokens: int = Field(..., alias="reasoningOutputTokens")
+    total_tokens: int = Field(..., alias="totalTokens")
+
+
+class TokenUsageInfo(BaseModel):
+    last_token_usage: TokenUsage
+    model_context_window: int | None = None
+    total_token_usage: TokenUsage
+
+
+class Tool(BaseModel):
+    field_meta: Any | None = Field(None, alias="_meta")
+    annotations: Any | None = None
+    description: str | None = None
+    icons: list[Any] | None = None
+    input_schema: Any = Field(..., alias="inputSchema")
+    name: str
+    output_schema: Any | None = Field(None, alias="outputSchema")
+    title: str | None = None
+
+
+class ToolRequestUserInputAnswer(BaseModel):
+    answers: list[str]
+
+
+class ToolRequestUserInputOption(BaseModel):
+    description: str
+    label: str
+
+
+class ToolRequestUserInputQuestion(BaseModel):
+    header: str
+    id: str
+    is_other: bool | None = Field(default=False, alias="isOther")
+    is_secret: bool | None = Field(default=False, alias="isSecret")
+    options: list[ToolRequestUserInputOption] | None = None
+    question: str
+
+
+class ToolRequestUserInputResponse(BaseModel):
+    answers: dict[str, ToolRequestUserInputAnswer]
+
+
+class TurnAbortReason(StrEnum):
+    interrupted = "interrupted"
+    replaced = "replaced"
+    review_ended = "review_ended"
+
+
+class TurnDiffUpdatedNotification(BaseModel):
+    diff: str
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class TurnError(BaseModel):
+    additional_details: str | None = Field(default=None, alias="additionalDetails")
+    codex_error_info: CodexErrorInfo | None = Field(
+        default=None, alias="codexErrorInfo"
+    )
+    message: str
+
+
+class TurnInterruptParams(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class UserMessageTurnItemType(RootModel[Literal["UserMessage"]]):
+    root: Literal["UserMessage"] = Field(..., title="UserMessageTurnItemType")
+
+
+class AgentMessageTurnItemType(RootModel[Literal["AgentMessage"]]):
+    root: Literal["AgentMessage"] = Field(..., title="AgentMessageTurnItemType")
+
+
+class AgentMessageTurnItem(BaseModel):
+    content: list[AgentMessageContent]
+    id: str
+    phase: MessagePhase | None = Field(
+        default=None,
+        description="Optional phase metadata carried through from `ResponseItem::Message`.\n\nThis is currently used by TUI rendering to distinguish mid-turn commentary from a final answer and avoid status-indicator jitter.",
+    )
+    type: AgentMessageTurnItemType = Field(..., title="AgentMessageTurnItemType")
+
+
+class PlanTurnItemType(RootModel[Literal["Plan"]]):
+    root: Literal["Plan"] = Field(..., title="PlanTurnItemType")
+
+
+class PlanTurnItem(BaseModel):
+    id: str
+    text: str
+    type: PlanTurnItemType = Field(..., title="PlanTurnItemType")
+
+
+class ReasoningTurnItemType(RootModel[Literal["Reasoning"]]):
+    root: Literal["Reasoning"] = Field(..., title="ReasoningTurnItemType")
+
+
+class ReasoningTurnItem(BaseModel):
+    id: str
+    raw_content: list[str] | None = []
+    summary_text: list[str]
+    type: ReasoningTurnItemType = Field(..., title="ReasoningTurnItemType")
+
+
+class WebSearchTurnItemType(RootModel[Literal["WebSearch"]]):
+    root: Literal["WebSearch"] = Field(..., title="WebSearchTurnItemType")
+
+
+class WebSearchTurnItem(BaseModel):
+    action: ResponsesApiWebSearchAction
+    id: str
+    query: str
+    type: WebSearchTurnItemType = Field(..., title="WebSearchTurnItemType")
+
+
+class ImageGenerationTurnItemType(RootModel[Literal["ImageGeneration"]]):
+    root: Literal["ImageGeneration"] = Field(..., title="ImageGenerationTurnItemType")
+
+
+class ImageGenerationTurnItem(BaseModel):
+    id: str
+    result: str
+    revised_prompt: str | None = None
+    saved_path: str | None = None
+    status: str
+    type: ImageGenerationTurnItemType = Field(..., title="ImageGenerationTurnItemType")
+
+
+class ContextCompactionTurnItemType(RootModel[Literal["ContextCompaction"]]):
+    root: Literal["ContextCompaction"] = Field(
+        ..., title="ContextCompactionTurnItemType"
+    )
+
+
+class ContextCompactionTurnItem(BaseModel):
+    id: str
+    type: ContextCompactionTurnItemType = Field(
+        ..., title="ContextCompactionTurnItemType"
+    )
+
+
+class TurnPlanStepStatus(StrEnum):
+    pending = "pending"
+    in_progress = "inProgress"
+    completed = "completed"
+
+
+class TurnStatus(StrEnum):
+    completed = "completed"
+    interrupted = "interrupted"
+    failed = "failed"
+    in_progress = "inProgress"
+
+
+class TextUserInputType(RootModel[Literal["text"]]):
+    root: Literal["text"] = Field(..., title="TextUserInputType")
+
+
+class TextUserInput(BaseModel):
+    text: str
+    text_elements: list[TextElement] | None = Field(
+        default_factory=list,
+        description="UI-defined spans within `text` used to render or persist special elements.",
+    )
+    type: TextUserInputType = Field(..., title="TextUserInputType")
+
+
+class ImageUserInputType(RootModel[Literal["image"]]):
+    root: Literal["image"] = Field(..., title="ImageUserInputType")
+
+
+class ImageUserInput(BaseModel):
+    type: ImageUserInputType = Field(..., title="ImageUserInputType")
+    url: str
+
+
+class LocalImageUserInputType(RootModel[Literal["localImage"]]):
+    root: Literal["localImage"] = Field(..., title="LocalImageUserInputType")
+
+
+class LocalImageUserInput(BaseModel):
+    path: str
+    type: LocalImageUserInputType = Field(..., title="LocalImageUserInputType")
+
+
+class SkillUserInputType(RootModel[Literal["skill"]]):
+    root: Literal["skill"] = Field(..., title="SkillUserInputType")
+
+
+class SkillUserInput(BaseModel):
+    name: str
+    path: str
+    type: SkillUserInputType = Field(..., title="SkillUserInputType")
+
+
+class MentionUserInputType(RootModel[Literal["mention"]]):
+    root: Literal["mention"] = Field(..., title="MentionUserInputType")
+
+
+class MentionUserInput(BaseModel):
+    name: str
+    path: str
+    type: MentionUserInputType = Field(..., title="MentionUserInputType")
+
+
+class UserInput(
+    RootModel[
+        TextUserInput
+        | ImageUserInput
+        | LocalImageUserInput
+        | SkillUserInput
+        | MentionUserInput
+    ]
+):
+    root: (
+        TextUserInput
+        | ImageUserInput
+        | LocalImageUserInput
+        | SkillUserInput
+        | MentionUserInput
+    )
+
+
+class W3cTraceContext(BaseModel):
+    traceparent: str | None = None
+    tracestate: str | None = None
+
+
+class SearchWebSearchActionType(RootModel[Literal["search"]]):
+    root: Literal["search"] = Field(..., title="SearchWebSearchActionType")
+
+
+class SearchWebSearchAction(BaseModel):
+    queries: list[str] | None = None
+    query: str | None = None
+    type: SearchWebSearchActionType = Field(..., title="SearchWebSearchActionType")
+
+
+class OpenPageWebSearchActionType(RootModel[Literal["openPage"]]):
+    root: Literal["openPage"] = Field(..., title="OpenPageWebSearchActionType")
+
+
+class OpenPageWebSearchAction(BaseModel):
+    type: OpenPageWebSearchActionType = Field(..., title="OpenPageWebSearchActionType")
+    url: str | None = None
+
+
+class FindInPageWebSearchActionType(RootModel[Literal["findInPage"]]):
+    root: Literal["findInPage"] = Field(..., title="FindInPageWebSearchActionType")
+
+
+class FindInPageWebSearchAction(BaseModel):
+    pattern: str | None = None
+    type: FindInPageWebSearchActionType = Field(
+        ..., title="FindInPageWebSearchActionType"
+    )
+    url: str | None = None
+
+
+class OtherWebSearchActionType(RootModel[Literal["other"]]):
+    root: Literal["other"] = Field(..., title="OtherWebSearchActionType")
+
+
+class OtherWebSearchAction(BaseModel):
+    type: OtherWebSearchActionType = Field(..., title="OtherWebSearchActionType")
+
+
+class WebSearchAction(
+    RootModel[
+        SearchWebSearchAction
+        | OpenPageWebSearchAction
+        | FindInPageWebSearchAction
+        | OtherWebSearchAction
+    ]
+):
+    root: (
+        SearchWebSearchAction
+        | OpenPageWebSearchAction
+        | FindInPageWebSearchAction
+        | OtherWebSearchAction
+    )
+
+
+class WindowsSandboxSetupMode(StrEnum):
+    elevated = "elevated"
+    unelevated = "unelevated"
+
+
+class WindowsSandboxSetupStartParams(BaseModel):
+    cwd: AbsolutePathBuf | None = None
+    mode: WindowsSandboxSetupMode
+
+
+class WindowsWorldWritableWarningNotification(BaseModel):
+    extra_count: int = Field(..., alias="extraCount", ge=0)
+    failed_scan: bool = Field(..., alias="failedScan")
+    sample_paths: list[str] = Field(..., alias="samplePaths")
+
+
+class AccountUpdatedNotification(BaseModel):
+    auth_mode: AuthMode | None = Field(default=None, alias="authMode")
+    plan_type: PlanType | None = Field(default=None, alias="planType")
+
+
+class AdditionalMacOsPermissions(BaseModel):
+    accessibility: bool
+    automations: MacOsAutomationPermission
+    calendar: bool
+    preferences: MacOsPreferencesPermission
+
+
+class AdditionalPermissionProfile(BaseModel):
+    file_system: AdditionalFileSystemPermissions | None = Field(
+        default=None, alias="fileSystem"
+    )
+    macos: AdditionalMacOsPermissions | None = None
+    network: AdditionalNetworkPermissions | None = None
+
+
+class AppMetadata(BaseModel):
+    categories: list[str] | None = None
+    developer: str | None = None
+    first_party_requires_install: bool | None = Field(
+        default=None, alias="firstPartyRequiresInstall"
+    )
+    first_party_type: str | None = Field(default=None, alias="firstPartyType")
+    review: AppReview | None = None
+    screenshots: list[AppScreenshot] | None = None
+    seo_description: str | None = Field(default=None, alias="seoDescription")
+    show_in_composer_when_unlinked: bool | None = Field(
+        default=None, alias="showInComposerWhenUnlinked"
+    )
+    sub_categories: list[str] | None = Field(default=None, alias="subCategories")
+    version: str | None = None
+    version_id: str | None = Field(default=None, alias="versionId")
+    version_notes: str | None = Field(default=None, alias="versionNotes")
+
+
+class ApplyPatchApprovalParams(BaseModel):
+    call_id: str = Field(
+        ...,
+        alias="callId",
+        description="Use to correlate this with [codex_protocol::protocol::PatchApplyBeginEvent] and [codex_protocol::protocol::PatchApplyEndEvent].",
+    )
+    conversation_id: ThreadId = Field(..., alias="conversationId")
+    file_changes: dict[str, FileChange] = Field(..., alias="fileChanges")
+    grant_root: str | None = Field(
+        default=None,
+        alias="grantRoot",
+        description="When set, the agent is asking the user to allow writes under this root for the remainder of the session (unclear if this is honored today).",
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Optional explanatory reason (e.g. request for extra write access).",
+    )
+
+
+class ChatgptAuthTokensRefreshParams(BaseModel):
+    previous_account_id: str | None = Field(
+        default=None,
+        alias="previousAccountId",
+        description="Workspace/account identifier that Codex was previously using.\n\nClients that manage multiple accounts/workspaces can use this as a hint to refresh the token for the correct workspace.\n\nThis may be `null` when the prior auth state did not include a workspace identifier (`chatgpt_account_id`).",
+    )
+    reason: ChatgptAuthTokensRefreshReason
+
+
+class InitializeClientRequest(BaseModel):
+    id: RequestId
+    method: InitializeClientRequestMethod = Field(
+        ..., title="InitializeClientRequestMethod"
+    )
+    params: InitializeParams
+
+
+class ThreadStartClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadStartClientRequestMethod = Field(
+        ..., title="Thread/startClientRequestMethod"
+    )
+    params: ThreadStartParams
+
+
+class ThreadResumeClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadResumeClientRequestMethod = Field(
+        ..., title="Thread/resumeClientRequestMethod"
+    )
+    params: ThreadResumeParams
+
+
+class ThreadForkClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadForkClientRequestMethod = Field(
+        ..., title="Thread/forkClientRequestMethod"
+    )
+    params: ThreadForkParams
+
+
+class ThreadArchiveClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadArchiveClientRequestMethod = Field(
+        ..., title="Thread/archiveClientRequestMethod"
+    )
+    params: ThreadArchiveParams
+
+
+class ThreadUnsubscribeClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadUnsubscribeClientRequestMethod = Field(
+        ..., title="Thread/unsubscribeClientRequestMethod"
+    )
+    params: ThreadUnsubscribeParams
+
+
+class ThreadNameSetClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadNameSetClientRequestMethod = Field(
+        ..., title="Thread/name/setClientRequestMethod"
+    )
+    params: ThreadSetNameParams
+
+
+class ThreadMetadataUpdateClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadMetadataUpdateClientRequestMethod = Field(
+        ..., title="Thread/metadata/updateClientRequestMethod"
+    )
+    params: ThreadMetadataUpdateParams
+
+
+class ThreadUnarchiveClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadUnarchiveClientRequestMethod = Field(
+        ..., title="Thread/unarchiveClientRequestMethod"
+    )
+    params: ThreadUnarchiveParams
+
+
+class ThreadCompactStartClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadCompactStartClientRequestMethod = Field(
+        ..., title="Thread/compact/startClientRequestMethod"
+    )
+    params: ThreadCompactStartParams
+
+
+class ThreadRollbackClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadRollbackClientRequestMethod = Field(
+        ..., title="Thread/rollbackClientRequestMethod"
+    )
+    params: ThreadRollbackParams
+
+
+class ThreadLoadedListClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadLoadedListClientRequestMethod = Field(
+        ..., title="Thread/loaded/listClientRequestMethod"
+    )
+    params: ThreadLoadedListParams
+
+
+class ThreadReadClientRequest(BaseModel):
+    id: RequestId
+    method: ThreadReadClientRequestMethod = Field(
+        ..., title="Thread/readClientRequestMethod"
+    )
+    params: ThreadReadParams
+
+
+class SkillsListClientRequest(BaseModel):
+    id: RequestId
+    method: SkillsListClientRequestMethod = Field(
+        ..., title="Skills/listClientRequestMethod"
+    )
+    params: SkillsListParams
+
+
+class PluginListClientRequest(BaseModel):
+    id: RequestId
+    method: PluginListClientRequestMethod = Field(
+        ..., title="Plugin/listClientRequestMethod"
+    )
+    params: PluginListParams
+
+
+class SkillsRemoteListClientRequest(BaseModel):
+    id: RequestId
+    method: SkillsRemoteListClientRequestMethod = Field(
+        ..., title="Skills/remote/listClientRequestMethod"
+    )
+    params: SkillsRemoteReadParams
+
+
+class SkillsRemoteExportClientRequest(BaseModel):
+    id: RequestId
+    method: SkillsRemoteExportClientRequestMethod = Field(
+        ..., title="Skills/remote/exportClientRequestMethod"
+    )
+    params: SkillsRemoteWriteParams
+
+
+class AppListClientRequest(BaseModel):
+    id: RequestId
+    method: AppListClientRequestMethod = Field(..., title="App/listClientRequestMethod")
+    params: AppsListParams
+
+
+class SkillsConfigWriteClientRequest(BaseModel):
+    id: RequestId
+    method: SkillsConfigWriteClientRequestMethod = Field(
+        ..., title="Skills/config/writeClientRequestMethod"
+    )
+    params: SkillsConfigWriteParams
+
+
+class PluginInstallClientRequest(BaseModel):
+    id: RequestId
+    method: PluginInstallClientRequestMethod = Field(
+        ..., title="Plugin/installClientRequestMethod"
+    )
+    params: PluginInstallParams
+
+
+class TurnInterruptClientRequest(BaseModel):
+    id: RequestId
+    method: TurnInterruptClientRequestMethod = Field(
+        ..., title="Turn/interruptClientRequestMethod"
+    )
+    params: TurnInterruptParams
+
+
+class ModelListClientRequest(BaseModel):
+    id: RequestId
+    method: ModelListClientRequestMethod = Field(
+        ..., title="Model/listClientRequestMethod"
+    )
+    params: ModelListParams
+
+
+class ExperimentalFeatureListClientRequest(BaseModel):
+    id: RequestId
+    method: ExperimentalFeatureListClientRequestMethod = Field(
+        ..., title="ExperimentalFeature/listClientRequestMethod"
+    )
+    params: ExperimentalFeatureListParams
+
+
+class McpServerOauthLoginClientRequest(BaseModel):
+    id: RequestId
+    method: McpServerOauthLoginClientRequestMethod = Field(
+        ..., title="McpServer/oauth/loginClientRequestMethod"
+    )
+    params: McpServerOauthLoginParams
+
+
+class ConfigMcpServerReloadClientRequest(BaseModel):
+    id: RequestId
+    method: ConfigMcpServerReloadClientRequestMethod = Field(
+        ..., title="Config/mcpServer/reloadClientRequestMethod"
+    )
+    params: None = None
+
+
+class McpServerStatusListClientRequest(BaseModel):
+    id: RequestId
+    method: McpServerStatusListClientRequestMethod = Field(
+        ..., title="McpServerStatus/listClientRequestMethod"
+    )
+    params: ListMcpServerStatusParams
+
+
+class WindowsSandboxSetupStartClientRequest(BaseModel):
+    id: RequestId
+    method: WindowsSandboxSetupStartClientRequestMethod = Field(
+        ..., title="WindowsSandbox/setupStartClientRequestMethod"
+    )
+    params: WindowsSandboxSetupStartParams
+
+
+class AccountLoginStartClientRequest(BaseModel):
+    id: RequestId
+    method: AccountLoginStartClientRequestMethod = Field(
+        ..., title="Account/login/startClientRequestMethod"
+    )
+    params: LoginAccountParams
+
+
+class AccountLoginCancelClientRequest(BaseModel):
+    id: RequestId
+    method: AccountLoginCancelClientRequestMethod = Field(
+        ..., title="Account/login/cancelClientRequestMethod"
+    )
+    params: CancelLoginAccountParams
+
+
+class AccountLogoutClientRequest(BaseModel):
+    id: RequestId
+    method: AccountLogoutClientRequestMethod = Field(
+        ..., title="Account/logoutClientRequestMethod"
+    )
+    params: None = None
+
+
+class AccountRateLimitsReadClientRequest(BaseModel):
+    id: RequestId
+    method: AccountRateLimitsReadClientRequestMethod = Field(
+        ..., title="Account/rateLimits/readClientRequestMethod"
+    )
+    params: None = None
+
+
+class FeedbackUploadClientRequest(BaseModel):
+    id: RequestId
+    method: FeedbackUploadClientRequestMethod = Field(
+        ..., title="Feedback/uploadClientRequestMethod"
+    )
+    params: FeedbackUploadParams
+
+
+class CommandExecWriteClientRequest(BaseModel):
+    id: RequestId
+    method: CommandExecWriteClientRequestMethod = Field(
+        ..., title="Command/exec/writeClientRequestMethod"
+    )
+    params: CommandExecWriteParams
+
+
+class CommandExecTerminateClientRequest(BaseModel):
+    id: RequestId
+    method: CommandExecTerminateClientRequestMethod = Field(
+        ..., title="Command/exec/terminateClientRequestMethod"
+    )
+    params: CommandExecTerminateParams
+
+
+class ConfigReadClientRequest(BaseModel):
+    id: RequestId
+    method: ConfigReadClientRequestMethod = Field(
+        ..., title="Config/readClientRequestMethod"
+    )
+    params: ConfigReadParams
+
+
+class ExternalAgentConfigDetectClientRequest(BaseModel):
+    id: RequestId
+    method: ExternalAgentConfigDetectClientRequestMethod = Field(
+        ..., title="ExternalAgentConfig/detectClientRequestMethod"
+    )
+    params: ExternalAgentConfigDetectParams
+
+
+class ConfigRequirementsReadClientRequest(BaseModel):
+    id: RequestId
+    method: ConfigRequirementsReadClientRequestMethod = Field(
+        ..., title="ConfigRequirements/readClientRequestMethod"
+    )
+    params: None = None
+
+
+class AccountReadClientRequest(BaseModel):
+    id: RequestId
+    method: AccountReadClientRequestMethod = Field(
+        ..., title="Account/readClientRequestMethod"
+    )
+    params: GetAccountParams
+
+
+class FuzzyFileSearchClientRequest(BaseModel):
+    id: RequestId
+    method: FuzzyFileSearchClientRequestMethod = Field(
+        ..., title="FuzzyFileSearchClientRequestMethod"
+    )
+    params: FuzzyFileSearchParams
+
+
+class CollabAgentRef(BaseModel):
+    agent_nickname: str | None = Field(
+        default=None,
+        description="Optional nickname assigned to an AgentControl-spawned sub-agent.",
+    )
+    agent_role: str | None = Field(
+        default=None,
+        description="Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
+    )
+    thread_id: ThreadId = Field(..., description="Thread ID of the receiver/new agent.")
+
+
+class CollabAgentState(BaseModel):
+    message: str | None = None
+    status: CollabAgentStatus
+
+
+class CollabAgentStatusEntry(BaseModel):
+    agent_nickname: str | None = Field(
+        default=None,
+        description="Optional nickname assigned to an AgentControl-spawned sub-agent.",
+    )
+    agent_role: str | None = Field(
+        default=None,
+        description="Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
+    )
+    status: AgentStatus = Field(..., description="Last known status of the agent.")
+    thread_id: ThreadId = Field(..., description="Thread ID of the receiver/new agent.")
+
+
+class CommandExecOutputDeltaNotification(BaseModel):
+    cap_reached: bool = Field(
+        ...,
+        alias="capReached",
+        description="`true` on the final streamed chunk for a stream when `outputBytesCap` truncated later output on that stream.",
+    )
+    delta_base64: str = Field(
+        ..., alias="deltaBase64", description="Base64-encoded output bytes."
+    )
+    process_id: str = Field(
+        ...,
+        alias="processId",
+        description="Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+    )
+    stream: CommandExecOutputStream = Field(
+        ..., description="Output stream for this chunk."
+    )
+
+
+class CommandExecParams(BaseModel):
+    command: list[str] = Field(
+        ..., description="Command argv vector. Empty arrays are rejected."
+    )
+    cwd: str | None = Field(
+        default=None,
+        description="Optional working directory. Defaults to the server cwd.",
+    )
+    disable_output_cap: bool | None = Field(
+        default=None,
+        alias="disableOutputCap",
+        description="Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.",
+    )
+    disable_timeout: bool | None = Field(
+        default=None,
+        alias="disableTimeout",
+        description="Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.",
+    )
+    env: dict[str, Any] | None = Field(
+        default=None,
+        description="Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.",
+    )
+    output_bytes_cap: int | None = Field(
+        default=None,
+        alias="outputBytesCap",
+        description="Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
+        ge=0,
+    )
+    process_id: str | None = Field(
+        default=None,
+        alias="processId",
+        description="Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.",
+    )
+    sandbox_policy: SandboxPolicy | None = Field(
+        default=None,
+        alias="sandboxPolicy",
+        description="Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted.",
+    )
+    size: CommandExecTerminalSize | None = Field(
+        default=None,
+        description="Optional initial PTY size in character cells. Only valid when `tty` is true.",
+    )
+    stream_stdin: bool | None = Field(
+        default=None,
+        alias="streamStdin",
+        description="Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.",
+    )
+    stream_stdout_stderr: bool | None = Field(
+        default=None,
+        alias="streamStdoutStderr",
+        description="Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.",
+    )
+    timeout_ms: int | None = Field(
+        default=None,
+        alias="timeoutMs",
+        description="Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.",
+    )
+    tty: bool | None = Field(
+        default=None,
+        description="Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.",
+    )
+
+
+class CommandExecResizeParams(BaseModel):
+    process_id: str = Field(
+        ...,
+        alias="processId",
+        description="Client-supplied, connection-scoped `processId` from the original `command/exec` request.",
+    )
+    size: CommandExecTerminalSize = Field(
+        ..., description="New PTY size in character cells."
+    )
+
+
+class ConfigEdit(BaseModel):
+    key_path: str = Field(..., alias="keyPath")
+    merge_strategy: MergeStrategy = Field(..., alias="mergeStrategy")
+    value: Any
+
+
+class ConfigValueWriteParams(BaseModel):
+    expected_version: str | None = Field(default=None, alias="expectedVersion")
+    file_path: str | None = Field(
+        default=None,
+        alias="filePath",
+        description="Path to the config file to write; defaults to the user's `config.toml` when omitted.",
+    )
+    key_path: str = Field(..., alias="keyPath")
+    merge_strategy: MergeStrategy = Field(..., alias="mergeStrategy")
+    value: Any
+
+
+class ConfigWarningNotification(BaseModel):
+    details: str | None = Field(
+        default=None, description="Optional extra guidance or error details."
+    )
+    path: str | None = Field(
+        default=None,
+        description="Optional path to the config file that triggered the warning.",
+    )
+    range: TextRange | None = Field(
+        default=None,
+        description="Optional range for the error location inside the config file.",
+    )
+    summary: str = Field(..., description="Concise summary of the warning.")
+
+
+class ErrorNotification(BaseModel):
+    error: TurnError
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+    will_retry: bool = Field(..., alias="willRetry")
+
+
+class ModelRerouteEventMsg(BaseModel):
+    from_model: str
+    reason: ModelRerouteReason
+    to_model: str
+    type: ModelRerouteEventMsgType = Field(..., title="ModelRerouteEventMsgType")
+
+
+class TaskStartedEventMsg(BaseModel):
+    collaboration_mode_kind: ModeKind | None = "default"
+    model_context_window: int | None = None
+    turn_id: str
+    type: TaskStartedEventMsgType = Field(..., title="TaskStartedEventMsgType")
+
+
+class AgentMessageEventMsg(BaseModel):
+    message: str
+    phase: MessagePhase | None = None
+    type: AgentMessageEventMsgType = Field(..., title="AgentMessageEventMsgType")
+
+
+class UserMessageEventMsg(BaseModel):
+    images: list[str] | None = Field(
+        default=None,
+        description="Image URLs sourced from `UserInput::Image`. These are safe to replay in legacy UI history events and correspond to images sent to the model.",
+    )
+    local_images: list[str] | None = Field(
+        default=[],
+        description="Local file paths sourced from `UserInput::LocalImage`. These are kept so the UI can reattach images when editing history, and should not be sent to the model or treated as API-ready URLs.",
+    )
+    message: str
+    text_elements: list[TextElement] | None = Field(
+        default_factory=list,
+        description="UI-defined spans within `message` used to render or persist special elements.",
+    )
+    type: UserMessageEventMsgType = Field(..., title="UserMessageEventMsgType")
+
+
+class ThreadNameUpdatedEventMsg(BaseModel):
+    thread_id: ThreadId
+    thread_name: str | None = None
+    type: ThreadNameUpdatedEventMsgType = Field(
+        ..., title="ThreadNameUpdatedEventMsgType"
+    )
+
+
+class McpStartupUpdateEventMsg(BaseModel):
+    server: str = Field(..., description="Server name being started.")
+    status: McpStartupStatus = Field(..., description="Current startup status.")
+    type: McpStartupUpdateEventMsgType = Field(
+        ..., title="McpStartupUpdateEventMsgType"
+    )
+
+
+class McpStartupCompleteEventMsg(BaseModel):
+    cancelled: list[str]
+    failed: list[McpStartupFailure]
+    ready: list[str]
+    type: McpStartupCompleteEventMsgType = Field(
+        ..., title="McpStartupCompleteEventMsgType"
+    )
+
+
+class McpToolCallBeginEventMsg(BaseModel):
+    call_id: str = Field(
+        ...,
+        description="Identifier so this can be paired with the McpToolCallEnd event.",
+    )
+    invocation: McpInvocation
+    type: McpToolCallBeginEventMsgType = Field(
+        ..., title="McpToolCallBeginEventMsgType"
+    )
+
+
+class McpToolCallEndEventMsg(BaseModel):
+    call_id: str = Field(
+        ...,
+        description="Identifier for the corresponding McpToolCallBegin that finished.",
+    )
+    duration: Duration
+    invocation: McpInvocation
+    result: ResultOfCallToolResultOrString = Field(
+        ..., description="Result of the tool call. Note this could be an error."
+    )
+    type: McpToolCallEndEventMsgType = Field(..., title="McpToolCallEndEventMsgType")
+
+
+class WebSearchEndEventMsg(BaseModel):
+    action: ResponsesApiWebSearchAction
+    call_id: str
+    query: str
+    type: WebSearchEndEventMsgType = Field(..., title="WebSearchEndEventMsgType")
+
+
+class ExecCommandBeginEventMsg(BaseModel):
+    call_id: str = Field(
+        ...,
+        description="Identifier so this can be paired with the ExecCommandEnd event.",
+    )
+    command: list[str] = Field(..., description="The command to be executed.")
+    cwd: str = Field(
+        ...,
+        description="The command's working directory if not the default cwd for the agent.",
+    )
+    interaction_input: str | None = Field(
+        default=None,
+        description="Raw input sent to a unified exec session (if this is an interaction event).",
+    )
+    parsed_cmd: list[ParsedCommand]
+    process_id: str | None = Field(
+        default=None,
+        description="Identifier for the underlying PTY process (when available).",
+    )
+    source: ExecCommandSource | None = Field(
+        default="agent",
+        description="Where the command originated. Defaults to Agent for backward compatibility.",
+    )
+    turn_id: str = Field(..., description="Turn ID that this command belongs to.")
+    type: ExecCommandBeginEventMsgType = Field(
+        ..., title="ExecCommandBeginEventMsgType"
+    )
+
+
+class ExecCommandOutputDeltaEventMsg(BaseModel):
+    call_id: str = Field(
+        ..., description="Identifier for the ExecCommandBegin that produced this chunk."
+    )
+    chunk: str = Field(
+        ..., description="Raw bytes from the stream (may not be valid UTF-8)."
+    )
+    stream: ExecOutputStream = Field(
+        ..., description="Which stream produced this chunk."
+    )
+    type: ExecCommandOutputDeltaEventMsgType = Field(
+        ..., title="ExecCommandOutputDeltaEventMsgType"
+    )
+
+
+class ExecCommandEndEventMsg(BaseModel):
+    aggregated_output: str | None = Field(
+        default="", description="Captured aggregated output"
+    )
+    call_id: str = Field(
+        ..., description="Identifier for the ExecCommandBegin that finished."
+    )
+    command: list[str] = Field(..., description="The command that was executed.")
+    cwd: str = Field(
+        ...,
+        description="The command's working directory if not the default cwd for the agent.",
+    )
+    duration: Duration = Field(
+        ..., description="The duration of the command execution."
+    )
+    exit_code: int = Field(..., description="The command's exit code.")
+    formatted_output: str = Field(
+        ..., description="Formatted output from the command, as seen by the model."
+    )
+    interaction_input: str | None = Field(
+        default=None,
+        description="Raw input sent to a unified exec session (if this is an interaction event).",
+    )
+    parsed_cmd: list[ParsedCommand]
+    process_id: str | None = Field(
+        default=None,
+        description="Identifier for the underlying PTY process (when available).",
+    )
+    source: ExecCommandSource | None = Field(
+        default="agent",
+        description="Where the command originated. Defaults to Agent for backward compatibility.",
+    )
+    status: ExecCommandStatus = Field(
+        ..., description="Completion status for this command execution."
+    )
+    stderr: str = Field(..., description="Captured stderr")
+    stdout: str = Field(..., description="Captured stdout")
+    turn_id: str = Field(..., description="Turn ID that this command belongs to.")
+    type: ExecCommandEndEventMsgType = Field(..., title="ExecCommandEndEventMsgType")
+
+
+class RequestPermissionsEventMsg(BaseModel):
+    call_id: str = Field(
+        ...,
+        description="Responses API call id for the associated tool call, if available.",
+    )
+    permissions: PermissionProfile
+    reason: str | None = None
+    turn_id: str | None = Field(
+        default="",
+        description="Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+    )
+    type: RequestPermissionsEventMsgType = Field(
+        ..., title="RequestPermissionsEventMsgType"
+    )
+
+
+class ElicitationRequestEventMsg(BaseModel):
+    id: RequestId
+    request: ElicitationRequest
+    server_name: str
+    turn_id: str | None = Field(
+        default=None,
+        description="Turn ID that this elicitation belongs to, when known.",
+    )
+    type: ElicitationRequestEventMsgType = Field(
+        ..., title="ElicitationRequestEventMsgType"
+    )
+
+
+class ApplyPatchApprovalRequestEventMsg(BaseModel):
+    call_id: str = Field(
+        ...,
+        description="Responses API call id for the associated patch apply call, if available.",
+    )
+    changes: dict[str, FileChange]
+    grant_root: str | None = Field(
+        default=None,
+        description="When set, the agent is asking the user to allow writes under this root for the remainder of the session.",
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Optional explanatory reason (e.g. request for extra write access).",
+    )
+    turn_id: str | None = Field(
+        default="",
+        description="Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility with older senders.",
+    )
+    type: ApplyPatchApprovalRequestEventMsgType = Field(
+        ..., title="ApplyPatchApprovalRequestEventMsgType"
+    )
+
+
+class PatchApplyBeginEventMsg(BaseModel):
+    auto_approved: bool = Field(
+        ...,
+        description="If true, there was no ApplyPatchApprovalRequest for this patch.",
+    )
+    call_id: str = Field(
+        ...,
+        description="Identifier so this can be paired with the PatchApplyEnd event.",
+    )
+    changes: dict[str, FileChange] = Field(
+        ..., description="The changes to be applied."
+    )
+    turn_id: str | None = Field(
+        default="",
+        description="Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+    )
+    type: PatchApplyBeginEventMsgType = Field(..., title="PatchApplyBeginEventMsgType")
+
+
+class PatchApplyEndEventMsg(BaseModel):
+    call_id: str = Field(
+        ..., description="Identifier for the PatchApplyBegin that finished."
+    )
+    changes: dict[str, FileChange] | None = Field(
+        default_factory=lambda: FileChange({}),
+        description="The changes that were applied (mirrors PatchApplyBeginEvent::changes).",
+    )
+    status: PatchApplyStatus = Field(
+        ..., description="Completion status for this patch application."
+    )
+    stderr: str = Field(
+        ..., description="Captured stderr (parser errors, IO failures, etc.)."
+    )
+    stdout: str = Field(
+        ..., description="Captured stdout (summary printed by apply_patch)."
+    )
+    success: bool = Field(
+        ..., description="Whether the patch was applied successfully."
+    )
+    turn_id: str | None = Field(
+        default="",
+        description="Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+    )
+    type: PatchApplyEndEventMsgType = Field(..., title="PatchApplyEndEventMsgType")
+
+
+class GetHistoryEntryResponseEventMsg(BaseModel):
+    entry: HistoryEntry | None = Field(
+        default=None,
+        description="The entry at the requested offset, if available and parseable.",
+    )
+    log_id: int = Field(..., ge=0)
+    offset: int = Field(..., ge=0)
+    type: GetHistoryEntryResponseEventMsgType = Field(
+        ..., title="GetHistoryEntryResponseEventMsgType"
+    )
+
+
+class McpListToolsResponseEventMsg(BaseModel):
+    auth_statuses: dict[str, McpAuthStatus] = Field(
+        ..., description="Authentication status for each configured MCP server."
+    )
+    resource_templates: dict[str, list[ResourceTemplate]] = Field(
+        ..., description="Known resource templates grouped by server name."
+    )
+    resources: dict[str, list[Resource]] = Field(
+        ..., description="Known resources grouped by server name."
+    )
+    tools: dict[str, Tool] = Field(
+        ..., description="Fully qualified tool name -> tool definition."
+    )
+    type: McpListToolsResponseEventMsgType = Field(
+        ..., title="McpListToolsResponseEventMsgType"
+    )
+
+
+class ListRemoteSkillsResponseEventMsg(BaseModel):
+    skills: list[RemoteSkillSummary]
+    type: ListRemoteSkillsResponseEventMsgType = Field(
+        ..., title="ListRemoteSkillsResponseEventMsgType"
+    )
+
+
+class TurnAbortedEventMsg(BaseModel):
+    reason: TurnAbortReason
+    turn_id: str | None = None
+    type: TurnAbortedEventMsgType = Field(..., title="TurnAbortedEventMsgType")
+
+
+class EnteredReviewModeEventMsg(BaseModel):
+    target: ReviewTarget
+    type: EnteredReviewModeEventMsgType = Field(
+        ..., title="EnteredReviewModeEventMsgType"
+    )
+    user_facing_hint: str | None = None
+
+
+class CollabAgentSpawnBeginEventMsg(BaseModel):
+    call_id: str = Field(..., description="Identifier for the collab tool call.")
+    prompt: str = Field(
+        ...,
+        description="Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
+    )
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    type: CollabAgentSpawnBeginEventMsgType = Field(
+        ..., title="CollabAgentSpawnBeginEventMsgType"
+    )
+
+
+class CollabAgentSpawnEndEventMsg(BaseModel):
+    call_id: str = Field(..., description="Identifier for the collab tool call.")
+    new_agent_nickname: str | None = Field(
+        default=None, description="Optional nickname assigned to the new agent."
+    )
+    new_agent_role: str | None = Field(
+        default=None, description="Optional role assigned to the new agent."
+    )
+    new_thread_id: ThreadId | None = Field(
+        default=None,
+        description="Thread ID of the newly spawned agent, if it was created.",
+    )
+    prompt: str = Field(
+        ...,
+        description="Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.",
+    )
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    status: AgentStatus = Field(
+        ...,
+        description="Last known status of the new agent reported to the sender agent.",
+    )
+    type: CollabAgentSpawnEndEventMsgType = Field(
+        ..., title="CollabAgentSpawnEndEventMsgType"
+    )
+
+
+class CollabAgentInteractionBeginEventMsg(BaseModel):
+    call_id: str = Field(..., description="Identifier for the collab tool call.")
+    prompt: str = Field(
+        ...,
+        description="Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
+    )
+    receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    type: CollabAgentInteractionBeginEventMsgType = Field(
+        ..., title="CollabAgentInteractionBeginEventMsgType"
+    )
+
+
+class CollabAgentInteractionEndEventMsg(BaseModel):
+    call_id: str = Field(..., description="Identifier for the collab tool call.")
+    prompt: str = Field(
+        ...,
+        description="Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.",
+    )
+    receiver_agent_nickname: str | None = Field(
+        default=None, description="Optional nickname assigned to the receiver agent."
+    )
+    receiver_agent_role: str | None = Field(
+        default=None, description="Optional role assigned to the receiver agent."
+    )
+    receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    status: AgentStatus = Field(
+        ...,
+        description="Last known status of the receiver agent reported to the sender agent.",
+    )
+    type: CollabAgentInteractionEndEventMsgType = Field(
+        ..., title="CollabAgentInteractionEndEventMsgType"
+    )
+
+
+class CollabWaitingBeginEventMsg(BaseModel):
+    call_id: str = Field(..., description="ID of the waiting call.")
+    receiver_agents: list[CollabAgentRef] | None = Field(
+        default=None, description="Optional nicknames/roles for receivers."
+    )
+    receiver_thread_ids: list[ThreadId] = Field(
+        ..., description="Thread ID of the receivers."
+    )
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    type: CollabWaitingBeginEventMsgType = Field(
+        ..., title="CollabWaitingBeginEventMsgType"
+    )
+
+
+class CollabWaitingEndEventMsg(BaseModel):
+    agent_statuses: list[CollabAgentStatusEntry] | None = Field(
+        default=None,
+        description="Optional receiver metadata paired with final statuses.",
+    )
+    call_id: str = Field(..., description="ID of the waiting call.")
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    statuses: dict[str, AgentStatus] = Field(
+        ...,
+        description="Last known status of the receiver agents reported to the sender agent.",
+    )
+    type: CollabWaitingEndEventMsgType = Field(
+        ..., title="CollabWaitingEndEventMsgType"
+    )
+
+
+class CollabCloseBeginEventMsg(BaseModel):
+    call_id: str = Field(..., description="Identifier for the collab tool call.")
+    receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    type: CollabCloseBeginEventMsgType = Field(
+        ..., title="CollabCloseBeginEventMsgType"
+    )
+
+
+class CollabCloseEndEventMsg(BaseModel):
+    call_id: str = Field(..., description="Identifier for the collab tool call.")
+    receiver_agent_nickname: str | None = Field(
+        default=None, description="Optional nickname assigned to the receiver agent."
+    )
+    receiver_agent_role: str | None = Field(
+        default=None, description="Optional role assigned to the receiver agent."
+    )
+    receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    status: AgentStatus = Field(
+        ...,
+        description="Last known status of the receiver agent reported to the sender agent before the close.",
+    )
+    type: CollabCloseEndEventMsgType = Field(..., title="CollabCloseEndEventMsgType")
+
+
+class CollabResumeBeginEventMsg(BaseModel):
+    call_id: str = Field(..., description="Identifier for the collab tool call.")
+    receiver_agent_nickname: str | None = Field(
+        default=None, description="Optional nickname assigned to the receiver agent."
+    )
+    receiver_agent_role: str | None = Field(
+        default=None, description="Optional role assigned to the receiver agent."
+    )
+    receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    type: CollabResumeBeginEventMsgType = Field(
+        ..., title="CollabResumeBeginEventMsgType"
+    )
+
+
+class CollabResumeEndEventMsg(BaseModel):
+    call_id: str = Field(..., description="Identifier for the collab tool call.")
+    receiver_agent_nickname: str | None = Field(
+        default=None, description="Optional nickname assigned to the receiver agent."
+    )
+    receiver_agent_role: str | None = Field(
+        default=None, description="Optional role assigned to the receiver agent."
+    )
+    receiver_thread_id: ThreadId = Field(..., description="Thread ID of the receiver.")
+    sender_thread_id: ThreadId = Field(..., description="Thread ID of the sender.")
+    status: AgentStatus = Field(
+        ...,
+        description="Last known status of the receiver agent reported to the sender agent after resume.",
+    )
+    type: CollabResumeEndEventMsgType = Field(..., title="CollabResumeEndEventMsgType")
+
+
+class ExecCommandApprovalParams(BaseModel):
+    approval_id: str | None = Field(
+        default=None,
+        alias="approvalId",
+        description="Identifier for this specific approval callback.",
+    )
+    call_id: str = Field(
+        ...,
+        alias="callId",
+        description="Use to correlate this with [codex_protocol::protocol::ExecCommandBeginEvent] and [codex_protocol::protocol::ExecCommandEndEvent].",
+    )
+    command: list[str]
+    conversation_id: ThreadId = Field(..., alias="conversationId")
+    cwd: str
+    parsed_cmd: list[ParsedCommand] = Field(..., alias="parsedCmd")
+    reason: str | None = None
+
+
+class ExternalAgentConfigMigrationItem(BaseModel):
+    cwd: str | None = Field(
+        default=None,
+        description="Null or empty means home-scoped migration; non-empty means repo-scoped migration.",
+    )
+    description: str
+    item_type: ExternalAgentConfigMigrationItemType = Field(..., alias="itemType")
+
+
+class FileUpdateChange(BaseModel):
+    diff: str
+    kind: PatchChangeKind
+    path: str
+
+
+class InputImageFunctionCallOutputContentItem(BaseModel):
+    detail: ImageDetail | None = None
+    image_url: str
+    type: InputImageFunctionCallOutputContentItemType = Field(
+        ..., title="InputImageFunctionCallOutputContentItemType"
+    )
+
+
+class FunctionCallOutputContentItem(
+    RootModel[
+        InputTextFunctionCallOutputContentItem | InputImageFunctionCallOutputContentItem
+    ]
+):
+    root: (
+        InputTextFunctionCallOutputContentItem | InputImageFunctionCallOutputContentItem
+    ) = Field(
+        ...,
+        description="Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.",
+    )
+
+
+class FuzzyFileSearchResponse(BaseModel):
+    files: list[FuzzyFileSearchResult]
+
+
+class GrantedMacOsPermissions(BaseModel):
+    accessibility: bool | None = None
+    automations: MacOsAutomationPermission | None = None
+    calendar: bool | None = None
+    preferences: MacOsPreferencesPermission | None = None
+
+
+class GrantedPermissionProfile(BaseModel):
+    file_system: AdditionalFileSystemPermissions | None = Field(
+        default=None, alias="fileSystem"
+    )
+    macos: GrantedMacOsPermissions | None = None
+    network: AdditionalNetworkPermissions | None = None
 
 
 class JSONRPCError(BaseModel):
@@ -4270,303 +5586,18 @@ class JSONRPCRequest(BaseModel):
     method: str
     params: Any | None = None
     trace: W3cTraceContext | None = Field(
-        default=None, description='Optional W3C Trace Context for distributed tracing.'
+        default=None, description="Optional W3C Trace Context for distributed tracing."
     )
 
 
-class JSONRPCMessage(
-    RootModel[JSONRPCRequest | JSONRPCNotification | JSONRPCResponse | JSONRPCError]
-):
-    root: JSONRPCRequest | JSONRPCNotification | JSONRPCResponse | JSONRPCError = Field(
-        ...,
-        description='Refers to any valid JSON-RPC object that can be decoded off the wire, or encoded to be sent.',
-        title='JSONRPCMessage',
-    )
-
-
-class ThreadStartClientRequest(BaseModel):
+class JSONRPCResponse(BaseModel):
     id: RequestId
-    method: ThreadStartClientRequestMethod = Field(
-        ..., title='Thread/startClientRequestMethod'
-    )
-    params: ThreadStartParams
-
-
-class ThreadArchiveClientRequest(BaseModel):
-    id: RequestId
-    method: ThreadArchiveClientRequestMethod = Field(
-        ..., title='Thread/archiveClientRequestMethod'
-    )
-    params: ThreadArchiveParams
-
-
-class ThreadUnsubscribeClientRequest(BaseModel):
-    id: RequestId
-    method: ThreadUnsubscribeClientRequestMethod = Field(
-        ..., title='Thread/unsubscribeClientRequestMethod'
-    )
-    params: ThreadUnsubscribeParams
-
-
-class ThreadNameSetClientRequest(BaseModel):
-    id: RequestId
-    method: ThreadNameSetClientRequestMethod = Field(
-        ..., title='Thread/name/setClientRequestMethod'
-    )
-    params: ThreadSetNameParams
-
-
-class ThreadUnarchiveClientRequest(BaseModel):
-    id: RequestId
-    method: ThreadUnarchiveClientRequestMethod = Field(
-        ..., title='Thread/unarchiveClientRequestMethod'
-    )
-    params: ThreadUnarchiveParams
-
-
-class ThreadCompactStartClientRequest(BaseModel):
-    id: RequestId
-    method: ThreadCompactStartClientRequestMethod = Field(
-        ..., title='Thread/compact/startClientRequestMethod'
-    )
-    params: ThreadCompactStartParams
-
-
-class ThreadRollbackClientRequest(BaseModel):
-    id: RequestId
-    method: ThreadRollbackClientRequestMethod = Field(
-        ..., title='Thread/rollbackClientRequestMethod'
-    )
-    params: ThreadRollbackParams
-
-
-class ThreadLoadedListClientRequest(BaseModel):
-    id: RequestId
-    method: ThreadLoadedListClientRequestMethod = Field(
-        ..., title='Thread/loaded/listClientRequestMethod'
-    )
-    params: ThreadLoadedListParams
-
-
-class ThreadReadClientRequest(BaseModel):
-    id: RequestId
-    method: ThreadReadClientRequestMethod = Field(
-        ..., title='Thread/readClientRequestMethod'
-    )
-    params: ThreadReadParams
-
-
-class SkillsRemoteExportClientRequest(BaseModel):
-    id: RequestId
-    method: SkillsRemoteExportClientRequestMethod = Field(
-        ..., title='Skills/remote/exportClientRequestMethod'
-    )
-    params: SkillsRemoteWriteParams
-
-
-class AppListClientRequest(BaseModel):
-    id: RequestId
-    method: AppListClientRequestMethod = Field(..., title='App/listClientRequestMethod')
-    params: AppsListParams
-
-
-class SkillsConfigWriteClientRequest(BaseModel):
-    id: RequestId
-    method: SkillsConfigWriteClientRequestMethod = Field(
-        ..., title='Skills/config/writeClientRequestMethod'
-    )
-    params: SkillsConfigWriteParams
-
-
-class PluginInstallClientRequest(BaseModel):
-    id: RequestId
-    method: PluginInstallClientRequestMethod = Field(
-        ..., title='Plugin/installClientRequestMethod'
-    )
-    params: PluginInstallParams
-
-
-class TurnInterruptClientRequest(BaseModel):
-    id: RequestId
-    method: TurnInterruptClientRequestMethod = Field(
-        ..., title='Turn/interruptClientRequestMethod'
-    )
-    params: TurnInterruptParams
-
-
-class ModelListClientRequest(BaseModel):
-    id: RequestId
-    method: ModelListClientRequestMethod = Field(
-        ..., title='Model/listClientRequestMethod'
-    )
-    params: ModelListParams
-
-
-class ExperimentalFeatureListClientRequest(BaseModel):
-    id: RequestId
-    method: ExperimentalFeatureListClientRequestMethod = Field(
-        ..., title='ExperimentalFeature/listClientRequestMethod'
-    )
-    params: ExperimentalFeatureListParams
-
-
-class McpServerOauthLoginClientRequest(BaseModel):
-    id: RequestId
-    method: McpServerOauthLoginClientRequestMethod = Field(
-        ..., title='McpServer/oauth/loginClientRequestMethod'
-    )
-    params: McpServerOauthLoginParams
-
-
-class McpServerStatusListClientRequest(BaseModel):
-    id: RequestId
-    method: McpServerStatusListClientRequestMethod = Field(
-        ..., title='McpServerStatus/listClientRequestMethod'
-    )
-    params: ListMcpServerStatusParams
-
-
-class AccountLoginStartClientRequest(BaseModel):
-    id: RequestId
-    method: AccountLoginStartClientRequestMethod = Field(
-        ..., title='Account/login/startClientRequestMethod'
-    )
-    params: LoginAccountParams
-
-
-class AccountLoginCancelClientRequest(BaseModel):
-    id: RequestId
-    method: AccountLoginCancelClientRequestMethod = Field(
-        ..., title='Account/login/cancelClientRequestMethod'
-    )
-    params: CancelLoginAccountParams
-
-
-class FeedbackUploadClientRequest(BaseModel):
-    id: RequestId
-    method: FeedbackUploadClientRequestMethod = Field(
-        ..., title='Feedback/uploadClientRequestMethod'
-    )
-    params: FeedbackUploadParams
-
-
-class CommandExecWriteClientRequest(BaseModel):
-    id: RequestId
-    method: CommandExecWriteClientRequestMethod = Field(
-        ..., title='Command/exec/writeClientRequestMethod'
-    )
-    params: CommandExecWriteParams
-
-
-class CommandExecTerminateClientRequest(BaseModel):
-    id: RequestId
-    method: CommandExecTerminateClientRequestMethod = Field(
-        ..., title='Command/exec/terminateClientRequestMethod'
-    )
-    params: CommandExecTerminateParams
-
-
-class ConfigReadClientRequest(BaseModel):
-    id: RequestId
-    method: ConfigReadClientRequestMethod = Field(
-        ..., title='Config/readClientRequestMethod'
-    )
-    params: ConfigReadParams
-
-
-class ExternalAgentConfigDetectClientRequest(BaseModel):
-    id: RequestId
-    method: ExternalAgentConfigDetectClientRequestMethod = Field(
-        ..., title='ExternalAgentConfig/detectClientRequestMethod'
-    )
-    params: ExternalAgentConfigDetectParams
-
-
-class ConfigValueWriteClientRequest(BaseModel):
-    id: RequestId
-    method: ConfigValueWriteClientRequestMethod = Field(
-        ..., title='Config/value/writeClientRequestMethod'
-    )
-    params: ConfigValueWriteParams
-
-
-class AccountReadClientRequest(BaseModel):
-    id: RequestId
-    method: AccountReadClientRequestMethod = Field(
-        ..., title='Account/readClientRequestMethod'
-    )
-    params: GetAccountParams
-
-
-class AdditionalFileSystemPermissions(BaseModel):
-    read: list[AbsolutePathBuf] | None = None
-    write: list[AbsolutePathBuf] | None = None
-
-
-class AdditionalMacOsPermissions(BaseModel):
-    accessibility: bool
-    automations: MacOsAutomationPermission
-    calendar: bool
-    preferences: MacOsPreferencesPermission
-
-
-class AdditionalPermissionProfile(BaseModel):
-    file_system: AdditionalFileSystemPermissions | None = Field(
-        default=None, alias='fileSystem'
-    )
-    macos: AdditionalMacOsPermissions | None = None
-    network: AdditionalNetworkPermissions | None = None
-
-
-class ApplyPatchApprovalParams(BaseModel):
-    call_id: str = Field(
-        ...,
-        alias='callId',
-        description='Use to correlate this with [codex_protocol::protocol::PatchApplyBeginEvent] and [codex_protocol::protocol::PatchApplyEndEvent].',
-    )
-    conversation_id: ThreadId = Field(..., alias='conversationId')
-    file_changes: dict[str, FileChange] = Field(..., alias='fileChanges')
-    grant_root: str | None = Field(
-        default=None,
-        alias='grantRoot',
-        description='When set, the agent is asking the user to allow writes under this root for the remainder of the session (unclear if this is honored today).',
-    )
-    reason: str | None = Field(
-        default=None,
-        description='Optional explanatory reason (e.g. request for extra write access).',
-    )
-
-
-class ChatgptAuthTokensRefreshParams(BaseModel):
-    previous_account_id: str | None = Field(
-        default=None,
-        alias='previousAccountId',
-        description='Workspace/account identifier that Codex was previously using.\n\nClients that manage multiple accounts/workspaces can use this as a hint to refresh the token for the correct workspace.\n\nThis may be `null` when the prior auth state did not include a workspace identifier (`chatgpt_account_id`).',
-    )
-    reason: ChatgptAuthTokensRefreshReason
-
-
-class ExecCommandApprovalParams(BaseModel):
-    approval_id: str | None = Field(
-        default=None,
-        alias='approvalId',
-        description='Identifier for this specific approval callback.',
-    )
-    call_id: str = Field(
-        ...,
-        alias='callId',
-        description='Use to correlate this with [codex_protocol::protocol::ExecCommandBeginEvent] and [codex_protocol::protocol::ExecCommandEndEvent].',
-    )
-    command: list[str]
-    conversation_id: ThreadId = Field(..., alias='conversationId')
-    cwd: str
-    parsed_cmd: list[ParsedCommand] = Field(..., alias='parsedCmd')
-    reason: str | None = None
+    result: Any
 
 
 class McpElicitationBooleanSchema(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     default: bool | None = None
     description: str | None = None
@@ -4576,12 +5607,12 @@ class McpElicitationBooleanSchema(BaseModel):
 
 class McpElicitationLegacyTitledEnumSchema(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     default: str | None = None
     description: str | None = None
     enum: list[str]
-    enum_names: list[str] | None = Field(default=None, alias='enumNames')
+    enum_names: list[str] | None = Field(default=None, alias="enumNames")
     title: str | None = None
     type: McpElicitationStringType
 
@@ -4600,7 +5631,7 @@ class McpElicitationMultiSelectEnumSchema(
 
 class McpElicitationNumberSchema(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     default: float | None = None
     description: str | None = None
@@ -4624,13 +5655,13 @@ class McpElicitationSingleSelectEnumSchema(
 
 class McpElicitationStringSchema(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     default: str | None = None
     description: str | None = None
     format: McpElicitationStringFormat | None = None
-    max_length: int | None = Field(default=None, alias='maxLength', ge=0)
-    min_length: int | None = Field(default=None, alias='minLength', ge=0)
+    max_length: int | None = Field(default=None, alias="maxLength", ge=0)
+    min_length: int | None = Field(default=None, alias="minLength", ge=0)
     title: str | None = None
     type: McpElicitationStringType
 
@@ -4646,298 +5677,39 @@ class NetworkPolicyAmendment(BaseModel):
 
 
 class PermissionsRequestApprovalParams(BaseModel):
-    item_id: str = Field(..., alias='itemId')
+    item_id: str = Field(..., alias="itemId")
     permissions: AdditionalPermissionProfile
     reason: str | None = None
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
 
 
-class ToolRequestUserInputParams(BaseModel):
-    item_id: str = Field(..., alias='itemId')
-    questions: list[ToolRequestUserInputQuestion]
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
-
-
-class ItemToolRequestUserInputServerRequest(BaseModel):
-    id: RequestId
-    method: ItemToolRequestUserInputServerRequestMethod = Field(
-        ..., title='Item/tool/requestUserInputServerRequestMethod'
-    )
-    params: ToolRequestUserInputParams
-
-
-class ItemPermissionsRequestApprovalServerRequest(BaseModel):
-    id: RequestId
-    method: ItemPermissionsRequestApprovalServerRequestMethod = Field(
-        ..., title='Item/permissions/requestApprovalServerRequestMethod'
-    )
-    params: PermissionsRequestApprovalParams
-
-
-class AccountChatgptAuthTokensRefreshServerRequest(BaseModel):
-    id: RequestId
-    method: AccountChatgptAuthTokensRefreshServerRequestMethod = Field(
-        ..., title='Account/chatgptAuthTokens/refreshServerRequestMethod'
-    )
-    params: ChatgptAuthTokensRefreshParams
-
-
-class ApplyPatchApprovalServerRequest(BaseModel):
-    id: RequestId
-    method: ApplyPatchApprovalServerRequestMethod = Field(
-        ..., title='ApplyPatchApprovalServerRequestMethod'
-    )
-    params: ApplyPatchApprovalParams
-
-
-class ExecCommandApprovalServerRequest(BaseModel):
-    id: RequestId
-    method: ExecCommandApprovalServerRequestMethod = Field(
-        ..., title='ExecCommandApprovalServerRequestMethod'
-    )
-    params: ExecCommandApprovalParams
-
-
-class ErrorServerNotification(BaseModel):
-    method: ErrorServerNotificationMethod = Field(
-        ..., title='ErrorServerNotificationMethod'
-    )
-    params: ErrorNotification
-
-
-class ThreadArchivedServerNotification(BaseModel):
-    method: ThreadArchivedServerNotificationMethod = Field(
-        ..., title='Thread/archivedServerNotificationMethod'
-    )
-    params: ThreadArchivedNotification
-
-
-class ThreadUnarchivedServerNotification(BaseModel):
-    method: ThreadUnarchivedServerNotificationMethod = Field(
-        ..., title='Thread/unarchivedServerNotificationMethod'
-    )
-    params: ThreadUnarchivedNotification
-
-
-class ThreadClosedServerNotification(BaseModel):
-    method: ThreadClosedServerNotificationMethod = Field(
-        ..., title='Thread/closedServerNotificationMethod'
-    )
-    params: ThreadClosedNotification
-
-
-class SkillsChangedServerNotification(BaseModel):
-    method: SkillsChangedServerNotificationMethod = Field(
-        ..., title='Skills/changedServerNotificationMethod'
-    )
-    params: SkillsChangedNotification
-
-
-class ThreadNameUpdatedServerNotification(BaseModel):
-    method: ThreadNameUpdatedServerNotificationMethod = Field(
-        ..., title='Thread/name/updatedServerNotificationMethod'
-    )
-    params: ThreadNameUpdatedNotification
-
-
-class TurnDiffUpdatedServerNotification(BaseModel):
-    method: TurnDiffUpdatedServerNotificationMethod = Field(
-        ..., title='Turn/diff/updatedServerNotificationMethod'
-    )
-    params: TurnDiffUpdatedNotification
-
-
-class ItemAgentMessageDeltaServerNotification(BaseModel):
-    method: ItemAgentMessageDeltaServerNotificationMethod = Field(
-        ..., title='Item/agentMessage/deltaServerNotificationMethod'
-    )
-    params: AgentMessageDeltaNotification
-
-
-class ItemPlanDeltaServerNotification(BaseModel):
-    method: ItemPlanDeltaServerNotificationMethod = Field(
-        ..., title='Item/plan/deltaServerNotificationMethod'
-    )
-    params: PlanDeltaNotification
-
-
-class ItemCommandExecutionOutputDeltaServerNotification(BaseModel):
-    method: ItemCommandExecutionOutputDeltaServerNotificationMethod = Field(
-        ..., title='Item/commandExecution/outputDeltaServerNotificationMethod'
-    )
-    params: CommandExecutionOutputDeltaNotification
-
-
-class ItemCommandExecutionTerminalInteractionServerNotification(BaseModel):
-    method: ItemCommandExecutionTerminalInteractionServerNotificationMethod = Field(
-        ..., title='Item/commandExecution/terminalInteractionServerNotificationMethod'
-    )
-    params: TerminalInteractionNotification
-
-
-class ItemFileChangeOutputDeltaServerNotification(BaseModel):
-    method: ItemFileChangeOutputDeltaServerNotificationMethod = Field(
-        ..., title='Item/fileChange/outputDeltaServerNotificationMethod'
-    )
-    params: FileChangeOutputDeltaNotification
-
-
-class ServerRequestResolvedServerNotification(BaseModel):
-    method: ServerRequestResolvedServerNotificationMethod = Field(
-        ..., title='ServerRequest/resolvedServerNotificationMethod'
-    )
-    params: ServerRequestResolvedNotification
-
-
-class ItemMcpToolCallProgressServerNotification(BaseModel):
-    method: ItemMcpToolCallProgressServerNotificationMethod = Field(
-        ..., title='Item/mcpToolCall/progressServerNotificationMethod'
-    )
-    params: McpToolCallProgressNotification
-
-
-class McpServerOauthLoginCompletedServerNotification(BaseModel):
-    method: McpServerOauthLoginCompletedServerNotificationMethod = Field(
-        ..., title='McpServer/oauthLogin/completedServerNotificationMethod'
-    )
-    params: McpServerOauthLoginCompletedNotification
-
-
-class ItemReasoningSummaryTextDeltaServerNotification(BaseModel):
-    method: ItemReasoningSummaryTextDeltaServerNotificationMethod = Field(
-        ..., title='Item/reasoning/summaryTextDeltaServerNotificationMethod'
-    )
-    params: ReasoningSummaryTextDeltaNotification
-
-
-class ItemReasoningSummaryPartAddedServerNotification(BaseModel):
-    method: ItemReasoningSummaryPartAddedServerNotificationMethod = Field(
-        ..., title='Item/reasoning/summaryPartAddedServerNotificationMethod'
-    )
-    params: ReasoningSummaryPartAddedNotification
-
-
-class ItemReasoningTextDeltaServerNotification(BaseModel):
-    method: ItemReasoningTextDeltaServerNotificationMethod = Field(
-        ..., title='Item/reasoning/textDeltaServerNotificationMethod'
-    )
-    params: ReasoningTextDeltaNotification
-
-
-class ThreadCompactedServerNotification(BaseModel):
-    method: ThreadCompactedServerNotificationMethod = Field(
-        ..., title='Thread/compactedServerNotificationMethod'
-    )
-    params: ContextCompactedNotification
-
-
-class DeprecationNoticeServerNotification(BaseModel):
-    method: DeprecationNoticeServerNotificationMethod = Field(
-        ..., title='DeprecationNoticeServerNotificationMethod'
-    )
-    params: DeprecationNoticeNotification
-
-
-class ThreadRealtimeStartedServerNotification(BaseModel):
-    method: ThreadRealtimeStartedServerNotificationMethod = Field(
-        ..., title='Thread/realtime/startedServerNotificationMethod'
-    )
-    params: ThreadRealtimeStartedNotification
-
-
-class ThreadRealtimeItemAddedServerNotification(BaseModel):
-    method: ThreadRealtimeItemAddedServerNotificationMethod = Field(
-        ..., title='Thread/realtime/itemAddedServerNotificationMethod'
-    )
-    params: ThreadRealtimeItemAddedNotification
-
-
-class ThreadRealtimeErrorServerNotification(BaseModel):
-    method: ThreadRealtimeErrorServerNotificationMethod = Field(
-        ..., title='Thread/realtime/errorServerNotificationMethod'
-    )
-    params: ThreadRealtimeErrorNotification
-
-
-class ThreadRealtimeClosedServerNotification(BaseModel):
-    method: ThreadRealtimeClosedServerNotificationMethod = Field(
-        ..., title='Thread/realtime/closedServerNotificationMethod'
-    )
-    params: ThreadRealtimeClosedNotification
-
-
-class WindowsWorldWritableWarningServerNotification(BaseModel):
-    method: WindowsWorldWritableWarningServerNotificationMethod = Field(
-        ..., title='Windows/worldWritableWarningServerNotificationMethod'
-    )
-    params: WindowsWorldWritableWarningNotification
-
-
-class WindowsSandboxSetupCompletedServerNotification(BaseModel):
-    method: WindowsSandboxSetupCompletedServerNotificationMethod = Field(
-        ..., title='WindowsSandbox/setupCompletedServerNotificationMethod'
-    )
-    params: WindowsSandboxSetupCompletedNotification
-
-
-class AccountLoginCompletedServerNotification(BaseModel):
-    method: AccountLoginCompletedServerNotificationMethod = Field(
-        ..., title='Account/login/completedServerNotificationMethod'
-    )
-    params: AccountLoginCompletedNotification
-
-
-class CollabAgentRef(BaseModel):
-    agent_nickname: str | None = Field(
-        default=None,
-        description='Optional nickname assigned to an AgentControl-spawned sub-agent.',
-    )
-    agent_role: str | None = Field(
-        default=None,
-        description='Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.',
-    )
-    thread_id: ThreadId = Field(..., description='Thread ID of the receiver/new agent.')
-
-
-class CollabAgentStatusEntry(BaseModel):
-    agent_nickname: str | None = Field(
-        default=None,
-        description='Optional nickname assigned to an AgentControl-spawned sub-agent.',
-    )
-    agent_role: str | None = Field(
-        default=None,
-        description='Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.',
-    )
-    status: AgentStatus = Field(..., description='Last known status of the agent.')
-    thread_id: ThreadId = Field(..., description='Thread ID of the receiver/new agent.')
-
-
-class FileSystemPermissions(BaseModel):
-    read: list[AbsolutePathBuf] | None = None
-    write: list[AbsolutePathBuf] | None = None
-
-
-class PermissionProfile(BaseModel):
-    file_system: FileSystemPermissions | None = None
-    macos: MacOsSeatbeltProfileExtensions | None = None
-    network: NetworkPermissions | None = None
+class PermissionsRequestApprovalResponse(BaseModel):
+    permissions: GrantedPermissionProfile
 
 
 class PlanItemArg(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     status: StepStatus
     step: str
 
 
+class RateLimitSnapshot(BaseModel):
+    credits: CreditsSnapshot | None = None
+    limit_id: str | None = Field(default=None, alias="limitId")
+    limit_name: str | None = Field(default=None, alias="limitName")
+    plan_type: PlanType | None = Field(default=None, alias="planType")
+    primary: RateLimitWindow | None = None
+    secondary: RateLimitWindow | None = None
+
+
 class HandoffRequestedRealtimeEvent(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
-    handoff_requested: RealtimeHandoffRequested = Field(..., alias='HandoffRequested')
+    handoff_requested: RealtimeHandoffRequested = Field(..., alias="HandoffRequested")
 
 
 class RealtimeEvent(
@@ -4963,10 +5735,19 @@ class RealtimeEvent(
 class RequestUserInputQuestion(BaseModel):
     header: str
     id: str
-    is_other: bool | None = Field(default=False, alias='isOther')
-    is_secret: bool | None = Field(default=False, alias='isSecret')
+    is_other: bool | None = Field(default=False, alias="isOther")
+    is_secret: bool | None = Field(default=False, alias="isSecret")
     options: list[RequestUserInputQuestionOption] | None = None
     question: str
+
+
+class WebSearchCallResponseItem(BaseModel):
+    action: ResponsesApiWebSearchAction | None = None
+    id: str | None = None
+    status: str | None = None
+    type: WebSearchCallResponseItemType = Field(
+        ..., title="WebSearchCallResponseItemType"
+    )
 
 
 class ReviewCodeLocation(BaseModel):
@@ -4980,28 +5761,28 @@ class NetworkPolicyAmendment1(BaseModel):
 
 class NetworkPolicyAmendmentReviewDecision(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     network_policy_amendment: NetworkPolicyAmendment1
 
 
 class ReviewDecision(
     RootModel[
-        Literal['approved']
+        Literal["approved"]
         | ApprovedExecpolicyAmendmentReviewDecision
-        | Literal['approved_for_session']
+        | Literal["approved_for_session"]
         | NetworkPolicyAmendmentReviewDecision
-        | Literal['denied']
-        | Literal['abort']
+        | Literal["denied"]
+        | Literal["abort"]
     ]
 ):
     root: (
-        Literal['approved']
+        Literal["approved"]
         | ApprovedExecpolicyAmendmentReviewDecision
-        | Literal['approved_for_session']
+        | Literal["approved_for_session"]
         | NetworkPolicyAmendmentReviewDecision
-        | Literal['denied']
-        | Literal['abort']
+        | Literal["denied"]
+        | Literal["abort"]
     ) = Field(..., description="User's decision in response to an ExecApprovalRequest.")
 
 
@@ -5020,594 +5801,203 @@ class ReviewOutputEvent(BaseModel):
     overall_explanation: str
 
 
-class AgentMessageTurnItem(BaseModel):
-    content: list[AgentMessageContent]
-    id: str
-    phase: MessagePhase | None = Field(
+class ReviewStartParams(BaseModel):
+    delivery: ReviewDelivery | None = Field(
         default=None,
-        description='Optional phase metadata carried through from `ResponseItem::Message`.\n\nThis is currently used by TUI rendering to distinguish mid-turn commentary from a final answer and avoid status-indicator jitter.',
+        description="Where to run the review: inline (default) on the current thread or detached on a new thread (returned in `reviewThreadId`).",
     )
-    type: AgentMessageTurnItemType = Field(..., title='AgentMessageTurnItemType')
-
-
-class WebSearchTurnItem(BaseModel):
-    action: ResponsesApiWebSearchAction
-    id: str
-    query: str
-    type: WebSearchTurnItemType = Field(..., title='WebSearchTurnItemType')
-
-
-class ErrorEventMsg(BaseModel):
-    codex_error_info: CodexErrorInfo | None = None
-    message: str
-    type: ErrorEventMsgType = Field(..., title='ErrorEventMsgType')
-
-
-class RealtimeConversationRealtimeEventMsg(BaseModel):
-    payload: RealtimeEvent
-    type: RealtimeConversationRealtimeEventMsgType = Field(
-        ..., title='RealtimeConversationRealtimeEventMsgType'
-    )
-
-
-class ModelRerouteEventMsg(BaseModel):
-    from_model: str
-    reason: ModelRerouteReason
-    to_model: str
-    type: ModelRerouteEventMsgType = Field(..., title='ModelRerouteEventMsgType')
-
-
-class TaskStartedEventMsg(BaseModel):
-    collaboration_mode_kind: ModeKind | None = 'default'
-    model_context_window: int | None = None
-    turn_id: str
-    type: TaskStartedEventMsgType = Field(..., title='TaskStartedEventMsgType')
-
-
-class AgentMessageEventMsg(BaseModel):
-    message: str
-    phase: MessagePhase | None = None
-    type: AgentMessageEventMsgType = Field(..., title='AgentMessageEventMsgType')
-
-
-class ThreadNameUpdatedEventMsg(BaseModel):
-    thread_id: ThreadId
-    thread_name: str | None = None
-    type: ThreadNameUpdatedEventMsgType = Field(
-        ..., title='ThreadNameUpdatedEventMsgType'
-    )
-
-
-class WebSearchEndEventMsg(BaseModel):
-    action: ResponsesApiWebSearchAction
-    call_id: str
-    query: str
-    type: WebSearchEndEventMsgType = Field(..., title='WebSearchEndEventMsgType')
-
-
-class ExecApprovalRequestEventMsg(BaseModel):
-    additional_permissions: PermissionProfile | None = Field(
-        default=None,
-        description='Optional additional filesystem permissions requested for this command.',
-    )
-    approval_id: str | None = Field(
-        default=None,
-        description='Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).',
-    )
-    available_decisions: list[ReviewDecision] | None = Field(
-        default=None,
-        description='Ordered list of decisions the client may present for this prompt.\n\nWhen absent, clients should derive the legacy default set from the other fields on this request.',
-    )
-    call_id: str = Field(
-        ..., description='Identifier for the associated command execution item.'
-    )
-    command: list[str] = Field(..., description='The command to be executed.')
-    cwd: str = Field(..., description="The command's working directory.")
-    network_approval_context: NetworkApprovalContext | None = Field(
-        default=None,
-        description='Optional network context for a blocked request that can be approved.',
-    )
-    parsed_cmd: list[ParsedCommand]
-    proposed_execpolicy_amendment: list[str] | None = Field(
-        default=None,
-        description='Proposed execpolicy amendment that can be applied to allow future runs.',
-    )
-    proposed_network_policy_amendments: list[NetworkPolicyAmendment] | None = Field(
-        default=None,
-        description='Proposed network policy amendments (for example allow/deny this host in future).',
-    )
-    reason: str | None = Field(
-        default=None,
-        description='Optional human-readable reason for the approval (e.g. retry without sandbox).',
-    )
-    skill_metadata: ExecApprovalRequestSkillMetadata | None = Field(
-        default=None,
-        description='Optional skill metadata when the approval was triggered by a skill script.',
-    )
-    turn_id: str | None = Field(
-        default='',
-        description='Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.',
-    )
-    type: ExecApprovalRequestEventMsgType = Field(
-        ..., title='ExecApprovalRequestEventMsgType'
-    )
-
-
-class RequestPermissionsEventMsg(BaseModel):
-    call_id: str = Field(
-        ...,
-        description='Responses API call id for the associated tool call, if available.',
-    )
-    permissions: PermissionProfile
-    reason: str | None = None
-    turn_id: str | None = Field(
-        default='',
-        description='Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.',
-    )
-    type: RequestPermissionsEventMsgType = Field(
-        ..., title='RequestPermissionsEventMsgType'
-    )
-
-
-class RequestUserInputEventMsg(BaseModel):
-    call_id: str = Field(
-        ...,
-        description='Responses API call id for the associated tool call, if available.',
-    )
-    questions: list[RequestUserInputQuestion]
-    turn_id: str | None = Field(
-        default='',
-        description='Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.',
-    )
-    type: RequestUserInputEventMsgType = Field(
-        ..., title='RequestUserInputEventMsgType'
-    )
-
-
-class DynamicToolCallResponseEventMsg(BaseModel):
-    arguments: Any = Field(..., description='Dynamic tool call arguments.')
-    call_id: str = Field(
-        ..., description='Identifier for the corresponding DynamicToolCallRequest.'
-    )
-    content_items: list[DynamicToolCallOutputContentItem] = Field(
-        ..., description='Dynamic tool response content items.'
-    )
-    duration: Duration = Field(
-        ..., description='The duration of the dynamic tool call.'
-    )
-    error: str | None = Field(
-        default=None,
-        description='Optional error text when the tool call failed before producing a response.',
-    )
-    success: bool = Field(..., description='Whether the tool call succeeded.')
-    tool: str = Field(..., description='Dynamic tool name.')
-    turn_id: str = Field(
-        ..., description='Turn ID that this dynamic tool call belongs to.'
-    )
-    type: DynamicToolCallResponseEventMsgType = Field(
-        ..., title='DynamicToolCallResponseEventMsgType'
-    )
-
-
-class StreamErrorEventMsg(BaseModel):
-    additional_details: str | None = Field(
-        default=None,
-        description='Optional details about the underlying stream failure (often the same human-readable message that is surfaced as the terminal error if retries are exhausted).',
-    )
-    codex_error_info: CodexErrorInfo | None = None
-    message: str
-    type: StreamErrorEventMsgType = Field(..., title='StreamErrorEventMsgType')
-
-
-class PatchApplyEndEventMsg(BaseModel):
-    call_id: str = Field(
-        ..., description='Identifier for the PatchApplyBegin that finished.'
-    )
-    changes: dict[str, FileChange] | None = Field(
-        default_factory=lambda: FileChange({}),
-        description='The changes that were applied (mirrors PatchApplyBeginEvent::changes).',
-    )
-    status: PatchApplyStatus = Field(
-        ..., description='Completion status for this patch application.'
-    )
-    stderr: str = Field(
-        ..., description='Captured stderr (parser errors, IO failures, etc.).'
-    )
-    stdout: str = Field(
-        ..., description='Captured stdout (summary printed by apply_patch).'
-    )
-    success: bool = Field(
-        ..., description='Whether the patch was applied successfully.'
-    )
-    turn_id: str | None = Field(
-        default='',
-        description='Turn ID that this patch belongs to. Uses `#[serde(default)]` for backwards compatibility.',
-    )
-    type: PatchApplyEndEventMsgType = Field(..., title='PatchApplyEndEventMsgType')
-
-
-class McpListToolsResponseEventMsg(BaseModel):
-    auth_statuses: dict[str, McpAuthStatus] = Field(
-        ..., description='Authentication status for each configured MCP server.'
-    )
-    resource_templates: dict[str, list[ResourceTemplate]] = Field(
-        ..., description='Known resource templates grouped by server name.'
-    )
-    resources: dict[str, list[Resource]] = Field(
-        ..., description='Known resources grouped by server name.'
-    )
-    tools: dict[str, Tool] = Field(
-        ..., description='Fully qualified tool name -> tool definition.'
-    )
-    type: McpListToolsResponseEventMsgType = Field(
-        ..., title='McpListToolsResponseEventMsgType'
-    )
-
-
-class ListRemoteSkillsResponseEventMsg(BaseModel):
-    skills: list[RemoteSkillSummary]
-    type: ListRemoteSkillsResponseEventMsgType = Field(
-        ..., title='ListRemoteSkillsResponseEventMsgType'
-    )
-
-
-class PlanUpdateEventMsg(BaseModel):
-    explanation: str | None = Field(
-        default=None,
-        description='Arguments for the `update_plan` todo/checklist tool (not plan mode).',
-    )
-    plan: list[PlanItemArg]
-    type: PlanUpdateEventMsgType = Field(..., title='PlanUpdateEventMsgType')
-
-
-class EnteredReviewModeEventMsg(BaseModel):
     target: ReviewTarget
-    type: EnteredReviewModeEventMsgType = Field(
-        ..., title='EnteredReviewModeEventMsgType'
-    )
-    user_facing_hint: str | None = None
+    thread_id: str = Field(..., alias="threadId")
 
 
-class ExitedReviewModeEventMsg(BaseModel):
-    review_output: ReviewOutputEvent | None = None
-    type: ExitedReviewModeEventMsgType = Field(
-        ..., title='ExitedReviewModeEventMsgType'
+class ErrorServerNotification(BaseModel):
+    method: ErrorServerNotificationMethod = Field(
+        ..., title="ErrorServerNotificationMethod"
     )
+    params: ErrorNotification
 
 
-class CollabAgentSpawnBeginEventMsg(BaseModel):
-    call_id: str = Field(..., description='Identifier for the collab tool call.')
-    prompt: str = Field(
-        ...,
-        description='Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.',
+class ThreadStatusChangedServerNotification(BaseModel):
+    method: ThreadStatusChangedServerNotificationMethod = Field(
+        ..., title="Thread/status/changedServerNotificationMethod"
     )
-    sender_thread_id: ThreadId = Field(..., description='Thread ID of the sender.')
-    type: CollabAgentSpawnBeginEventMsgType = Field(
-        ..., title='CollabAgentSpawnBeginEventMsgType'
-    )
+    params: ThreadStatusChangedNotification
 
 
-class CollabAgentSpawnEndEventMsg(BaseModel):
-    call_id: str = Field(..., description='Identifier for the collab tool call.')
-    new_agent_nickname: str | None = Field(
-        default=None, description='Optional nickname assigned to the new agent.'
+class ThreadArchivedServerNotification(BaseModel):
+    method: ThreadArchivedServerNotificationMethod = Field(
+        ..., title="Thread/archivedServerNotificationMethod"
     )
-    new_agent_role: str | None = Field(
-        default=None, description='Optional role assigned to the new agent.'
-    )
-    new_thread_id: ThreadId | None = Field(
-        default=None,
-        description='Thread ID of the newly spawned agent, if it was created.',
-    )
-    prompt: str = Field(
-        ...,
-        description='Initial prompt sent to the agent. Can be empty to prevent CoT leaking at the beginning.',
-    )
-    sender_thread_id: ThreadId = Field(..., description='Thread ID of the sender.')
-    status: AgentStatus = Field(
-        ...,
-        description='Last known status of the new agent reported to the sender agent.',
-    )
-    type: CollabAgentSpawnEndEventMsgType = Field(
-        ..., title='CollabAgentSpawnEndEventMsgType'
-    )
+    params: ThreadArchivedNotification
 
 
-class CollabAgentInteractionBeginEventMsg(BaseModel):
-    call_id: str = Field(..., description='Identifier for the collab tool call.')
-    prompt: str = Field(
-        ...,
-        description='Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.',
+class ThreadUnarchivedServerNotification(BaseModel):
+    method: ThreadUnarchivedServerNotificationMethod = Field(
+        ..., title="Thread/unarchivedServerNotificationMethod"
     )
-    receiver_thread_id: ThreadId = Field(..., description='Thread ID of the receiver.')
-    sender_thread_id: ThreadId = Field(..., description='Thread ID of the sender.')
-    type: CollabAgentInteractionBeginEventMsgType = Field(
-        ..., title='CollabAgentInteractionBeginEventMsgType'
-    )
+    params: ThreadUnarchivedNotification
 
 
-class CollabAgentInteractionEndEventMsg(BaseModel):
-    call_id: str = Field(..., description='Identifier for the collab tool call.')
-    prompt: str = Field(
-        ...,
-        description='Prompt sent from the sender to the receiver. Can be empty to prevent CoT leaking at the beginning.',
+class ThreadClosedServerNotification(BaseModel):
+    method: ThreadClosedServerNotificationMethod = Field(
+        ..., title="Thread/closedServerNotificationMethod"
     )
-    receiver_agent_nickname: str | None = Field(
-        default=None, description='Optional nickname assigned to the receiver agent.'
-    )
-    receiver_agent_role: str | None = Field(
-        default=None, description='Optional role assigned to the receiver agent.'
-    )
-    receiver_thread_id: ThreadId = Field(..., description='Thread ID of the receiver.')
-    sender_thread_id: ThreadId = Field(..., description='Thread ID of the sender.')
-    status: AgentStatus = Field(
-        ...,
-        description='Last known status of the receiver agent reported to the sender agent.',
-    )
-    type: CollabAgentInteractionEndEventMsgType = Field(
-        ..., title='CollabAgentInteractionEndEventMsgType'
-    )
+    params: ThreadClosedNotification
 
 
-class CollabWaitingBeginEventMsg(BaseModel):
-    call_id: str = Field(..., description='ID of the waiting call.')
-    receiver_agents: list[CollabAgentRef] | None = Field(
-        default=None, description='Optional nicknames/roles for receivers.'
+class SkillsChangedServerNotification(BaseModel):
+    method: SkillsChangedServerNotificationMethod = Field(
+        ..., title="Skills/changedServerNotificationMethod"
     )
-    receiver_thread_ids: list[ThreadId] = Field(
-        ..., description='Thread ID of the receivers.'
+    params: SkillsChangedNotification
+
+
+class ThreadNameUpdatedServerNotification(BaseModel):
+    method: ThreadNameUpdatedServerNotificationMethod = Field(
+        ..., title="Thread/name/updatedServerNotificationMethod"
     )
-    sender_thread_id: ThreadId = Field(..., description='Thread ID of the sender.')
-    type: CollabWaitingBeginEventMsgType = Field(
-        ..., title='CollabWaitingBeginEventMsgType'
+    params: ThreadNameUpdatedNotification
+
+
+class TurnDiffUpdatedServerNotification(BaseModel):
+    method: TurnDiffUpdatedServerNotificationMethod = Field(
+        ..., title="Turn/diff/updatedServerNotificationMethod"
     )
+    params: TurnDiffUpdatedNotification
 
 
-class CollabWaitingEndEventMsg(BaseModel):
-    agent_statuses: list[CollabAgentStatusEntry] | None = Field(
-        default=None,
-        description='Optional receiver metadata paired with final statuses.',
+class CommandExecOutputDeltaServerNotification(BaseModel):
+    method: CommandExecOutputDeltaServerNotificationMethod = Field(
+        ..., title="Command/exec/outputDeltaServerNotificationMethod"
     )
-    call_id: str = Field(..., description='ID of the waiting call.')
-    sender_thread_id: ThreadId = Field(..., description='Thread ID of the sender.')
-    statuses: dict[str, AgentStatus] = Field(
-        ...,
-        description='Last known status of the receiver agents reported to the sender agent.',
+    params: CommandExecOutputDeltaNotification
+
+
+class ItemCommandExecutionTerminalInteractionServerNotification(BaseModel):
+    method: ItemCommandExecutionTerminalInteractionServerNotificationMethod = Field(
+        ..., title="Item/commandExecution/terminalInteractionServerNotificationMethod"
     )
-    type: CollabWaitingEndEventMsgType = Field(
-        ..., title='CollabWaitingEndEventMsgType'
+    params: TerminalInteractionNotification
+
+
+class ServerRequestResolvedServerNotification(BaseModel):
+    method: ServerRequestResolvedServerNotificationMethod = Field(
+        ..., title="ServerRequest/resolvedServerNotificationMethod"
     )
+    params: ServerRequestResolvedNotification
 
 
-class CollabCloseBeginEventMsg(BaseModel):
-    call_id: str = Field(..., description='Identifier for the collab tool call.')
-    receiver_thread_id: ThreadId = Field(..., description='Thread ID of the receiver.')
-    sender_thread_id: ThreadId = Field(..., description='Thread ID of the sender.')
-    type: CollabCloseBeginEventMsgType = Field(
-        ..., title='CollabCloseBeginEventMsgType'
+class AccountUpdatedServerNotification(BaseModel):
+    method: AccountUpdatedServerNotificationMethod = Field(
+        ..., title="Account/updatedServerNotificationMethod"
     )
+    params: AccountUpdatedNotification
 
 
-class CollabCloseEndEventMsg(BaseModel):
-    call_id: str = Field(..., description='Identifier for the collab tool call.')
-    receiver_agent_nickname: str | None = Field(
-        default=None, description='Optional nickname assigned to the receiver agent.'
+class ConfigWarningServerNotification(BaseModel):
+    method: ConfigWarningServerNotificationMethod = Field(
+        ..., title="ConfigWarningServerNotificationMethod"
     )
-    receiver_agent_role: str | None = Field(
-        default=None, description='Optional role assigned to the receiver agent.'
+    params: ConfigWarningNotification
+
+
+class ThreadRealtimeStartedServerNotification(BaseModel):
+    method: ThreadRealtimeStartedServerNotificationMethod = Field(
+        ..., title="Thread/realtime/startedServerNotificationMethod"
     )
-    receiver_thread_id: ThreadId = Field(..., description='Thread ID of the receiver.')
-    sender_thread_id: ThreadId = Field(..., description='Thread ID of the sender.')
-    status: AgentStatus = Field(
-        ...,
-        description='Last known status of the receiver agent reported to the sender agent before the close.',
+    params: ThreadRealtimeStartedNotification
+
+
+class ThreadRealtimeItemAddedServerNotification(BaseModel):
+    method: ThreadRealtimeItemAddedServerNotificationMethod = Field(
+        ..., title="Thread/realtime/itemAddedServerNotificationMethod"
     )
-    type: CollabCloseEndEventMsgType = Field(..., title='CollabCloseEndEventMsgType')
+    params: ThreadRealtimeItemAddedNotification
 
 
-class CollabResumeBeginEventMsg(BaseModel):
-    call_id: str = Field(..., description='Identifier for the collab tool call.')
-    receiver_agent_nickname: str | None = Field(
-        default=None, description='Optional nickname assigned to the receiver agent.'
+class ThreadRealtimeOutputAudioDeltaServerNotification(BaseModel):
+    method: ThreadRealtimeOutputAudioDeltaServerNotificationMethod = Field(
+        ..., title="Thread/realtime/outputAudio/deltaServerNotificationMethod"
     )
-    receiver_agent_role: str | None = Field(
-        default=None, description='Optional role assigned to the receiver agent.'
+    params: ThreadRealtimeOutputAudioDeltaNotification
+
+
+class ThreadRealtimeErrorServerNotification(BaseModel):
+    method: ThreadRealtimeErrorServerNotificationMethod = Field(
+        ..., title="Thread/realtime/errorServerNotificationMethod"
     )
-    receiver_thread_id: ThreadId = Field(..., description='Thread ID of the receiver.')
-    sender_thread_id: ThreadId = Field(..., description='Thread ID of the sender.')
-    type: CollabResumeBeginEventMsgType = Field(
-        ..., title='CollabResumeBeginEventMsgType'
+    params: ThreadRealtimeErrorNotification
+
+
+class ThreadRealtimeClosedServerNotification(BaseModel):
+    method: ThreadRealtimeClosedServerNotificationMethod = Field(
+        ..., title="Thread/realtime/closedServerNotificationMethod"
     )
+    params: ThreadRealtimeClosedNotification
 
 
-class CollabResumeEndEventMsg(BaseModel):
-    call_id: str = Field(..., description='Identifier for the collab tool call.')
-    receiver_agent_nickname: str | None = Field(
-        default=None, description='Optional nickname assigned to the receiver agent.'
+class WindowsWorldWritableWarningServerNotification(BaseModel):
+    method: WindowsWorldWritableWarningServerNotificationMethod = Field(
+        ..., title="Windows/worldWritableWarningServerNotificationMethod"
     )
-    receiver_agent_role: str | None = Field(
-        default=None, description='Optional role assigned to the receiver agent.'
+    params: WindowsWorldWritableWarningNotification
+
+
+class ItemPermissionsRequestApprovalServerRequest(BaseModel):
+    id: RequestId
+    method: ItemPermissionsRequestApprovalServerRequestMethod = Field(
+        ..., title="Item/permissions/requestApprovalServerRequestMethod"
     )
-    receiver_thread_id: ThreadId = Field(..., description='Thread ID of the receiver.')
-    sender_thread_id: ThreadId = Field(..., description='Thread ID of the sender.')
-    status: AgentStatus = Field(
-        ...,
-        description='Last known status of the receiver agent reported to the sender agent after resume.',
+    params: PermissionsRequestApprovalParams
+
+
+class AccountChatgptAuthTokensRefreshServerRequest(BaseModel):
+    id: RequestId
+    method: AccountChatgptAuthTokensRefreshServerRequestMethod = Field(
+        ..., title="Account/chatgptAuthTokens/refreshServerRequestMethod"
     )
-    type: CollabResumeEndEventMsgType = Field(..., title='CollabResumeEndEventMsgType')
+    params: ChatgptAuthTokensRefreshParams
 
 
-class DynamicToolCallResponse(BaseModel):
-    content_items: list[DynamicToolCallOutputContentItem] = Field(
-        ..., alias='contentItems'
+class ApplyPatchApprovalServerRequest(BaseModel):
+    id: RequestId
+    method: ApplyPatchApprovalServerRequestMethod = Field(
+        ..., title="ApplyPatchApprovalServerRequestMethod"
     )
-    success: bool
+    params: ApplyPatchApprovalParams
 
 
-class GrantedPermissionProfile(BaseModel):
-    file_system: AdditionalFileSystemPermissions | None = Field(
-        default=None, alias='fileSystem'
+class ExecCommandApprovalServerRequest(BaseModel):
+    id: RequestId
+    method: ExecCommandApprovalServerRequestMethod = Field(
+        ..., title="ExecCommandApprovalServerRequestMethod"
     )
-    macos: GrantedMacOsPermissions | None = None
-    network: AdditionalNetworkPermissions | None = None
+    params: ExecCommandApprovalParams
 
 
-class ActiveThreadStatus(BaseModel):
-    active_flags: list[ThreadActiveFlag] = Field(..., alias='activeFlags')
-    type: ActiveThreadStatusType = Field(..., title='ActiveThreadStatusType')
+class SkillDependencies(BaseModel):
+    tools: list[SkillToolDependency]
 
 
-class ThreadStatus(
-    RootModel[
-        NotLoadedThreadStatus
-        | IdleThreadStatus
-        | SystemErrorThreadStatus
-        | ActiveThreadStatus
-    ]
-):
-    root: (
-        NotLoadedThreadStatus
-        | IdleThreadStatus
-        | SystemErrorThreadStatus
-        | ActiveThreadStatus
-    )
-
-
-class AgentMessageThreadItem(BaseModel):
-    id: str
-    phase: MessagePhase | None = None
-    text: str
-    type: AgentMessageThreadItemType = Field(..., title='AgentMessageThreadItemType')
-
-
-class CommandExecutionThreadItem(BaseModel):
-    aggregated_output: str | None = Field(
-        default=None,
-        alias='aggregatedOutput',
-        description="The command's output, aggregated from stdout and stderr.",
-    )
-    command: str = Field(..., description='The command to be executed.')
-    command_actions: list[CommandAction] = Field(
-        ...,
-        alias='commandActions',
-        description='A best-effort parsing of the command to understand the action(s) it will perform. This returns a list of CommandAction objects because a single shell command may be composed of many commands piped together.',
-    )
-    cwd: str = Field(..., description="The command's working directory.")
-    duration_ms: int | None = Field(
-        default=None,
-        alias='durationMs',
-        description='The duration of the command execution in milliseconds.',
-    )
-    exit_code: int | None = Field(
-        default=None, alias='exitCode', description="The command's exit code."
-    )
-    id: str
-    process_id: str | None = Field(
-        default=None,
-        alias='processId',
-        description='Identifier for the underlying PTY process (when available).',
-    )
-    status: CommandExecutionStatus
-    type: CommandExecutionThreadItemType = Field(
-        ..., title='CommandExecutionThreadItemType'
-    )
-
-
-class McpToolCallThreadItem(BaseModel):
-    arguments: Any
-    duration_ms: int | None = Field(
-        default=None,
-        alias='durationMs',
-        description='The duration of the MCP tool call in milliseconds.',
-    )
-    error: McpToolCallError | None = None
-    id: str
-    result: McpToolCallResult | None = None
-    server: str
-    status: McpToolCallStatus
-    tool: str
-    type: McpToolCallThreadItemType = Field(..., title='McpToolCallThreadItemType')
-
-
-class DynamicToolCallThreadItem(BaseModel):
-    arguments: Any
-    content_items: list[DynamicToolCallOutputContentItem] | None = Field(
-        default=None, alias='contentItems'
-    )
-    duration_ms: int | None = Field(
-        default=None,
-        alias='durationMs',
-        description='The duration of the dynamic tool call in milliseconds.',
-    )
-    id: str
-    status: DynamicToolCallStatus
-    success: bool | None = None
-    tool: str
-    type: DynamicToolCallThreadItemType = Field(
-        ..., title='DynamicToolCallThreadItemType'
-    )
-
-
-class WebSearchThreadItem(BaseModel):
-    action: WebSearchAction | None = None
-    id: str
-    query: str
-    type: WebSearchThreadItemType = Field(..., title='WebSearchThreadItemType')
-
-
-class CollabAgentState(BaseModel):
-    message: str | None = None
-    status: CollabAgentStatus
-
-
-class TextElement(BaseModel):
-    byte_range: ByteRange = Field(
-        ...,
-        alias='byteRange',
-        description='Byte range in the parent `text` buffer that this element occupies.',
-    )
-    placeholder: str | None = Field(
-        default=None,
-        description='Optional human-readable placeholder for the element, displayed in the UI.',
-    )
-
-
-class FileUpdateChange(BaseModel):
-    diff: str
-    kind: PatchChangeKind
+class SkillMetadata(BaseModel):
+    dependencies: SkillDependencies | None = None
+    description: str
+    enabled: bool
+    interface: SkillInterface | None = None
+    name: str
     path: str
-
-
-class CommandExecResizeParams(BaseModel):
-    process_id: str = Field(
-        ...,
-        alias='processId',
-        description='Client-supplied, connection-scoped `processId` from the original `command/exec` request.',
-    )
-    size: CommandExecTerminalSize = Field(
-        ..., description='New PTY size in character cells.'
-    )
-
-
-class PluginListParams(BaseModel):
-    cwds: list[AbsolutePathBuf] | None = Field(
+    scope: SkillScope
+    short_description: str | None = Field(
         default=None,
-        description='Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.',
+        alias="shortDescription",
+        description="Legacy short_description from SKILL.md. Prefer SKILL.json interface.short_description.",
     )
 
 
-class RateLimitSnapshot(BaseModel):
-    credits: CreditsSnapshot | None = None
-    limit_id: str | None = Field(default=None, alias='limitId')
-    limit_name: str | None = Field(default=None, alias='limitName')
-    plan_type: PlanType | None = Field(default=None, alias='planType')
-    primary: RateLimitWindow | None = None
-    secondary: RateLimitWindow | None = None
-
-
-class ThreadRealtimeOutputAudioDeltaNotification(BaseModel):
-    audio: ThreadRealtimeAudioChunk
-    thread_id: str = Field(..., alias='threadId')
+class SkillsListEntry(BaseModel):
+    cwd: str
+    errors: list[SkillErrorInfo]
+    skills: list[SkillMetadata]
 
 
 class ThreadSpawn(BaseModel):
@@ -5619,7 +6009,7 @@ class ThreadSpawn(BaseModel):
 
 class ThreadSpawnSubAgentSource(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     thread_spawn: ThreadSpawn
 
@@ -5630,383 +6020,197 @@ class SubAgentSource(
     root: SubAgentSource1 | ThreadSpawnSubAgentSource | OtherSubAgentSource
 
 
-class ExternalAgentConfigMigrationItem(BaseModel):
-    cwd: str | None = Field(
-        default=None,
-        description='Null or empty means home-scoped migration; non-empty means repo-scoped migration.',
-    )
-    description: str
-    item_type: ExternalAgentConfigMigrationItemType = Field(..., alias='itemType')
-
-
-class SkillsListParams(BaseModel):
-    cwds: list[str] | None = Field(
-        default=None,
-        description='When empty, defaults to the current session working directory.',
-    )
-    force_reload: bool | None = Field(
-        default=None,
-        alias='forceReload',
-        description='When true, bypass the skills cache and re-scan skills from disk.',
-    )
-    per_cwd_extra_user_roots: list[SkillsListExtraRootsForCwd] | None = Field(
-        default=None,
-        alias='perCwdExtraUserRoots',
-        description='Optional per-cwd extra roots to scan as user-scoped skills.',
-    )
-
-
-class ThreadForkParams(BaseModel):
-    approval_policy: AskForApproval | None = Field(default=None, alias='approvalPolicy')
-    base_instructions: str | None = Field(default=None, alias='baseInstructions')
-    config: dict[str, Any] | None = None
-    cwd: str | None = None
-    developer_instructions: str | None = Field(
-        default=None, alias='developerInstructions'
-    )
-    model: str | None = Field(
-        default=None,
-        description='Configuration overrides for the forked thread, if any.',
-    )
-    model_provider: str | None = Field(default=None, alias='modelProvider')
-    thread_id: str = Field(..., alias='threadId')
-    service_tier: ServiceTier | None = Field(default=None, alias='serviceTier')
-    sandbox: SandboxMode | None = None
-
-
-class ThreadMetadataUpdateParams(BaseModel):
-    git_info: ThreadMetadataGitInfoUpdateParams | None = Field(
-        default=None,
-        alias='gitInfo',
-        description='Patch the stored Git metadata for this thread. Omit a field to leave it unchanged, set it to `null` to clear it, or provide a string to replace the stored value.',
-    )
-    thread_id: str = Field(..., alias='threadId')
-
-
-class ThreadResumeParams(BaseModel):
-    approval_policy: AskForApproval | None = Field(default=None, alias='approvalPolicy')
-    base_instructions: str | None = Field(default=None, alias='baseInstructions')
-    config: dict[str, Any] | None = None
-    cwd: str | None = None
-    developer_instructions: str | None = Field(
-        default=None, alias='developerInstructions'
-    )
-    thread_id: str = Field(..., alias='threadId')
-    model: str | None = Field(
-        default=None,
-        description='Configuration overrides for the resumed thread, if any.',
-    )
-    model_provider: str | None = Field(default=None, alias='modelProvider')
-    service_tier: ServiceTier | None = Field(default=None, alias='serviceTier')
-    sandbox: SandboxMode | None = None
-    personality: Personality | None = None
-
-
-class ThreadTokenUsage(BaseModel):
-    last: TokenUsageBreakdown
-    model_context_window: int | None = Field(default=None, alias='modelContextWindow')
-    total: TokenUsageBreakdown
-
-
-class ConfigEdit(BaseModel):
-    key_path: str = Field(..., alias='keyPath')
-    merge_strategy: MergeStrategy = Field(..., alias='mergeStrategy')
-    value: Any
-
-
-class ReadOnlySandboxPolicy(BaseModel):
-    access: ReadOnlyAccess | None = Field(
-        default_factory=lambda: ReadOnlyAccess({'type': 'fullAccess'})
-    )
-    network_access: bool | None = Field(default=False, alias='networkAccess')
-    type: ReadOnlySandboxPolicyType = Field(..., title='ReadOnlySandboxPolicyType')
-
-
-class ExternalSandboxSandboxPolicy(BaseModel):
-    network_access: NetworkAccess | None = Field(
-        default='restricted', alias='networkAccess'
-    )
-    type: ExternalSandboxSandboxPolicyType = Field(
-        ..., title='ExternalSandboxSandboxPolicyType'
-    )
-
-
-class WorkspaceWriteSandboxPolicy(BaseModel):
-    exclude_slash_tmp: bool | None = Field(default=False, alias='excludeSlashTmp')
-    exclude_tmpdir_env_var: bool | None = Field(
-        default=False, alias='excludeTmpdirEnvVar'
-    )
-    network_access: bool | None = Field(default=False, alias='networkAccess')
-    read_only_access: ReadOnlyAccess | None = Field(
-        default_factory=lambda: ReadOnlyAccess({'type': 'fullAccess'}),
-        alias='readOnlyAccess',
-    )
-    type: WorkspaceWriteSandboxPolicyType = Field(
-        ..., title='WorkspaceWriteSandboxPolicyType'
-    )
-    writable_roots: list[AbsolutePathBuf] | None = Field(
-        default_factory=list, alias='writableRoots'
-    )
-
-
-class SandboxPolicy(
-    RootModel[
-        DangerFullAccessSandboxPolicy
-        | ReadOnlySandboxPolicy
-        | ExternalSandboxSandboxPolicy
-        | WorkspaceWriteSandboxPolicy
-    ]
-):
-    root: (
-        DangerFullAccessSandboxPolicy
-        | ReadOnlySandboxPolicy
-        | ExternalSandboxSandboxPolicy
-        | WorkspaceWriteSandboxPolicy
-    )
-
-
-class WindowsSandboxSetupStartParams(BaseModel):
-    cwd: AbsolutePathBuf | None = None
-    mode: WindowsSandboxSetupMode
-
-
-class AccountUpdatedNotification(BaseModel):
-    auth_mode: AuthMode | None = Field(default=None, alias='authMode')
-    plan_type: PlanType | None = Field(default=None, alias='planType')
-
-
-class ReviewStartParams(BaseModel):
-    delivery: ReviewDelivery | None = Field(
-        default=None,
-        description='Where to run the review: inline (default) on the current thread or detached on a new thread (returned in `reviewThreadId`).',
-    )
-    target: ReviewTarget
-    thread_id: str = Field(..., alias='threadId')
-
-
-class ModelReroutedNotification(BaseModel):
-    from_model: str = Field(..., alias='fromModel')
-    reason: ModelRerouteReason
-    thread_id: str = Field(..., alias='threadId')
-    to_model: str = Field(..., alias='toModel')
-    turn_id: str = Field(..., alias='turnId')
-
-
-class MessageResponseItem(BaseModel):
-    content: list[ContentItem]
-    end_turn: bool | None = None
-    id: str | None = None
-    phase: MessagePhase | None = None
-    role: str
-    type: MessageResponseItemType = Field(..., title='MessageResponseItemType')
-
-
-class ReasoningResponseItem(BaseModel):
-    content: list[ReasoningItemContent] | None = None
-    encrypted_content: str | None = None
+class UserMessageThreadItem(BaseModel):
+    content: list[UserInput]
     id: str
-    summary: list[ReasoningItemReasoningSummary]
-    type: ReasoningResponseItemType = Field(..., title='ReasoningResponseItemType')
+    type: UserMessageThreadItemType = Field(..., title="UserMessageThreadItemType")
 
 
-class LocalShellCallResponseItem(BaseModel):
-    action: LocalShellAction
-    call_id: str | None = Field(
-        default=None, description='Set when using the Responses API.'
+class FileChangeThreadItem(BaseModel):
+    changes: list[FileUpdateChange]
+    id: str
+    status: PatchApplyStatus
+    type: FileChangeThreadItemType = Field(..., title="FileChangeThreadItemType")
+
+
+class CollabAgentToolCallThreadItem(BaseModel):
+    agents_states: dict[str, CollabAgentState] = Field(
+        ...,
+        alias="agentsStates",
+        description="Last known status of the target agents, when available.",
     )
-    id: str | None = Field(
+    id: str = Field(..., description="Unique identifier for this collab tool call.")
+    prompt: str | None = Field(
         default=None,
-        description='Legacy id field retained for compatibility with older payloads.',
+        description="Prompt text sent as part of the collab tool call, when available.",
     )
-    status: LocalShellStatus
-    type: LocalShellCallResponseItemType = Field(
-        ..., title='LocalShellCallResponseItemType'
+    receiver_thread_ids: list[str] = Field(
+        ...,
+        alias="receiverThreadIds",
+        description="Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.",
     )
-
-
-class WebSearchCallResponseItem(BaseModel):
-    action: ResponsesApiWebSearchAction | None = None
-    id: str | None = None
-    status: str | None = None
-    type: WebSearchCallResponseItemType = Field(
-        ..., title='WebSearchCallResponseItemType'
+    sender_thread_id: str = Field(
+        ...,
+        alias="senderThreadId",
+        description="Thread ID of the agent issuing the collab request.",
     )
-
-
-class GhostSnapshotResponseItem(BaseModel):
-    ghost_commit: GhostCommit
-    type: GhostSnapshotResponseItemType = Field(
-        ..., title='GhostSnapshotResponseItemType'
+    status: CollabAgentToolCallStatus = Field(
+        ..., description="Current status of the collab tool call."
     )
-
-
-class InputImageFunctionCallOutputContentItem(BaseModel):
-    detail: ImageDetail | None = None
-    image_url: str
-    type: InputImageFunctionCallOutputContentItemType = Field(
-        ..., title='InputImageFunctionCallOutputContentItemType'
+    tool: CollabAgentTool = Field(
+        ..., description="Name of the collab tool that was invoked."
+    )
+    type: CollabAgentToolCallThreadItemType = Field(
+        ..., title="CollabAgentToolCallThreadItemType"
     )
 
 
-class FunctionCallOutputContentItem(
+class WebSearchThreadItem(BaseModel):
+    action: WebSearchAction | None = None
+    id: str
+    query: str
+    type: WebSearchThreadItemType = Field(..., title="WebSearchThreadItemType")
+
+
+class ThreadItem(
     RootModel[
-        InputTextFunctionCallOutputContentItem | InputImageFunctionCallOutputContentItem
+        UserMessageThreadItem
+        | AgentMessageThreadItem
+        | PlanThreadItem
+        | ReasoningThreadItem
+        | CommandExecutionThreadItem
+        | FileChangeThreadItem
+        | McpToolCallThreadItem
+        | DynamicToolCallThreadItem
+        | CollabAgentToolCallThreadItem
+        | WebSearchThreadItem
+        | ImageViewThreadItem
+        | ImageGenerationThreadItem
+        | EnteredReviewModeThreadItem
+        | ExitedReviewModeThreadItem
+        | ContextCompactionThreadItem
     ]
 ):
     root: (
-        InputTextFunctionCallOutputContentItem | InputImageFunctionCallOutputContentItem
-    ) = Field(
-        ...,
-        description='Responses API compatible content items that can be returned by a tool call. This is a subset of ContentItem with the types we support as function call outputs.',
-    )
-
-
-class SkillDependencies(BaseModel):
-    tools: list[SkillToolDependency]
-
-
-class AccountRateLimitsUpdatedNotification(BaseModel):
-    rate_limits: RateLimitSnapshot = Field(..., alias='rateLimits')
-
-
-class CommandExecOutputDeltaNotification(BaseModel):
-    cap_reached: bool = Field(
-        ...,
-        alias='capReached',
-        description='`true` on the final streamed chunk for a stream when `outputBytesCap` truncated later output on that stream.',
-    )
-    delta_base64: str = Field(
-        ..., alias='deltaBase64', description='Base64-encoded output bytes.'
-    )
-    process_id: str = Field(
-        ...,
-        alias='processId',
-        description='Client-supplied, connection-scoped `processId` from the original `command/exec` request.',
-    )
-    stream: CommandExecOutputStream = Field(
-        ..., description='Output stream for this chunk.'
+        UserMessageThreadItem
+        | AgentMessageThreadItem
+        | PlanThreadItem
+        | ReasoningThreadItem
+        | CommandExecutionThreadItem
+        | FileChangeThreadItem
+        | McpToolCallThreadItem
+        | DynamicToolCallThreadItem
+        | CollabAgentToolCallThreadItem
+        | WebSearchThreadItem
+        | ImageViewThreadItem
+        | ImageGenerationThreadItem
+        | EnteredReviewModeThreadItem
+        | ExitedReviewModeThreadItem
+        | ContextCompactionThreadItem
     )
 
 
 class ThreadListParams(BaseModel):
     archived: bool | None = Field(
         default=None,
-        description='Optional archived filter; when set to true, only archived threads are returned. If false or null, only non-archived threads are returned.',
+        description="Optional archived filter; when set to true, only archived threads are returned. If false or null, only non-archived threads are returned.",
     )
     cursor: str | None = Field(
         default=None,
-        description='Opaque pagination cursor returned by a previous call.',
+        description="Opaque pagination cursor returned by a previous call.",
     )
     cwd: str | None = Field(
         default=None,
-        description='Optional cwd filter; when set, only threads whose session cwd exactly matches this path are returned.',
+        description="Optional cwd filter; when set, only threads whose session cwd exactly matches this path are returned.",
     )
     limit: int | None = Field(
         default=None,
-        description='Optional page size; defaults to a reasonable server-side value.',
+        description="Optional page size; defaults to a reasonable server-side value.",
         ge=0,
     )
     model_providers: list[str] | None = Field(
         default=None,
-        alias='modelProviders',
-        description='Optional provider filter; when set, only sessions recorded under these providers are returned. When present but empty, includes all providers.',
+        alias="modelProviders",
+        description="Optional provider filter; when set, only sessions recorded under these providers are returned. When present but empty, includes all providers.",
     )
     search_term: str | None = Field(
         default=None,
-        alias='searchTerm',
-        description='Optional substring filter for the extracted thread title.',
+        alias="searchTerm",
+        description="Optional substring filter for the extracted thread title.",
     )
     sort_key: ThreadSortKey | None = Field(
         default=None,
-        alias='sortKey',
-        description='Optional sort key; defaults to created_at.',
+        alias="sortKey",
+        description="Optional sort key; defaults to created_at.",
     )
     source_kinds: list[ThreadSourceKind] | None = Field(
         default=None,
-        alias='sourceKinds',
-        description='Optional source filter; when set, only sessions from these source kinds are returned. When omitted or empty, defaults to interactive sources.',
+        alias="sourceKinds",
+        description="Optional source filter; when set, only sessions from these source kinds are returned. When omitted or empty, defaults to interactive sources.",
     )
 
 
-class AppMetadata(BaseModel):
-    categories: list[str] | None = None
-    developer: str | None = None
-    first_party_requires_install: bool | None = Field(
-        default=None, alias='firstPartyRequiresInstall'
-    )
-    first_party_type: str | None = Field(default=None, alias='firstPartyType')
-    review: AppReview | None = None
-    screenshots: list[AppScreenshot] | None = None
-    seo_description: str | None = Field(default=None, alias='seoDescription')
-    show_in_composer_when_unlinked: bool | None = Field(
-        default=None, alias='showInComposerWhenUnlinked'
-    )
-    sub_categories: list[str] | None = Field(default=None, alias='subCategories')
-    version: str | None = None
-    version_id: str | None = Field(default=None, alias='versionId')
-    version_notes: str | None = Field(default=None, alias='versionNotes')
+class ThreadTokenUsage(BaseModel):
+    last: TokenUsageBreakdown
+    model_context_window: int | None = Field(default=None, alias="modelContextWindow")
+    total: TokenUsageBreakdown
 
 
-class CommandExecParams(BaseModel):
-    command: list[str] = Field(
-        ..., description='Command argv vector. Empty arrays are rejected.'
+class ThreadTokenUsageUpdatedNotification(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
+    token_usage: ThreadTokenUsage = Field(..., alias="tokenUsage")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class ToolRequestUserInputParams(BaseModel):
+    item_id: str = Field(..., alias="itemId")
+    questions: list[ToolRequestUserInputQuestion]
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class Turn(BaseModel):
+    error: TurnError | None = Field(
+        default=None, description="Only populated when the Turn's status is failed."
     )
-    cwd: str | None = Field(
-        default=None,
-        description='Optional working directory. Defaults to the server cwd.',
+    id: str
+    items: list[ThreadItem] = Field(
+        ...,
+        description="Only populated on a `thread/resume` or `thread/fork` response. For all other responses and notifications returning a Turn, the items field will be an empty list.",
     )
-    disable_output_cap: bool | None = Field(
-        default=None,
-        alias='disableOutputCap',
-        description='Disable stdout/stderr capture truncation for this request.\n\nCannot be combined with `outputBytesCap`.',
-    )
-    disable_timeout: bool | None = Field(
-        default=None,
-        alias='disableTimeout',
-        description='Disable the timeout entirely for this request.\n\nCannot be combined with `timeoutMs`.',
-    )
-    env: dict[str, Any] | None = Field(
-        default=None,
-        description='Optional environment overrides merged into the server-computed environment.\n\nMatching names override inherited values. Set a key to `null` to unset an inherited variable.',
-    )
-    output_bytes_cap: int | None = Field(
-        default=None,
-        alias='outputBytesCap',
-        description='Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.',
-        ge=0,
-    )
-    process_id: str | None = Field(
-        default=None,
-        alias='processId',
-        description='Optional client-supplied, connection-scoped process id.\n\nRequired for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up `command/exec/write`, `command/exec/resize`, and `command/exec/terminate` calls. When omitted, buffered execution gets an internal id that is not exposed to the client.',
-    )
-    sandbox_policy: SandboxPolicy | None = Field(
-        default=None,
-        alias='sandboxPolicy',
-        description="Optional sandbox policy for this command.\n\nUses the same shape as thread/turn execution sandbox configuration and defaults to the user's configured policy when omitted.",
-    )
-    size: CommandExecTerminalSize | None = Field(
-        default=None,
-        description='Optional initial PTY size in character cells. Only valid when `tty` is true.',
-    )
-    stream_stdin: bool | None = Field(
-        default=None,
-        alias='streamStdin',
-        description='Allow follow-up `command/exec/write` requests to write stdin bytes.\n\nRequires a client-supplied `processId`.',
-    )
-    stream_stdout_stderr: bool | None = Field(
-        default=None,
-        alias='streamStdoutStderr',
-        description='Stream stdout/stderr via `command/exec/outputDelta` notifications.\n\nStreamed bytes are not duplicated into the final response and require a client-supplied `processId`.',
-    )
-    timeout_ms: int | None = Field(
-        default=None,
-        alias='timeoutMs',
-        description='Optional timeout in milliseconds.\n\nWhen omitted, the server default applies. Cannot be combined with `disableTimeout`.',
-    )
-    tty: bool | None = Field(
-        default=None,
-        description='Enable PTY mode.\n\nThis implies `streamStdin` and `streamStdoutStderr`.',
+    status: TurnStatus
+
+
+class TurnCompletedNotification(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
+    turn: Turn
+
+
+class UserMessageTurnItem(BaseModel):
+    content: list[UserInput]
+    id: str
+    type: UserMessageTurnItemType = Field(..., title="UserMessageTurnItemType")
+
+
+class TurnItem(
+    RootModel[
+        UserMessageTurnItem
+        | AgentMessageTurnItem
+        | PlanTurnItem
+        | ReasoningTurnItem
+        | WebSearchTurnItem
+        | ImageGenerationTurnItem
+        | ContextCompactionTurnItem
+    ]
+):
+    root: (
+        UserMessageTurnItem
+        | AgentMessageTurnItem
+        | PlanTurnItem
+        | ReasoningTurnItem
+        | WebSearchTurnItem
+        | ImageGenerationTurnItem
+        | ContextCompactionTurnItem
     )
 
 
@@ -6015,105 +6219,149 @@ class TurnPlanStep(BaseModel):
     step: str
 
 
-class SkillsRemoteReadParams(BaseModel):
-    enabled: bool | None = False
-    hazelnut_scope: HazelnutScope | None = Field(
-        default='example', alias='hazelnutScope'
+class TurnPlanUpdatedNotification(BaseModel):
+    explanation: str | None = None
+    plan: list[TurnPlanStep]
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class TurnStartParams(BaseModel):
+    approval_policy: AskForApproval | None = Field(
+        default=None,
+        alias="approvalPolicy",
+        description="Override the approval policy for this turn and subsequent turns.",
     )
-    product_surface: ProductSurface | None = Field(
-        default='codex', alias='productSurface'
+    cwd: str | None = Field(
+        default=None,
+        description="Override the working directory for this turn and subsequent turns.",
+    )
+    effort: ReasoningEffort | None = Field(
+        default=None,
+        description="Override the reasoning effort for this turn and subsequent turns.",
+    )
+    input: list[UserInput]
+    model: str | None = Field(
+        default=None,
+        description="Override the model for this turn and subsequent turns.",
+    )
+    output_schema: Any | None = Field(
+        default=None,
+        alias="outputSchema",
+        description="Optional JSON Schema used to constrain the final assistant message for this turn.",
+    )
+    personality: Personality | None = Field(
+        default=None,
+        description="Override the personality for this turn and subsequent turns.",
+    )
+    sandbox_policy: SandboxPolicy | None = Field(
+        default=None,
+        alias="sandboxPolicy",
+        description="Override the sandbox policy for this turn and subsequent turns.",
+    )
+    service_tier: ServiceTier | None = Field(
+        default=None,
+        alias="serviceTier",
+        description="Override the service tier for this turn and subsequent turns.",
+    )
+    summary: ReasoningSummary | None = Field(
+        default=None,
+        description="Override the reasoning summary for this turn and subsequent turns.",
+    )
+    thread_id: str = Field(..., alias="threadId")
+
+
+class TurnStartedNotification(BaseModel):
+    thread_id: str = Field(..., alias="threadId")
+    turn: Turn
+
+
+class TurnSteerParams(BaseModel):
+    expected_turn_id: str = Field(
+        ...,
+        alias="expectedTurnId",
+        description="Required active turn id precondition. The request fails when it does not match the currently active turn.",
+    )
+    input: list[UserInput]
+    thread_id: str = Field(..., alias="threadId")
+
+
+class WindowsSandboxSetupCompletedNotification(BaseModel):
+    error: str | None = None
+    mode: WindowsSandboxSetupMode
+    success: bool
+
+
+class AccountRateLimitsUpdatedNotification(BaseModel):
+    rate_limits: RateLimitSnapshot = Field(..., alias="rateLimits")
+
+
+class AppInfo(BaseModel):
+    app_metadata: AppMetadata | None = Field(default=None, alias="appMetadata")
+    branding: AppBranding | None = None
+    description: str | None = None
+    distribution_channel: str | None = Field(default=None, alias="distributionChannel")
+    id: str
+    install_url: str | None = Field(default=None, alias="installUrl")
+    is_accessible: bool | None = Field(default=False, alias="isAccessible")
+    is_enabled: bool | None = Field(
+        default=True,
+        alias="isEnabled",
+        description="Whether this app is enabled in config.toml. Example: ```toml [apps.bad_app] enabled = false ```",
+    )
+    labels: dict[str, Any] | None = None
+    logo_url: str | None = Field(default=None, alias="logoUrl")
+    logo_url_dark: str | None = Field(default=None, alias="logoUrlDark")
+    name: str
+    plugin_display_names: list[str] | None = Field(
+        default=[], alias="pluginDisplayNames"
     )
 
 
-class TextRange(BaseModel):
-    end: TextPosition
-    start: TextPosition
-
-
-class ExecCommandApprovalResponse(BaseModel):
-    decision: ReviewDecision
+class AppListUpdatedNotification(BaseModel):
+    data: list[AppInfo]
 
 
 class ApplyPatchApprovalResponse(BaseModel):
     decision: ReviewDecision
 
 
-class ThreadResumeClientRequest(BaseModel):
-    id: RequestId
-    method: ThreadResumeClientRequestMethod = Field(
-        ..., title='Thread/resumeClientRequestMethod'
-    )
-    params: ThreadResumeParams
-
-
-class ThreadForkClientRequest(BaseModel):
-    id: RequestId
-    method: ThreadForkClientRequestMethod = Field(
-        ..., title='Thread/forkClientRequestMethod'
-    )
-    params: ThreadForkParams
-
-
-class ThreadMetadataUpdateClientRequest(BaseModel):
-    id: RequestId
-    method: ThreadMetadataUpdateClientRequestMethod = Field(
-        ..., title='Thread/metadata/updateClientRequestMethod'
-    )
-    params: ThreadMetadataUpdateParams
-
-
 class ThreadListClientRequest(BaseModel):
     id: RequestId
     method: ThreadListClientRequestMethod = Field(
-        ..., title='Thread/listClientRequestMethod'
+        ..., title="Thread/listClientRequestMethod"
     )
     params: ThreadListParams
 
 
-class SkillsListClientRequest(BaseModel):
+class TurnStartClientRequest(BaseModel):
     id: RequestId
-    method: SkillsListClientRequestMethod = Field(
-        ..., title='Skills/listClientRequestMethod'
+    method: TurnStartClientRequestMethod = Field(
+        ..., title="Turn/startClientRequestMethod"
     )
-    params: SkillsListParams
+    params: TurnStartParams
 
 
-class PluginListClientRequest(BaseModel):
+class TurnSteerClientRequest(BaseModel):
     id: RequestId
-    method: PluginListClientRequestMethod = Field(
-        ..., title='Plugin/listClientRequestMethod'
+    method: TurnSteerClientRequestMethod = Field(
+        ..., title="Turn/steerClientRequestMethod"
     )
-    params: PluginListParams
-
-
-class SkillsRemoteListClientRequest(BaseModel):
-    id: RequestId
-    method: SkillsRemoteListClientRequestMethod = Field(
-        ..., title='Skills/remote/listClientRequestMethod'
-    )
-    params: SkillsRemoteReadParams
+    params: TurnSteerParams
 
 
 class ReviewStartClientRequest(BaseModel):
     id: RequestId
     method: ReviewStartClientRequestMethod = Field(
-        ..., title='Review/startClientRequestMethod'
+        ..., title="Review/startClientRequestMethod"
     )
     params: ReviewStartParams
-
-
-class WindowsSandboxSetupStartClientRequest(BaseModel):
-    id: RequestId
-    method: WindowsSandboxSetupStartClientRequestMethod = Field(
-        ..., title='WindowsSandbox/setupStartClientRequestMethod'
-    )
-    params: WindowsSandboxSetupStartParams
 
 
 class CommandExecClientRequest(BaseModel):
     id: RequestId
     method: CommandExecClientRequestMethod = Field(
-        ..., title='Command/execClientRequestMethod'
+        ..., title="Command/execClientRequestMethod"
     )
     params: CommandExecParams
 
@@ -6121,9 +6369,17 @@ class CommandExecClientRequest(BaseModel):
 class CommandExecResizeClientRequest(BaseModel):
     id: RequestId
     method: CommandExecResizeClientRequestMethod = Field(
-        ..., title='Command/exec/resizeClientRequestMethod'
+        ..., title="Command/exec/resizeClientRequestMethod"
     )
     params: CommandExecResizeParams
+
+
+class ConfigValueWriteClientRequest(BaseModel):
+    id: RequestId
+    method: ConfigValueWriteClientRequestMethod = Field(
+        ..., title="Config/value/writeClientRequestMethod"
+    )
+    params: ConfigValueWriteParams
 
 
 class ApplyNetworkPolicyAmendment(BaseModel):
@@ -6132,69 +6388,242 @@ class ApplyNetworkPolicyAmendment(BaseModel):
 
 class ApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
     apply_network_policy_amendment: ApplyNetworkPolicyAmendment = Field(
-        ..., alias='applyNetworkPolicyAmendment'
+        ..., alias="applyNetworkPolicyAmendment"
     )
 
 
 class CommandExecutionApprovalDecision(
     RootModel[
-        Literal['accept']
-        | Literal['acceptForSession']
+        Literal["accept"]
+        | Literal["acceptForSession"]
         | AcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision
         | ApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision
-        | Literal['decline']
-        | Literal['cancel']
+        | Literal["decline"]
+        | Literal["cancel"]
     ]
 ):
     root: (
-        Literal['accept']
-        | Literal['acceptForSession']
+        Literal["accept"]
+        | Literal["acceptForSession"]
         | AcceptWithExecpolicyAmendmentCommandExecutionApprovalDecision
         | ApplyNetworkPolicyAmendmentCommandExecutionApprovalDecision
-        | Literal['decline']
-        | Literal['cancel']
+        | Literal["decline"]
+        | Literal["cancel"]
     )
 
 
 class CommandExecutionRequestApprovalParams(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
     approval_id: str | None = Field(
         default=None,
-        alias='approvalId',
-        description='Unique identifier for this specific approval callback.\n\nFor regular shell/unified_exec approvals, this is null.\n\nFor zsh-exec-bridge subcommand approvals, multiple callbacks can belong to one parent `itemId`, so `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing.',
+        alias="approvalId",
+        description="Unique identifier for this specific approval callback.\n\nFor regular shell/unified_exec approvals, this is null.\n\nFor zsh-exec-bridge subcommand approvals, multiple callbacks can belong to one parent `itemId`, so `approvalId` is a distinct opaque callback id (a UUID) used to disambiguate routing.",
     )
-    turn_id: str = Field(..., alias='turnId')
-    command: str | None = Field(default=None, description='The command to be executed.')
+    command: str | None = Field(default=None, description="The command to be executed.")
     command_actions: list[CommandAction] | None = Field(
         default=None,
-        alias='commandActions',
-        description='Best-effort parsed command actions for friendly display.',
+        alias="commandActions",
+        description="Best-effort parsed command actions for friendly display.",
     )
     cwd: str | None = Field(
         default=None, description="The command's working directory."
     )
-    item_id: str = Field(..., alias='itemId')
+    item_id: str = Field(..., alias="itemId")
     network_approval_context: NetworkApprovalContext | None = Field(
         default=None,
-        alias='networkApprovalContext',
-        description='Optional context for a managed-network approval prompt.',
+        alias="networkApprovalContext",
+        description="Optional context for a managed-network approval prompt.",
     )
     proposed_execpolicy_amendment: list[str] | None = Field(
         default=None,
-        alias='proposedExecpolicyAmendment',
-        description='Optional proposed execpolicy amendment to allow similar commands without prompting.',
+        alias="proposedExecpolicyAmendment",
+        description="Optional proposed execpolicy amendment to allow similar commands without prompting.",
     )
     proposed_network_policy_amendments: list[NetworkPolicyAmendment] | None = Field(
         default=None,
-        alias='proposedNetworkPolicyAmendments',
-        description='Optional proposed network policy amendments (allow/deny host) for future requests.',
+        alias="proposedNetworkPolicyAmendments",
+        description="Optional proposed network policy amendments (allow/deny host) for future requests.",
     )
     reason: str | None = Field(
         default=None,
-        description='Optional explanatory reason (e.g. request for network access).',
+        description="Optional explanatory reason (e.g. request for network access).",
+    )
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class CommandExecutionRequestApprovalResponse(BaseModel):
+    decision: CommandExecutionApprovalDecision
+
+
+class ConfigBatchWriteParams(BaseModel):
+    edits: list[ConfigEdit]
+    expected_version: str | None = Field(default=None, alias="expectedVersion")
+    file_path: str | None = Field(
+        default=None,
+        alias="filePath",
+        description="Path to the config file to write; defaults to the user's `config.toml` when omitted.",
+    )
+    reload_user_config: bool | None = Field(
+        default=None,
+        alias="reloadUserConfig",
+        description="When true, hot-reload the updated user config into all loaded threads after writing.",
+    )
+
+
+class RealtimeConversationRealtimeEventMsg(BaseModel):
+    payload: RealtimeEvent
+    type: RealtimeConversationRealtimeEventMsgType = Field(
+        ..., title="RealtimeConversationRealtimeEventMsgType"
+    )
+
+
+class TokenCountEventMsg(BaseModel):
+    info: TokenUsageInfo | None = None
+    rate_limits: RateLimitSnapshot | None = None
+    type: TokenCountEventMsgType = Field(..., title="TokenCountEventMsgType")
+
+
+class ExecApprovalRequestEventMsg(BaseModel):
+    additional_permissions: PermissionProfile | None = Field(
+        default=None,
+        description="Optional additional filesystem permissions requested for this command.",
+    )
+    approval_id: str | None = Field(
+        default=None,
+        description="Identifier for this specific approval callback.\n\nWhen absent, the approval is for the command item itself (`call_id`). This is present for subcommand approvals (via execve intercept).",
+    )
+    available_decisions: list[ReviewDecision] | None = Field(
+        default=None,
+        description="Ordered list of decisions the client may present for this prompt.\n\nWhen absent, clients should derive the legacy default set from the other fields on this request.",
+    )
+    call_id: str = Field(
+        ..., description="Identifier for the associated command execution item."
+    )
+    command: list[str] = Field(..., description="The command to be executed.")
+    cwd: str = Field(..., description="The command's working directory.")
+    network_approval_context: NetworkApprovalContext | None = Field(
+        default=None,
+        description="Optional network context for a blocked request that can be approved.",
+    )
+    parsed_cmd: list[ParsedCommand]
+    proposed_execpolicy_amendment: list[str] | None = Field(
+        default=None,
+        description="Proposed execpolicy amendment that can be applied to allow future runs.",
+    )
+    proposed_network_policy_amendments: list[NetworkPolicyAmendment] | None = Field(
+        default=None,
+        description="Proposed network policy amendments (for example allow/deny this host in future).",
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Optional human-readable reason for the approval (e.g. retry without sandbox).",
+    )
+    skill_metadata: ExecApprovalRequestSkillMetadata | None = Field(
+        default=None,
+        description="Optional skill metadata when the approval was triggered by a skill script.",
+    )
+    turn_id: str | None = Field(
+        default="",
+        description="Turn ID that this command belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+    )
+    type: ExecApprovalRequestEventMsgType = Field(
+        ..., title="ExecApprovalRequestEventMsgType"
+    )
+
+
+class RequestUserInputEventMsg(BaseModel):
+    call_id: str = Field(
+        ...,
+        description="Responses API call id for the associated tool call, if available.",
+    )
+    questions: list[RequestUserInputQuestion]
+    turn_id: str | None = Field(
+        default="",
+        description="Turn ID that this request belongs to. Uses `#[serde(default)]` for backwards compatibility.",
+    )
+    type: RequestUserInputEventMsgType = Field(
+        ..., title="RequestUserInputEventMsgType"
+    )
+
+
+class ListSkillsResponseEventMsg(BaseModel):
+    skills: list[SkillsListEntry]
+    type: ListSkillsResponseEventMsgType = Field(
+        ..., title="ListSkillsResponseEventMsgType"
+    )
+
+
+class PlanUpdateEventMsg(BaseModel):
+    explanation: str | None = Field(
+        default=None,
+        description="Arguments for the `update_plan` todo/checklist tool (not plan mode).",
+    )
+    plan: list[PlanItemArg]
+    type: PlanUpdateEventMsgType = Field(..., title="PlanUpdateEventMsgType")
+
+
+class ExitedReviewModeEventMsg(BaseModel):
+    review_output: ReviewOutputEvent | None = None
+    type: ExitedReviewModeEventMsgType = Field(
+        ..., title="ExitedReviewModeEventMsgType"
+    )
+
+
+class ItemStartedEventMsg(BaseModel):
+    item: TurnItem
+    thread_id: ThreadId
+    turn_id: str
+    type: ItemStartedEventMsgType = Field(..., title="ItemStartedEventMsgType")
+
+
+class ItemCompletedEventMsg(BaseModel):
+    item: TurnItem
+    thread_id: ThreadId
+    turn_id: str
+    type: ItemCompletedEventMsgType = Field(..., title="ItemCompletedEventMsgType")
+
+
+class ExecCommandApprovalResponse(BaseModel):
+    decision: ReviewDecision
+
+
+class ExternalAgentConfigImportParams(BaseModel):
+    migration_items: list[ExternalAgentConfigMigrationItem] = Field(
+        ..., alias="migrationItems"
+    )
+
+
+class FunctionCallOutputBody(RootModel[str | list[FunctionCallOutputContentItem]]):
+    root: str | list[FunctionCallOutputContentItem]
+
+
+class FunctionCallOutputPayload(BaseModel):
+    body: FunctionCallOutputBody
+    success: bool | None = None
+
+
+class ItemCompletedNotification(BaseModel):
+    item: ThreadItem
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class ItemStartedNotification(BaseModel):
+    item: ThreadItem
+    thread_id: str = Field(..., alias="threadId")
+    turn_id: str = Field(..., alias="turnId")
+
+
+class JSONRPCMessage(
+    RootModel[JSONRPCRequest | JSONRPCNotification | JSONRPCResponse | JSONRPCError]
+):
+    root: JSONRPCRequest | JSONRPCNotification | JSONRPCResponse | JSONRPCError = Field(
+        ...,
+        description="Refers to any valid JSON-RPC object that can be decoded off the wire, or encoded to be sent.",
+        title="JSONRPCMessage",
     )
 
 
@@ -6230,48 +6659,167 @@ class McpElicitationPrimitiveSchema(
 
 class McpElicitationSchema(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
-    field_schema: str | None = Field(default=None, alias='$schema')
+    field_schema: str | None = Field(default=None, alias="$schema")
     properties: dict[str, McpElicitationPrimitiveSchema]
     required: list[str] | None = None
     type: McpElicitationObjectType
 
 
 class McpServerElicitationRequestParams1(BaseModel):
-    server_name: str = Field(..., alias='serverName')
-    thread_id: str = Field(..., alias='threadId')
+    server_name: str = Field(..., alias="serverName")
+    thread_id: str = Field(..., alias="threadId")
     turn_id: str | None = Field(
         default=None,
-        alias='turnId',
-        description='Active Codex turn when this elicitation was observed, if app-server could correlate one.\n\nThis is nullable because MCP models elicitation as a standalone server-to-client request identified by the MCP server request id. It may be triggered during a turn, but turn context is app-server correlation rather than part of the protocol identity of the elicitation itself.',
+        alias="turnId",
+        description="Active Codex turn when this elicitation was observed, if app-server could correlate one.\n\nThis is nullable because MCP models elicitation as a standalone server-to-client request identified by the MCP server request id. It may be triggered during a turn, but turn context is app-server correlation rather than part of the protocol identity of the elicitation itself.",
     )
-    field_meta: Any | None = Field(None, alias='_meta')
+    field_meta: Any | None = Field(None, alias="_meta")
     message: str
-    mode: Literal['form']
-    requested_schema: McpElicitationSchema = Field(..., alias='requestedSchema')
+    mode: Literal["form"]
+    requested_schema: McpElicitationSchema = Field(..., alias="requestedSchema")
 
 
 class McpServerElicitationRequestParams(
     RootModel[McpServerElicitationRequestParams1 | McpServerElicitationRequestParams2]
 ):
     root: McpServerElicitationRequestParams1 | McpServerElicitationRequestParams2 = (
-        Field(..., title='McpServerElicitationRequestParams')
+        Field(..., title="McpServerElicitationRequestParams")
     )
+
+
+class FunctionCallOutputResponseItem(BaseModel):
+    call_id: str
+    output: FunctionCallOutputPayload
+    type: FunctionCallOutputResponseItemType = Field(
+        ..., title="FunctionCallOutputResponseItemType"
+    )
+
+
+class CustomToolCallOutputResponseItem(BaseModel):
+    call_id: str
+    output: FunctionCallOutputPayload
+    type: CustomToolCallOutputResponseItemType = Field(
+        ..., title="CustomToolCallOutputResponseItemType"
+    )
+
+
+class ResponseItem(
+    RootModel[
+        MessageResponseItem
+        | ReasoningResponseItem
+        | LocalShellCallResponseItem
+        | FunctionCallResponseItem
+        | FunctionCallOutputResponseItem
+        | CustomToolCallResponseItem
+        | CustomToolCallOutputResponseItem
+        | WebSearchCallResponseItem
+        | ImageGenerationCallResponseItem
+        | GhostSnapshotResponseItem
+        | CompactionResponseItem
+        | OtherResponseItem
+    ]
+):
+    root: (
+        MessageResponseItem
+        | ReasoningResponseItem
+        | LocalShellCallResponseItem
+        | FunctionCallResponseItem
+        | FunctionCallOutputResponseItem
+        | CustomToolCallResponseItem
+        | CustomToolCallOutputResponseItem
+        | WebSearchCallResponseItem
+        | ImageGenerationCallResponseItem
+        | GhostSnapshotResponseItem
+        | CompactionResponseItem
+        | OtherResponseItem
+    )
+
+
+class ThreadTokenUsageUpdatedServerNotification(BaseModel):
+    method: ThreadTokenUsageUpdatedServerNotificationMethod = Field(
+        ..., title="Thread/tokenUsage/updatedServerNotificationMethod"
+    )
+    params: ThreadTokenUsageUpdatedNotification
+
+
+class TurnStartedServerNotification(BaseModel):
+    method: TurnStartedServerNotificationMethod = Field(
+        ..., title="Turn/startedServerNotificationMethod"
+    )
+    params: TurnStartedNotification
+
+
+class TurnCompletedServerNotification(BaseModel):
+    method: TurnCompletedServerNotificationMethod = Field(
+        ..., title="Turn/completedServerNotificationMethod"
+    )
+    params: TurnCompletedNotification
+
+
+class TurnPlanUpdatedServerNotification(BaseModel):
+    method: TurnPlanUpdatedServerNotificationMethod = Field(
+        ..., title="Turn/plan/updatedServerNotificationMethod"
+    )
+    params: TurnPlanUpdatedNotification
+
+
+class ItemStartedServerNotification(BaseModel):
+    method: ItemStartedServerNotificationMethod = Field(
+        ..., title="Item/startedServerNotificationMethod"
+    )
+    params: ItemStartedNotification
+
+
+class ItemCompletedServerNotification(BaseModel):
+    method: ItemCompletedServerNotificationMethod = Field(
+        ..., title="Item/completedServerNotificationMethod"
+    )
+    params: ItemCompletedNotification
+
+
+class AccountRateLimitsUpdatedServerNotification(BaseModel):
+    method: AccountRateLimitsUpdatedServerNotificationMethod = Field(
+        ..., title="Account/rateLimits/updatedServerNotificationMethod"
+    )
+    params: AccountRateLimitsUpdatedNotification
+
+
+class AppListUpdatedServerNotification(BaseModel):
+    method: AppListUpdatedServerNotificationMethod = Field(
+        ..., title="App/list/updatedServerNotificationMethod"
+    )
+    params: AppListUpdatedNotification
+
+
+class WindowsSandboxSetupCompletedServerNotification(BaseModel):
+    method: WindowsSandboxSetupCompletedServerNotificationMethod = Field(
+        ..., title="WindowsSandbox/setupCompletedServerNotificationMethod"
+    )
+    params: WindowsSandboxSetupCompletedNotification
 
 
 class ItemCommandExecutionRequestApprovalServerRequest(BaseModel):
     id: RequestId
     method: ItemCommandExecutionRequestApprovalServerRequestMethod = Field(
-        ..., title='Item/commandExecution/requestApprovalServerRequestMethod'
+        ..., title="Item/commandExecution/requestApprovalServerRequestMethod"
     )
     params: CommandExecutionRequestApprovalParams
+
+
+class ItemToolRequestUserInputServerRequest(BaseModel):
+    id: RequestId
+    method: ItemToolRequestUserInputServerRequestMethod = Field(
+        ..., title="Item/tool/requestUserInputServerRequestMethod"
+    )
+    params: ToolRequestUserInputParams
 
 
 class McpServerElicitationRequestServerRequest(BaseModel):
     id: RequestId
     method: McpServerElicitationRequestServerRequestMethod = Field(
-        ..., title='McpServer/elicitation/requestServerRequestMethod'
+        ..., title="McpServer/elicitation/requestServerRequestMethod"
     )
     params: McpServerElicitationRequestParams
 
@@ -6301,324 +6849,94 @@ class ServerRequest(
         | ExecCommandApprovalServerRequest
     ) = Field(
         ...,
-        description='Request initiated from the server and sent to the client.',
-        title='ServerRequest',
-    )
-
-
-class CommandExecOutputDeltaServerNotification(BaseModel):
-    method: CommandExecOutputDeltaServerNotificationMethod = Field(
-        ..., title='Command/exec/outputDeltaServerNotificationMethod'
-    )
-    params: CommandExecOutputDeltaNotification
-
-
-class AccountUpdatedServerNotification(BaseModel):
-    method: AccountUpdatedServerNotificationMethod = Field(
-        ..., title='Account/updatedServerNotificationMethod'
-    )
-    params: AccountUpdatedNotification
-
-
-class AccountRateLimitsUpdatedServerNotification(BaseModel):
-    method: AccountRateLimitsUpdatedServerNotificationMethod = Field(
-        ..., title='Account/rateLimits/updatedServerNotificationMethod'
-    )
-    params: AccountRateLimitsUpdatedNotification
-
-
-class ModelReroutedServerNotification(BaseModel):
-    method: ModelReroutedServerNotificationMethod = Field(
-        ..., title='Model/reroutedServerNotificationMethod'
-    )
-    params: ModelReroutedNotification
-
-
-class ThreadRealtimeOutputAudioDeltaServerNotification(BaseModel):
-    method: ThreadRealtimeOutputAudioDeltaServerNotificationMethod = Field(
-        ..., title='Thread/realtime/outputAudio/deltaServerNotificationMethod'
-    )
-    params: ThreadRealtimeOutputAudioDeltaNotification
-
-
-class TokenCountEventMsg(BaseModel):
-    info: TokenUsageInfo | None = None
-    rate_limits: RateLimitSnapshot | None = None
-    type: TokenCountEventMsgType = Field(..., title='TokenCountEventMsgType')
-
-
-class UserMessageEventMsg(BaseModel):
-    images: list[str] | None = Field(
-        default=None,
-        description='Image URLs sourced from `UserInput::Image`. These are safe to replay in legacy UI history events and correspond to images sent to the model.',
-    )
-    local_images: list[str] | None = Field(
-        default=[],
-        description='Local file paths sourced from `UserInput::LocalImage`. These are kept so the UI can reattach images when editing history, and should not be sent to the model or treated as API-ready URLs.',
-    )
-    message: str
-    text_elements: list[TextElement] | None = Field(
-        default_factory=list,
-        description='UI-defined spans within `message` used to render or persist special elements.',
-    )
-    type: UserMessageEventMsgType = Field(..., title='UserMessageEventMsgType')
-
-
-class PermissionsRequestApprovalResponse(BaseModel):
-    permissions: GrantedPermissionProfile
-
-
-class CommandExecutionRequestApprovalResponse(BaseModel):
-    decision: CommandExecutionApprovalDecision
-
-
-class ThreadStatusChangedNotification(BaseModel):
-    status: ThreadStatus
-    thread_id: str = Field(..., alias='threadId')
-
-
-class FileChangeThreadItem(BaseModel):
-    changes: list[FileUpdateChange]
-    id: str
-    status: PatchApplyStatus
-    type: FileChangeThreadItemType = Field(..., title='FileChangeThreadItemType')
-
-
-class CollabAgentToolCallThreadItem(BaseModel):
-    agents_states: dict[str, CollabAgentState] = Field(
-        ...,
-        alias='agentsStates',
-        description='Last known status of the target agents, when available.',
-    )
-    id: str = Field(..., description='Unique identifier for this collab tool call.')
-    prompt: str | None = Field(
-        default=None,
-        description='Prompt text sent as part of the collab tool call, when available.',
-    )
-    receiver_thread_ids: list[str] = Field(
-        ...,
-        alias='receiverThreadIds',
-        description='Thread ID of the receiving agent, when applicable. In case of spawn operation, this corresponds to the newly spawned agent.',
-    )
-    sender_thread_id: str = Field(
-        ...,
-        alias='senderThreadId',
-        description='Thread ID of the agent issuing the collab request.',
-    )
-    status: CollabAgentToolCallStatus = Field(
-        ..., description='Current status of the collab tool call.'
-    )
-    tool: CollabAgentTool = Field(
-        ..., description='Name of the collab tool that was invoked.'
-    )
-    type: CollabAgentToolCallThreadItemType = Field(
-        ..., title='CollabAgentToolCallThreadItemType'
-    )
-
-
-class TextUserInput(BaseModel):
-    text: str
-    text_elements: list[TextElement] | None = Field(
-        default_factory=list,
-        description='UI-defined spans within `text` used to render or persist special elements.',
-    )
-    type: TextUserInputType = Field(..., title='TextUserInputType')
-
-
-class UserInput(
-    RootModel[
-        TextUserInput
-        | ImageUserInput
-        | LocalImageUserInput
-        | SkillUserInput
-        | MentionUserInput
-    ]
-):
-    root: (
-        TextUserInput
-        | ImageUserInput
-        | LocalImageUserInput
-        | SkillUserInput
-        | MentionUserInput
+        description="Request initiated from the server and sent to the client.",
+        title="ServerRequest",
     )
 
 
 class SubAgentSessionSource(BaseModel):
     model_config = ConfigDict(
-        extra='forbid',
+        extra="forbid",
     )
-    sub_agent: SubAgentSource = Field(..., alias='subAgent')
+    sub_agent: SubAgentSource = Field(..., alias="subAgent")
 
 
 class SessionSource(RootModel[SessionSource1 | SubAgentSessionSource]):
     root: SessionSource1 | SubAgentSessionSource
 
 
-class ExternalAgentConfigImportParams(BaseModel):
-    migration_items: list[ExternalAgentConfigMigrationItem] = Field(
-        ..., alias='migrationItems'
-    )
-
-
-class ThreadTokenUsageUpdatedNotification(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
-    token_usage: ThreadTokenUsage = Field(..., alias='tokenUsage')
-    turn_id: str = Field(..., alias='turnId')
-
-
-class ConfigBatchWriteParams(BaseModel):
-    edits: list[ConfigEdit]
-    expected_version: str | None = Field(default=None, alias='expectedVersion')
-    file_path: str | None = Field(
+class Thread(BaseModel):
+    agent_nickname: str | None = Field(
         default=None,
-        alias='filePath',
-        description="Path to the config file to write; defaults to the user's `config.toml` when omitted.",
+        alias="agentNickname",
+        description="Optional random unique nickname assigned to an AgentControl-spawned sub-agent.",
     )
-    reload_user_config: bool | None = Field(
+    agent_role: str | None = Field(
         default=None,
-        alias='reloadUserConfig',
-        description='When true, hot-reload the updated user config into all loaded threads after writing.',
+        alias="agentRole",
+        description="Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.",
     )
-
-
-class TurnStartParams(BaseModel):
-    approval_policy: AskForApproval | None = Field(
-        default=None,
-        alias='approvalPolicy',
-        description='Override the approval policy for this turn and subsequent turns.',
-    )
-    thread_id: str = Field(..., alias='threadId')
-    cwd: str | None = Field(
-        default=None,
-        description='Override the working directory for this turn and subsequent turns.',
-    )
-    effort: ReasoningEffort | None = Field(
-        default=None,
-        description='Override the reasoning effort for this turn and subsequent turns.',
-    )
-    input: list[UserInput]
-    model: str | None = Field(
-        default=None,
-        description='Override the model for this turn and subsequent turns.',
-    )
-    output_schema: Any | None = Field(
-        default=None,
-        alias='outputSchema',
-        description='Optional JSON Schema used to constrain the final assistant message for this turn.',
-    )
-    personality: Personality | None = Field(
-        default=None,
-        description='Override the personality for this turn and subsequent turns.',
-    )
-    sandbox_policy: SandboxPolicy | None = Field(
-        default=None,
-        alias='sandboxPolicy',
-        description='Override the sandbox policy for this turn and subsequent turns.',
-    )
-    service_tier: ServiceTier | None = Field(
-        default=None,
-        alias='serviceTier',
-        description='Override the service tier for this turn and subsequent turns.',
-    )
-    summary: ReasoningSummary | None = Field(
-        default=None,
-        description='Override the reasoning summary for this turn and subsequent turns.',
-    )
-
-
-class FunctionCallOutputBody(RootModel[str | list[FunctionCallOutputContentItem]]):
-    root: str | list[FunctionCallOutputContentItem]
-
-
-class SkillMetadata(BaseModel):
-    dependencies: SkillDependencies | None = None
-    description: str
-    enabled: bool
-    interface: SkillInterface | None = None
-    name: str
-    path: str
-    scope: SkillScope
-    short_description: str | None = Field(
-        default=None,
-        alias='shortDescription',
-        description='Legacy short_description from SKILL.md. Prefer SKILL.json interface.short_description.',
-    )
-
-
-class AppInfo(BaseModel):
-    app_metadata: AppMetadata | None = Field(default=None, alias='appMetadata')
-    branding: AppBranding | None = None
-    description: str | None = None
-    distribution_channel: str | None = Field(default=None, alias='distributionChannel')
-    id: str
-    install_url: str | None = Field(default=None, alias='installUrl')
-    is_accessible: bool | None = Field(default=False, alias='isAccessible')
-    is_enabled: bool | None = Field(
-        default=True,
-        alias='isEnabled',
-        description='Whether this app is enabled in config.toml. Example: ```toml [apps.bad_app] enabled = false ```',
-    )
-    labels: dict[str, Any] | None = None
-    logo_url: str | None = Field(default=None, alias='logoUrl')
-    logo_url_dark: str | None = Field(default=None, alias='logoUrlDark')
-    name: str
-    plugin_display_names: list[str] | None = Field(
-        default=[], alias='pluginDisplayNames'
-    )
-
-
-class TurnPlanUpdatedNotification(BaseModel):
-    explanation: str | None = None
-    plan: list[TurnPlanStep]
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
-
-
-class TurnSteerParams(BaseModel):
-    expected_turn_id: str = Field(
+    cli_version: str = Field(
         ...,
-        alias='expectedTurnId',
-        description='Required active turn id precondition. The request fails when it does not match the currently active turn.',
+        alias="cliVersion",
+        description="Version of the CLI that created the thread.",
     )
-    input: list[UserInput]
-    thread_id: str = Field(..., alias='threadId')
-
-
-class ConfigWarningNotification(BaseModel):
-    details: str | None = Field(
-        default=None, description='Optional extra guidance or error details.'
+    created_at: int = Field(
+        ...,
+        alias="createdAt",
+        description="Unix timestamp (in seconds) when the thread was created.",
+    )
+    cwd: str = Field(..., description="Working directory captured for the thread.")
+    ephemeral: bool = Field(
+        ...,
+        description="Whether the thread is ephemeral and should not be materialized on disk.",
+    )
+    git_info: GitInfo | None = Field(
+        default=None,
+        alias="gitInfo",
+        description="Optional Git metadata captured when the thread was created.",
+    )
+    id: str
+    model_provider: str = Field(
+        ...,
+        alias="modelProvider",
+        description="Model provider used for this thread (for example, 'openai').",
+    )
+    name: str | None = Field(
+        default=None, description="Optional user-facing thread title."
     )
     path: str | None = Field(
-        default=None,
-        description='Optional path to the config file that triggered the warning.',
+        default=None, description="[UNSTABLE] Path to the thread on disk."
     )
-    range: TextRange | None = Field(
-        default=None,
-        description='Optional range for the error location inside the config file.',
+    preview: str = Field(
+        ..., description="Usually the first user message in the thread, if available."
     )
-    summary: str = Field(..., description='Concise summary of the warning.')
+    source: SessionSource = Field(
+        ...,
+        description="Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).",
+    )
+    status: ThreadStatus = Field(
+        ..., description="Current runtime status for the thread."
+    )
+    turns: list[Turn] = Field(
+        ...,
+        description="Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.",
+    )
+    updated_at: int = Field(
+        ...,
+        alias="updatedAt",
+        description="Unix timestamp (in seconds) when the thread was last updated.",
+    )
 
 
-class TurnStartClientRequest(BaseModel):
-    id: RequestId
-    method: TurnStartClientRequestMethod = Field(
-        ..., title='Turn/startClientRequestMethod'
-    )
-    params: TurnStartParams
-
-
-class TurnSteerClientRequest(BaseModel):
-    id: RequestId
-    method: TurnSteerClientRequestMethod = Field(
-        ..., title='Turn/steerClientRequestMethod'
-    )
-    params: TurnSteerParams
+class ThreadStartedNotification(BaseModel):
+    thread: Thread
 
 
 class ExternalAgentConfigImportClientRequest(BaseModel):
     id: RequestId
     method: ExternalAgentConfigImportClientRequestMethod = Field(
-        ..., title='ExternalAgentConfig/importClientRequestMethod'
+        ..., title="ExternalAgentConfig/importClientRequestMethod"
     )
     params: ExternalAgentConfigImportParams
 
@@ -6626,7 +6944,7 @@ class ExternalAgentConfigImportClientRequest(BaseModel):
 class ConfigBatchWriteClientRequest(BaseModel):
     id: RequestId
     method: ConfigBatchWriteClientRequestMethod = Field(
-        ..., title='Config/batchWriteClientRequestMethod'
+        ..., title="Config/batchWriteClientRequestMethod"
     )
     params: ConfigBatchWriteParams
 
@@ -6733,339 +7051,18 @@ class ClientRequest(
         | AccountReadClientRequest
         | FuzzyFileSearchClientRequest
     ) = Field(
-        ..., description='Request from the client to the server.', title='ClientRequest'
+        ..., description="Request from the client to the server.", title="ClientRequest"
     )
-
-
-class ThreadStatusChangedServerNotification(BaseModel):
-    method: ThreadStatusChangedServerNotificationMethod = Field(
-        ..., title='Thread/status/changedServerNotificationMethod'
-    )
-    params: ThreadStatusChangedNotification
-
-
-class ThreadTokenUsageUpdatedServerNotification(BaseModel):
-    method: ThreadTokenUsageUpdatedServerNotificationMethod = Field(
-        ..., title='Thread/tokenUsage/updatedServerNotificationMethod'
-    )
-    params: ThreadTokenUsageUpdatedNotification
-
-
-class TurnPlanUpdatedServerNotification(BaseModel):
-    method: TurnPlanUpdatedServerNotificationMethod = Field(
-        ..., title='Turn/plan/updatedServerNotificationMethod'
-    )
-    params: TurnPlanUpdatedNotification
-
-
-class ConfigWarningServerNotification(BaseModel):
-    method: ConfigWarningServerNotificationMethod = Field(
-        ..., title='ConfigWarningServerNotificationMethod'
-    )
-    params: ConfigWarningNotification
-
-
-class UserMessageTurnItem(BaseModel):
-    content: list[UserInput]
-    id: str
-    type: UserMessageTurnItemType = Field(..., title='UserMessageTurnItemType')
-
-
-class TurnItem(
-    RootModel[
-        UserMessageTurnItem
-        | AgentMessageTurnItem
-        | PlanTurnItem
-        | ReasoningTurnItem
-        | WebSearchTurnItem
-        | ImageGenerationTurnItem
-        | ContextCompactionTurnItem
-    ]
-):
-    root: (
-        UserMessageTurnItem
-        | AgentMessageTurnItem
-        | PlanTurnItem
-        | ReasoningTurnItem
-        | WebSearchTurnItem
-        | ImageGenerationTurnItem
-        | ContextCompactionTurnItem
-    )
-
-
-class ItemStartedEventMsg(BaseModel):
-    item: TurnItem
-    thread_id: ThreadId
-    turn_id: str
-    type: ItemStartedEventMsgType = Field(..., title='ItemStartedEventMsgType')
-
-
-class ItemCompletedEventMsg(BaseModel):
-    item: TurnItem
-    thread_id: ThreadId
-    turn_id: str
-    type: ItemCompletedEventMsgType = Field(..., title='ItemCompletedEventMsgType')
-
-
-class UserMessageThreadItem(BaseModel):
-    content: list[UserInput]
-    id: str
-    type: UserMessageThreadItemType = Field(..., title='UserMessageThreadItemType')
-
-
-class ThreadItem(
-    RootModel[
-        UserMessageThreadItem
-        | AgentMessageThreadItem
-        | PlanThreadItem
-        | ReasoningThreadItem
-        | CommandExecutionThreadItem
-        | FileChangeThreadItem
-        | McpToolCallThreadItem
-        | DynamicToolCallThreadItem
-        | CollabAgentToolCallThreadItem
-        | WebSearchThreadItem
-        | ImageViewThreadItem
-        | ImageGenerationThreadItem
-        | EnteredReviewModeThreadItem
-        | ExitedReviewModeThreadItem
-        | ContextCompactionThreadItem
-    ]
-):
-    root: (
-        UserMessageThreadItem
-        | AgentMessageThreadItem
-        | PlanThreadItem
-        | ReasoningThreadItem
-        | CommandExecutionThreadItem
-        | FileChangeThreadItem
-        | McpToolCallThreadItem
-        | DynamicToolCallThreadItem
-        | CollabAgentToolCallThreadItem
-        | WebSearchThreadItem
-        | ImageViewThreadItem
-        | ImageGenerationThreadItem
-        | EnteredReviewModeThreadItem
-        | ExitedReviewModeThreadItem
-        | ContextCompactionThreadItem
-    )
-
-
-class Turn(BaseModel):
-    error: TurnError | None = Field(
-        default=None, description="Only populated when the Turn's status is failed."
-    )
-    id: str
-    items: list[ThreadItem] = Field(
-        ...,
-        description='Only populated on a `thread/resume` or `thread/fork` response. For all other responses and notifications returning a Turn, the items field will be an empty list.',
-    )
-    status: TurnStatus
-
-
-class FunctionCallOutputPayload(BaseModel):
-    body: FunctionCallOutputBody
-    success: bool | None = None
-
-
-class SkillsListEntry(BaseModel):
-    cwd: str
-    errors: list[SkillErrorInfo]
-    skills: list[SkillMetadata]
-
-
-class AppListUpdatedNotification(BaseModel):
-    data: list[AppInfo]
-
-
-class TurnCompletedNotification(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
-    turn: Turn
-
-
-class ItemCompletedNotification(BaseModel):
-    item: ThreadItem
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
-
-
-class TurnStartedNotification(BaseModel):
-    thread_id: str = Field(..., alias='threadId')
-    turn: Turn
-
-
-class TurnStartedServerNotification(BaseModel):
-    method: TurnStartedServerNotificationMethod = Field(
-        ..., title='Turn/startedServerNotificationMethod'
-    )
-    params: TurnStartedNotification
-
-
-class TurnCompletedServerNotification(BaseModel):
-    method: TurnCompletedServerNotificationMethod = Field(
-        ..., title='Turn/completedServerNotificationMethod'
-    )
-    params: TurnCompletedNotification
-
-
-class ItemCompletedServerNotification(BaseModel):
-    method: ItemCompletedServerNotificationMethod = Field(
-        ..., title='Item/completedServerNotificationMethod'
-    )
-    params: ItemCompletedNotification
-
-
-class AppListUpdatedServerNotification(BaseModel):
-    method: AppListUpdatedServerNotificationMethod = Field(
-        ..., title='App/list/updatedServerNotificationMethod'
-    )
-    params: AppListUpdatedNotification
-
-
-class ListSkillsResponseEventMsg(BaseModel):
-    skills: list[SkillsListEntry]
-    type: ListSkillsResponseEventMsgType = Field(
-        ..., title='ListSkillsResponseEventMsgType'
-    )
-
-
-class ItemStartedNotification(BaseModel):
-    item: ThreadItem
-    thread_id: str = Field(..., alias='threadId')
-    turn_id: str = Field(..., alias='turnId')
-
-
-class Thread(BaseModel):
-    agent_nickname: str | None = Field(
-        default=None,
-        alias='agentNickname',
-        description='Optional random unique nickname assigned to an AgentControl-spawned sub-agent.',
-    )
-    agent_role: str | None = Field(
-        default=None,
-        alias='agentRole',
-        description='Optional role (agent_role) assigned to an AgentControl-spawned sub-agent.',
-    )
-    cli_version: str = Field(
-        ...,
-        alias='cliVersion',
-        description='Version of the CLI that created the thread.',
-    )
-    created_at: int = Field(
-        ...,
-        alias='createdAt',
-        description='Unix timestamp (in seconds) when the thread was created.',
-    )
-    cwd: str = Field(..., description='Working directory captured for the thread.')
-    ephemeral: bool = Field(
-        ...,
-        description='Whether the thread is ephemeral and should not be materialized on disk.',
-    )
-    git_info: GitInfo | None = Field(
-        default=None,
-        alias='gitInfo',
-        description='Optional Git metadata captured when the thread was created.',
-    )
-    id: str
-    model_provider: str = Field(
-        ...,
-        alias='modelProvider',
-        description="Model provider used for this thread (for example, 'openai').",
-    )
-    name: str | None = Field(
-        default=None, description='Optional user-facing thread title.'
-    )
-    path: str | None = Field(
-        default=None, description='[UNSTABLE] Path to the thread on disk.'
-    )
-    preview: str = Field(
-        ..., description='Usually the first user message in the thread, if available.'
-    )
-    source: SessionSource = Field(
-        ...,
-        description='Origin of the thread (CLI, VSCode, codex exec, codex app-server, etc.).',
-    )
-    status: ThreadStatus = Field(
-        ..., description='Current runtime status for the thread.'
-    )
-    turns: list[Turn] = Field(
-        ...,
-        description='Only populated on `thread/resume`, `thread/rollback`, `thread/fork`, and `thread/read` (when `includeTurns` is true) responses. For all other responses and notifications returning a Thread, the turns field will be an empty list.',
-    )
-    updated_at: int = Field(
-        ...,
-        alias='updatedAt',
-        description='Unix timestamp (in seconds) when the thread was last updated.',
-    )
-
-
-class FunctionCallOutputResponseItem(BaseModel):
-    call_id: str
-    output: FunctionCallOutputPayload
-    type: FunctionCallOutputResponseItemType = Field(
-        ..., title='FunctionCallOutputResponseItemType'
-    )
-
-
-class CustomToolCallOutputResponseItem(BaseModel):
-    call_id: str
-    output: FunctionCallOutputPayload
-    type: CustomToolCallOutputResponseItemType = Field(
-        ..., title='CustomToolCallOutputResponseItemType'
-    )
-
-
-class ResponseItem(
-    RootModel[
-        MessageResponseItem
-        | ReasoningResponseItem
-        | LocalShellCallResponseItem
-        | FunctionCallResponseItem
-        | FunctionCallOutputResponseItem
-        | CustomToolCallResponseItem
-        | CustomToolCallOutputResponseItem
-        | WebSearchCallResponseItem
-        | ImageGenerationCallResponseItem
-        | GhostSnapshotResponseItem
-        | CompactionResponseItem
-        | OtherResponseItem
-    ]
-):
-    root: (
-        MessageResponseItem
-        | ReasoningResponseItem
-        | LocalShellCallResponseItem
-        | FunctionCallResponseItem
-        | FunctionCallOutputResponseItem
-        | CustomToolCallResponseItem
-        | CustomToolCallOutputResponseItem
-        | WebSearchCallResponseItem
-        | ImageGenerationCallResponseItem
-        | GhostSnapshotResponseItem
-        | CompactionResponseItem
-        | OtherResponseItem
-    )
-
-
-class ItemStartedServerNotification(BaseModel):
-    method: ItemStartedServerNotificationMethod = Field(
-        ..., title='Item/startedServerNotificationMethod'
-    )
-    params: ItemStartedNotification
 
 
 class RawResponseItemEventMsg(BaseModel):
     item: ResponseItem
-    type: RawResponseItemEventMsgType = Field(..., title='RawResponseItemEventMsgType')
-
-
-class ThreadStartedNotification(BaseModel):
-    thread: Thread
+    type: RawResponseItemEventMsgType = Field(..., title="RawResponseItemEventMsgType")
 
 
 class ThreadStartedServerNotification(BaseModel):
     method: ThreadStartedServerNotificationMethod = Field(
-        ..., title='Thread/startedServerNotificationMethod'
+        ..., title="Thread/startedServerNotificationMethod"
     )
     params: ThreadStartedNotification
 
@@ -7165,37 +7162,37 @@ class ServerNotification(
         | AccountLoginCompletedServerNotification
     ) = Field(
         ...,
-        description='Notification sent from the server to the client.',
-        title='ServerNotification',
+        description="Notification sent from the server to the client.",
+        title="ServerNotification",
     )
 
 
 class SessionConfiguredEventMsg(BaseModel):
     approval_policy: AskForApproval = Field(
-        ..., description='When to escalate for approval for execution'
+        ..., description="When to escalate for approval for execution"
     )
     cwd: str = Field(
         ...,
-        description='Working directory that should be treated as the *root* of the session.',
+        description="Working directory that should be treated as the *root* of the session.",
     )
     forked_from_id: ThreadId | None = None
     history_entry_count: int = Field(
-        ..., description='Current number of entries in the history log.', ge=0
+        ..., description="Current number of entries in the history log.", ge=0
     )
     history_log_id: int = Field(
         ...,
-        description='Identifier of the history log file (inode on Unix, 0 otherwise).',
+        description="Identifier of the history log file (inode on Unix, 0 otherwise).",
         ge=0,
     )
     initial_messages: list[EventMsg] | None = Field(
         default=None,
-        description='Optional initial messages (as events) for resumed sessions. When present, UIs can use these to seed the history.',
+        description="Optional initial messages (as events) for resumed sessions. When present, UIs can use these to seed the history.",
     )
-    model: str = Field(..., description='Tell the client what model is being queried.')
+    model: str = Field(..., description="Tell the client what model is being queried.")
     model_provider_id: str
     network_proxy: SessionNetworkProxyRuntime | None = Field(
         default=None,
-        description='Runtime proxy bind addresses, when the managed proxy was started for this session.',
+        description="Runtime proxy bind addresses, when the managed proxy was started for this session.",
     )
     reasoning_effort: ReasoningEffort | None = Field(
         default=None,
@@ -7203,18 +7200,18 @@ class SessionConfiguredEventMsg(BaseModel):
     )
     rollout_path: str | None = Field(
         default=None,
-        description='Path in which the rollout is stored. Can be `None` for ephemeral threads',
+        description="Path in which the rollout is stored. Can be `None` for ephemeral threads",
     )
     sandbox_policy: SandboxPolicy = Field(
-        ..., description='How to sandbox commands executed in the system'
+        ..., description="How to sandbox commands executed in the system"
     )
     service_tier: ServiceTier | None = None
     session_id: ThreadId
     thread_name: str | None = Field(
-        default=None, description='Optional user-facing thread name (may be unset).'
+        default=None, description="Optional user-facing thread name (may be unset)."
     )
     type: SessionConfiguredEventMsgType = Field(
-        ..., title='SessionConfiguredEventMsgType'
+        ..., title="SessionConfiguredEventMsgType"
     )
 
 
@@ -7381,8 +7378,8 @@ class EventMsg(
         | CollabResumeEndEventMsg
     ) = Field(
         ...,
-        description='Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.',
-        title='EventMsg',
+        description="Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",
+        title="EventMsg",
     )
 
 

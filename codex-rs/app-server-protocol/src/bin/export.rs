@@ -15,6 +15,10 @@ struct Args {
     #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
     prettier: Option<PathBuf>,
 
+    /// Optional Ruff executable path to format generated Python files
+    #[arg(long = "ruff", value_name = "RUFF_BIN")]
+    ruff: Option<PathBuf>,
+
     /// Include experimental API methods and fields in generated output.
     #[arg(long = "experimental")]
     experimental: bool,
@@ -34,5 +38,12 @@ fn main() -> Result<()> {
         },
     )?;
     codex_app_server_protocol::generate_json_with_experimental(&json_out_dir, args.experimental)?;
-    codex_app_server_protocol::generate_python_with_experimental(&python_out_dir, args.experimental)
+    codex_app_server_protocol::generate_python_with_options(
+        &python_out_dir,
+        args.ruff.as_deref(),
+        codex_app_server_protocol::GeneratePythonOptions {
+            experimental_api: args.experimental,
+            ..codex_app_server_protocol::GeneratePythonOptions::default()
+        },
+    )
 }

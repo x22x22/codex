@@ -385,6 +385,10 @@ struct GeneratePythonCommand {
     #[arg(short = 'o', long = "out", value_name = "DIR")]
     out_dir: PathBuf,
 
+    /// Optional path to the Ruff executable to format generated Python files
+    #[arg(long = "ruff", value_name = "RUFF_BIN")]
+    ruff: Option<PathBuf>,
+
     /// Include experimental methods and fields in the generated output
     #[arg(long = "experimental", default_value_t = false)]
     experimental: bool,
@@ -646,9 +650,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 )?;
             }
             Some(AppServerSubcommand::GeneratePython(gen_cli)) => {
-                codex_app_server_protocol::generate_python_with_experimental(
+                codex_app_server_protocol::generate_python_with_options(
                     &gen_cli.out_dir,
-                    gen_cli.experimental,
+                    gen_cli.ruff.as_deref(),
+                    codex_app_server_protocol::GeneratePythonOptions {
+                        experimental_api: gen_cli.experimental,
+                        ..codex_app_server_protocol::GeneratePythonOptions::default()
+                    },
                 )?;
             }
         },

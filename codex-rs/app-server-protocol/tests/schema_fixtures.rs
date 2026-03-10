@@ -1,6 +1,7 @@
 use anyhow::Context;
 use anyhow::Result;
 use codex_app_server_protocol::generate_json_with_experimental;
+use codex_app_server_protocol::generate_python_with_experimental;
 use codex_app_server_protocol::generate_typescript_schema_fixture_subtree_for_tests;
 use codex_app_server_protocol::read_schema_fixture_subtree;
 use similar::TextDiff;
@@ -24,6 +25,13 @@ fn typescript_schema_fixtures_match_generated() -> Result<()> {
 fn json_schema_fixtures_match_generated() -> Result<()> {
     assert_schema_fixtures_match_generated("json", |output_dir| {
         generate_json_with_experimental(output_dir, false)
+    })
+}
+
+#[test]
+fn python_schema_fixtures_match_generated() -> Result<()> {
+    assert_schema_fixtures_match_generated("python", |output_dir| {
+        generate_python_with_experimental(output_dir, false)
     })
 }
 

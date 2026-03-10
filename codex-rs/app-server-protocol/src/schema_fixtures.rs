@@ -85,14 +85,19 @@ pub fn generate_typescript_schema_fixture_subtree_for_tests() -> Result<BTreeMap
 ///
 /// This is intended to be used by tooling (e.g., `just write-app-server-schema`).
 /// It deletes any previously generated files so stale artifacts are removed.
-pub fn write_schema_fixtures(schema_root: &Path, prettier: Option<&Path>) -> Result<()> {
-    write_schema_fixtures_with_options(schema_root, prettier, SchemaFixtureOptions::default())
+pub fn write_schema_fixtures(
+    schema_root: &Path,
+    prettier: Option<&Path>,
+    ruff: Option<&Path>,
+) -> Result<()> {
+    write_schema_fixtures_with_options(schema_root, prettier, ruff, SchemaFixtureOptions::default())
 }
 
 /// Regenerates schema fixtures with configurable options.
 pub fn write_schema_fixtures_with_options(
     schema_root: &Path,
     prettier: Option<&Path>,
+    ruff: Option<&Path>,
     options: SchemaFixtureOptions,
 ) -> Result<()> {
     let typescript_out_dir = schema_root.join("typescript");
@@ -112,7 +117,14 @@ pub fn write_schema_fixtures_with_options(
         },
     )?;
     crate::generate_json_with_experimental(&json_out_dir, options.experimental_api)?;
-    crate::generate_python_with_experimental(&python_out_dir, options.experimental_api)?;
+    crate::generate_python_with_options(
+        &python_out_dir,
+        ruff,
+        crate::GeneratePythonOptions {
+            experimental_api: options.experimental_api,
+            ..crate::GeneratePythonOptions::default()
+        },
+    )?;
 
     Ok(())
 }

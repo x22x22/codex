@@ -102,6 +102,21 @@ impl Default for GenerateTsOptions {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct GeneratePythonOptions {
+    pub run_ruff: bool,
+    pub experimental_api: bool,
+}
+
+impl Default for GeneratePythonOptions {
+    fn default() -> Self {
+        Self {
+            run_ruff: true,
+            experimental_api: false,
+        }
+    }
+}
+
 pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     generate_ts_with_options(out_dir, prettier, GenerateTsOptions::default())
 }
@@ -244,10 +259,25 @@ pub fn generate_json_with_experimental(out_dir: &Path, experimental_api: bool) -
 }
 
 pub fn generate_python(out_dir: &Path) -> Result<()> {
-    generate_python_with_experimental(out_dir, false)
+    generate_python_with_options(out_dir, None, GeneratePythonOptions::default())
 }
 
 pub fn generate_python_with_experimental(out_dir: &Path, experimental_api: bool) -> Result<()> {
+    generate_python_with_options(
+        out_dir,
+        None,
+        GeneratePythonOptions {
+            experimental_api,
+            ..GeneratePythonOptions::default()
+        },
+    )
+}
+
+pub fn generate_python_with_options(
+    out_dir: &Path,
+    ruff: Option<&Path>,
+    options: GeneratePythonOptions,
+) -> Result<()> {
     ensure_dir(out_dir)?;
 
     let temp_json_dir = std::env::temp_dir().join(format!(
@@ -261,7 +291,7 @@ pub fn generate_python_with_experimental(out_dir: &Path, experimental_api: bool)
         )
     })?;
 
-    generate_json_with_experimental(&temp_json_dir, experimental_api)?;
+    generate_json_with_experimental(&temp_json_dir, options.experimental_api)?;
     let bundle_path = temp_json_dir.join("codex_app_server_protocol.schemas.json");
     let bundle = read_json_value(&bundle_path)?;
     let root_schema_path = temp_json_dir.join("codex_app_server_protocol.python.schemas.json");
@@ -295,6 +325,10 @@ pub fn generate_python_with_experimental(out_dir: &Path, experimental_api: bool)
     fs::write(module_dir.join("py.typed"), "")
         .with_context(|| format!("Failed to write {}", module_dir.join("py.typed").display()))?;
 
+    if options.run_ruff {
+        run_ruff_on_python_files(ruff, &module_dir)?;
+    }
+
     let _ = fs::remove_dir_all(&temp_json_dir);
     Ok(())
 }
@@ -325,8 +359,7 @@ fn generate_python_models(schema_path: &Path, output_path: &Path) -> Result<()> 
         .arg("--use-generic-base-class")
         .arg("--disable-timestamp")
         .arg("--formatters")
-        .arg("black")
-        .arg("isort");
+        .arg("ruff-format");
 
     let status = command.status().with_context(|| {
         format!(
@@ -353,28 +386,25 @@ Install `uv`/`uvx` or `datamodel-codegen` to regenerate app-server Python bindin
 }
 
 fn datamodel_codegen_command() -> Command {
-    if command_exists("uvx") {
-        let mut command = Command::new("uvx");
+    if command_exists("uv") {
+        // Keep the uv-managed tool environment next to the protocol crate source,
+        // not under schema/python/, which is regenerated as a fixture artifact.
+        let python_codegen_project = Path::new(env!("CARGO_MANIFEST_DIR")).join("python");
+        let mut command = Command::new("uv");
         command
-            .arg("--with")
-            .arg("black")
-            .arg("--with")
-            .arg("isort")
-            .arg("--from")
-            .arg("datamodel-code-generator")
-            .arg("datamodel-codegen");
+            .arg("run")
+            .arg("--project")
+            .arg(python_codegen_project)
+            .arg("--locked")
+            .arg("python")
+            .arg("-m")
+            .arg("datamodel_code_generator");
         return command;
     }
 
-    if command_exists("uv") {
-        let mut command = Command::new("uv");
+    if command_exists("uvx") {
+        let mut command = Command::new("uvx");
         command
-            .arg("tool")
-            .arg("run")
-            .arg("--with")
-            .arg("black")
-            .arg("--with")
-            .arg("isort")
             .arg("--from")
             .arg("datamodel-code-generator")
             .arg("datamodel-codegen");
@@ -382,6 +412,52 @@ fn datamodel_codegen_command() -> Command {
     }
 
     Command::new("datamodel-codegen")
+}
+
+fn run_ruff_on_python_files(ruff: Option<&Path>, out_dir: &Path) -> Result<()> {
+    let py_files = py_files_in_recursive(out_dir)?;
+    if py_files.is_empty() {
+        return Ok(());
+    }
+
+    let mut format_command = ruff_command(ruff)?;
+    let format_status = format_command
+        .arg("format")
+        .args(py_files.iter().map(|p| p.as_os_str()))
+        .status()
+        .context("Failed to invoke Ruff format")?;
+    if !format_status.success() {
+        return Err(anyhow!("Ruff format failed with status {format_status}"));
+    }
+
+    Ok(())
+}
+
+fn ruff_command(ruff: Option<&Path>) -> Result<Command> {
+    if let Some(ruff_bin) = ruff {
+        return Ok(Command::new(ruff_bin));
+    }
+
+    if command_exists("uv") {
+        let python_codegen_project = Path::new(env!("CARGO_MANIFEST_DIR")).join("python");
+        let mut command = Command::new("uv");
+        command
+            .arg("run")
+            .arg("--project")
+            .arg(python_codegen_project)
+            .arg("--locked")
+            .arg("ruff");
+        return Ok(command);
+    }
+
+    if command_exists("ruff") {
+        return Ok(Command::new("ruff"));
+    }
+
+    Err(anyhow!(
+        "Ruff was requested for Python generation, but no Ruff command is available. \
+Install `uv` for the vendored Python toolchain or pass `--ruff /path/to/ruff`."
+    ))
 }
 
 fn command_exists(command: &str) -> bool {
@@ -2281,6 +2357,26 @@ fn ts_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
             if path.is_dir() {
                 stack.push(path);
             } else if path.is_file() && path.extension() == Some(OsStr::new("ts")) {
+                files.push(path);
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
+fn py_files_in_recursive(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in
+            fs::read_dir(&d).with_context(|| format!("Failed to read dir {}", d.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.is_file() && path.extension() == Some(OsStr::new("py")) {
                 files.push(path);
             }
         }
