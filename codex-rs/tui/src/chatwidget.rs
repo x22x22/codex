@@ -2973,8 +2973,7 @@ impl ChatWidget {
         });
 
         let thread_id = self.thread_id.unwrap_or_default();
-        if let Some(params) =
-            crate::bottom_pane::app_install_suggestion_params_from_event(thread_id, &ev)
+        if let Some(params) = crate::bottom_pane::tool_suggestion_params_from_event(thread_id, &ev)
         {
             self.bottom_pane.push_app_link_view(params);
         } else if let Some(request) =

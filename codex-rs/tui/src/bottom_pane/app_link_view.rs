@@ -43,10 +43,34 @@ enum AppLinkScreen {
     InstallConfirmation,
 }
 
-const APP_INSTALL_SUGGESTION_META_KIND_VALUE: &str = "app_install_suggestion";
-const APP_INSTALL_SUGGESTION_DECISION_INSTALL: &str = "install";
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum ToolSuggestionToolType {
+    Connector,
+    Plugin,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ToolSuggestionType {
+    Install,
+    Enable,
+}
+
+impl ToolSuggestionType {
+    fn decision(self) -> &'static str {
+        match self {
+            Self::Install => "install",
+            Self::Enable => "enable",
+        }
+    }
+}
+
+const TOOL_SUGGESTION_META_KIND_VALUE: &str = "tool_suggestion";
 pub(crate) const APP_LINK_INSTALL_INSTRUCTIONS: &str =
     "Install this app in your browser, then reload Codex.";
+const APP_LINK_ENABLE_INSTRUCTIONS: &str =
+    "Enable this app in Codex to use its tools in this session.";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AppLinkElicitationResolution {
@@ -64,20 +88,23 @@ pub(crate) struct AppLinkViewParams {
     pub(crate) url: String,
     pub(crate) is_installed: bool,
     pub(crate) is_enabled: bool,
+    pub(crate) suggestion_type: Option<ToolSuggestionType>,
     pub(crate) elicitation_resolution: Option<AppLinkElicitationResolution>,
 }
 
 #[derive(Deserialize)]
-struct AppInstallSuggestionMeta {
+struct ToolSuggestionMeta {
     #[serde(rename = "codex_approval_kind")]
     approval_kind: String,
+    tool_type: ToolSuggestionToolType,
+    suggestion_type: ToolSuggestionType,
     connector_id: String,
     connector_name: String,
     connector_description: Option<String>,
     install_url: String,
 }
 
-pub(crate) fn app_install_suggestion_params_from_event(
+pub(crate) fn tool_suggestion_params_from_event(
     thread_id: ThreadId,
     request: &ElicitationRequestEvent,
 ) -> Option<AppLinkViewParams> {
@@ -88,19 +115,27 @@ pub(crate) fn app_install_suggestion_params_from_event(
         return None;
     };
 
-    let meta = serde_json::from_value::<AppInstallSuggestionMeta>(meta.clone()).ok()?;
-    if meta.approval_kind != APP_INSTALL_SUGGESTION_META_KIND_VALUE {
+    let meta = serde_json::from_value::<ToolSuggestionMeta>(meta.clone()).ok()?;
+    if meta.approval_kind != TOOL_SUGGESTION_META_KIND_VALUE
+        || meta.tool_type != ToolSuggestionToolType::Connector
+    {
         return None;
     }
+
+    let (instructions, is_installed, is_enabled) = match meta.suggestion_type {
+        ToolSuggestionType::Install => (APP_LINK_INSTALL_INSTRUCTIONS.to_string(), false, false),
+        ToolSuggestionType::Enable => (APP_LINK_ENABLE_INSTRUCTIONS.to_string(), true, false),
+    };
 
     Some(AppLinkViewParams {
         app_id: meta.connector_id,
         title: meta.connector_name,
         description: meta.connector_description,
-        instructions: APP_LINK_INSTALL_INSTRUCTIONS.to_string(),
+        instructions,
         url: meta.install_url,
-        is_installed: false,
-        is_enabled: false,
+        is_installed,
+        is_enabled,
+        suggestion_type: Some(meta.suggestion_type),
         elicitation_resolution: Some(AppLinkElicitationResolution {
             thread_id,
             server_name: request.server_name.clone(),
@@ -117,6 +152,7 @@ pub(crate) struct AppLinkView {
     url: String,
     is_installed: bool,
     is_enabled: bool,
+    suggestion_type: Option<ToolSuggestionType>,
     elicitation_resolution: Option<AppLinkElicitationResolution>,
     app_event_tx: AppEventSender,
     screen: AppLinkScreen,
@@ -134,6 +170,7 @@ impl AppLinkView {
             url,
             is_installed,
             is_enabled,
+            suggestion_type,
             elicitation_resolution,
         } = params;
         Self {
@@ -144,6 +181,7 @@ impl AppLinkView {
             url,
             is_installed,
             is_enabled,
+            suggestion_type,
             elicitation_resolution,
             app_event_tx,
             screen: AppLinkScreen::Link,
@@ -198,7 +236,10 @@ impl AppLinkView {
         self.resolve_elicitation(
             ElicitationAction::Accept,
             Some(json!({
-                "decision": APP_INSTALL_SUGGESTION_DECISION_INSTALL,
+                "decision": self
+                    .suggestion_type
+                    .unwrap_or(ToolSuggestionType::Install)
+                    .decision(),
             })),
         );
         self.complete = true;
@@ -220,6 +261,18 @@ impl AppLinkView {
             id: self.app_id.clone(),
             enabled: self.is_enabled,
         });
+        if self.is_enabled
+            && self.elicitation_resolution.is_some()
+            && self.suggestion_type == Some(ToolSuggestionType::Enable)
+        {
+            self.resolve_elicitation(
+                ElicitationAction::Accept,
+                Some(json!({
+                    "decision": ToolSuggestionType::Enable.decision(),
+                })),
+            );
+            self.complete = true;
+        }
     }
 
     fn resolve_elicitation(&self, decision: ElicitationAction, content: Option<Value>) {
@@ -555,8 +608,15 @@ mod tests {
             url: "https://example.test/notion".to_string(),
             is_installed: true,
             is_enabled: true,
+            suggestion_type: None,
             elicitation_resolution: None,
         }
+    }
+
+    fn render_snapshot(view: &AppLinkView, area: Rect) -> String {
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+        format!("{buf:?}")
     }
 
     fn elicitation_resolution(thread_id: ThreadId) -> AppLinkElicitationResolution {
@@ -673,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn app_install_suggestion_event_builds_app_link_params() {
+    fn tool_install_suggestion_event_builds_app_link_params() {
         let thread_id = ThreadId::default();
         let request = ElicitationRequestEvent {
             turn_id: Some("turn-1".to_string()),
@@ -681,7 +741,9 @@ mod tests {
             id: McpRequestId::String("request-1".to_string()),
             request: ElicitationRequest::Form {
                 meta: Some(json!({
-                    "codex_approval_kind": "app_install_suggestion",
+                    "codex_approval_kind": "tool_suggestion",
+                    "tool_type": "connector",
+                    "suggestion_type": "install",
                     "connector_id": "connector_1",
                     "connector_name": "Notion",
                     "connector_description": "Docs and notes",
@@ -695,7 +757,7 @@ mod tests {
             },
         };
 
-        let params = app_install_suggestion_params_from_event(thread_id, &request);
+        let params = tool_suggestion_params_from_event(thread_id, &request);
 
         assert_eq!(
             params,
@@ -707,8 +769,69 @@ mod tests {
                 url: "https://example.test/notion".to_string(),
                 is_installed: false,
                 is_enabled: false,
+                suggestion_type: Some(ToolSuggestionType::Install),
                 elicitation_resolution: Some(elicitation_resolution(thread_id)),
             })
+        );
+    }
+
+    #[test]
+    fn tool_enable_suggestion_event_builds_app_link_params() {
+        let thread_id = ThreadId::default();
+        let request = ElicitationRequestEvent {
+            turn_id: Some("turn-1".to_string()),
+            server_name: "codex_apps".to_string(),
+            id: McpRequestId::String("request-1".to_string()),
+            request: ElicitationRequest::Form {
+                meta: Some(json!({
+                    "codex_approval_kind": "tool_suggestion",
+                    "tool_type": "connector",
+                    "suggestion_type": "enable",
+                    "connector_id": "connector_1",
+                    "connector_name": "Notion",
+                    "connector_description": "Docs and notes",
+                    "install_url": "https://example.test/notion",
+                })),
+                message: "Enable Notion to continue?".to_string(),
+                requested_schema: json!({
+                    "type": "object",
+                    "properties": {},
+                }),
+            },
+        };
+
+        let params = tool_suggestion_params_from_event(thread_id, &request);
+
+        assert_eq!(
+            params,
+            Some(AppLinkViewParams {
+                app_id: "connector_1".to_string(),
+                title: "Notion".to_string(),
+                description: Some("Docs and notes".to_string()),
+                instructions: APP_LINK_ENABLE_INSTRUCTIONS.to_string(),
+                url: "https://example.test/notion".to_string(),
+                is_installed: true,
+                is_enabled: false,
+                suggestion_type: Some(ToolSuggestionType::Enable),
+                elicitation_resolution: Some(elicitation_resolution(thread_id)),
+            })
+        );
+    }
+
+    #[test]
+    fn enable_suggestion_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut params = base_params();
+        params.is_enabled = false;
+        params.instructions = APP_LINK_ENABLE_INSTRUCTIONS.to_string();
+        params.suggestion_type = Some(ToolSuggestionType::Enable);
+        let view = AppLinkView::new(params, tx);
+        let area = Rect::new(0, 0, 80, view.desired_height(80));
+
+        insta::assert_snapshot!(
+            "app_link_view_enable_suggestion",
+            render_snapshot(&view, area)
         );
     }
 
@@ -721,6 +844,7 @@ mod tests {
         params.is_installed = false;
         params.is_enabled = false;
         params.instructions = APP_LINK_INSTALL_INSTRUCTIONS.to_string();
+        params.suggestion_type = Some(ToolSuggestionType::Install);
         params.elicitation_resolution = Some(elicitation_resolution(expected_thread_id));
         let mut view = AppLinkView::new(params, tx);
         view.screen = AppLinkScreen::InstallConfirmation;
@@ -775,6 +899,7 @@ mod tests {
         params.is_installed = false;
         params.is_enabled = false;
         params.instructions = APP_LINK_INSTALL_INSTRUCTIONS.to_string();
+        params.suggestion_type = Some(ToolSuggestionType::Install);
         params.elicitation_resolution = Some(elicitation_resolution(expected_thread_id));
         let mut view = AppLinkView::new(params, tx);
         view.selected_action = 1;
@@ -798,6 +923,60 @@ mod tests {
                 assert_eq!(request_id, McpRequestId::String("request-1".to_string()));
                 assert_eq!(decision, ElicitationAction::Cancel);
                 assert_eq!(content, None);
+                assert_eq!(meta, None);
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+
+        assert!(view.is_complete());
+    }
+
+    #[test]
+    fn enabling_suggested_app_resolves_elicitation() {
+        let expected_thread_id = ThreadId::default();
+        let (tx_raw, mut rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut params = base_params();
+        params.is_enabled = false;
+        params.instructions = APP_LINK_ENABLE_INSTRUCTIONS.to_string();
+        params.suggestion_type = Some(ToolSuggestionType::Enable);
+        params.elicitation_resolution = Some(elicitation_resolution(expected_thread_id));
+        let mut view = AppLinkView::new(params, tx);
+
+        view.handle_key_event(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+
+        match rx.try_recv() {
+            Ok(AppEvent::SetAppEnabled { id, enabled }) => {
+                assert_eq!(id, "connector_1");
+                assert!(enabled);
+            }
+            Ok(other) => panic!("unexpected app event: {other:?}"),
+            Err(err) => panic!("missing app event: {err}"),
+        }
+
+        match rx.try_recv() {
+            Ok(AppEvent::SubmitThreadOp {
+                thread_id,
+                op:
+                    Op::ResolveElicitation {
+                        server_name,
+                        request_id,
+                        decision,
+                        content,
+                        meta,
+                    },
+            }) => {
+                assert_eq!(thread_id, expected_thread_id);
+                assert_eq!(server_name, "codex_apps");
+                assert_eq!(request_id, McpRequestId::String("request-1".to_string()));
+                assert_eq!(decision, ElicitationAction::Accept);
+                assert_eq!(
+                    content,
+                    Some(json!({
+                        "decision": "enable",
+                    }))
+                );
                 assert_eq!(meta, None);
             }
             Ok(other) => panic!("unexpected app event: {other:?}"),

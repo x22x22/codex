@@ -50,7 +50,7 @@ mod status_line_setup;
 pub(crate) use app_link_view::APP_LINK_INSTALL_INSTRUCTIONS;
 pub(crate) use app_link_view::AppLinkView;
 pub(crate) use app_link_view::AppLinkViewParams;
-pub(crate) use app_link_view::app_install_suggestion_params_from_event;
+pub(crate) use app_link_view::tool_suggestion_params_from_event;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use approval_overlay::format_additional_permissions_rule;

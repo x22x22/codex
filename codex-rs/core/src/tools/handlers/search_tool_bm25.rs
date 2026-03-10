@@ -17,6 +17,8 @@ use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
+use crate::tools::handlers::tool_suggest::ToolSuggestionToolType;
+use crate::tools::handlers::tool_suggest::ToolSuggestionType;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
 
@@ -33,8 +35,8 @@ fn default_limit() -> usize {
 #[serde(rename_all = "lowercase")]
 pub(crate) enum SearchToolMode {
     #[default]
-    Available,
-    Installable,
+    Enabled,
+    Discoverable,
 }
 
 #[derive(Deserialize)]
@@ -87,16 +89,18 @@ struct ConnectorEntry {
     connector_id: String,
     connector_name: String,
     connector_description: Option<String>,
+    suggestion_type: ToolSuggestionType,
     search_text: String,
 }
 
 impl ConnectorEntry {
-    fn new(connector: AppInfo) -> Self {
+    fn new(connector: AppInfo, suggestion_type: ToolSuggestionType) -> Self {
         let search_text = build_connector_search_text(&connector);
         Self {
             connector_id: connector.id,
             connector_name: connector.name,
             connector_description: connector.description,
+            suggestion_type,
             search_text,
         }
     }
@@ -142,7 +146,7 @@ impl ToolHandler for SearchToolBm25Handler {
         }
 
         let content = match args.mode {
-            SearchToolMode::Available => {
+            SearchToolMode::Enabled => {
                 let mcp_tools = session
                     .services
                     .mcp_connection_manager
@@ -150,14 +154,23 @@ impl ToolHandler for SearchToolBm25Handler {
                     .await
                     .list_all_tools()
                     .await;
+                let enabled_connector_overrides = session.get_connector_selection().await;
 
                 let connectors = connectors::with_app_enabled_state(
                     connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
                     &turn.config,
                 );
-                let mcp_tools = filter_codex_apps_mcp_tools(mcp_tools, &connectors);
+                let mcp_tools = filter_codex_apps_mcp_tools(
+                    mcp_tools,
+                    &connectors,
+                    &enabled_connector_overrides,
+                );
                 let mcp_tools =
-                    connectors::filter_codex_apps_tools_by_policy(mcp_tools, &turn.config);
+                    connectors::filter_codex_apps_tools_by_policy_with_enabled_connector_overrides(
+                        mcp_tools,
+                        &turn.config,
+                        &enabled_connector_overrides,
+                    );
 
                 let mut entries: Vec<ToolEntry> = mcp_tools
                     .into_iter()
@@ -170,7 +183,7 @@ impl ToolHandler for SearchToolBm25Handler {
                         session.get_mcp_tool_selection().await.unwrap_or_default();
                     json!({
                         "query": query,
-                        "mode": SearchToolMode::Available,
+                        "mode": SearchToolMode::Enabled,
                         "total_tools": 0,
                         "active_selected_tools": active_selected_tools,
                         "tools": [],
@@ -210,7 +223,7 @@ impl ToolHandler for SearchToolBm25Handler {
 
                     json!({
                         "query": query,
-                        "mode": SearchToolMode::Available,
+                        "mode": SearchToolMode::Enabled,
                         "total_tools": entries.len(),
                         "active_selected_tools": active_selected_tools,
                         "tools": result_payloads,
@@ -218,67 +231,67 @@ impl ToolHandler for SearchToolBm25Handler {
                     .to_string()
                 }
             }
-            SearchToolMode::Installable => {
+            SearchToolMode::Discoverable => {
                 let all_connectors = match connectors::list_cached_connectors(&turn.config).await {
                     Some(connectors) => connectors,
                     None => connectors::list_connectors(&turn.config)
                         .await
                         .map_err(|err| {
                             FunctionCallError::RespondToModel(format!(
-                                "failed to load installable apps: {err}"
+                                "failed to load discoverable apps: {err}"
                             ))
                         })?,
                 };
                 let active_selected_tools =
                     session.get_mcp_tool_selection().await.unwrap_or_default();
-                let mut entries: Vec<ConnectorEntry> = all_connectors
-                    .into_iter()
-                    .filter(|connector| !connector.is_accessible && connector.is_enabled)
-                    .map(ConnectorEntry::new)
-                    .collect();
-                entries.sort_by(|a, b| {
-                    a.connector_name
-                        .cmp(&b.connector_name)
-                        .then_with(|| a.connector_id.cmp(&b.connector_id))
-                });
+                let (installable_entries, disabled_entries) =
+                    discoverable_connector_entries(all_connectors);
+                let total_connectors = installable_entries.len() + disabled_entries.len();
 
-                if entries.is_empty() {
+                if total_connectors == 0 {
                     json!({
                         "query": query,
-                        "mode": SearchToolMode::Installable,
+                        "mode": SearchToolMode::Discoverable,
                         "total_connectors": 0,
                         "active_selected_tools": active_selected_tools,
                         "connectors": [],
                     })
                     .to_string()
                 } else {
-                    let documents: Vec<Document<usize>> = entries
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, entry)| Document::new(idx, entry.search_text.clone()))
-                        .collect();
-                    let search_engine =
-                        SearchEngineBuilder::<usize>::with_documents(Language::English, documents)
-                            .build();
-                    let results = search_engine.search(query, args.limit);
-
                     let mut result_payloads = Vec::new();
-                    for result in results {
-                        let Some(entry) = entries.get(result.document.id) else {
-                            continue;
-                        };
+                    let installable_results =
+                        search_connector_entries(&installable_entries, query, args.limit);
+                    for (entry, score) in installable_results {
                         result_payloads.push(json!({
                             "connector_id": entry.connector_id.clone(),
                             "connector_name": entry.connector_name.clone(),
                             "connector_description": entry.connector_description.clone(),
-                            "score": result.score,
+                            "tool_type": ToolSuggestionToolType::Connector,
+                            "suggestion_type": entry.suggestion_type,
+                            "score": score,
                         }));
+                    }
+
+                    let remaining = args.limit.saturating_sub(result_payloads.len());
+                    if remaining > 0 {
+                        for (entry, score) in
+                            search_connector_entries(&disabled_entries, query, remaining)
+                        {
+                            result_payloads.push(json!({
+                                "connector_id": entry.connector_id.clone(),
+                                "connector_name": entry.connector_name.clone(),
+                                "connector_description": entry.connector_description.clone(),
+                                "tool_type": ToolSuggestionToolType::Connector,
+                                "suggestion_type": entry.suggestion_type,
+                                "score": score,
+                            }));
+                        }
                     }
 
                     json!({
                         "query": query,
-                        "mode": SearchToolMode::Installable,
-                        "total_connectors": entries.len(),
+                        "mode": SearchToolMode::Discoverable,
+                        "total_connectors": total_connectors,
                         "active_selected_tools": active_selected_tools,
                         "connectors": result_payloads,
                     })
@@ -294,10 +307,13 @@ impl ToolHandler for SearchToolBm25Handler {
 fn filter_codex_apps_mcp_tools(
     mut mcp_tools: HashMap<String, ToolInfo>,
     connectors: &[AppInfo],
+    enabled_connector_overrides: &HashSet<String>,
 ) -> HashMap<String, ToolInfo> {
     let enabled_connectors: HashSet<&str> = connectors
         .iter()
-        .filter(|connector| connector.is_enabled)
+        .filter(|connector| {
+            connector.is_enabled || enabled_connector_overrides.contains(connector.id.as_str())
+        })
         .map(|connector| connector.id.as_str())
         .collect();
 
@@ -311,6 +327,62 @@ fn filter_codex_apps_mcp_tools(
             .is_some_and(|connector_id| enabled_connectors.contains(connector_id))
     });
     mcp_tools
+}
+
+fn discoverable_connector_entries(
+    connectors: Vec<AppInfo>,
+) -> (Vec<ConnectorEntry>, Vec<ConnectorEntry>) {
+    let mut installable_entries = Vec::new();
+    let mut disabled_entries = Vec::new();
+
+    for connector in connectors {
+        if !connector.is_accessible {
+            installable_entries.push(ConnectorEntry::new(connector, ToolSuggestionType::Install));
+        } else if !connector.is_enabled {
+            disabled_entries.push(ConnectorEntry::new(connector, ToolSuggestionType::Enable));
+        }
+    }
+
+    installable_entries.sort_by(|a, b| {
+        a.connector_name
+            .cmp(&b.connector_name)
+            .then_with(|| a.connector_id.cmp(&b.connector_id))
+    });
+    disabled_entries.sort_by(|a, b| {
+        a.connector_name
+            .cmp(&b.connector_name)
+            .then_with(|| a.connector_id.cmp(&b.connector_id))
+    });
+
+    (installable_entries, disabled_entries)
+}
+
+fn search_connector_entries<'a>(
+    entries: &'a [ConnectorEntry],
+    query: &str,
+    limit: usize,
+) -> Vec<(&'a ConnectorEntry, f32)> {
+    if entries.is_empty() || limit == 0 {
+        return Vec::new();
+    }
+
+    let documents: Vec<Document<usize>> = entries
+        .iter()
+        .enumerate()
+        .map(|(idx, entry)| Document::new(idx, entry.search_text.clone()))
+        .collect();
+    let search_engine =
+        SearchEngineBuilder::<usize>::with_documents(Language::English, documents).build();
+    let results = search_engine.search(query, limit);
+
+    results
+        .into_iter()
+        .filter_map(|result| {
+            entries
+                .get(result.document.id)
+                .map(|entry| (entry, result.score))
+        })
+        .collect()
 }
 
 fn build_search_text(name: &str, info: &ToolInfo, input_keys: &[String]) -> String {
@@ -479,12 +551,35 @@ mod tests {
             make_connector("drive", true),
         ];
 
-        let mut filtered: Vec<String> = filter_codex_apps_mcp_tools(mcp_tools, &connectors)
-            .into_keys()
-            .collect();
+        let mut filtered: Vec<String> =
+            filter_codex_apps_mcp_tools(mcp_tools, &connectors, &HashSet::new())
+                .into_keys()
+                .collect();
         filtered.sort();
 
         assert_eq!(filtered, vec!["mcp__codex_apps__drive_search".to_string()]);
+    }
+
+    #[test]
+    fn filter_codex_apps_mcp_tools_keeps_temporarily_enabled_apps() {
+        let mcp_tools = HashMap::from([make_tool(
+            "mcp__codex_apps__calendar_create_event",
+            CODEX_APPS_MCP_SERVER_NAME,
+            "calendar_create_event",
+            Some("calendar"),
+        )]);
+        let connectors = vec![make_connector("calendar", false)];
+        let enabled_connector_overrides = HashSet::from(["calendar".to_string()]);
+
+        let filtered: Vec<String> =
+            filter_codex_apps_mcp_tools(mcp_tools, &connectors, &enabled_connector_overrides)
+                .into_keys()
+                .collect();
+
+        assert_eq!(
+            filtered,
+            vec!["mcp__codex_apps__calendar_create_event".to_string()]
+        );
     }
 
     #[test]
@@ -499,12 +594,67 @@ mod tests {
             make_tool("mcp__rmcp__echo", "rmcp", "echo", None),
         ]);
 
-        let mut filtered: Vec<String> =
-            filter_codex_apps_mcp_tools(mcp_tools, &[make_connector("calendar", true)])
-                .into_keys()
-                .collect();
+        let mut filtered: Vec<String> = filter_codex_apps_mcp_tools(
+            mcp_tools,
+            &[make_connector("calendar", true)],
+            &HashSet::new(),
+        )
+        .into_keys()
+        .collect();
         filtered.sort();
 
         assert_eq!(filtered, Vec::<String>::new());
+    }
+
+    #[test]
+    fn discoverable_connector_entries_prioritize_install_before_enable() {
+        let installable = AppInfo {
+            id: "calendar".to_string(),
+            name: "Calendar".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: None,
+            is_accessible: false,
+            is_enabled: false,
+            plugin_display_names: Vec::new(),
+        };
+        let disabled = AppInfo {
+            id: "drive".to_string(),
+            name: "Drive".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: None,
+            is_accessible: true,
+            is_enabled: false,
+            plugin_display_names: Vec::new(),
+        };
+
+        let (installable_entries, disabled_entries) =
+            discoverable_connector_entries(vec![disabled, installable]);
+
+        assert_eq!(
+            installable_entries
+                .iter()
+                .map(|entry| (entry.connector_id.clone(), entry.suggestion_type))
+                .collect::<Vec<_>>(),
+            vec![("calendar".to_string(), ToolSuggestionType::Install)]
+        );
+        assert_eq!(
+            disabled_entries
+                .iter()
+                .map(|entry| (entry.connector_id.clone(), entry.suggestion_type))
+                .collect::<Vec<_>>(),
+            vec![("drive".to_string(), ToolSuggestionType::Enable)]
+        );
     }
 }

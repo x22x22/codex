@@ -1290,7 +1290,7 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
             "mode".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Search mode: `available` searches currently available app tools; `installable` searches apps that are not installed yet. Defaults to `available`."
+                    "Search mode: `enabled` searches currently enabled app tools; `discoverable` searches connectors that still need install or enable steps. Defaults to `enabled`."
                         .to_string(),
                 ),
             },
@@ -1307,7 +1307,7 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
     let description = if app_names.is_empty() {
         SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE
             .replace("({{app_names}})", "(None currently enabled)")
-            .replace("{{app_names}}", "available apps")
+            .replace("{{app_names}}", "enabled apps")
     } else {
         SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE.replace("{{app_names}}", app_names.as_str())
     };
@@ -1325,22 +1325,47 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
 }
 
 fn create_tool_suggest_tool() -> ToolSpec {
-    let properties = BTreeMap::from([(
-        "connector_id".to_string(),
-        JsonSchema::String {
-            description: Some(
-                "Connector ID returned by `search_tool_bm25` in `installable` mode.".to_string(),
-            ),
-        },
-    )]);
+    let properties = BTreeMap::from([
+        (
+            "connector_id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Connector ID returned by `search_tool_bm25` in `discoverable` mode."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "tool_type".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Tool type returned by `search_tool_bm25` in `discoverable` mode, for example `connector`."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "suggestion_type".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Suggestion type returned by `search_tool_bm25` in `discoverable` mode: `install` or `enable`."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: TOOL_SUGGEST_TOOL_NAME.to_string(),
-        description: "Prompt the user to install an app that is not installed yet.".to_string(),
+        description: "Prompt the user to install or enable a discoverable connector.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["connector_id".to_string()]),
+            required: Some(vec![
+                "connector_id".to_string(),
+                "tool_type".to_string(),
+                "suggestion_type".to_string(),
+            ]),
             additional_properties: Some(false.into()),
         },
     })
@@ -3431,7 +3456,7 @@ mod tests {
         };
         assert!(description.contains("Calendar"));
         assert!(!description.contains("mcp__rmcp__echo"));
-        assert!(description.contains("Always search `mode: \"available\"` first."));
+        assert!(description.contains("Always search `mode: \"enabled\"` first."));
         assert!(description.contains("call `tool_suggest`"));
     }
 
@@ -3500,7 +3525,18 @@ mod tests {
             panic!("expected object schema");
         };
         assert!(properties.contains_key("connector_id"));
-        assert_eq!(required.as_deref(), Some(&["connector_id".to_string()][..]));
+        assert!(properties.contains_key("tool_type"));
+        assert!(properties.contains_key("suggestion_type"));
+        assert_eq!(
+            required.as_deref(),
+            Some(
+                &[
+                    "connector_id".to_string(),
+                    "tool_type".to_string(),
+                    "suggestion_type".to_string(),
+                ][..]
+            )
+        );
     }
 
     #[test]
@@ -3567,7 +3603,7 @@ mod tests {
         };
 
         assert!(description.contains("(None currently enabled)"));
-        assert!(description.contains("available apps."));
+        assert!(description.contains("enabled apps."));
         assert!(!description.contains("{{app_names}}"));
     }
 

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 
 use async_trait::async_trait;
 use codex_app_server_protocol::McpElicitationObjectType;
@@ -9,6 +10,7 @@ use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use rmcp::model::RequestId;
 use serde::Deserialize;
+use serde::Serialize;
 use serde_json::Value;
 use serde_json::json;
 
@@ -26,13 +28,46 @@ pub struct ToolSuggestHandler;
 
 pub(crate) const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
 const TOOL_SUGGEST_DECISION_INSTALL: &str = "install";
+const TOOL_SUGGEST_DECISION_ENABLE: &str = "enable";
 const TOOL_SUGGEST_DECISION_NOT_NOW: &str = "not_now";
 const TOOL_SUGGEST_META_KIND_KEY: &str = "codex_approval_kind";
-const TOOL_SUGGEST_META_KIND_VALUE: &str = "app_install_suggestion";
+const TOOL_SUGGEST_META_KIND_VALUE: &str = "tool_suggestion";
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ToolSuggestionToolType {
+    Connector,
+    Plugin,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ToolSuggestionType {
+    Install,
+    Enable,
+}
+
+impl ToolSuggestionType {
+    fn decision(self) -> &'static str {
+        match self {
+            Self::Install => TOOL_SUGGEST_DECISION_INSTALL,
+            Self::Enable => TOOL_SUGGEST_DECISION_ENABLE,
+        }
+    }
+
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Install => "Install",
+            Self::Enable => "Enable",
+        }
+    }
+}
 
 #[derive(Deserialize)]
 struct ToolSuggestArgs {
     connector_id: String,
+    tool_type: ToolSuggestionToolType,
+    suggestion_type: ToolSuggestionType,
 }
 
 #[derive(Deserialize)]
@@ -41,17 +76,21 @@ struct ToolSuggestElicitationContent {
 }
 
 fn tool_suggest_message(
+    suggestion_type: ToolSuggestionType,
     connector_name: &str,
     connector_description: Option<&str>,
-    install_url: &str,
+    url: &str,
 ) -> String {
-    let mut parts = vec![format!("Install {connector_name} to continue?")];
+    let mut parts = vec![format!(
+        "{} {connector_name} to continue?",
+        suggestion_type.verb()
+    )];
     if let Some(description) = connector_description.map(str::trim)
         && !description.is_empty()
     {
         parts.push(description.to_string());
     }
-    parts.push(format!("Install URL: {install_url}"));
+    parts.push(format!("Open URL: {url}"));
     parts.join(" | ")
 }
 
@@ -65,6 +104,8 @@ fn tool_suggest_requested_schema() -> McpElicitationSchema {
 }
 
 fn tool_suggest_elicitation_meta(
+    tool_type: ToolSuggestionToolType,
+    suggestion_type: ToolSuggestionType,
     connector_id: &str,
     connector_name: &str,
     connector_description: Option<&str>,
@@ -72,6 +113,8 @@ fn tool_suggest_elicitation_meta(
 ) -> Value {
     json!({
         TOOL_SUGGEST_META_KIND_KEY: TOOL_SUGGEST_META_KIND_VALUE,
+        "tool_type": tool_type,
+        "suggestion_type": suggestion_type,
         "connector_id": connector_id,
         "connector_name": connector_name,
         "connector_description": connector_description,
@@ -81,6 +124,7 @@ fn tool_suggest_elicitation_meta(
 
 fn parse_tool_suggest_elicitation_response(
     response: ElicitationResponse,
+    suggestion_type: ToolSuggestionType,
 ) -> (&'static str, String) {
     let elicitation_action = match response.action {
         ElicitationAction::Accept => "accept",
@@ -98,10 +142,12 @@ fn parse_tool_suggest_elicitation_response(
             .filter(|decision| {
                 matches!(
                     decision.as_str(),
-                    TOOL_SUGGEST_DECISION_INSTALL | TOOL_SUGGEST_DECISION_NOT_NOW
+                    TOOL_SUGGEST_DECISION_INSTALL
+                        | TOOL_SUGGEST_DECISION_ENABLE
+                        | TOOL_SUGGEST_DECISION_NOT_NOW
                 )
             })
-            .unwrap_or_else(|| TOOL_SUGGEST_DECISION_INSTALL.to_string()),
+            .unwrap_or_else(|| suggestion_type.decision().to_string()),
         ElicitationAction::Decline | ElicitationAction::Cancel => {
             TOOL_SUGGEST_DECISION_NOT_NOW.to_string()
         }
@@ -143,6 +189,15 @@ impl ToolHandler for ToolSuggestHandler {
                 "connector_id must not be empty".to_string(),
             ));
         }
+        if args.tool_type != ToolSuggestionToolType::Connector {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "tool_type `{}` is not supported by {TOOL_SUGGEST_TOOL_NAME} yet",
+                match args.tool_type {
+                    ToolSuggestionToolType::Connector => "connector",
+                    ToolSuggestionToolType::Plugin => "plugin",
+                }
+            )));
+        }
 
         let connectors = match connectors::list_cached_connectors(&turn.config).await {
             Some(connectors) => connectors,
@@ -150,7 +205,7 @@ impl ToolHandler for ToolSuggestHandler {
                 .await
                 .map_err(|err| {
                     FunctionCallError::RespondToModel(format!(
-                        "failed to load installable apps: {err}"
+                        "failed to load discoverable apps: {err}"
                     ))
                 })?,
         };
@@ -162,10 +217,29 @@ impl ToolHandler for ToolSuggestHandler {
                 FunctionCallError::RespondToModel(format!("unknown connector_id `{connector_id}`"))
             })?;
 
-        if connector.is_accessible {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "connector_id `{connector_id}` is already available; use available tools or search_tool_bm25 with mode `available` instead"
-            )));
+        let enabled_connector_overrides = session.get_connector_selection().await;
+        let connector_is_enabled =
+            connector.is_enabled || enabled_connector_overrides.contains(connector_id);
+        match args.suggestion_type {
+            ToolSuggestionType::Install => {
+                if connector.is_accessible {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "connector_id `{connector_id}` is already installed; use search_tool_bm25 with mode `enabled`, or mode `discoverable` with suggestion_type `enable` if it is disabled"
+                    )));
+                }
+            }
+            ToolSuggestionType::Enable => {
+                if !connector.is_accessible {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "connector_id `{connector_id}` is not installed; use search_tool_bm25 with mode `discoverable` and suggestion_type `install` instead"
+                    )));
+                }
+                if connector_is_enabled {
+                    return Err(FunctionCallError::RespondToModel(format!(
+                        "connector_id `{connector_id}` is already enabled; use its tools or search_tool_bm25 with mode `enabled` instead"
+                    )));
+                }
+            }
         }
 
         let install_url = connector
@@ -183,12 +257,15 @@ impl ToolHandler for ToolSuggestHandler {
                     server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
                     request: McpServerElicitationRequest::Form {
                         meta: Some(tool_suggest_elicitation_meta(
+                            args.tool_type,
+                            args.suggestion_type,
                             &connector.id,
                             &connector.name,
                             connector.description.as_deref(),
                             &install_url,
                         )),
                         message: tool_suggest_message(
+                            args.suggestion_type,
                             &connector.name,
                             connector.description.as_deref(),
                             &install_url,
@@ -204,17 +281,30 @@ impl ToolHandler for ToolSuggestHandler {
                 )
             })?;
         let (elicitation_action, user_decision) =
-            parse_tool_suggest_elicitation_response(elicitation_response);
+            parse_tool_suggest_elicitation_response(elicitation_response, args.suggestion_type);
+
+        if user_decision == TOOL_SUGGEST_DECISION_INSTALL
+            || user_decision == TOOL_SUGGEST_DECISION_ENABLE
+        {
+            session
+                .merge_connector_selection(HashSet::from([connector.id.clone()]))
+                .await;
+        }
+
         let assistant_instruction = if user_decision == TOOL_SUGGEST_DECISION_INSTALL {
-            "The user confirmed they installed this app. Treat it as installed for this request, but verify its tools appear in an available-tool search before trying to use them."
+            "The user confirmed they completed the install flow. Treat this connector as selectable for this turn, but verify its tools appear in a `search_tool_bm25` search with `mode: \"enabled\"` before trying to use them. If they still do not appear, it may also need enabling."
+        } else if user_decision == TOOL_SUGGEST_DECISION_ENABLE {
+            "The user confirmed they enabled this connector. Treat it as selectable for this turn, but verify its tools appear in a `search_tool_bm25` search with `mode: \"enabled\"` before trying to use them."
         } else {
-            "The user did not install this app in this flow, either because they chose not to or did not finish setup. Do not try to use its tools in this turn."
+            "The user did not complete this suggestion flow. Do not try to use this tool in this turn."
         };
         let content = json!({
             "connector_id": connector.id,
             "connector_name": connector.name,
             "connector_description": connector.description,
             "install_url": install_url,
+            "tool_type": args.tool_type,
+            "suggestion_type": args.suggestion_type,
             "elicitation_action": elicitation_action,
             "user_decision": user_decision,
             "assistant_instruction": assistant_instruction,
@@ -231,14 +321,17 @@ mod tests {
     use codex_rmcp_client::ElicitationResponse;
     use pretty_assertions::assert_eq;
 
+    use super::TOOL_SUGGEST_DECISION_ENABLE;
     use super::TOOL_SUGGEST_DECISION_INSTALL;
     use super::TOOL_SUGGEST_DECISION_NOT_NOW;
+    use super::ToolSuggestionType;
     use super::parse_tool_suggest_elicitation_response;
     use super::tool_suggest_message;
 
     #[test]
     fn tool_suggest_message_uses_single_line_text() {
         let message = tool_suggest_message(
+            ToolSuggestionType::Install,
             "Docs & Notes",
             Some("Install <now> & sync"),
             "https://example.com/apps?name=Docs",
@@ -246,31 +339,50 @@ mod tests {
 
         assert_eq!(
             message,
-            "Install Docs & Notes to continue? | Install <now> & sync | Install URL: https://example.com/apps?name=Docs"
+            "Install Docs & Notes to continue? | Install <now> & sync | Open URL: https://example.com/apps?name=Docs"
         );
     }
 
     #[test]
     fn accepted_tool_suggest_defaults_to_install_without_form_content() {
-        let (elicitation_action, user_decision) =
-            parse_tool_suggest_elicitation_response(ElicitationResponse {
+        let (elicitation_action, user_decision) = parse_tool_suggest_elicitation_response(
+            ElicitationResponse {
                 action: ElicitationAction::Accept,
                 content: None,
                 meta: None,
-            });
+            },
+            ToolSuggestionType::Install,
+        );
 
         assert_eq!(elicitation_action, "accept");
         assert_eq!(user_decision, TOOL_SUGGEST_DECISION_INSTALL);
     }
 
     #[test]
+    fn accepted_tool_suggest_defaults_to_enable_without_form_content() {
+        let (elicitation_action, user_decision) = parse_tool_suggest_elicitation_response(
+            ElicitationResponse {
+                action: ElicitationAction::Accept,
+                content: None,
+                meta: None,
+            },
+            ToolSuggestionType::Enable,
+        );
+
+        assert_eq!(elicitation_action, "accept");
+        assert_eq!(user_decision, TOOL_SUGGEST_DECISION_ENABLE);
+    }
+
+    #[test]
     fn declined_tool_suggest_maps_to_not_now() {
-        let (elicitation_action, user_decision) =
-            parse_tool_suggest_elicitation_response(ElicitationResponse {
+        let (elicitation_action, user_decision) = parse_tool_suggest_elicitation_response(
+            ElicitationResponse {
                 action: ElicitationAction::Decline,
                 content: None,
                 meta: None,
-            });
+            },
+            ToolSuggestionType::Install,
+        );
 
         assert_eq!(elicitation_action, "decline");
         assert_eq!(user_decision, TOOL_SUGGEST_DECISION_NOT_NOW);
@@ -278,12 +390,14 @@ mod tests {
 
     #[test]
     fn cancelled_tool_suggest_maps_to_not_now() {
-        let (elicitation_action, user_decision) =
-            parse_tool_suggest_elicitation_response(ElicitationResponse {
+        let (elicitation_action, user_decision) = parse_tool_suggest_elicitation_response(
+            ElicitationResponse {
                 action: ElicitationAction::Cancel,
                 content: None,
                 meta: None,
-            });
+            },
+            ToolSuggestionType::Install,
+        );
 
         assert_eq!(elicitation_action, "cancel");
         assert_eq!(user_decision, TOOL_SUGGEST_DECISION_NOT_NOW);

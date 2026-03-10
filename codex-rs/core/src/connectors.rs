@@ -652,46 +652,57 @@ pub fn with_app_plugin_sources(
     connectors
 }
 
-pub(crate) fn app_tool_policy(
+pub(crate) fn app_tool_policy_with_enabled_connector_overrides(
     config: &Config,
     connector_id: Option<&str>,
     tool_name: &str,
     tool_title: Option<&str>,
     annotations: Option<&ToolAnnotations>,
+    enabled_connector_overrides: &HashSet<String>,
 ) -> AppToolPolicy {
     let apps_config = read_apps_config(config);
-    app_tool_policy_from_apps_config(
+    app_tool_policy_from_apps_config_with_enabled_connector_overrides(
         apps_config.as_ref(),
         connector_id,
         tool_name,
         tool_title,
         annotations,
+        enabled_connector_overrides,
     )
 }
 
-pub(crate) fn codex_app_tool_is_enabled(
+pub(crate) fn codex_app_tool_is_enabled_with_enabled_connector_overrides(
     config: &Config,
     tool_info: &crate::mcp_connection_manager::ToolInfo,
+    enabled_connector_overrides: &HashSet<String>,
 ) -> bool {
     if tool_info.server_name != CODEX_APPS_MCP_SERVER_NAME {
         return true;
     }
 
-    app_tool_policy(
+    app_tool_policy_with_enabled_connector_overrides(
         config,
         tool_info.connector_id.as_deref(),
         &tool_info.tool_name,
         tool_info.tool.title.as_deref(),
         tool_info.tool.annotations.as_ref(),
+        enabled_connector_overrides,
     )
     .enabled
 }
 
-pub(crate) fn filter_codex_apps_tools_by_policy(
+pub(crate) fn filter_codex_apps_tools_by_policy_with_enabled_connector_overrides(
     mut mcp_tools: HashMap<String, crate::mcp_connection_manager::ToolInfo>,
     config: &Config,
+    enabled_connector_overrides: &HashSet<String>,
 ) -> HashMap<String, crate::mcp_connection_manager::ToolInfo> {
-    mcp_tools.retain(|_, tool_info| codex_app_tool_is_enabled(config, tool_info));
+    mcp_tools.retain(|_, tool_info| {
+        codex_app_tool_is_enabled_with_enabled_connector_overrides(
+            config,
+            tool_info,
+            enabled_connector_overrides,
+        )
+    });
     mcp_tools
 }
 
@@ -756,12 +767,31 @@ fn app_is_enabled(apps_config: &AppsConfigToml, connector_id: Option<&str>) -> b
         .unwrap_or(default_enabled)
 }
 
+#[cfg(test)]
 fn app_tool_policy_from_apps_config(
     apps_config: Option<&AppsConfigToml>,
     connector_id: Option<&str>,
     tool_name: &str,
     tool_title: Option<&str>,
     annotations: Option<&ToolAnnotations>,
+) -> AppToolPolicy {
+    app_tool_policy_from_apps_config_with_enabled_connector_overrides(
+        apps_config,
+        connector_id,
+        tool_name,
+        tool_title,
+        annotations,
+        &HashSet::new(),
+    )
+}
+
+fn app_tool_policy_from_apps_config_with_enabled_connector_overrides(
+    apps_config: Option<&AppsConfigToml>,
+    connector_id: Option<&str>,
+    tool_name: &str,
+    tool_title: Option<&str>,
+    annotations: Option<&ToolAnnotations>,
+    enabled_connector_overrides: &HashSet<String>,
 ) -> AppToolPolicy {
     let Some(apps_config) = apps_config else {
         return AppToolPolicy::default();
@@ -780,7 +810,10 @@ fn app_tool_policy_from_apps_config(
         .or_else(|| app.and_then(|app| app.default_tools_approval_mode))
         .unwrap_or(AppToolApproval::Auto);
 
-    if !app_is_enabled(apps_config, connector_id) {
+    let connector_is_temporarily_enabled =
+        connector_id.is_some_and(|connector_id| enabled_connector_overrides.contains(connector_id));
+
+    if !connector_is_temporarily_enabled && !app_is_enabled(apps_config, connector_id) {
         return AppToolPolicy {
             enabled: false,
             approval,
@@ -1518,6 +1551,36 @@ mod tests {
             policy,
             AppToolPolicy {
                 enabled: false,
+                approval: AppToolApproval::Auto,
+            }
+        );
+    }
+
+    #[test]
+    fn app_tool_policy_allows_temporarily_enabled_connector_when_default_is_disabled() {
+        let apps_config = AppsConfigToml {
+            default: Some(AppsDefaultConfig {
+                enabled: false,
+                destructive_enabled: true,
+                open_world_enabled: true,
+            }),
+            apps: HashMap::new(),
+        };
+        let enabled_connector_overrides = HashSet::from(["calendar".to_string()]);
+
+        let policy = app_tool_policy_from_apps_config_with_enabled_connector_overrides(
+            Some(&apps_config),
+            Some("calendar"),
+            "events/list",
+            None,
+            Some(&annotations(None, None)),
+            &enabled_connector_overrides,
+        );
+
+        assert_eq!(
+            policy,
+            AppToolPolicy {
+                enabled: true,
                 approval: AppToolApproval::Auto,
             }
         );

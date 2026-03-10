@@ -2382,6 +2382,7 @@ impl App {
                         url,
                         is_installed,
                         is_enabled,
+                        suggestion_type: None,
                         elicitation_resolution: None,
                     });
             }

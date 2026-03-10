@@ -46,8 +46,8 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 const SEARCH_TOOL_INSTRUCTION_SNIPPETS: [&str; 2] = [
-    "Always search `mode: \"available\"` first.",
-    "If `installable` finds the right app, call `tool_suggest` with the returned `connector_id` to prompt the user to install it.",
+    "Always search `mode: \"enabled\"` first.",
+    "If `discoverable` finds the right app, call `tool_suggest` with the returned `connector_id`, `tool_type`, and `suggestion_type`.",
 ];
 const SEARCH_TOOL_BM25_TOOL_NAME: &str = "search_tool_bm25";
 const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
@@ -1362,7 +1362,7 @@ async fn installable_search_returns_inaccessible_connectors_without_selecting_to
     let args = json!({
         "query": "notion docs",
         "limit": 5,
-        "mode": "installable",
+        "mode": "discoverable",
     });
     let mock = mount_sse_sequence(
         &server,
@@ -1405,7 +1405,7 @@ async fn installable_search_returns_inaccessible_connectors_without_selecting_to
     let payload = search_tool_output_payload(&requests[1], call_id);
     assert_eq!(
         payload.get("mode").and_then(Value::as_str),
-        Some("installable")
+        Some("discoverable")
     );
     assert_eq!(
         payload.get("total_connectors").and_then(Value::as_u64),
@@ -1426,6 +1426,14 @@ async fn installable_search_returns_inaccessible_connectors_without_selecting_to
     assert_eq!(
         connectors[0].get("connector_id").and_then(Value::as_str),
         Some(NOTION_CONNECTOR_ID),
+    );
+    assert_eq!(
+        connectors[0].get("tool_type").and_then(Value::as_str),
+        Some("connector"),
+    );
+    assert_eq!(
+        connectors[0].get("suggestion_type").and_then(Value::as_str),
+        Some("install"),
     );
     assert_eq!(
         connectors[0].get("connector_name").and_then(Value::as_str),
@@ -1475,7 +1483,7 @@ async fn installable_search_preserves_available_selection() -> Result<()> {
                 &serde_json::to_string(&json!({
                     "query": "notion docs",
                     "limit": 5,
-                    "mode": "installable",
+                    "mode": "discoverable",
                 }))?,
             ),
             ev_completed("resp-3"),
@@ -1545,7 +1553,7 @@ async fn installable_search_reports_catalog_load_errors() -> Result<()> {
     let call_id = "installable-search";
     let args = json!({
         "query": "notion docs",
-        "mode": "installable",
+        "mode": "discoverable",
     });
     let mock = mount_sse_sequence(
         &server,
@@ -1597,7 +1605,7 @@ async fn installable_search_reports_catalog_load_errors() -> Result<()> {
         .and_then(|(content, _)| content)
         .expect("installable search output should contain an error");
     assert!(
-        error.contains("failed to load installable apps"),
+        error.contains("failed to load discoverable apps"),
         "unexpected installable search error: {error:?}"
     );
 
@@ -1614,6 +1622,8 @@ async fn tool_suggest_prompts_install_via_elicitation() -> Result<()> {
     let call_id = "tool-suggest";
     let args = json!({
         "connector_id": NOTION_CONNECTOR_ID,
+        "tool_type": "connector",
+        "suggestion_type": "install",
     });
     let mock = mount_sse_sequence(
         &server,
@@ -1654,13 +1664,15 @@ async fn tool_suggest_prompts_install_via_elicitation() -> Result<()> {
     assert_eq!(
         message,
         format!(
-            "Install {NOTION_CONNECTOR_NAME} to continue? | {NOTION_CONNECTOR_DESCRIPTION} | Install URL: https://chatgpt.com/apps/notion/notion"
+            "Install {NOTION_CONNECTOR_NAME} to continue? | {NOTION_CONNECTOR_DESCRIPTION} | Open URL: https://chatgpt.com/apps/notion/notion"
         )
     );
     assert_eq!(
         meta,
         Some(json!({
-            "codex_approval_kind": "app_install_suggestion",
+            "codex_approval_kind": "tool_suggestion",
+            "tool_type": "connector",
+            "suggestion_type": "install",
             "connector_id": NOTION_CONNECTOR_ID,
             "connector_name": NOTION_CONNECTOR_NAME,
             "connector_description": NOTION_CONNECTOR_DESCRIPTION,
@@ -1727,7 +1739,7 @@ async fn tool_suggest_prompts_install_via_elicitation() -> Result<()> {
         payload
             .get("assistant_instruction")
             .and_then(Value::as_str)
-            .is_some_and(|instruction| instruction.contains("confirmed they installed")),
+            .is_some_and(|instruction| instruction.contains("completed the install flow")),
         "unexpected tool_suggest payload: {payload:?}"
     );
 
@@ -1744,6 +1756,8 @@ async fn tool_suggest_rejects_accessible_connector() -> Result<()> {
     let call_id = "tool-suggest";
     let args = json!({
         "connector_id": "calendar",
+        "tool_type": "connector",
+        "suggestion_type": "install",
     });
     let mock = mount_sse_sequence(
         &server,
@@ -1788,7 +1802,7 @@ async fn tool_suggest_rejects_accessible_connector() -> Result<()> {
         .and_then(|(content, _)| content)
         .expect("tool_suggest should return an error");
     assert!(
-        error.contains("already available"),
+        error.contains("already installed"),
         "unexpected accessible connector rejection: {error:?}"
     );
 
@@ -1805,6 +1819,8 @@ async fn tool_suggest_reports_not_now_when_user_declines_install() -> Result<()>
     let call_id = "tool-suggest";
     let args = json!({
         "connector_id": NOTION_CONNECTOR_ID,
+        "tool_type": "connector",
+        "suggestion_type": "install",
     });
     let mock = mount_sse_sequence(
         &server,
@@ -1868,7 +1884,9 @@ async fn tool_suggest_reports_not_now_when_user_declines_install() -> Result<()>
         payload
             .get("assistant_instruction")
             .and_then(Value::as_str)
-            .is_some_and(|instruction| instruction.contains("did not install this app")),
+            .is_some_and(
+                |instruction| instruction.contains("did not complete this suggestion flow")
+            ),
         "unexpected tool_suggest payload: {payload:?}"
     );
 
@@ -1885,6 +1903,8 @@ async fn tool_suggest_rejects_unknown_connector() -> Result<()> {
     let call_id = "tool-suggest";
     let args = json!({
         "connector_id": "unknown-app",
+        "tool_type": "connector",
+        "suggestion_type": "install",
     });
     let mock = mount_sse_sequence(
         &server,
