@@ -21,16 +21,20 @@ pub(crate) struct ParsedHandler<T> {
     pub data: T,
 }
 
+/// Selects handlers matching `event_name`. The `matcher_text` value is matched
+/// against the handler's `matcher` regex: for `SessionStart` it is the session
+/// source string; for `AfterToolUse` it is the tool name. `Stop` handlers
+/// always match regardless of `matcher_text`.
 pub(crate) fn select_handlers(
     handlers: &[ConfiguredHandler],
     event_name: HookEventName,
-    session_start_source: Option<&str>,
+    matcher_text: Option<&str>,
 ) -> Vec<ConfiguredHandler> {
     handlers
         .iter()
         .filter(|handler| handler.event_name == event_name)
         .filter(|handler| match event_name {
-            HookEventName::SessionStart => match (&handler.matcher, session_start_source) {
+            HookEventName::SessionStart => match (&handler.matcher, matcher_text) {
                 (Some(matcher), Some(source)) => regex::Regex::new(matcher)
                     .map(|regex| regex.is_match(source))
                     .unwrap_or(false),
@@ -38,6 +42,13 @@ pub(crate) fn select_handlers(
                 _ => false,
             },
             HookEventName::Stop => true,
+            HookEventName::AfterToolUse => match (&handler.matcher, matcher_text) {
+                (Some(matcher), Some(tool_name)) => regex::Regex::new(matcher)
+                    .map(|regex| regex.is_match(tool_name))
+                    .unwrap_or(false),
+                (None, _) => true,
+                _ => false,
+            },
         })
         .cloned()
         .collect()
@@ -110,6 +121,7 @@ fn scope_for_event(event_name: HookEventName) -> HookScope {
     match event_name {
         HookEventName::SessionStart => HookScope::Thread,
         HookEventName::Stop => HookScope::Turn,
+        HookEventName::AfterToolUse => HookScope::Turn,
     }
 }
 

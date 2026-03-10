@@ -8,6 +8,8 @@ pub(crate) struct GeneratedHookSchemas {
     pub session_start_command_output: Value,
     pub stop_command_input: Value,
     pub stop_command_output: Value,
+    pub after_tool_use_command_input: Value,
+    pub after_tool_use_command_output: Value,
 }
 
 pub(crate) fn generated_hook_schemas() -> &'static GeneratedHookSchemas {
@@ -28,6 +30,14 @@ pub(crate) fn generated_hook_schemas() -> &'static GeneratedHookSchemas {
         stop_command_output: parse_json_schema(
             "stop.command.output",
             include_str!("../../schema/generated/stop.command.output.schema.json"),
+        ),
+        after_tool_use_command_input: parse_json_schema(
+            "after-tool-use.command.input",
+            include_str!("../../schema/generated/after-tool-use.command.input.schema.json"),
+        ),
+        after_tool_use_command_output: parse_json_schema(
+            "after-tool-use.command.output",
+            include_str!("../../schema/generated/after-tool-use.command.output.schema.json"),
         ),
     })
 }
@@ -50,5 +60,7 @@ mod tests {
         assert_eq!(schemas.session_start_command_output["type"], "object");
         assert_eq!(schemas.stop_command_input["type"], "object");
         assert_eq!(schemas.stop_command_output["type"], "object");
+        assert_eq!(schemas.after_tool_use_command_input["type"], "object");
+        assert_eq!(schemas.after_tool_use_command_output["type"], "object");
     }
 }

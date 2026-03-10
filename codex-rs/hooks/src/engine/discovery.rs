@@ -91,6 +91,18 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 group.hooks,
             );
         }
+
+        for group in parsed.hooks.after_tool_use {
+            append_group_handlers(
+                &mut handlers,
+                &mut warnings,
+                &mut display_order,
+                source_path.as_path(),
+                codex_protocol::protocol::HookEventName::AfterToolUse,
+                group.matcher.as_deref(),
+                group.hooks,
+            );
+        }
     }
 
     DiscoveryResult { handlers, warnings }

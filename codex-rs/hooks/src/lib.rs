@@ -5,6 +5,8 @@ mod registry;
 mod schema;
 mod types;
 
+pub use events::after_tool_use::AfterToolUseOutcome;
+pub use events::after_tool_use::AfterToolUseRequest;
 pub use events::session_start::SessionStartOutcome;
 pub use events::session_start::SessionStartRequest;
 pub use events::session_start::SessionStartSource;

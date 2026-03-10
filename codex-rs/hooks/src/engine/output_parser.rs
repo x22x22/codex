@@ -19,6 +19,7 @@ pub(crate) struct StopOutput {
     pub reason: Option<String>,
 }
 
+use crate::schema::AfterToolUseCommandOutputWire;
 use crate::schema::HookUniversalOutputWire;
 use crate::schema::SessionStartCommandOutputWire;
 use crate::schema::StopCommandOutputWire;
@@ -41,6 +42,18 @@ pub(crate) fn parse_stop(stdout: &str) -> Option<StopOutput> {
         universal: UniversalOutput::from(wire.universal),
         should_block: matches!(wire.decision, Some(StopDecisionWire::Block)),
         reason: wire.reason,
+    })
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AfterToolUseOutput {
+    pub universal: UniversalOutput,
+}
+
+pub(crate) fn parse_after_tool_use(stdout: &str) -> Option<AfterToolUseOutput> {
+    let wire: AfterToolUseCommandOutputWire = parse_json(stdout)?;
+    Some(AfterToolUseOutput {
+        universal: UniversalOutput::from(wire.universal),
     })
 }
 

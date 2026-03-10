@@ -17,6 +17,8 @@ const SESSION_START_INPUT_FIXTURE: &str = "session-start.command.input.schema.js
 const SESSION_START_OUTPUT_FIXTURE: &str = "session-start.command.output.schema.json";
 const STOP_INPUT_FIXTURE: &str = "stop.command.input.schema.json";
 const STOP_OUTPUT_FIXTURE: &str = "stop.command.output.schema.json";
+const AFTER_TOOL_USE_INPUT_FIXTURE: &str = "after-tool-use.command.input.schema.json";
+const AFTER_TOOL_USE_OUTPUT_FIXTURE: &str = "after-tool-use.command.output.schema.json";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(transparent)]
@@ -182,6 +184,79 @@ impl StopCommandInput {
     }
 }
 
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "after-tool-use.command.input")]
+pub(crate) struct AfterToolUseCommandInput {
+    pub session_id: String,
+    pub transcript_path: NullableString,
+    pub cwd: String,
+    #[schemars(schema_with = "after_tool_use_hook_event_name_schema")]
+    pub hook_event_name: String,
+    pub model: String,
+    #[schemars(schema_with = "permission_mode_schema")]
+    pub permission_mode: String,
+    pub turn_id: String,
+    pub call_id: String,
+    pub tool_name: String,
+    pub executed: bool,
+    pub success: bool,
+    pub duration_ms: u64,
+    pub mutating: bool,
+    pub sandbox: String,
+    pub sandbox_policy: String,
+    pub output_preview: String,
+}
+
+impl AfterToolUseCommandInput {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        session_id: impl Into<String>,
+        transcript_path: Option<PathBuf>,
+        cwd: impl Into<String>,
+        model: impl Into<String>,
+        permission_mode: impl Into<String>,
+        turn_id: impl Into<String>,
+        call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        executed: bool,
+        success: bool,
+        duration_ms: u64,
+        mutating: bool,
+        sandbox: impl Into<String>,
+        sandbox_policy: impl Into<String>,
+        output_preview: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            transcript_path: NullableString::from_path(transcript_path),
+            cwd: cwd.into(),
+            hook_event_name: "AfterToolUse".to_string(),
+            model: model.into(),
+            permission_mode: permission_mode.into(),
+            turn_id: turn_id.into(),
+            call_id: call_id.into(),
+            tool_name: tool_name.into(),
+            executed,
+            success,
+            duration_ms,
+            mutating,
+            sandbox: sandbox.into(),
+            sandbox_policy: sandbox_policy.into(),
+            output_preview: output_preview.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+#[schemars(rename = "after-tool-use.command.output")]
+pub(crate) struct AfterToolUseCommandOutputWire {
+    #[serde(flatten)]
+    pub universal: HookUniversalOutputWire,
+}
+
 pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
     let generated_dir = schema_root.join(GENERATED_DIR);
     ensure_empty_dir(&generated_dir)?;
@@ -201,6 +276,14 @@ pub fn write_schema_fixtures(schema_root: &Path) -> anyhow::Result<()> {
     write_schema(
         &generated_dir.join(STOP_OUTPUT_FIXTURE),
         schema_json::<StopCommandOutputWire>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(AFTER_TOOL_USE_INPUT_FIXTURE),
+        schema_json::<AfterToolUseCommandInput>()?,
+    )?;
+    write_schema(
+        &generated_dir.join(AFTER_TOOL_USE_OUTPUT_FIXTURE),
+        schema_json::<AfterToolUseCommandOutputWire>()?,
     )?;
 
     Ok(())
@@ -265,6 +348,10 @@ fn stop_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_const_schema("Stop")
 }
 
+fn after_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
+    string_const_schema("AfterToolUse")
+}
+
 fn permission_mode_schema(_gen: &mut SchemaGenerator) -> Schema {
     string_enum_schema(&[
         "default",
@@ -308,6 +395,8 @@ fn default_continue() -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::AFTER_TOOL_USE_INPUT_FIXTURE;
+    use super::AFTER_TOOL_USE_OUTPUT_FIXTURE;
     use super::SESSION_START_INPUT_FIXTURE;
     use super::SESSION_START_OUTPUT_FIXTURE;
     use super::STOP_INPUT_FIXTURE;
@@ -330,6 +419,12 @@ mod tests {
             STOP_OUTPUT_FIXTURE => {
                 include_str!("../schema/generated/stop.command.output.schema.json")
             }
+            AFTER_TOOL_USE_INPUT_FIXTURE => {
+                include_str!("../schema/generated/after-tool-use.command.input.schema.json")
+            }
+            AFTER_TOOL_USE_OUTPUT_FIXTURE => {
+                include_str!("../schema/generated/after-tool-use.command.output.schema.json")
+            }
             _ => panic!("unexpected fixture name: {name}"),
         }
     }
@@ -349,6 +444,8 @@ mod tests {
             SESSION_START_OUTPUT_FIXTURE,
             STOP_INPUT_FIXTURE,
             STOP_OUTPUT_FIXTURE,
+            AFTER_TOOL_USE_INPUT_FIXTURE,
+            AFTER_TOOL_USE_OUTPUT_FIXTURE,
         ] {
             let expected = normalize_newlines(expected_fixture(fixture));
             let actual = std::fs::read_to_string(schema_root.join("generated").join(fixture))

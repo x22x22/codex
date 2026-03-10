@@ -1277,6 +1277,7 @@ pub enum EventMsg {
 pub enum HookEventName {
     SessionStart,
     Stop,
+    AfterToolUse,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]

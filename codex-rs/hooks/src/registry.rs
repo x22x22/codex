@@ -3,6 +3,8 @@ use tokio::process::Command;
 
 use crate::engine::ClaudeHooksEngine;
 use crate::engine::CommandShell;
+use crate::events::after_tool_use::AfterToolUseOutcome;
+use crate::events::after_tool_use::AfterToolUseRequest;
 use crate::events::session_start::SessionStartOutcome;
 use crate::events::session_start::SessionStartRequest;
 use crate::events::stop::StopOutcome;
@@ -107,6 +109,17 @@ impl Hooks {
 
     pub async fn run_stop(&self, request: StopRequest) -> StopOutcome {
         self.engine.run_stop(request).await
+    }
+
+    pub fn preview_after_tool_use(
+        &self,
+        request: &AfterToolUseRequest,
+    ) -> Vec<codex_protocol::protocol::HookRunSummary> {
+        self.engine.preview_after_tool_use(request)
+    }
+
+    pub async fn run_after_tool_use(&self, request: AfterToolUseRequest) -> AfterToolUseOutcome {
+        self.engine.run_after_tool_use(request).await
     }
 }
 
