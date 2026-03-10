@@ -1,7 +1,19 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
 load("//:defs.bzl", "codex_rust_crate")
 
 codex_rust_crate(
     name = "code-mode",
     crate_name = "codex_code_mode",
     compile_data = ["src/code_mode_bridge.js"],
+    deps_extra = select({
+        "@platforms//os:linux": [":libc_stack_end_shim"],
+        "//conditions:default": [],
+    }),
+)
+
+cc_library(
+    name = "libc_stack_end_shim",
+    srcs = ["src/libc_stack_end_shim.cc"],
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:private"],
 )
