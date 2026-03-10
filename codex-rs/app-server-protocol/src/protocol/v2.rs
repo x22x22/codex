@@ -1382,6 +1382,7 @@ pub enum SessionSource {
     #[default]
     VsCode,
     Exec,
+    Acp,
     AppServer,
     SubAgent(CoreSubAgentSource),
     #[serde(other)]
@@ -1394,6 +1395,7 @@ impl From<CoreSessionSource> for SessionSource {
             CoreSessionSource::Cli => SessionSource::Cli,
             CoreSessionSource::VSCode => SessionSource::VsCode,
             CoreSessionSource::Exec => SessionSource::Exec,
+            CoreSessionSource::Acp => SessionSource::Acp,
             CoreSessionSource::Mcp => SessionSource::AppServer,
             CoreSessionSource::SubAgent(sub) => SessionSource::SubAgent(sub),
             CoreSessionSource::Unknown => SessionSource::Unknown,
@@ -1407,6 +1409,7 @@ impl From<SessionSource> for CoreSessionSource {
             SessionSource::Cli => CoreSessionSource::Cli,
             SessionSource::VsCode => CoreSessionSource::VSCode,
             SessionSource::Exec => CoreSessionSource::Exec,
+            SessionSource::Acp => CoreSessionSource::Acp,
             SessionSource::AppServer => CoreSessionSource::Mcp,
             SessionSource::SubAgent(sub) => CoreSessionSource::SubAgent(sub),
             SessionSource::Unknown => CoreSessionSource::Unknown,

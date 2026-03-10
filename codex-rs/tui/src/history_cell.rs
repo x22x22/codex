@@ -1767,6 +1767,9 @@ pub(crate) fn new_mcp_tools_output(
         lines.push(vec!["    • Auth: ".into(), auth_status.to_string().into()].into());
 
         match &cfg.transport {
+            McpServerTransportConfig::Acp { id, .. } => {
+                lines.push(vec!["    • ACP Id: ".into(), id.clone().into()].into());
+            }
             McpServerTransportConfig::Stdio {
                 command,
                 args,

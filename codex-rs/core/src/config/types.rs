@@ -111,6 +111,11 @@ pub struct McpServerConfig {
 #[derive(Deserialize, Clone, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(crate) struct RawMcpServerConfig {
+    #[serde(default)]
+    pub transport: Option<String>,
+    #[serde(default)]
+    pub id: Option<String>,
+
     // stdio
     pub command: Option<String>,
     #[serde(default)]
@@ -187,7 +192,31 @@ impl<'de> Deserialize<'de> for McpServerConfig {
             )))
         }
 
-        let transport = if let Some(command) = raw.command.clone() {
+        let transport = if raw.transport.as_deref() == Some("acp") || raw.id.is_some() {
+            throw_if_set("acp", "command", raw.command.as_ref())?;
+            throw_if_set("acp", "args", raw.args.as_ref())?;
+            throw_if_set("acp", "env", raw.env.as_ref())?;
+            throw_if_set("acp", "env_vars", raw.env_vars.as_ref())?;
+            throw_if_set("acp", "cwd", raw.cwd.as_ref())?;
+            throw_if_set("acp", "url", raw.url.as_ref())?;
+            throw_if_set(
+                "acp",
+                "bearer_token_env_var",
+                raw.bearer_token_env_var.as_ref(),
+            )?;
+            throw_if_set("acp", "bearer_token", raw.bearer_token.as_ref())?;
+            throw_if_set("acp", "http_headers", raw.http_headers.as_ref())?;
+            throw_if_set("acp", "env_http_headers", raw.env_http_headers.as_ref())?;
+            let acp_id = raw
+                .id
+                .clone()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| SerdeError::custom("acp transport requires non-empty id"))?;
+            McpServerTransportConfig::Acp {
+                transport: "acp".to_string(),
+                id: acp_id,
+            }
+        } else if let Some(command) = raw.command.clone() {
             throw_if_set("stdio", "url", raw.url.as_ref())?;
             throw_if_set(
                 "stdio",
@@ -243,6 +272,8 @@ const fn default_enabled() -> bool {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema)]
 #[serde(untagged, deny_unknown_fields, rename_all = "snake_case")]
 pub enum McpServerTransportConfig {
+    /// ACP draft MCP-over-ACP transport.
+    Acp { transport: String, id: String },
     /// https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio
     Stdio {
         command: String,

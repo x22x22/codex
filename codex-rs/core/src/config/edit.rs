@@ -147,6 +147,10 @@ mod document_helpers {
         entry.set_implicit(false);
 
         match &config.transport {
+            McpServerTransportConfig::Acp { id, .. } => {
+                entry["transport"] = value("acp");
+                entry["id"] = value(id.clone());
+            }
             McpServerTransportConfig::Stdio {
                 command,
                 args,

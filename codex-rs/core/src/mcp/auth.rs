@@ -92,6 +92,7 @@ async fn compute_auth_status(
     store_mode: OAuthCredentialsStoreMode,
 ) -> Result<McpAuthStatus> {
     match &config.transport {
+        McpServerTransportConfig::Acp { .. } => Ok(McpAuthStatus::Unsupported),
         McpServerTransportConfig::Stdio { .. } => Ok(McpAuthStatus::Unsupported),
         McpServerTransportConfig::StreamableHttp {
             url,

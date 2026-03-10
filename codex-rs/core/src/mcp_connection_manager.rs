@@ -1439,6 +1439,9 @@ async fn make_rmcp_client(
             .await
             .map_err(StartupOutcomeError::from)
         }
+        McpServerTransportConfig::Acp { id, .. } => RmcpClient::new_acp_client(id)
+            .await
+            .map_err(StartupOutcomeError::from),
     }
 }
 
@@ -1549,6 +1552,7 @@ fn transport_origin(transport: &McpServerTransportConfig) -> Option<String> {
             let parsed = Url::parse(url).ok()?;
             Some(parsed.origin().ascii_serialization())
         }
+        McpServerTransportConfig::Acp { id, .. } => Some(format!("acp:{id}")),
         McpServerTransportConfig::Stdio { .. } => Some("stdio".to_string()),
     }
 }

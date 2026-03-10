@@ -2191,6 +2191,7 @@ pub enum SessionSource {
     #[default]
     VSCode,
     Exec,
+    Acp,
     Mcp,
     SubAgent(SubAgentSource),
     #[serde(other)]
@@ -2221,6 +2222,7 @@ impl fmt::Display for SessionSource {
             SessionSource::Cli => f.write_str("cli"),
             SessionSource::VSCode => f.write_str("vscode"),
             SessionSource::Exec => f.write_str("exec"),
+            SessionSource::Acp => f.write_str("acp"),
             SessionSource::Mcp => f.write_str("mcp"),
             SessionSource::SubAgent(sub_source) => write!(f, "subagent_{sub_source}"),
             SessionSource::Unknown => f.write_str("unknown"),

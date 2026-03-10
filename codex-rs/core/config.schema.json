@@ -1245,6 +1245,10 @@
           },
           "type": "object"
         },
+        "id": {
+          "default": null,
+          "type": "string"
+        },
         "oauth_resource": {
           "default": null,
           "type": "string"
@@ -1275,6 +1279,10 @@
           "default": null,
           "format": "double",
           "type": "number"
+        },
+        "transport": {
+          "default": null,
+          "type": "string"
         },
         "url": {
           "type": "string"

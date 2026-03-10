@@ -1372,6 +1372,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
+name = "codex-acp-server"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codex-app-server-client",
+ "codex-app-server-protocol",
+ "codex-arg0",
+ "codex-cloud-requirements",
+ "codex-core",
+ "codex-feedback",
+ "codex-protocol",
+ "codex-rmcp-client",
+ "codex-utils-cargo-bin",
+ "codex-utils-cli",
+ "futures",
+ "pretty_assertions",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "codex-ansi-escape"
 version = "0.0.0"
 dependencies = [
@@ -1637,6 +1664,7 @@ dependencies = [
  "assert_matches",
  "clap",
  "clap_complete",
+ "codex-acp-server",
  "codex-app-server",
  "codex-app-server-protocol",
  "codex-app-server-test-client",

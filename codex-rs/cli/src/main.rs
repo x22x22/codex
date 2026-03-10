@@ -102,6 +102,9 @@ enum Subcommand {
     /// Start Codex as an MCP server (stdio).
     McpServer,
 
+    /// Start Codex as an ACP server (stdio).
+    AcpServer,
+
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
 
@@ -596,6 +599,9 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         }
         Some(Subcommand::McpServer) => {
             codex_mcp_server::run_main(arg0_paths.clone(), root_config_overrides).await?;
+        }
+        Some(Subcommand::AcpServer) => {
+            codex_acp_server::run_main(arg0_paths.clone(), root_config_overrides).await?;
         }
         Some(Subcommand::Mcp(mut mcp_cli)) => {
             // Propagate any root-level config overrides (e.g. `-c key=value`).
@@ -1205,6 +1211,14 @@ mod tests {
             unreachable!()
         };
         app_server
+    }
+
+    #[test]
+    fn parses_acp_server_subcommand() {
+        let cli = MultitoolCli::try_parse_from(["codex", "acp-server"]).expect("parse");
+        let Some(Subcommand::AcpServer) = cli.subcommand else {
+            panic!("expected acp-server subcommand");
+        };
     }
 
     fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {

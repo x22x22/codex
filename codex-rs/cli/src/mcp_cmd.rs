@@ -426,6 +426,10 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
                     .map(|entry| entry.auth_status)
                     .unwrap_or(McpAuthStatus::Unsupported);
                 let transport = match &cfg.transport {
+                    McpServerTransportConfig::Acp { id, .. } => serde_json::json!({
+                        "type": "acp",
+                        "id": id,
+                    }),
                     McpServerTransportConfig::Stdio {
                         command,
                         args,
@@ -482,10 +486,20 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
     }
 
     let mut stdio_rows: Vec<[String; 7]> = Vec::new();
+    let mut acp_rows: Vec<[String; 4]> = Vec::new();
     let mut http_rows: Vec<[String; 5]> = Vec::new();
 
     for (name, cfg) in entries {
         match &cfg.transport {
+            McpServerTransportConfig::Acp { id, .. } => {
+                let status = format_mcp_status(cfg);
+                let auth_status = auth_statuses
+                    .get(name.as_str())
+                    .map(|entry| entry.auth_status)
+                    .unwrap_or(McpAuthStatus::Unsupported)
+                    .to_string();
+                acp_rows.push([name.clone(), id.clone(), status, auth_status]);
+            }
             McpServerTransportConfig::Stdio {
                 command,
                 args,
@@ -603,6 +617,45 @@ async fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) ->
         println!();
     }
 
+    if !acp_rows.is_empty() {
+        let mut widths = ["Name".len(), "ACP Id".len(), "Status".len(), "Auth".len()];
+        for row in &acp_rows {
+            for (i, cell) in row.iter().enumerate() {
+                widths[i] = widths[i].max(cell.len());
+            }
+        }
+
+        println!(
+            "{name:<name_w$}  {id:<id_w$}  {status:<status_w$}  {auth:<auth_w$}",
+            name = "Name",
+            id = "ACP Id",
+            status = "Status",
+            auth = "Auth",
+            name_w = widths[0],
+            id_w = widths[1],
+            status_w = widths[2],
+            auth_w = widths[3],
+        );
+
+        for row in &acp_rows {
+            println!(
+                "{name:<name_w$}  {id:<id_w$}  {status:<status_w$}  {auth:<auth_w$}",
+                name = row[0].as_str(),
+                id = row[1].as_str(),
+                status = row[2].as_str(),
+                auth = row[3].as_str(),
+                name_w = widths[0],
+                id_w = widths[1],
+                status_w = widths[2],
+                auth_w = widths[3],
+            );
+        }
+    }
+
+    if (!stdio_rows.is_empty() || !acp_rows.is_empty()) && !http_rows.is_empty() {
+        println!();
+    }
+
     if !http_rows.is_empty() {
         let mut widths = [
             "Name".len(),
@@ -667,6 +720,10 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
 
     if get_args.json {
         let transport = match &server.transport {
+            McpServerTransportConfig::Acp { id, .. } => serde_json::json!({
+                "type": "acp",
+                "id": id,
+            }),
             McpServerTransportConfig::Stdio {
                 command,
                 args,
@@ -739,6 +796,10 @@ async fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Re
         println!("  disabled_tools: {disabled_tools_display}");
     }
     match &server.transport {
+        McpServerTransportConfig::Acp { id, .. } => {
+            println!("  transport: acp");
+            println!("  id: {id}");
+        }
         McpServerTransportConfig::Stdio {
             command,
             args,

@@ -284,6 +284,7 @@ fn canonical_mcp_key(transport: &str, identifier: &str, fallback: &str) -> Strin
 
 fn canonical_mcp_server_key(name: &str, config: &McpServerConfig) -> String {
     match &config.transport {
+        McpServerTransportConfig::Acp { id, .. } => canonical_mcp_key("acp", id, name),
         McpServerTransportConfig::Stdio { command, .. } => {
             canonical_mcp_key("stdio", command, name)
         }

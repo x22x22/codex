@@ -1,3 +1,4 @@
+mod acp_bridge;
 mod auth_status;
 mod logging_client_handler;
 mod oauth;
@@ -6,6 +7,9 @@ mod program_resolver;
 mod rmcp_client;
 mod utils;
 
+pub use acp_bridge::AcpBridge;
+pub use acp_bridge::AcpConnection;
+pub use acp_bridge::set_acp_bridge;
 pub use auth_status::determine_streamable_http_auth_status;
 pub use auth_status::supports_oauth_login;
 pub use codex_protocol::protocol::McpAuthStatus;

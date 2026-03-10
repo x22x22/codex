@@ -12134,6 +12134,7 @@
             "cli",
             "vscode",
             "exec",
+            "acp",
             "appServer",
             "unknown"
           ],

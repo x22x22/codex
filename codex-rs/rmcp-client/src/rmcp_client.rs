@@ -53,6 +53,11 @@ use rmcp::transport::streamable_http_client::StreamableHttpClient;
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::streamable_http_client::StreamableHttpError;
 use rmcp::transport::streamable_http_client::StreamableHttpPostResponse;
+use rmcp::transport::worker::Worker;
+use rmcp::transport::worker::WorkerConfig;
+use rmcp::transport::worker::WorkerContext;
+use rmcp::transport::worker::WorkerQuitReason;
+use rmcp::transport::worker::WorkerTransport;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -66,6 +71,8 @@ use tokio::time;
 use tracing::info;
 use tracing::warn;
 
+use crate::acp_bridge::AcpConnection;
+use crate::acp_bridge::get_acp_bridge;
 use crate::load_oauth_tokens;
 use crate::logging_client_handler::LoggingClientHandler;
 use crate::oauth::OAuthCredentialsStoreMode;
@@ -295,6 +302,84 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum AcpTransportError {
+    #[error("ACP transport bridge is closed")]
+    Closed,
+    #[error("ACP transport join failed: {0}")]
+    Join(#[source] tokio::task::JoinError),
+    #[error(transparent)]
+    Bridge(#[from] anyhow::Error),
+}
+
+struct AcpTransportWorker {
+    connection: Arc<dyn AcpConnection>,
+}
+
+impl Worker for AcpTransportWorker {
+    type Error = AcpTransportError;
+    type Role = RoleClient;
+
+    fn err_closed() -> Self::Error {
+        AcpTransportError::Closed
+    }
+
+    fn err_join(error: tokio::task::JoinError) -> Self::Error {
+        AcpTransportError::Join(error)
+    }
+
+    fn config(&self) -> WorkerConfig {
+        WorkerConfig {
+            name: Some("mcp_acp_transport".to_string()),
+            channel_buffer_capacity: 32,
+        }
+    }
+
+    async fn run(
+        self,
+        mut context: WorkerContext<Self>,
+    ) -> Result<(), WorkerQuitReason<Self::Error>> {
+        let cancellation_token = context.cancellation_token.clone();
+        loop {
+            tokio::select! {
+                _ = cancellation_token.cancelled() => {
+                    self.connection
+                        .close()
+                        .await
+                        .map_err(AcpTransportError::from)
+                        .map_err(WorkerQuitReason::fatal_context("closing ACP transport"))?;
+                    return Err(WorkerQuitReason::Cancelled);
+                }
+                incoming = self.connection.recv() => {
+                    match incoming
+                        .map_err(AcpTransportError::from)
+                        .map_err(WorkerQuitReason::fatal_context("receiving ACP MCP message"))?
+                    {
+                        Some(message) => context.send_to_handler(message).await?,
+                        None => return Err(WorkerQuitReason::TransportClosed),
+                    }
+                }
+                outbound = context.recv_from_handler() => {
+                    let outbound = outbound?;
+                    let send_result = self.connection
+                        .send(outbound.message)
+                        .await
+                        .map_err(AcpTransportError::from);
+                    match send_result {
+                        Ok(()) => {
+                            let _ = outbound.responder.send(Ok(()));
+                        }
+                        Err(error) => {
+                            let _ = outbound.responder.send(Err(AcpTransportError::Closed));
+                            return Err(WorkerQuitReason::fatal(error, "sending ACP MCP message"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 enum PendingTransport {
     ChildProcess {
         transport: TokioChildProcess,
@@ -306,6 +391,9 @@ enum PendingTransport {
     StreamableHttpWithOAuth {
         transport: StreamableHttpClientTransport<AuthClient<StreamableHttpResponseClient>>,
         oauth_persistor: OAuthPersistor,
+    },
+    Acp {
+        transport: WorkerTransport<AcpTransportWorker>,
     },
 }
 
@@ -395,6 +483,9 @@ enum TransportRecipe {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+    },
+    Acp {
+        acp_id: String,
     },
 }
 
@@ -513,6 +604,19 @@ impl RmcpClient {
             env_http_headers,
             store_mode,
         };
+        let transport = Self::create_pending_transport(&transport_recipe).await?;
+        Ok(Self {
+            state: Mutex::new(ClientState::Connecting {
+                transport: Some(transport),
+            }),
+            transport_recipe,
+            initialize_context: Mutex::new(None),
+            session_recovery_lock: Mutex::new(()),
+        })
+    }
+
+    pub async fn new_acp_client(acp_id: String) -> Result<Self> {
+        let transport_recipe = TransportRecipe::Acp { acp_id };
         let transport = Self::create_pending_transport(&transport_recipe).await?;
         Ok(Self {
             state: Mutex::new(ClientState::Connecting {
@@ -947,6 +1051,13 @@ impl RmcpClient {
                     Ok(PendingTransport::StreamableHttp { transport })
                 }
             }
+            TransportRecipe::Acp { acp_id } => {
+                let bridge = get_acp_bridge()?;
+                let connection = bridge.connect(acp_id.clone()).await?;
+                Ok(PendingTransport::Acp {
+                    transport: WorkerTransport::spawn(AcpTransportWorker { connection }),
+                })
+            }
         }
     }
 
@@ -979,6 +1090,11 @@ impl RmcpClient {
             } => (
                 service::serve_client(client_handler, transport).boxed(),
                 Some(oauth_persistor),
+                None,
+            ),
+            PendingTransport::Acp { transport } => (
+                service::serve_client(client_handler, transport).boxed(),
+                None,
                 None,
             ),
         };
@@ -1162,4 +1278,146 @@ async fn create_oauth_transport_and_runtime(
     );
 
     Ok((transport, runtime))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use rmcp::model::ClientCapabilities;
+    use rmcp::model::ClientJsonRpcMessage;
+    use rmcp::model::ClientRequest;
+    use rmcp::model::Implementation;
+    use rmcp::model::InitializeRequestParams;
+    use rmcp::model::InitializeResult;
+    use rmcp::model::JsonRpcRequest;
+    use rmcp::model::JsonRpcResponse;
+    use rmcp::model::ListToolsResult;
+    use rmcp::model::ProtocolVersion;
+    use rmcp::model::ServerCapabilities;
+    use rmcp::model::ServerJsonRpcMessage;
+    use rmcp::model::ServerResult;
+    use serial_test::serial;
+    use tokio::sync::mpsc;
+
+    struct FakeAcpBridge {
+        connection: Arc<FakeAcpConnection>,
+    }
+
+    impl crate::AcpBridge for FakeAcpBridge {
+        fn connect(
+            &self,
+            _acp_id: String,
+        ) -> BoxFuture<'static, Result<Arc<dyn crate::AcpConnection>>> {
+            let connection = Arc::clone(&self.connection);
+            Box::pin(async move { Ok(connection as Arc<dyn crate::AcpConnection>) })
+        }
+    }
+
+    struct FakeAcpConnection {
+        inbound_tx: mpsc::UnboundedSender<ServerJsonRpcMessage>,
+        inbound_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<ServerJsonRpcMessage>>>,
+    }
+
+    impl crate::AcpConnection for FakeAcpConnection {
+        fn send(&self, message: ClientJsonRpcMessage) -> BoxFuture<'static, Result<()>> {
+            let inbound_tx = self.inbound_tx.clone();
+            Box::pin(async move {
+                if let ClientJsonRpcMessage::Request(JsonRpcRequest { id, request, .. }) = message {
+                    match request {
+                        ClientRequest::InitializeRequest(_) => inbound_tx
+                            .send(ServerJsonRpcMessage::Response(JsonRpcResponse {
+                                jsonrpc: rmcp::model::JsonRpcVersion2_0,
+                                id,
+                                result: ServerResult::InitializeResult(InitializeResult {
+                                    protocol_version: ProtocolVersion::default(),
+                                    capabilities: ServerCapabilities::builder()
+                                        .enable_tools()
+                                        .build(),
+                                    server_info: Implementation {
+                                        name: "fake-acp".to_string(),
+                                        version: "0.0.0".to_string(),
+                                        title: None,
+                                        description: None,
+                                        icons: None,
+                                        website_url: None,
+                                    },
+                                    instructions: None,
+                                }),
+                            }))
+                            .map_err(|_| anyhow!("failed to enqueue initialize response"))?,
+                        ClientRequest::ListToolsRequest(_) => inbound_tx
+                            .send(ServerJsonRpcMessage::Response(JsonRpcResponse {
+                                jsonrpc: rmcp::model::JsonRpcVersion2_0,
+                                id,
+                                result: ServerResult::ListToolsResult(ListToolsResult {
+                                    tools: Vec::new(),
+                                    next_cursor: None,
+                                    meta: None,
+                                }),
+                            }))
+                            .map_err(|_| anyhow!("failed to enqueue tools response"))?,
+                        _ => {}
+                    }
+                }
+                Ok(())
+            })
+        }
+
+        fn recv(&self) -> BoxFuture<'static, Result<Option<ServerJsonRpcMessage>>> {
+            let inbound_rx = Arc::clone(&self.inbound_rx);
+            Box::pin(async move { Ok(inbound_rx.lock().await.recv().await) })
+        }
+
+        fn close(&self) -> BoxFuture<'static, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn acp_transport_initializes_and_lists_tools() {
+        let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
+        crate::set_acp_bridge(Some(Arc::new(FakeAcpBridge {
+            connection: Arc::new(FakeAcpConnection {
+                inbound_tx,
+                inbound_rx: Arc::new(tokio::sync::Mutex::new(inbound_rx)),
+            }),
+        })));
+
+        let client = RmcpClient::new_acp_client("srv-123".to_string())
+            .await
+            .expect("ACP client should initialize");
+        let send_elicitation: SendElicitation =
+            Box::new(|_, _| async { anyhow::bail!("elicitation should be unused") }.boxed());
+
+        let initialize_result = client
+            .initialize(
+                InitializeRequestParams {
+                    meta: None,
+                    protocol_version: ProtocolVersion::default(),
+                    capabilities: ClientCapabilities::default(),
+                    client_info: Implementation {
+                        name: "test-client".to_string(),
+                        version: "0.0.0".to_string(),
+                        title: None,
+                        description: None,
+                        icons: None,
+                        website_url: None,
+                    },
+                },
+                None,
+                send_elicitation,
+            )
+            .await
+            .expect("initialize should succeed");
+        let tools = client
+            .list_tools(None, None)
+            .await
+            .expect("tools/list should succeed");
+
+        assert_eq!(initialize_result.server_info.name, "fake-acp");
+        assert_eq!(tools.tools, Vec::new());
+        crate::set_acp_bridge(None);
+    }
 }
