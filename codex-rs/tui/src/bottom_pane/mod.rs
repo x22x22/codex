@@ -28,6 +28,7 @@ use crate::render::renderable::RenderableItem;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
 use codex_core::features::Features;
+use codex_core::plugins::PluginCapabilitySummary;
 use codex_core::skills::model::SkillMetadata;
 use codex_file_search::FileMatch;
 use codex_protocol::request_user_input::RequestUserInputEvent;
@@ -52,6 +53,7 @@ pub(crate) use app_link_view::AppLinkViewParams;
 pub(crate) use app_link_view::app_install_suggestion_params_from_event;
 pub(crate) use approval_overlay::ApprovalOverlay;
 pub(crate) use approval_overlay::ApprovalRequest;
+pub(crate) use approval_overlay::format_additional_permissions_rule;
 pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
 pub(crate) use request_user_input::RequestUserInputOverlay;
@@ -96,6 +98,7 @@ pub(crate) use feedback_view::feedback_upload_consent_params;
 pub(crate) use skills_toggle_view::SkillsToggleItem;
 pub(crate) use skills_toggle_view::SkillsToggleView;
 pub(crate) use status_line_setup::StatusLineItem;
+pub(crate) use status_line_setup::StatusLinePreviewData;
 pub(crate) use status_line_setup::StatusLineSetupView;
 mod paste_burst;
 mod pending_input_preview;
@@ -255,6 +258,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub fn set_plugin_mentions(&mut self, plugins: Option<Vec<PluginCapabilitySummary>>) {
+        self.composer.set_plugin_mentions(plugins);
+        self.request_redraw();
+    }
+
     pub fn take_mention_bindings(&mut self) -> Vec<MentionBinding> {
         self.composer.take_mention_bindings()
     }
@@ -332,6 +340,10 @@ impl BottomPane {
 
     pub fn skills(&self) -> Option<&Vec<SkillMetadata>> {
         self.composer.skills()
+    }
+
+    pub fn plugins(&self) -> Option<&Vec<PluginCapabilitySummary>> {
+        self.composer.plugins()
     }
 
     #[cfg(test)]
@@ -681,6 +693,11 @@ impl BottomPane {
         self.status.is_some()
     }
 
+    #[cfg(test)]
+    pub(crate) fn status_line_text(&self) -> Option<String> {
+        self.composer.status_line_text()
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.esc_backtrack_hint = true;
         self.composer.set_esc_backtrack_hint(true);
@@ -786,6 +803,13 @@ impl BottomPane {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
         self.push_view(Box::new(view));
         true
+    }
+
+    pub(crate) fn selected_index_for_active_view(&self, view_id: &'static str) -> Option<usize> {
+        self.view_stack
+            .last()
+            .filter(|view| view.view_id() == Some(view_id))
+            .and_then(|view| view.selected_index())
     }
 
     /// Update the pending-input preview shown above the composer.

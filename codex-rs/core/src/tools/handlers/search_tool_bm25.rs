@@ -3,7 +3,6 @@ use bm25::Document;
 use bm25::Language;
 use bm25::SearchEngineBuilder;
 use codex_app_server_protocol::AppInfo;
-use codex_protocol::models::FunctionCallOutputBody;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
@@ -14,8 +13,8 @@ use crate::connectors;
 use crate::function_tool::FunctionCallError;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
@@ -105,11 +104,13 @@ impl ConnectorEntry {
 
 #[async_trait]
 impl ToolHandler for SearchToolBm25Handler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             payload,
             session,
@@ -286,10 +287,7 @@ impl ToolHandler for SearchToolBm25Handler {
             }
         };
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(content),
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
 
