@@ -298,11 +298,13 @@ pub fn generate_python_with_options(
     let mut root_schema = build_python_root_schema(&bundle)?;
     normalize_python_integer_formats(&mut root_schema);
     rename_python_envelope_titles(&mut root_schema);
+    root_schema = sort_json_object_keys(root_schema);
     write_pretty_json(root_schema_path.clone(), &root_schema)?;
     let v2_schema_path = temp_json_dir.join("codex_app_server_protocol.v2.schemas.json");
     let mut v2_schema = read_json_value(&v2_schema_path)?;
     normalize_python_integer_formats(&mut v2_schema);
     rename_python_envelope_titles(&mut v2_schema);
+    v2_schema = sort_json_object_keys(v2_schema);
     write_pretty_json(v2_schema_path.clone(), &v2_schema)?;
 
     let module_dir = out_dir.join(PYTHON_MODULE_NAME);
@@ -1454,6 +1456,22 @@ fn schema_is_integer(map: &serde_json::Map<String, Value>) -> bool {
                 .is_some_and(|type_name| type_name == "integer")
         }),
         Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_)) | None => false,
+    }
+}
+
+fn sort_json_object_keys(value: Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.into_iter().map(sort_json_object_keys).collect()),
+        Value::Object(map) => {
+            let mut entries = map.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            let sorted = entries
+                .into_iter()
+                .map(|(key, value)| (key, sort_json_object_keys(value)))
+                .collect();
+            Value::Object(sorted)
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => value,
     }
 }
 
