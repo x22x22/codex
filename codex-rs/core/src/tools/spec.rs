@@ -40,6 +40,40 @@ use std::collections::HashMap;
 const SEARCH_TOOL_BM25_DESCRIPTION_TEMPLATE: &str =
     include_str!("../../templates/search_tool/tool_description.md");
 const WEB_SEARCH_CONTENT_TYPES: [&str; 2] = ["text", "image"];
+
+fn unified_exec_output_schema() -> JsonValue {
+    json!({
+        "type": "object",
+        "properties": {
+            "chunk_id": {
+                "type": "string",
+                "description": "Chunk identifier included when the response reports one."
+            },
+            "wall_time_seconds": {
+                "type": "number",
+                "description": "Elapsed wall time spent waiting for output in seconds."
+            },
+            "exit_code": {
+                "type": "number",
+                "description": "Process exit code when the command finished during this call."
+            },
+            "session_id": {
+                "type": "string",
+                "description": "Session identifier to pass to write_stdin when the process is still running."
+            },
+            "original_token_count": {
+                "type": "number",
+                "description": "Approximate token count before output truncation."
+            },
+            "output": {
+                "type": "string",
+                "description": "Command output text, possibly truncated."
+            }
+        },
+        "required": ["wall_time_seconds", "output"],
+        "additionalProperties": false
+    })
+}
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ShellCommandBackendConfig {
     Classic,
@@ -480,6 +514,7 @@ fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled:
             required: Some(vec!["cmd".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: Some(unified_exec_output_schema()),
     })
 }
 
@@ -527,6 +562,7 @@ fn create_write_stdin_tool() -> ToolSpec {
             required: Some(vec!["session_id".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: Some(unified_exec_output_schema()),
     })
 }
 
@@ -580,6 +616,7 @@ Examples of valid command strings:
             required: Some(vec!["command".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -647,6 +684,7 @@ Examples of valid command strings:
             required: Some(vec!["command".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -669,6 +707,7 @@ fn create_view_image_tool() -> ToolSpec {
             required: Some(vec!["path".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -794,6 +833,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -870,6 +910,7 @@ fn create_spawn_agents_on_csv_tool() -> ToolSpec {
             required: Some(vec!["csv_path".to_string(), "instruction".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -919,6 +960,7 @@ fn create_report_agent_job_result_tool() -> ToolSpec {
             ]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -961,6 +1003,7 @@ fn create_send_input_tool() -> ToolSpec {
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -984,6 +1027,7 @@ fn create_resume_agent_tool() -> ToolSpec {
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1018,6 +1062,7 @@ fn create_wait_tool() -> ToolSpec {
             required: Some(vec!["ids".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1103,6 +1148,7 @@ fn create_request_user_input_tool(
             required: Some(vec!["questions".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1127,6 +1173,7 @@ fn create_request_permissions_tool() -> ToolSpec {
             required: Some(vec!["permissions".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1149,6 +1196,7 @@ fn create_close_agent_tool() -> ToolSpec {
             required: Some(vec!["id".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1216,6 +1264,7 @@ fn create_test_sync_tool() -> ToolSpec {
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1267,6 +1316,7 @@ fn create_grep_files_tool() -> ToolSpec {
             required: Some(vec!["pattern".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1312,6 +1362,7 @@ fn create_search_tool_bm25_tool(app_tools: &HashMap<String, ToolInfo>) -> ToolSp
             required: Some(vec!["query".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1415,6 +1466,7 @@ fn create_read_file_tool() -> ToolSpec {
             required: Some(vec!["file_path".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1461,6 +1513,7 @@ fn create_list_dir_tool() -> ToolSpec {
             required: Some(vec!["dir_path".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1535,6 +1588,7 @@ fn create_js_repl_reset_tool() -> ToolSpec {
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1595,6 +1649,7 @@ fn create_list_mcp_resources_tool() -> ToolSpec {
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1629,6 +1684,7 @@ fn create_list_mcp_resource_templates_tool() -> ToolSpec {
             required: None,
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1665,6 +1721,7 @@ fn create_read_mcp_resource_tool() -> ToolSpec {
             required: Some(vec!["server".to_string(), "uri".to_string()]),
             additional_properties: Some(false.into()),
         },
+        output_schema: None,
     })
 }
 
@@ -1727,6 +1784,7 @@ pub(crate) fn mcp_tool_to_openai_tool(
         description: description.map(Into::into).unwrap_or_default(),
         strict: false,
         parameters: input_schema,
+        output_schema: None,
     })
 }
 
@@ -1740,6 +1798,7 @@ fn dynamic_tool_to_openai_tool(
         description: tool.description.clone(),
         strict: false,
         parameters: input_schema,
+        output_schema: None,
     })
 }
 
@@ -3279,6 +3338,7 @@ mod tests {
                 },
                 description: "Do something cool".to_string(),
                 strict: false,
+                output_schema: None,
             })
         );
     }
@@ -3517,6 +3577,7 @@ mod tests {
                 },
                 description: "Search docs".to_string(),
                 strict: false,
+                output_schema: None,
             })
         );
     }
@@ -3568,6 +3629,7 @@ mod tests {
                 },
                 description: "Pagination".to_string(),
                 strict: false,
+                output_schema: None,
             })
         );
     }
@@ -3623,6 +3685,7 @@ mod tests {
                 },
                 description: "Tags".to_string(),
                 strict: false,
+                output_schema: None,
             })
         );
     }
@@ -3676,6 +3739,7 @@ mod tests {
                 },
                 description: "AnyOf Value".to_string(),
                 strict: false,
+                output_schema: None,
             })
         );
     }
@@ -3934,6 +3998,7 @@ Examples of valid command strings:
                 },
                 description: "Do something cool".to_string(),
                 strict: false,
+                output_schema: None,
             })
         );
     }
@@ -3951,6 +4016,7 @@ Examples of valid command strings:
                 required: None,
                 additional_properties: None,
             },
+            output_schema: None,
         })];
 
         let responses_json = create_tools_json_for_responses_api(&tools).unwrap();
