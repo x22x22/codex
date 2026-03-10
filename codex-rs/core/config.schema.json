@@ -326,6 +326,9 @@
             "child_agents_md": {
               "type": "boolean"
             },
+            "code_mode": {
+              "type": "boolean"
+            },
             "codex_git_commit": {
               "type": "boolean"
             },
@@ -411,6 +414,9 @@
               "type": "boolean"
             },
             "request_permissions": {
+              "type": "boolean"
+            },
+            "request_permissions_tool": {
               "type": "boolean"
             },
             "request_rule": {
@@ -1316,6 +1322,10 @@
           "description": "Reject MCP elicitation prompts.",
           "type": "boolean"
         },
+        "request_permissions": {
+          "description": "Reject approval prompts related to built-in permission requests.",
+          "type": "boolean"
+        },
         "rules": {
           "description": "Reject prompts triggered by execpolicy `prompt` rules.",
           "type": "boolean"
@@ -1327,6 +1337,7 @@
       },
       "required": [
         "mcp_elicitations",
+        "request_permissions",
         "rules",
         "sandbox_approval"
       ],
@@ -1801,6 +1812,9 @@
         "child_agents_md": {
           "type": "boolean"
         },
+        "code_mode": {
+          "type": "boolean"
+        },
         "codex_git_commit": {
           "type": "boolean"
         },
@@ -1886,6 +1900,9 @@
           "type": "boolean"
         },
         "request_permissions": {
+          "type": "boolean"
+        },
+        "request_permissions_tool": {
           "type": "boolean"
         },
         "request_rule": {

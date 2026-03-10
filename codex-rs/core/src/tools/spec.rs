@@ -16,6 +16,7 @@ use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
 use crate::tools::handlers::multi_agents::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
+use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolRegistryBuilder;
 use codex_protocol::config_types::WebSearchConfig;
@@ -65,6 +66,8 @@ pub(crate) struct ToolsConfig {
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
     pub search_tool: bool,
     pub request_permission_enabled: bool,
+    pub request_permissions_tool_enabled: bool,
+    pub code_mode_enabled: bool,
     pub js_repl_enabled: bool,
     pub js_repl_tools_only: bool,
     pub collab_tools: bool,
@@ -92,6 +95,7 @@ impl ToolsConfig {
             session_source,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
+        let include_code_mode = features.enabled(Feature::CodeMode);
         let include_js_repl = features.enabled(Feature::JsRepl);
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
@@ -106,6 +110,7 @@ impl ToolsConfig {
             features.enabled(Feature::ImageGeneration) && supports_image_generation(model_info);
         let include_agent_jobs = include_collab_tools;
         let request_permission_enabled = features.enabled(Feature::RequestPermissions);
+        let request_permissions_tool_enabled = features.enabled(Feature::RequestPermissionsTool);
         let shell_command_backend =
             if features.enabled(Feature::ShellTool) && features.enabled(Feature::ShellZshFork) {
                 ShellCommandBackendConfig::ZshFork
@@ -166,6 +171,8 @@ impl ToolsConfig {
             agent_roles: BTreeMap::new(),
             search_tool: include_search_tool,
             request_permission_enabled,
+            request_permissions_tool_enabled,
+            code_mode_enabled: include_code_mode,
             js_repl_enabled: include_js_repl,
             js_repl_tools_only: include_js_repl_tools_only,
             collab_tools: include_collab_tools,
@@ -191,6 +198,12 @@ impl ToolsConfig {
     pub fn with_web_search_config(mut self, web_search_config: Option<WebSearchConfig>) -> Self {
         self.web_search_config = web_search_config;
         self
+    }
+
+    pub fn for_code_mode_nested_tools(&self) -> Self {
+        let mut nested = self.clone();
+        nested.code_mode_enabled = false;
+        nested
     }
 }
 
@@ -254,6 +267,94 @@ impl From<JsonSchema> for AdditionalProperties {
     }
 }
 
+fn create_network_permissions_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([(
+            "enabled".to_string(),
+            JsonSchema::Boolean {
+                description: Some("Set to true to request network access.".to_string()),
+            },
+        )]),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_file_system_permissions_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([
+            (
+                "read".to_string(),
+                JsonSchema::Array {
+                    items: Box::new(JsonSchema::String { description: None }),
+                    description: Some("Absolute paths to grant read access to.".to_string()),
+                },
+            ),
+            (
+                "write".to_string(),
+                JsonSchema::Array {
+                    items: Box::new(JsonSchema::String { description: None }),
+                    description: Some("Absolute paths to grant write access to.".to_string()),
+                },
+            ),
+        ]),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_macos_permissions_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([
+            (
+                "preferences".to_string(),
+                JsonSchema::String {
+                    description: Some(
+                        "macOS preferences access. Supported values: `none`, `read_only`, or `read_write`."
+                            .to_string(),
+                    ),
+                },
+            ),
+            (
+                "automations".to_string(),
+                JsonSchema::Array {
+                    items: Box::new(JsonSchema::String { description: None }),
+                    description: Some("macOS automation access as app bundle identifiers.".to_string()),
+                },
+            ),
+            (
+                "accessibility".to_string(),
+                JsonSchema::Boolean {
+                    description: Some("Whether to request macOS accessibility access.".to_string()),
+                },
+            ),
+            (
+                "calendar".to_string(),
+                JsonSchema::Boolean {
+                    description: Some("Whether to request macOS calendar access.".to_string()),
+                },
+            ),
+        ]),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
+fn create_permissions_schema() -> JsonSchema {
+    JsonSchema::Object {
+        properties: BTreeMap::from([
+            ("network".to_string(), create_network_permissions_schema()),
+            (
+                "file_system".to_string(),
+                create_file_system_permissions_schema(),
+            ),
+            ("macos".to_string(), create_macos_permissions_schema()),
+        ]),
+        required: None,
+        additional_properties: Some(false.into()),
+    }
+}
+
 fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<String, JsonSchema> {
     let mut properties = BTreeMap::from([
         (
@@ -298,103 +399,7 @@ fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<Stri
     if request_permission_enabled {
         properties.insert(
             "additional_permissions".to_string(),
-            JsonSchema::Object {
-                properties: BTreeMap::from([
-                    (
-                        "network".to_string(),
-                        JsonSchema::Object {
-                            properties: BTreeMap::from([(
-                                "enabled".to_string(),
-                                JsonSchema::Boolean {
-                                    description: Some(
-                                        "Set to true to enable network access for this command."
-                                            .to_string(),
-                                    ),
-                                },
-                            )]),
-                            required: None,
-                            additional_properties: Some(false.into()),
-                        },
-                    ),
-                    (
-                        "file_system".to_string(),
-                        JsonSchema::Object {
-                            properties: BTreeMap::from([
-                                (
-                                    "read".to_string(),
-                                    JsonSchema::Array {
-                                        items: Box::new(JsonSchema::String { description: None }),
-                                        description: Some(
-                                            "Additional filesystem paths to grant read access for this command."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                                (
-                                    "write".to_string(),
-                                    JsonSchema::Array {
-                                        items: Box::new(JsonSchema::String { description: None }),
-                                        description: Some(
-                                            "Additional filesystem paths to grant write access for this command."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                            ]),
-                            required: None,
-                            additional_properties: Some(false.into()),
-                        },
-                    ),
-                    (
-                        "macos".to_string(),
-                        JsonSchema::Object {
-                            properties: BTreeMap::from([
-                                (
-                                    "preferences".to_string(),
-                                    JsonSchema::String {
-                                        description: Some(
-                                            "Additional macOS preferences access for this command. Supported values: \"readonly\" or \"readwrite\"."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                                (
-                                    "automations".to_string(),
-                                    JsonSchema::Array {
-                                        items: Box::new(JsonSchema::String { description: None }),
-                                        description: Some(
-                                            "Additional macOS automation targets for this command as bundle IDs, or use true in clients that support boolean union payloads."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                                (
-                                    "accessibility".to_string(),
-                                    JsonSchema::Boolean {
-                                        description: Some(
-                                            "Set to true to allow macOS accessibility APIs for this command."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                                (
-                                    "calendar".to_string(),
-                                    JsonSchema::Boolean {
-                                        description: Some(
-                                            "Set to true to allow macOS Calendar access for this command."
-                                                .to_string(),
-                                        ),
-                                    },
-                                ),
-                            ]),
-                            required: None,
-                            additional_properties: Some(false.into()),
-                        },
-                    ),
-                ]),
-                required: None,
-                additional_properties: Some(false.into()),
-            },
+            create_permissions_schema(),
         );
     }
 
@@ -1100,6 +1105,30 @@ fn create_request_user_input_tool(
     })
 }
 
+fn create_request_permissions_tool() -> ToolSpec {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "reason".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional short explanation for why additional permissions are needed.".to_string(),
+            ),
+        },
+    );
+    properties.insert("permissions".to_string(), create_permissions_schema());
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "request_permissions".to_string(),
+        description: request_permissions_tool_description(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["permissions".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_close_agent_tool() -> ToolSpec {
     let mut properties = BTreeMap::new();
     properties.insert(
@@ -1503,6 +1532,32 @@ fn create_js_repl_reset_tool() -> ToolSpec {
     })
 }
 
+fn create_code_mode_tool(enabled_tool_names: &[String]) -> ToolSpec {
+    const CODE_MODE_FREEFORM_GRAMMAR: &str = r#"
+start: source
+source: /[\s\S]+/
+"#;
+
+    let enabled_list = if enabled_tool_names.is_empty() {
+        "none".to_string()
+    } else {
+        enabled_tool_names.join(", ")
+    };
+    let description = format!(
+        "Runs JavaScript in a Node-backed `node:vm` context. This is a freeform tool: send raw JavaScript source text (no JSON/quotes/markdown fences). Direct tool calls remain available while `code_mode` is enabled. Inside JavaScript, call nested tools with `await tools[name](args)` or identifier wrappers like `await shell(args)` when the tool name is a valid JS identifier. Nested tool calls resolve to arrays of content items. Function tools require JSON object arguments. Freeform tools require raw strings. Use synchronous `add_content(value)` with a content item or content-item array, including `add_content(await exec_command(...))`, to return the same content items a direct tool call would expose to the model. Only content passed to `add_content(value)` is surfaced back to the model. Enabled nested tools: {enabled_list}."
+    );
+
+    ToolSpec::Freeform(FreeformTool {
+        name: "code_mode".to_string(),
+        description,
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: CODE_MODE_FREEFORM_GRAMMAR.to_string(),
+        },
+    })
+}
+
 fn create_list_mcp_resources_tool() -> ToolSpec {
     let properties = BTreeMap::from([
         (
@@ -1809,6 +1864,7 @@ pub(crate) fn build_specs(
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
     use crate::tools::handlers::ArtifactsHandler;
+    use crate::tools::handlers::CodeModeHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GrepFilesHandler;
     use crate::tools::handlers::JsReplHandler;
@@ -1819,6 +1875,7 @@ pub(crate) fn build_specs(
     use crate::tools::handlers::MultiAgentHandler;
     use crate::tools::handlers::PlanHandler;
     use crate::tools::handlers::ReadFileHandler;
+    use crate::tools::handlers::RequestPermissionsHandler;
     use crate::tools::handlers::RequestUserInputHandler;
     use crate::tools::handlers::SearchToolBm25Handler;
     use crate::tools::handlers::ShellCommandHandler;
@@ -1839,14 +1896,36 @@ pub(crate) fn build_specs(
     let mcp_handler = Arc::new(McpHandler);
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler::from(config.shell_command_backend));
+    let request_permissions_handler = Arc::new(RequestPermissionsHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler {
         default_mode_request_user_input: config.default_mode_request_user_input,
     });
     let search_tool_handler = Arc::new(SearchToolBm25Handler);
+    let code_mode_handler = Arc::new(CodeModeHandler);
     let js_repl_handler = Arc::new(JsReplHandler);
     let js_repl_reset_handler = Arc::new(JsReplResetHandler);
     let artifacts_handler = Arc::new(ArtifactsHandler);
     let request_permission_enabled = config.request_permission_enabled;
+
+    if config.code_mode_enabled {
+        let nested_config = config.for_code_mode_nested_tools();
+        let (nested_specs, _) = build_specs(
+            &nested_config,
+            mcp_tools.clone(),
+            app_tools.clone(),
+            dynamic_tools,
+        )
+        .build();
+        let mut enabled_tool_names = nested_specs
+            .into_iter()
+            .map(|spec| spec.spec.name().to_string())
+            .filter(|name| name != "code_mode")
+            .collect::<Vec<_>>();
+        enabled_tool_names.sort();
+        enabled_tool_names.dedup();
+        builder.push_spec(create_code_mode_tool(&enabled_tool_names));
+        builder.register_handler("code_mode", code_mode_handler);
+    }
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1910,6 +1989,11 @@ pub(crate) fn build_specs(
             default_mode_request_user_input: config.default_mode_request_user_input,
         }));
         builder.register_handler("request_user_input", request_user_input_handler);
+    }
+
+    if config.request_permissions_tool_enabled {
+        builder.push_spec(create_request_permissions_tool());
+        builder.register_handler("request_permissions", request_permissions_handler);
     }
 
     if config.search_tool
@@ -1990,11 +2074,11 @@ pub(crate) fn build_specs(
             filters: config
                 .web_search_config
                 .as_ref()
-                .and_then(|cfg| cfg.filters.clone()),
+                .and_then(|cfg| cfg.filters.clone().map(Into::into)),
             user_location: config
                 .web_search_config
                 .as_ref()
-                .and_then(|cfg| cfg.user_location.clone()),
+                .and_then(|cfg| cfg.user_location.clone().map(Into::into)),
             search_context_size: config
                 .web_search_config
                 .as_ref()
@@ -2296,6 +2380,11 @@ mod tests {
             expected.insert(tool_name(&spec).to_string(), spec);
         }
 
+        if config.request_permission_enabled {
+            let spec = create_request_permissions_tool();
+            expected.insert(tool_name(&spec).to_string(), spec);
+        }
+
         // Exact name set match — this is the only test allowed to fail when tools change.
         let actual_names: HashSet<_> = actual.keys().cloned().collect();
         let expected_names: HashSet<_> = expected.keys().cloned().collect();
@@ -2422,6 +2511,55 @@ mod tests {
                 default_mode_request_user_input: true,
             })
         );
+    }
+
+    #[test]
+    fn request_permissions_requires_feature_flag() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let features = Features::with_defaults();
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        assert_lacks_tool_name(&tools, "request_permissions");
+
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RequestPermissionsTool);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+        let request_permissions_tool = find_tool(&tools, "request_permissions");
+        assert_eq!(
+            request_permissions_tool.spec,
+            create_request_permissions_tool()
+        );
+    }
+
+    #[test]
+    fn request_permissions_tool_is_independent_from_additional_permissions() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let mut features = Features::with_defaults();
+        features.enable(Feature::RequestPermissions);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &features,
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+        assert_lacks_tool_name(&tools, "request_permissions");
     }
 
     #[test]
@@ -2685,8 +2823,12 @@ mod tests {
             tool.spec,
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
-                filters: web_search_config.filters,
-                user_location: web_search_config.user_location,
+                filters: web_search_config
+                    .filters
+                    .map(crate::client_common::tools::ResponsesApiWebSearchFilters::from),
+                user_location: web_search_config
+                    .user_location
+                    .map(crate::client_common::tools::ResponsesApiWebSearchUserLocation::from),
                 search_context_size: web_search_config.search_context_size,
                 search_content_types: None,
             }
@@ -3526,6 +3668,67 @@ Examples of valid command strings:
         assert!(additional_properties.contains_key("network"));
         assert!(additional_properties.contains_key("file_system"));
         assert!(additional_properties.contains_key("macos"));
+    }
+
+    #[test]
+    fn request_permissions_tool_includes_full_permission_schema() {
+        let tool = super::create_request_permissions_tool();
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+            panic!("expected function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("expected object parameters");
+        };
+        let Some(JsonSchema::Object {
+            properties: permission_properties,
+            additional_properties,
+            ..
+        }) = properties.get("permissions")
+        else {
+            panic!("expected permissions object");
+        };
+
+        assert_eq!(additional_properties, &Some(false.into()));
+        assert!(permission_properties.contains_key("network"));
+        assert!(permission_properties.contains_key("file_system"));
+        assert!(permission_properties.contains_key("macos"));
+
+        let Some(JsonSchema::Object {
+            properties: network_properties,
+            additional_properties,
+            ..
+        }) = permission_properties.get("network")
+        else {
+            panic!("expected network object");
+        };
+        assert_eq!(additional_properties, &Some(false.into()));
+        assert!(network_properties.contains_key("enabled"));
+
+        let Some(JsonSchema::Object {
+            properties: file_system_properties,
+            additional_properties,
+            ..
+        }) = permission_properties.get("file_system")
+        else {
+            panic!("expected file_system object");
+        };
+        assert_eq!(additional_properties, &Some(false.into()));
+        assert!(file_system_properties.contains_key("read"));
+        assert!(file_system_properties.contains_key("write"));
+
+        let Some(JsonSchema::Object {
+            properties: macos_properties,
+            additional_properties,
+            ..
+        }) = permission_properties.get("macos")
+        else {
+            panic!("expected macos object");
+        };
+        assert_eq!(additional_properties, &Some(false.into()));
+        assert!(macos_properties.contains_key("preferences"));
+        assert!(macos_properties.contains_key("automations"));
+        assert!(macos_properties.contains_key("accessibility"));
+        assert!(macos_properties.contains_key("calendar"));
     }
 
     #[test]
