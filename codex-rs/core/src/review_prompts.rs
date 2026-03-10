@@ -1,3 +1,4 @@
+use codex_git::branch_upstream;
 use codex_git::merge_base_with_head;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
@@ -13,6 +14,7 @@ pub struct ResolvedReviewRequest {
 const UNCOMMITTED_PROMPT: &str = "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings.";
 
 const BASE_BRANCH_PROMPT_BACKUP: &str = "Review the code changes against the base branch '{branch}'. Start by finding the merge diff between the current branch and {branch}'s upstream e.g. (`git merge-base HEAD \"$(git rev-parse --abbrev-ref \"{branch}@{upstream}\")\"`), then run `git diff` against that SHA to see what changes we would merge into the {branch} branch. Provide prioritized, actionable findings.";
+const BASE_BRANCH_PROMPT_WITH_UPSTREAM: &str = "Review the code changes against the base branch '{branch}', whose configured upstream is '{upstream}'. If tool permissions allow it, refresh that upstream ref first (for example with `git fetch`) so the comparison uses the latest remote state. Then compare '{branch}' and '{upstream}'. If '{upstream}' is ahead of '{branch}' at all, including diverged histories where both refs have unique commits, use '{upstream}' as the base ref for this review; otherwise use '{branch}'. Find the merge diff between the current branch and that chosen base ref, and run `git diff` against the merge-base SHA to inspect what would merge into {branch}. Provide prioritized, actionable findings.";
 const BASE_BRANCH_PROMPT: &str = "Review the code changes against the base branch '{baseBranch}'. The merge base commit for this comparison is {mergeBaseSha}. Run `git diff {mergeBaseSha}` to inspect the changes relative to {baseBranch}. Provide prioritized, actionable findings.";
 
 const COMMIT_PROMPT_WITH_TITLE: &str = "Review the code changes introduced by commit {sha} (\"{title}\"). Provide prioritized, actionable findings.";
@@ -42,7 +44,11 @@ pub fn review_prompt(target: &ReviewTarget, cwd: &Path) -> anyhow::Result<String
     match target {
         ReviewTarget::UncommittedChanges => Ok(UNCOMMITTED_PROMPT.to_string()),
         ReviewTarget::BaseBranch { branch } => {
-            if let Some(commit) = merge_base_with_head(cwd, branch)? {
+            if let Some(upstream) = branch_upstream(cwd, branch)? {
+                Ok(BASE_BRANCH_PROMPT_WITH_UPSTREAM
+                    .replace("{branch}", branch)
+                    .replace("{upstream}", &upstream))
+            } else if let Some(commit) = merge_base_with_head(cwd, branch)? {
                 Ok(BASE_BRANCH_PROMPT
                     .replace("{baseBranch}", branch)
                     .replace("{mergeBaseSha}", &commit))
@@ -130,6 +136,7 @@ impl From<ResolvedReviewRequest> for ReviewRequest {
         ReviewRequest {
             target: resolved.target,
             user_facing_hint: Some(resolved.user_facing_hint),
+            validate_findings: false,
         }
     }
 }
@@ -138,6 +145,32 @@ impl From<ResolvedReviewRequest> for ReviewRequest {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::process::Command;
+    use tempfile::tempdir;
+
+    fn run_git_in(repo_path: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .current_dir(repo_path)
+            .args(args)
+            .status()
+            .expect("git command");
+        assert!(status.success(), "git command failed: {args:?}");
+    }
+
+    fn commit(repo_path: &Path, message: &str) {
+        run_git_in(
+            repo_path,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                message,
+            ],
+        );
+    }
 
     #[test]
     fn review_prompt_with_additional_instructions_appends_header() {
@@ -170,6 +203,45 @@ mod tests {
         assert_eq!(
             prompt,
             "Review the cumulative code changes from abc1234^ through HEAD, rooted at commit abc1234. Run `git diff abc1234^ HEAD` to inspect the updated stack. Provide prioritized, actionable findings."
+        );
+    }
+
+    #[test]
+    fn review_prompt_uses_newer_of_local_or_upstream_when_branch_tracks_remote() {
+        let temp = tempdir().expect("temp dir");
+        let repo = temp.path().join("repo");
+        let remote = temp.path().join("remote.git");
+        std::fs::create_dir_all(&repo).expect("repo dir");
+        std::fs::create_dir_all(&remote).expect("remote dir");
+
+        run_git_in(&remote, &["init", "--bare"]);
+        run_git_in(&repo, &["init", "--initial-branch=main"]);
+        run_git_in(&repo, &["config", "core.autocrlf", "false"]);
+        std::fs::write(repo.join("base.txt"), "base\n").expect("write base");
+        run_git_in(&repo, &["add", "base.txt"]);
+        commit(&repo, "base commit");
+        run_git_in(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "origin",
+                remote.to_str().expect("remote path"),
+            ],
+        );
+        run_git_in(&repo, &["push", "-u", "origin", "main"]);
+
+        let prompt = review_prompt(
+            &ReviewTarget::BaseBranch {
+                branch: "main".to_string(),
+            },
+            &repo,
+        )
+        .expect("prompt");
+
+        assert_eq!(
+            prompt,
+            "Review the code changes against the base branch 'main', whose configured upstream is 'origin/main'. If tool permissions allow it, refresh that upstream ref first (for example with `git fetch`) so the comparison uses the latest remote state. Then compare 'main' and 'origin/main'. If 'origin/main' is ahead of 'main' at all, including diverged histories where both refs have unique commits, use 'origin/main' as the base ref for this review; otherwise use 'main'. Find the merge diff between the current branch and that chosen base ref, and run `git diff` against the merge-base SHA to inspect what would merge into main. Provide prioritized, actionable findings."
         );
     }
 }

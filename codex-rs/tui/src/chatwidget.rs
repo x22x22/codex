@@ -165,6 +165,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
 use tracing::debug;
@@ -183,7 +184,6 @@ const PLAN_MODE_REASONING_SCOPE_TITLE: &str = "Apply reasoning change";
 const PLAN_MODE_REASONING_SCOPE_PLAN_ONLY: &str = "Apply to Plan mode override";
 const PLAN_MODE_REASONING_SCOPE_ALL_MODES: &str = "Apply to global default and Plan mode override";
 const CONNECTORS_SELECTION_VIEW_ID: &str = "connectors-selection";
-
 /// Choose the keybinding used to edit the most-recently queued message.
 ///
 /// Apple Terminal, Warp, and VSCode integrated terminals intercept or silently
@@ -4400,6 +4400,7 @@ impl ChatWidget {
                             instructions: prepared_args,
                         },
                         user_facing_hint: None,
+                        validate_findings: false,
                     },
                 });
                 self.bottom_pane.drain_pending_submission_state();
@@ -4538,13 +4539,14 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        self.submit_user_message_with_collaboration_mode(user_message, None)
+        self.submit_user_message_with_collaboration_mode(user_message, None, None)
     }
 
     fn submit_user_message_with_collaboration_mode(
         &mut self,
         user_message: UserMessage,
         collaboration_mode_override: Option<CollaborationMode>,
+        final_output_json_schema: Option<Value>,
     ) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
@@ -4762,7 +4764,7 @@ impl ChatWidget {
             effort: effective_mode.reasoning_effort(),
             summary: None,
             service_tier,
-            final_output_json_schema: None,
+            final_output_json_schema,
             collaboration_mode,
             personality,
         };
@@ -5211,17 +5213,21 @@ impl ChatWidget {
                 }
             }
             if self.review_loop_state.is_some() {
-                if output.findings.is_empty()
-                    && output.overall_correctness.trim().is_empty()
-                    && !output.overall_explanation.trim().is_empty()
-                {
-                    self.clear_review_loop_state();
-                    self.add_error_message(
-                        "Review loop stopped because the review turn did not produce structured output."
-                            .to_string(),
-                    );
-                } else if output.findings.is_empty() {
-                    self.clear_review_loop_state();
+                if output.findings.is_empty() {
+                    if self.review_loop_state.as_ref().is_some_and(|state| {
+                        state.fix_attempts_started == 0
+                            && matches!(state.spec.target, ReviewTarget::Commit { .. })
+                            && output.overall_correctness.trim().is_empty()
+                            && output.overall_confidence_score == 0.0
+                    }) {
+                        self.clear_review_loop_state();
+                        self.add_error_message(
+                            "Review loop stopped because reviewer did not return valid structured output."
+                                .to_string(),
+                        );
+                    } else {
+                        self.clear_review_loop_state();
+                    }
                 } else {
                     let stop_message = if let Some(state) = self.review_loop_state.as_mut() {
                         if let Some(max_fix_attempts) = state.spec.max_fix_attempts
@@ -5246,6 +5252,24 @@ impl ChatWidget {
                 }
             }
             // Final message is rendered as part of the AgentMessage.
+        } else if let Some(failure_message) = review.failure_message {
+            self.flush_answer_stream_with_separator();
+            self.flush_interrupt_queue();
+            self.flush_active_cell();
+
+            let failure_message = failure_message.trim().to_string();
+            let failure_message = if failure_message.is_empty() {
+                "Review turn did not finish cleanly.".to_string()
+            } else {
+                failure_message
+            };
+            if self.review_loop_state.is_some() {
+                self.clear_review_loop_state();
+            } else {
+                tracing::debug!(
+                    "review failed cleanly; relying on final assistant message: {failure_message}"
+                );
+            }
         } else if self.review_loop_state.is_some() {
             self.clear_review_loop_state();
             self.add_error_message(
@@ -5443,6 +5467,7 @@ impl ChatWidget {
                 self.submit_user_message_with_collaboration_mode(
                     prompt.into(),
                     default_collaboration_mode,
+                    None,
                 );
                 true
             }
@@ -8630,6 +8655,7 @@ impl ChatWidget {
                             review_request: ReviewRequest {
                                 target: ReviewTarget::UncommittedChanges,
                                 user_facing_hint: None,
+                                validate_findings: false,
                             },
                         }));
                     }
@@ -8721,6 +8747,7 @@ impl ChatWidget {
                                     branch: branch.clone(),
                                 },
                                 user_facing_hint: None,
+                                validate_findings: false,
                             },
                         }));
                     }
@@ -8773,6 +8800,7 @@ impl ChatWidget {
                                     title: Some(subject.clone()),
                                 },
                                 user_facing_hint: None,
+                                validate_findings: false,
                             },
                         }));
                     }
@@ -8824,6 +8852,7 @@ impl ChatWidget {
                                     instructions: trimmed,
                                 },
                                 user_facing_hint: None,
+                                validate_findings: false,
                             },
                         }));
                     }
@@ -9096,6 +9125,7 @@ impl ChatWidget {
                 ReviewRequest {
                     target: state.spec.target.clone(),
                     user_facing_hint: None,
+                    validate_findings: true,
                 }
             }
             ReviewTarget::Commit { .. }
@@ -9104,11 +9134,13 @@ impl ChatWidget {
                 ReviewRequest {
                     target: state.spec.target.clone(),
                     user_facing_hint: None,
+                    validate_findings: false,
                 }
             }
             ReviewTarget::Custom { .. } => ReviewRequest {
                 target: state.spec.target.clone(),
                 user_facing_hint: None,
+                validate_findings: true,
             },
             ReviewTarget::Commit { sha, title } if is_commit_follow_up => {
                 let prompt = codex_core::review_prompts::commit_follow_up_review_prompt(
@@ -9124,6 +9156,7 @@ impl ChatWidget {
                         "stack since {}",
                         codex_core::review_prompts::user_facing_hint(&state.spec.target)
                     )),
+                    validate_findings: true,
                 }
             }
             _ => {
@@ -9141,6 +9174,7 @@ impl ChatWidget {
                     user_facing_hint: Some(codex_core::review_prompts::user_facing_hint(
                         &state.spec.target,
                     )),
+                    validate_findings: true,
                 }
             }
         };
@@ -9496,6 +9530,7 @@ pub(crate) fn show_review_commit_picker_with_entries(
                             title: Some(subject.clone()),
                         },
                         user_facing_hint: None,
+                        validate_findings: false,
                     },
                 }));
             })],

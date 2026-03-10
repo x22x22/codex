@@ -1475,6 +1475,7 @@ async fn entered_review_mode_uses_request_hint() {
                 branch: "feature".to_string(),
             },
             user_facing_hint: Some("feature branch".to_string()),
+            validate_findings: false,
         }),
     });
 
@@ -1494,6 +1495,7 @@ async fn entered_review_mode_defaults_to_current_changes_banner() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
             user_facing_hint: None,
+            validate_findings: false,
         }),
     });
 
@@ -1512,6 +1514,7 @@ async fn live_agent_message_renders_during_review_mode() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
             user_facing_hint: None,
+            validate_findings: false,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -1538,6 +1541,7 @@ async fn thread_snapshot_replay_preserves_agent_message_during_review_mode() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
             user_facing_hint: None,
+            validate_findings: false,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -1580,6 +1584,7 @@ async fn review_restores_context_window_indicator() {
                 branch: "feature".to_string(),
             },
             user_facing_hint: Some("feature branch".to_string()),
+            validate_findings: false,
         }),
     });
 
@@ -1596,6 +1601,7 @@ async fn review_restores_context_window_indicator() {
         id: "review-end".into(),
         msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
             review_output: None,
+            failure_message: None,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -6309,6 +6315,7 @@ async fn custom_prompt_submit_sends_review_op() {
                         instructions: "please audit dependencies".to_string(),
                     },
                     user_facing_hint: None,
+                    validate_findings: false,
                 }
             );
         }
@@ -6692,16 +6699,46 @@ async fn review_loop_stops_immediately_when_first_review_has_no_findings() {
         ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
             user_facing_hint: None,
+            validate_findings: true,
         }
     );
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(no_findings_review_output()),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
 
     assert!(chat.review_loop_state.is_none());
     assert_no_review_or_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn review_loop_validation_failure_stops_with_error() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    let failure_message =
+        "Review findings validation did not complete cleanly, so no findings were surfaced.";
+
+    chat.on_review_loop_target_selected(ReviewTarget::UncommittedChanges, None);
+    chat.start_review_loop(None);
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: None,
+        failure_message: Some(failure_message.to_string()),
+    });
+    complete_assistant_message(&mut chat, "review-failure", failure_message, None);
+    chat.on_task_complete(None, false);
+
+    assert!(chat.review_loop_state.is_none());
+    assert_no_review_or_submit_op(&mut op_rx);
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_snapshot!("review_loop_validation_failure", rendered);
 }
 
 #[tokio::test]
@@ -6716,6 +6753,7 @@ async fn review_loop_findings_trigger_fix_turn_with_required_prompt() {
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(review_output.clone()),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
 
@@ -6751,6 +6789,7 @@ async fn review_loop_findings_trigger_fix_turn_with_default_mode_in_plan() {
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(review_output),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
 
@@ -6792,6 +6831,7 @@ async fn review_loop_commit_targets_append_commit_requirement_to_fix_prompt() {
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(review_output),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
 
@@ -6810,6 +6850,85 @@ async fn review_loop_commit_targets_append_commit_requirement_to_fix_prompt() {
     assert!(
         text.contains("Before finishing, commit the fixes in a new git commit so the next review pass includes them."),
         "expected commit reminder in fix prompt: {text:?}"
+    );
+}
+
+#[tokio::test]
+async fn review_loop_initial_commit_review_skips_findings_validation() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.on_review_loop_target_selected(
+        ReviewTarget::Commit {
+            sha: "abc1234".to_string(),
+            title: Some("Add review loop".to_string()),
+        },
+        None,
+    );
+    chat.start_review_loop(None);
+    let generation = chat
+        .review_loop_state
+        .as_ref()
+        .expect("loop state")
+        .generation;
+    chat.on_review_loop_initial_head_resolved(generation, Some("head-1".to_string()));
+
+    assert_eq!(
+        next_review_request(&mut op_rx),
+        ReviewRequest {
+            target: ReviewTarget::Commit {
+                sha: "abc1234".to_string(),
+                title: Some("Add review loop".to_string()),
+            },
+            user_facing_hint: None,
+            validate_findings: false,
+        }
+    );
+}
+
+#[tokio::test]
+async fn review_loop_initial_commit_review_fallback_stops_with_error() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.on_review_loop_target_selected(
+        ReviewTarget::Commit {
+            sha: "abc1234".to_string(),
+            title: Some("Add review loop".to_string()),
+        },
+        None,
+    );
+    chat.start_review_loop(None);
+    let generation = chat
+        .review_loop_state
+        .as_ref()
+        .expect("loop state")
+        .generation;
+    chat.on_review_loop_initial_head_resolved(generation, Some("head-1".to_string()));
+    let _ = next_review_request(&mut op_rx);
+
+    chat.on_exited_review_mode(ExitedReviewModeEvent {
+        review_output: Some(ReviewOutputEvent {
+            overall_explanation: "plain text review output".to_string(),
+            ..Default::default()
+        }),
+        failure_message: None,
+    });
+    chat.on_task_complete(None, false);
+
+    assert!(chat.review_loop_state.is_none());
+    assert_no_review_or_submit_op(&mut op_rx);
+
+    let rendered = drain_insert_history(&mut rx)
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains(
+            "Review loop stopped because reviewer did not return valid structured output."
+        ),
+        "expected malformed commit review to stop the loop with an error: {rendered}"
     );
 }
 
@@ -6837,6 +6956,7 @@ async fn review_loop_commit_follow_up_review_uses_cumulative_stack_prompt() {
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(review_output),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
     let _ = next_submit_op(&mut op_rx);
@@ -6860,6 +6980,7 @@ async fn review_loop_commit_follow_up_review_uses_cumulative_stack_prompt() {
                 instructions: expected_prompt,
             },
             user_facing_hint: Some("stack since commit abc1234: Add review loop".to_string()),
+            validate_findings: true,
         }
     );
 }
@@ -6876,6 +6997,7 @@ async fn review_loop_stops_when_fix_attempt_cap_is_reached() {
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(review_output.clone()),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
     let _ = next_submit_op(&mut op_rx);
@@ -6885,6 +7007,7 @@ async fn review_loop_stops_when_fix_attempt_cap_is_reached() {
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(review_output),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
 
@@ -6913,6 +7036,7 @@ async fn review_loop_queued_messages_wait_until_loop_completes() {
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(review_output),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
     let fix_items = match next_submit_op(&mut op_rx) {
@@ -6934,6 +7058,7 @@ async fn review_loop_queued_messages_wait_until_loop_completes() {
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(no_findings_review_output()),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
 
@@ -6974,6 +7099,7 @@ async fn review_loop_commit_validation_failure_stops_with_error() {
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(review_output),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
     let _ = next_submit_op(&mut op_rx);
@@ -7017,6 +7143,7 @@ async fn review_loop_commit_validation_stops_when_fix_is_dirty_with_new_commit()
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(review_output),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
     let _ = next_submit_op(&mut op_rx);
@@ -7049,6 +7176,7 @@ async fn review_loop_state_survives_stream_error_during_fix_turn() {
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(review_output),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
     let _ = next_submit_op(&mut op_rx);
@@ -7095,6 +7223,7 @@ async fn review_loop_ignores_stale_commit_validation_callbacks() {
 
     chat.on_exited_review_mode(ExitedReviewModeEvent {
         review_output: Some(review_output),
+        failure_message: None,
     });
     chat.on_task_complete(None, false);
     let _ = next_submit_op(&mut op_rx);
@@ -10563,6 +10692,7 @@ async fn enter_queues_user_messages_while_review_is_running() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
             user_facing_hint: Some("current changes".to_string()),
+            validate_findings: false,
         }),
     });
     let _ = drain_insert_history(&mut rx);
@@ -10594,6 +10724,7 @@ async fn review_queues_user_messages_snapshot() {
         msg: EventMsg::EnteredReviewMode(ReviewRequest {
             target: ReviewTarget::UncommittedChanges,
             user_facing_hint: Some("current changes".to_string()),
+            validate_findings: false,
         }),
     });
     let _ = drain_insert_history(&mut rx);
