@@ -260,7 +260,7 @@ mod spawn {
             validate_reasoning_effort_for_preset(&preset, reasoning_effort)?;
             config.model_provider_id = turn.config.model_provider_id.clone();
             config.model_provider = turn.provider.clone();
-            config.model = Some(preset.model.clone());
+            config.model = Some(preset.model);
             config.model_reasoning_effort = Some(reasoning_effort);
             return Ok(());
         }
