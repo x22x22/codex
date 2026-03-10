@@ -141,6 +141,7 @@ class AskForApproval1(StrEnum):
 
 class Reject(BaseModel):
     mcp_elicitations: bool
+    request_permissions: bool
     rules: bool
     sandbox_approval: bool
 
@@ -321,6 +322,12 @@ class SkillsConfigWriteClientRequestMethod(RootModel[Literal["skills/config/writ
 class PluginInstallClientRequestMethod(RootModel[Literal["plugin/install"]]):
     root: Literal["plugin/install"] = Field(
         ..., title="Plugin/installClientRequestMethod"
+    )
+
+
+class PluginUninstallClientRequestMethod(RootModel[Literal["plugin/uninstall"]]):
+    root: Literal["plugin/uninstall"] = Field(
+        ..., title="Plugin/uninstallClientRequestMethod"
     )
 
 
@@ -2378,6 +2385,11 @@ class PatchChangeKind(
     root: AddPatchChangeKind | DeletePatchChangeKind | UpdatePatchChangeKind
 
 
+class PermissionGrantScope(StrEnum):
+    turn = "turn"
+    session = "session"
+
+
 class PermissionProfile(BaseModel):
     file_system: FileSystemPermissions | None = None
     macos: MacOsSeatbeltProfileExtensions | None = None
@@ -2419,6 +2431,10 @@ class PluginListParams(BaseModel):
         default=None,
         description="Optional working directories used to discover repo marketplaces. When omitted, only home-scoped marketplaces and the official curated marketplace are considered.",
     )
+
+
+class PluginUninstallParams(BaseModel):
+    plugin_id: str = Field(..., alias="pluginId")
 
 
 class ProductSurface(StrEnum):
@@ -2625,6 +2641,10 @@ class ReasoningTextDeltaNotification(BaseModel):
 
 class RejectConfig(BaseModel):
     mcp_elicitations: bool = Field(..., description="Reject MCP elicitation prompts.")
+    request_permissions: bool = Field(
+        ...,
+        description="Reject approval prompts related to built-in permission requests.",
+    )
     rules: bool = Field(
         ..., description="Reject prompts triggered by execpolicy `prompt` rules."
     )
@@ -4699,6 +4719,14 @@ class PluginInstallClientRequest(BaseModel):
     params: PluginInstallParams
 
 
+class PluginUninstallClientRequest(BaseModel):
+    id: RequestId
+    method: PluginUninstallClientRequestMethod = Field(
+        ..., title="Plugin/uninstallClientRequestMethod"
+    )
+    params: PluginUninstallParams
+
+
 class TurnInterruptClientRequest(BaseModel):
     id: RequestId
     method: TurnInterruptClientRequestMethod = Field(
@@ -5686,6 +5714,7 @@ class PermissionsRequestApprovalParams(BaseModel):
 
 class PermissionsRequestApprovalResponse(BaseModel):
     permissions: GrantedPermissionProfile
+    scope: PermissionGrantScope | None = "turn"
 
 
 class PlanItemArg(BaseModel):
@@ -6972,6 +7001,7 @@ class ClientRequest(
         | AppListClientRequest
         | SkillsConfigWriteClientRequest
         | PluginInstallClientRequest
+        | PluginUninstallClientRequest
         | TurnStartClientRequest
         | TurnSteerClientRequest
         | TurnInterruptClientRequest
@@ -7023,6 +7053,7 @@ class ClientRequest(
         | AppListClientRequest
         | SkillsConfigWriteClientRequest
         | PluginInstallClientRequest
+        | PluginUninstallClientRequest
         | TurnStartClientRequest
         | TurnSteerClientRequest
         | TurnInterruptClientRequest

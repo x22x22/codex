@@ -179,6 +179,7 @@ class AskForApproval1(StrEnum):
 
 class Reject(BaseModel):
     mcp_elicitations: bool
+    request_permissions: bool
     rules: bool
     sandbox_approval: bool
 
@@ -338,6 +339,12 @@ class SkillsConfigWriteClientRequestMethod(RootModel[Literal["skills/config/writ
 class PluginInstallClientRequestMethod(RootModel[Literal["plugin/install"]]):
     root: Literal["plugin/install"] = Field(
         ..., title="Plugin/installClientRequestMethod"
+    )
+
+
+class PluginUninstallClientRequestMethod(RootModel[Literal["plugin/uninstall"]]):
+    root: Literal["plugin/uninstall"] = Field(
+        ..., title="Plugin/uninstallClientRequestMethod"
     )
 
 
@@ -2533,6 +2540,14 @@ class PluginSummary(BaseModel):
     interface: PluginInterface | None = None
     name: str
     source: PluginSource
+
+
+class PluginUninstallParams(BaseModel):
+    plugin_id: str = Field(..., alias="pluginId")
+
+
+class PluginUninstallResponse(BaseModel):
+    pass
 
 
 class ProductSurface(StrEnum):
@@ -4796,6 +4811,14 @@ class PluginInstallClientRequest(BaseModel):
     params: PluginInstallParams
 
 
+class PluginUninstallClientRequest(BaseModel):
+    id: RequestId
+    method: PluginUninstallClientRequestMethod = Field(
+        ..., title="Plugin/uninstallClientRequestMethod"
+    )
+    params: PluginUninstallParams
+
+
 class TurnInterruptClientRequest(BaseModel):
     id: RequestId
     method: TurnInterruptClientRequestMethod = Field(
@@ -6994,6 +7017,7 @@ class ClientRequest(
         | AppListClientRequest
         | SkillsConfigWriteClientRequest
         | PluginInstallClientRequest
+        | PluginUninstallClientRequest
         | TurnStartClientRequest
         | TurnSteerClientRequest
         | TurnInterruptClientRequest
@@ -7045,6 +7069,7 @@ class ClientRequest(
         | AppListClientRequest
         | SkillsConfigWriteClientRequest
         | PluginInstallClientRequest
+        | PluginUninstallClientRequest
         | TurnStartClientRequest
         | TurnSteerClientRequest
         | TurnInterruptClientRequest

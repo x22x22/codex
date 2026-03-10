@@ -334,7 +334,7 @@ pub fn generate_python_with_options(
 }
 
 fn generate_python_models(schema_path: &Path, output_path: &Path) -> Result<()> {
-    let mut command = datamodel_codegen_command();
+    let mut command = datamodel_codegen_command()?;
     command
         .arg("--input")
         .arg(schema_path)
@@ -370,7 +370,7 @@ fn generate_python_models(schema_path: &Path, output_path: &Path) -> Result<()> 
     if !status.success() {
         return Err(anyhow!(
             "Python model generator failed with status {status}. \
-Install `uv`/`uvx` or `datamodel-codegen` to regenerate app-server Python bindings."
+Install `uv` to run the vendored Python codegen toolchain."
         ));
     }
 
@@ -385,33 +385,28 @@ Install `uv`/`uvx` or `datamodel-codegen` to regenerate app-server Python bindin
     Ok(())
 }
 
-fn datamodel_codegen_command() -> Command {
-    if command_exists("uv") {
-        // Keep the uv-managed tool environment next to the protocol crate source,
-        // not under schema/python/, which is regenerated as a fixture artifact.
-        let python_codegen_project = Path::new(env!("CARGO_MANIFEST_DIR")).join("python");
-        let mut command = Command::new("uv");
-        command
-            .arg("run")
-            .arg("--project")
-            .arg(python_codegen_project)
-            .arg("--locked")
-            .arg("python")
-            .arg("-m")
-            .arg("datamodel_code_generator");
-        return command;
+fn datamodel_codegen_command() -> Result<Command> {
+    // Keep the uv-managed tool environment next to the protocol crate source,
+    // not under schema/python/, which is regenerated as a fixture artifact.
+    let python_codegen_project = Path::new(env!("CARGO_MANIFEST_DIR")).join("python");
+    if !uv_exists() {
+        return Err(anyhow!(
+            "Python model generation requires `uv` to be installed so the vendored \
+Python codegen toolchain can run from {}.",
+            python_codegen_project.display()
+        ));
     }
 
-    if command_exists("uvx") {
-        let mut command = Command::new("uvx");
-        command
-            .arg("--from")
-            .arg("datamodel-code-generator")
-            .arg("datamodel-codegen");
-        return command;
-    }
-
-    Command::new("datamodel-codegen")
+    let mut command = Command::new("uv");
+    command
+        .arg("run")
+        .arg("--project")
+        .arg(python_codegen_project)
+        .arg("--locked")
+        .arg("python")
+        .arg("-m")
+        .arg("datamodel_code_generator");
+    Ok(command)
 }
 
 fn run_ruff_on_python_files(ruff: Option<&Path>, out_dir: &Path) -> Result<()> {
@@ -438,39 +433,36 @@ fn ruff_command(ruff: Option<&Path>) -> Result<Command> {
         return Ok(Command::new(ruff_bin));
     }
 
-    if command_exists("uv") {
-        let python_codegen_project = Path::new(env!("CARGO_MANIFEST_DIR")).join("python");
-        let mut command = Command::new("uv");
-        command
-            .arg("run")
-            .arg("--project")
-            .arg(python_codegen_project)
-            .arg("--locked")
-            .arg("ruff");
-        return Ok(command);
+    let python_codegen_project = Path::new(env!("CARGO_MANIFEST_DIR")).join("python");
+    if !uv_exists() {
+        return Err(anyhow!(
+            "Ruff formatting requires `uv` to be installed so the vendored Python \
+codegen toolchain can run from {}, or pass `--ruff /path/to/ruff`.",
+            python_codegen_project.display()
+        ));
     }
 
-    if command_exists("ruff") {
-        return Ok(Command::new("ruff"));
-    }
-
-    Err(anyhow!(
-        "Ruff was requested for Python generation, but no Ruff command is available. \
-Install `uv` for the vendored Python toolchain or pass `--ruff /path/to/ruff`."
-    ))
+    let mut command = Command::new("uv");
+    command
+        .arg("run")
+        .arg("--project")
+        .arg(python_codegen_project)
+        .arg("--locked")
+        .arg("ruff");
+    Ok(command)
 }
 
-fn command_exists(command: &str) -> bool {
+fn uv_exists() -> bool {
     std::env::var_os("PATH").is_some_and(|paths| {
         std::env::split_paths(&paths).any(|path| {
-            let candidate = path.join(command);
+            let candidate = path.join("uv");
             if candidate.is_file() {
                 return true;
             }
 
             #[cfg(windows)]
             {
-                let candidate = path.join(format!("{command}.exe"));
+                let candidate = path.join("uv.exe");
                 candidate.is_file()
             }
 
