@@ -44,7 +44,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
     );
-    section.push_str("- `add_content(value)` is synchronous. It accepts a content item or an array of content items, so `add_content(await exec_command(...))` returns the same content items a direct tool call would expose to the model.\n");
+    section.push_str("- `add_content(value)` is synchronous. It accepts a string, a content item, or an array of content items. `add_content(await exec_command(...))` returns the same content items a direct tool call would expose to the model, and structured results can be converted to text first with `JSON.stringify(...)` when needed.\n");
     section
         .push_str("- Only content passed to `add_content(value)` is surfaced back to the model.");
     Some(section)
