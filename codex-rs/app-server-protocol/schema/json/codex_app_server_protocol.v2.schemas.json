@@ -3671,6 +3671,10 @@
         "description": {
           "type": "string"
         },
+        "injectIntoContext": {
+          "default": true,
+          "type": "boolean"
+        },
         "inputSchema": true,
         "name": {
           "type": "string"
@@ -5140,6 +5144,13 @@
             "callId": {
               "type": "string"
             },
+            "providerOwned": {
+              "default": false,
+              "type": "boolean"
+            },
+            "threadId": {
+              "type": "string"
+            },
             "tool": {
               "type": "string"
             },
@@ -5157,6 +5168,7 @@
           "required": [
             "arguments",
             "callId",
+            "threadId",
             "tool",
             "turnId",
             "type"
@@ -14813,6 +14825,33 @@
         }
       },
       "required": [
+        "inputSchema",
+        "name"
+      ],
+      "type": "object"
+    },
+    "ToolProviderToolSpec": {
+      "properties": {
+        "defaultTimeoutMs": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "description": {
+          "type": "string"
+        },
+        "injectIntoContext": {
+          "type": "boolean"
+        },
+        "inputSchema": true,
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "defaultTimeoutMs",
+        "description",
+        "injectIntoContext",
         "inputSchema",
         "name"
       ],

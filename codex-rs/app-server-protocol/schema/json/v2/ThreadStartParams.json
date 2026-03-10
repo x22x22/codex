@@ -56,6 +56,10 @@
         "description": {
           "type": "string"
         },
+        "injectIntoContext": {
+          "default": true,
+          "type": "boolean"
+        },
         "inputSchema": true,
         "name": {
           "type": "string"

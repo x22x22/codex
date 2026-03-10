@@ -3096,6 +3096,8 @@ await codex.emitImage({ bytes: png, mimeType: "image/png", detail: "ultra" });
                     "properties": {},
                     "additionalProperties": false
                 }),
+                inject_into_context: true,
+                provider_owned: false,
             }])
             .await;
         if !turn
