@@ -89,19 +89,26 @@ add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_mark
         "code_mode call failed unexpectedly: {output}"
     );
     let parsed: Value = serde_json::from_str(&output)?;
-    assert!(
-        parsed
-            .get("chunk_id")
-            .and_then(Value::as_str)
-            .is_some_and(|chunk_id| !chunk_id.is_empty())
-    );
-    assert_eq!(
-        parsed.get("output").and_then(Value::as_str),
-        Some("code_mode_exec_marker"),
-    );
-    assert_eq!(parsed.get("exit_code").and_then(Value::as_i64), Some(0));
-    assert!(parsed.get("wall_time_seconds").is_some());
-    assert!(parsed.get("session_id").is_none());
+    let text = parsed
+        .as_array()
+        .and_then(|items| items.as_slice().first())
+        .and_then(|item| {
+            item.get("type")
+                .and_then(Value::as_str)
+                .zip(item.get("text"))
+        })
+        .and_then(|(kind, text)| (kind == "input_text").then_some(text))
+        .and_then(Value::as_str)
+        .expect("nested exec_command should return a single input_text content item");
+    let chunk_id = text
+        .lines()
+        .find_map(|line| line.strip_prefix("Chunk ID: "))
+        .expect("exec_command output should include a chunk id");
+    assert!(!chunk_id.is_empty(), "chunk id should not be empty");
+    assert!(text.contains("Wall time: "));
+    assert!(text.contains("Process exited with code 0"));
+    assert!(text.contains("Output:\ncode_mode_exec_marker"));
+    assert!(!text.contains("Process running with session ID"));
 
     Ok(())
 }
