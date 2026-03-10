@@ -323,15 +323,6 @@ pub fn validate_builtin_tools_request(requested_builtin_tools: &[String]) -> Res
             invalid_names.join(", ")
         ));
     }
-    if requested_builtin_tools
-        .iter()
-        .any(|name| name == "write_stdin")
-        && !requested_builtin_tools
-            .iter()
-            .any(|name| name == "exec_command")
-    {
-        return Err("builtinTools cannot enable write_stdin without exec_command".to_string());
-    }
     Ok(())
 }
 
@@ -4106,14 +4097,6 @@ mod tests {
                 "container.exec".to_string(),
             ]),
             Ok(())
-        );
-    }
-
-    #[test]
-    fn validate_builtin_tools_request_requires_exec_for_write_stdin() {
-        assert_eq!(
-            validate_builtin_tools_request(&["write_stdin".to_string()]),
-            Err("builtinTools cannot enable write_stdin without exec_command".to_string())
         );
     }
 
