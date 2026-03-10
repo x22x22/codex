@@ -183,6 +183,7 @@ struct SessionState {
     current_mode_id: String,
     current_mode: CollaborationMode,
     cwd: String,
+    has_turns: bool,
     last_title: Option<String>,
     modes: Vec<ModeBinding>,
     thread_id: String,
@@ -857,6 +858,8 @@ impl AcpServer {
                 resume_response.reasoning_effort,
             )
             .await?;
+        let mut session_state = session_state;
+        session_state.has_turns = !read_response.thread.turns.is_empty();
         let modes = session_state.modes_payload();
         let config_options = session_state.config_options.clone();
         let updated_at = rfc3339_timestamp(resume_response.thread.updated_at);
@@ -879,6 +882,16 @@ impl AcpServer {
     async fn handle_session_resume(&mut self, request: JsonRpcRequest) -> IoResult<()> {
         self.require_initialized(&request.id)?;
         let params = self.parse_params::<SessionResumeParams>(request.params)?;
+        if let Some(session) = self.sessions.get(&params.session_id) {
+            self.send_result(
+                request.id,
+                serde_json::to_value(SessionResumeResult {
+                    modes: session.modes_payload(),
+                    config_options: session.config_options.clone(),
+                })?,
+            )?;
+            return Ok(());
+        }
         let cwd = params.cwd.clone();
         let request_overrides = build_request_overrides_from_mcp_servers(&params.mcp_servers)
             .map_err(invalid_params_error)?;
@@ -907,6 +920,8 @@ impl AcpServer {
                 response.reasoning_effort,
             )
             .await?;
+        let mut session_state = session_state;
+        session_state.has_turns = true;
         let modes = session_state.modes_payload();
         let config_options = session_state.config_options.clone();
         let updated_at = rfc3339_timestamp(response.thread.updated_at);
@@ -930,6 +945,33 @@ impl AcpServer {
         let cwd = params.cwd.clone();
         let request_overrides = build_request_overrides_from_mcp_servers(&params.mcp_servers)
             .map_err(invalid_params_error)?;
+        let source_session = self
+            .sessions
+            .get(&params.session_id)
+            .map(|session| SessionState {
+                active_turn_id: session.active_turn_id.clone(),
+                config_options: session.config_options.clone(),
+                current_mode_id: session.current_mode_id.clone(),
+                current_mode: session.current_mode.clone(),
+                cwd: session.cwd.clone(),
+                has_turns: session.has_turns,
+                last_title: session.last_title.clone(),
+                modes: session.modes.clone(),
+                thread_id: session.thread_id.clone(),
+            });
+
+        if let Some(source_session) = source_session
+            && !source_session.has_turns
+        {
+            return self
+                .start_fork_for_unmaterialized_session(
+                    request.id,
+                    cwd,
+                    request_overrides,
+                    source_session,
+                )
+                .await;
+        }
 
         let request_id = self.next_app_request_id();
         let response: ThreadForkResponse = self
@@ -956,6 +998,8 @@ impl AcpServer {
                 response.reasoning_effort,
             )
             .await?;
+        let mut session_state = session_state;
+        session_state.has_turns = !response.thread.turns.is_empty();
         let modes = session_state.modes_payload();
         let config_options = session_state.config_options.clone();
         let updated_at = rfc3339_timestamp(response.thread.updated_at);
@@ -1409,6 +1453,58 @@ impl AcpServer {
         )
     }
 
+    async fn start_fork_for_unmaterialized_session(
+        &mut self,
+        request_id: RequestId,
+        cwd: String,
+        request_overrides: Option<HashMap<String, JsonValue>>,
+        source_session: SessionState,
+    ) -> IoResult<()> {
+        let app_request_id = self.next_app_request_id();
+        let response: ThreadStartResponse = self
+            .app_client
+            .request_typed(ClientRequest::ThreadStart {
+                request_id: app_request_id,
+                params: ThreadStartParams {
+                    cwd: Some(cwd.clone()),
+                    config: request_overrides,
+                    ..Default::default()
+                },
+            })
+            .await
+            .map_err(io_error_from_typed_request)?;
+
+        let session_id = response.thread.id.clone();
+        let mut session_state = self
+            .build_session_state(
+                response.thread.id.clone(),
+                cwd,
+                response.thread.name.clone(),
+                &response.model,
+                response.reasoning_effort,
+            )
+            .await?;
+        session_state.current_mode_id = source_session.current_mode_id.clone();
+        session_state.current_mode = source_session.current_mode.clone();
+        session_state.config_options = source_session.config_options.clone();
+        session_state.modes = source_session.modes;
+
+        let modes = session_state.modes_payload();
+        let config_options = session_state.config_options.clone();
+        let updated_at = rfc3339_timestamp(response.thread.updated_at);
+        self.sessions.insert(session_id.clone(), session_state);
+
+        self.send_result(
+            request_id,
+            serde_json::to_value(SessionForkResult {
+                session_id: session_id.clone(),
+                modes,
+                config_options,
+            })?,
+        )?;
+        self.maybe_send_session_info_update(&session_id, updated_at)
+    }
+
     async fn build_session_state(
         &mut self,
         thread_id: String,
@@ -1439,6 +1535,7 @@ impl AcpServer {
             current_mode,
             current_mode_id,
             cwd,
+            has_turns: false,
             last_title,
             modes: mode_bindings,
             thread_id,
@@ -1612,6 +1709,7 @@ impl AcpServer {
                 && session.active_turn_id.as_deref() == Some(turn_id.as_str())
             {
                 session.active_turn_id = None;
+                session.has_turns = true;
             }
 
             match notification.turn.status {
@@ -2274,7 +2372,13 @@ fn format_resource_text(resource: &crate::protocol::ResourceContent, text: &str)
 }
 
 fn file_uri_to_path(uri: &str) -> Option<PathBuf> {
-    uri.strip_prefix("file://").map(PathBuf::from)
+    let Ok(url) = url::Url::parse(uri) else {
+        return None;
+    };
+    if url.scheme() != "file" {
+        return None;
+    }
+    url.to_file_path().ok()
 }
 
 fn build_command_permission_options(
@@ -3107,6 +3211,30 @@ mod tests {
                 text: "<resource uri=\"file:///tmp/test.txt\" mimeType=\"text/plain\">\nhello\n</resource>"
                     .to_string(),
                 text_elements: Vec::new(),
+            }]
+        );
+    }
+
+    #[test]
+    fn file_uri_to_path_decodes_local_image_paths() {
+        let path = file_uri_to_path("file:///tmp/space%20cat.png");
+        assert_eq!(path, Some(PathBuf::from("/tmp/space cat.png")));
+    }
+
+    #[test]
+    fn prompt_to_user_input_supports_local_image_resources() {
+        let input = prompt_to_user_input(&[PromptContent::Resource {
+            resource: crate::protocol::ResourceContent {
+                uri: "file:///tmp/space%20cat.png".to_string(),
+                mime_type: Some("image/png".to_string()),
+                text: None,
+            },
+        }])
+        .expect("local image resources should be supported");
+        assert_eq!(
+            input,
+            vec![UserInput::LocalImage {
+                path: PathBuf::from("/tmp/space cat.png"),
             }]
         );
     }
