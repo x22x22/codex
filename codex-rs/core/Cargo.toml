@@ -81,6 +81,7 @@ rmcp = { workspace = true, default-features = false, features = [
     "schemars",
     "server",
 ] }
+rusty_v8 = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

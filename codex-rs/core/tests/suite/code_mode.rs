@@ -16,6 +16,7 @@ use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use regex_lite::Regex;
 use std::fs;
+use std::path::PathBuf;
 use wiremock::MockServer;
 
 fn custom_tool_output_text_and_success(
@@ -131,6 +132,54 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
 
     let file_path = test.cwd_path().join(file_name);
     assert_eq!(fs::read_to_string(&file_path)?, "hello from code_mode\n");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_does_not_require_node_startup_validation() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::CodeMode);
+        config.js_repl_node_path = Some(PathBuf::from("/definitely/missing/node"));
+    });
+    let test = builder.build(&server).await?;
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call(
+                "call-1",
+                "code_mode",
+                "add_content({ type: \"input_text\", text: \"v8-backed\" });",
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let second_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("use code_mode without Node").await?;
+
+    let req = second_mock.single_request();
+    let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode call failed unexpectedly: {output}"
+    );
+    assert_eq!(output, "v8-backed");
 
     Ok(())
 }

@@ -71,5 +71,3 @@ for (const name of __codexEnabledToolNames) {
     });
   }
 }
-
-__CODE_MODE_USER_CODE_PLACEHOLDER__
