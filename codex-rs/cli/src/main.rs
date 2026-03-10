@@ -341,16 +341,20 @@ struct AppServerCommand {
     analytics_default_enabled: bool,
 }
 
+#[expect(
+    clippy::enum_variant_names,
+    reason = "app-server subcommand names are part of the stable CLI surface"
+)]
 #[derive(Debug, clap::Subcommand)]
 enum AppServerSubcommand {
     /// [experimental] Generate TypeScript bindings for the app server protocol.
-    Ts(GenerateTsCommand),
+    GenerateTs(GenerateTsCommand),
 
     /// [experimental] Generate JSON Schema for the app server protocol.
-    JsonSchema(GenerateJsonSchemaCommand),
+    GenerateJsonSchema(GenerateJsonSchemaCommand),
 
     /// [experimental] Generate Python/Pydantic bindings for the app server protocol.
-    Python(GeneratePythonCommand),
+    GeneratePython(GeneratePythonCommand),
 }
 
 #[derive(Debug, Args)]
@@ -632,7 +636,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 )
                 .await?;
             }
-            Some(AppServerSubcommand::Ts(gen_cli)) => {
+            Some(AppServerSubcommand::GenerateTs(gen_cli)) => {
                 let options = codex_app_server_protocol::GenerateTsOptions {
                     experimental_api: gen_cli.experimental,
                     ..Default::default()
@@ -643,13 +647,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     options,
                 )?;
             }
-            Some(AppServerSubcommand::JsonSchema(gen_cli)) => {
+            Some(AppServerSubcommand::GenerateJsonSchema(gen_cli)) => {
                 codex_app_server_protocol::generate_json_with_experimental(
                     &gen_cli.out_dir,
                     gen_cli.experimental,
                 )?;
             }
-            Some(AppServerSubcommand::Python(gen_cli)) => {
+            Some(AppServerSubcommand::GeneratePython(gen_cli)) => {
                 codex_app_server_protocol::generate_python_with_options(
                     &gen_cli.out_dir,
                     gen_cli.ruff.as_deref(),
