@@ -179,6 +179,13 @@ impl FileSystemSandboxPolicy {
                 .any(|entry| entry.access == FileSystemAccessMode::None)
     }
 
+    /// Returns true when a restricted policy contains any entry that really
+    /// reduces a broader `:root = write` grant.
+    ///
+    /// Raw entry presence is not enough here: an equally specific `write`
+    /// entry for the same target wins under the normal precedence rules, so a
+    /// shadowed `read` entry must not downgrade the policy out of full-disk
+    /// write mode.
     fn has_write_narrowing_entries(&self) -> bool {
         matches!(self.kind, FileSystemSandboxKind::Restricted)
             && self.entries.iter().any(|entry| {
@@ -199,6 +206,8 @@ impl FileSystemSandboxPolicy {
             })
     }
 
+    /// Returns true when a higher-priority `write` entry targets the same
+    /// location as `entry`, so `entry` cannot narrow effective write access.
     fn has_same_target_write_override(&self, entry: &FileSystemSandboxEntry) -> bool {
         self.entries.iter().any(|candidate| {
             candidate.access.can_write()
@@ -762,6 +771,8 @@ fn resolve_candidate_path(path: &Path, cwd: &Path) -> Option<AbsolutePathBuf> {
     }
 }
 
+/// Mirrors the tie-breaker used by `resolve_access_with_cwd`: for equally
+/// specific entries, `none` beats `write`, and `write` beats `read`.
 fn access_priority(access: FileSystemAccessMode) -> u8 {
     match access {
         FileSystemAccessMode::Read => 0,
@@ -770,6 +781,12 @@ fn access_priority(access: FileSystemAccessMode) -> u8 {
     }
 }
 
+/// Returns true when two config paths refer to the same exact target before
+/// any prefix matching is applied.
+///
+/// This is intentionally narrower than full path resolution: it only answers
+/// the "can one entry shadow another at the same specificity?" question used
+/// by `has_write_narrowing_entries`.
 fn file_system_paths_share_target(left: &FileSystemPath, right: &FileSystemPath) -> bool {
     match (left, right) {
         (FileSystemPath::Path { path: left }, FileSystemPath::Path { path: right }) => {
@@ -785,6 +802,8 @@ fn file_system_paths_share_target(left: &FileSystemPath, right: &FileSystemPath)
     }
 }
 
+/// Compares special-path tokens that resolve to the same concrete target
+/// without needing a cwd.
 fn special_paths_share_target(left: &FileSystemSpecialPath, right: &FileSystemSpecialPath) -> bool {
     match (left, right) {
         (FileSystemSpecialPath::Root, FileSystemSpecialPath::Root)
@@ -821,6 +840,11 @@ fn special_paths_share_target(left: &FileSystemSpecialPath, right: &FileSystemSp
     }
 }
 
+/// Matches cwd-independent special paths against absolute `Path` entries when
+/// they name the same location.
+///
+/// We intentionally only fold the special paths whose concrete meaning is
+/// stable without a cwd, such as `/` and `/tmp`.
 fn special_path_matches_absolute_path(
     value: &FileSystemSpecialPath,
     path: &AbsolutePathBuf,
@@ -832,6 +856,8 @@ fn special_path_matches_absolute_path(
     }
 }
 
+/// Orders resolved entries so the most specific path wins first, then applies
+/// the access tie-breaker from `access_priority`.
 fn resolved_entry_precedence(entry: &ResolvedFileSystemEntry) -> (usize, u8) {
     let specificity = entry.path.as_path().components().count();
     (specificity, access_priority(entry.access))
