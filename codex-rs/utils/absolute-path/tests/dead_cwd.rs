@@ -10,7 +10,7 @@ struct CurrentDirGuard {
 
 impl Drop for CurrentDirGuard {
     fn drop(&mut self) {
-        std::env::set_current_dir(&self.previous).expect("restore cwd");
+        let _ = std::env::set_current_dir(&self.previous);
     }
 }
 
