@@ -10,6 +10,12 @@ use crate::endpoint::realtime_websocket::protocol::SessionAudio;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioFormat;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioInput;
 use crate::endpoint::realtime_websocket::protocol::SessionAudioOutput;
+use crate::endpoint::realtime_websocket::protocol::SessionAudioOutputFormat;
+use crate::endpoint::realtime_websocket::protocol::SessionTool;
+use crate::endpoint::realtime_websocket::protocol::SessionToolParameters;
+use crate::endpoint::realtime_websocket::protocol::SessionToolProperties;
+use crate::endpoint::realtime_websocket::protocol::SessionToolProperty;
+use crate::endpoint::realtime_websocket::protocol::SessionTurnDetection;
 use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
@@ -19,6 +25,7 @@ use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::HeaderValue;
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -228,6 +235,20 @@ impl RealtimeWebsocketConnection {
             .await
     }
 
+    pub async fn send_function_call_output(
+        &self,
+        call_id: String,
+        output_text: String,
+    ) -> Result<(), ApiError> {
+        self.writer
+            .send_function_call_output(call_id, output_text)
+            .await
+    }
+
+    pub async fn send_response_create(&self) -> Result<(), ApiError> {
+        self.writer.send_response_create().await
+    }
+
     pub async fn close(&self) -> Result<(), ApiError> {
         self.writer.close().await
     }
@@ -272,11 +293,10 @@ impl RealtimeWebsocketWriter {
 
     pub async fn send_conversation_item_create(&self, text: String) -> Result<(), ApiError> {
         self.send_json(RealtimeOutboundMessage::ConversationItemCreate {
-            item: ConversationItem {
-                kind: "message".to_string(),
+            item: ConversationItem::Message {
                 role: "user".to_string(),
                 content: vec![ConversationItemContent {
-                    kind: "text".to_string(),
+                    kind: "input_text".to_string(),
                     text,
                 }],
             },
@@ -286,32 +306,85 @@ impl RealtimeWebsocketWriter {
 
     pub async fn send_conversation_handoff_append(
         &self,
-        handoff_id: String,
+        _handoff_id: String,
         output_text: String,
     ) -> Result<(), ApiError> {
-        self.send_json(RealtimeOutboundMessage::ConversationHandoffAppend {
-            handoff_id,
-            output_text,
+        self.send_json(RealtimeOutboundMessage::ConversationItemCreate {
+            item: ConversationItem::Message {
+                role: "assistant".to_string(),
+                content: vec![ConversationItemContent {
+                    kind: "output_text".to_string(),
+                    text: output_text,
+                }],
+            },
         })
         .await
+    }
+
+    pub async fn send_function_call_output(
+        &self,
+        call_id: String,
+        output_text: String,
+    ) -> Result<(), ApiError> {
+        let output = json!({
+            "content": output_text,
+        })
+        .to_string();
+        self.send_json(RealtimeOutboundMessage::ConversationItemCreate {
+            item: ConversationItem::FunctionCallOutput { call_id, output },
+        })
+        .await
+    }
+
+    pub async fn send_response_create(&self) -> Result<(), ApiError> {
+        self.send_json(RealtimeOutboundMessage::ResponseCreate)
+            .await
     }
 
     pub async fn send_session_update(&self, instructions: String) -> Result<(), ApiError> {
         self.send_json(RealtimeOutboundMessage::SessionUpdate {
             session: SessionUpdateSession {
-                kind: "quicksilver".to_string(),
+                kind: "realtime".to_string(),
                 instructions,
+                output_modalities: vec!["audio".to_string()],
                 audio: SessionAudio {
                     input: SessionAudioInput {
                         format: SessionAudioFormat {
                             kind: "audio/pcm".to_string(),
                             rate: 24_000,
                         },
+                        turn_detection: SessionTurnDetection {
+                            kind: "server_vad".to_string(),
+                            interrupt_response: true,
+                            create_response: true,
+                        },
                     },
                     output: SessionAudioOutput {
-                        voice: "fathom".to_string(),
+                        format: SessionAudioOutputFormat {
+                            kind: "audio/pcm".to_string(),
+                            rate: 24_000,
+                        },
+                        voice: "marin".to_string(),
                     },
                 },
+                tools: vec![SessionTool {
+                    kind: "function".to_string(),
+                    name: "codex".to_string(),
+                    description:
+                        "Delegate a request to Codex and return the final result to the user."
+                            .to_string(),
+                    parameters: SessionToolParameters {
+                        kind: "object".to_string(),
+                        properties: SessionToolProperties {
+                            prompt: SessionToolProperty {
+                                kind: "string".to_string(),
+                                description: "The user request to delegate to Codex.".to_string(),
+                            },
+                        },
+                        required: vec!["prompt".to_string()],
+                    },
+                }],
+                tool_choice: "auto".to_string(),
             },
         })
         .await
@@ -558,15 +631,16 @@ fn websocket_url_from_api_url(
         }
     }
 
-    {
+    let has_additional_query_params = query_params
+        .is_some_and(|params| params.keys().any(|key| key != "model" || model.is_none()));
+    if model.is_some() || has_additional_query_params {
         let mut query = url.query_pairs_mut();
-        query.append_pair("intent", "quicksilver");
         if let Some(model) = model {
             query.append_pair("model", model);
         }
         if let Some(query_params) = query_params {
             for (key, value) in query_params {
-                if key == "intent" || (key == "model" && model.is_some()) {
+                if key == "model" && model.is_some() {
                     continue;
                 }
                 query.append_pair(key, value);
@@ -639,7 +713,7 @@ mod tests {
     #[test]
     fn parse_audio_delta_event() {
         let payload = json!({
-            "type": "conversation.output_audio.delta",
+            "type": "response.output_audio.delta",
             "delta": "AAA=",
             "sample_rate": 48000,
             "channels": 1,
@@ -653,6 +727,24 @@ mod tests {
                 sample_rate: 48000,
                 num_channels: 1,
                 samples_per_channel: Some(960),
+            }))
+        );
+    }
+
+    #[test]
+    fn parse_audio_delta_event_defaults_audio_shape() {
+        let payload = json!({
+            "type": "response.output_audio.delta",
+            "delta": "AAA="
+        })
+        .to_string();
+        assert_eq!(
+            parse_realtime_event(payload.as_str()),
+            Some(RealtimeEvent::AudioOut(RealtimeAudioFrame {
+                data: "AAA=".to_string(),
+                sample_rate: 24_000,
+                num_channels: 1,
+                samples_per_channel: None,
             }))
         );
     }
@@ -690,10 +782,18 @@ mod tests {
     #[test]
     fn parse_handoff_requested_event() {
         let payload = json!({
-            "type": "conversation.handoff.requested",
-            "handoff_id": "handoff_123",
-            "item_id": "item_123",
-            "input_transcript": "delegate this"
+            "type": "response.done",
+            "response": {
+                "output": [
+                    {
+                        "id": "item_123",
+                        "type": "function_call",
+                        "name": "codex",
+                        "call_id": "handoff_123",
+                        "arguments": "{\"prompt\":\"delegate this\"}"
+                    }
+                ]
+            }
         })
         .to_string();
 
@@ -705,6 +805,24 @@ mod tests {
                 input_transcript: "delegate this".to_string(),
                 active_transcript: Vec::new(),
             }))
+        );
+    }
+
+    #[test]
+    fn parse_unknown_event_as_conversation_item_added() {
+        let payload = json!({
+            "type": "response.output_text.delta",
+            "delta": "hello",
+            "response_id": "resp_1"
+        })
+        .to_string();
+        assert_eq!(
+            parse_realtime_event(payload.as_str()),
+            Some(RealtimeEvent::ConversationItemAdded(json!({
+                "type": "response.output_text.delta",
+                "delta": "hello",
+                "response_id": "resp_1"
+            })))
         );
     }
 
@@ -781,10 +899,7 @@ mod tests {
     fn websocket_url_from_http_base_defaults_to_ws_path() {
         let url =
             websocket_url_from_api_url("http://127.0.0.1:8011", None, None).expect("build ws url");
-        assert_eq!(
-            url.as_str(),
-            "ws://127.0.0.1:8011/v1/realtime?intent=quicksilver"
-        );
+        assert_eq!(url.as_str(), "ws://127.0.0.1:8011/v1/realtime");
     }
 
     #[test]
@@ -794,7 +909,7 @@ mod tests {
                 .expect("build ws url");
         assert_eq!(
             url.as_str(),
-            "wss://example.com/v1/realtime?intent=quicksilver&model=realtime-test-model"
+            "wss://example.com/v1/realtime?model=realtime-test-model"
         );
     }
 
@@ -804,7 +919,7 @@ mod tests {
             .expect("build ws url");
         assert_eq!(
             url.as_str(),
-            "wss://api.openai.com/v1/realtime?intent=quicksilver&model=snapshot"
+            "wss://api.openai.com/v1/realtime?model=snapshot"
         );
     }
 
@@ -815,7 +930,7 @@ mod tests {
                 .expect("build ws url");
         assert_eq!(
             url.as_str(),
-            "wss://example.com/openai/v1/realtime?intent=quicksilver&model=snapshot"
+            "wss://example.com/openai/v1/realtime?model=snapshot"
         );
     }
 
@@ -823,16 +938,13 @@ mod tests {
     fn websocket_url_preserves_existing_realtime_path_and_extra_query_params() {
         let url = websocket_url_from_api_url(
             "https://example.com/v1/realtime?foo=bar",
-            Some(&HashMap::from([
-                ("trace".to_string(), "1".to_string()),
-                ("intent".to_string(), "ignored".to_string()),
-            ])),
+            Some(&HashMap::from([("trace".to_string(), "1".to_string())])),
             Some("snapshot"),
         )
         .expect("build ws url");
         assert_eq!(
             url.as_str(),
-            "wss://example.com/v1/realtime?foo=bar&intent=quicksilver&model=snapshot&trace=1"
+            "wss://example.com/v1/realtime?foo=bar&model=snapshot&trace=1"
         );
     }
 
@@ -856,11 +968,15 @@ mod tests {
             assert_eq!(first_json["type"], "session.update");
             assert_eq!(
                 first_json["session"]["type"],
-                Value::String("quicksilver".to_string())
+                Value::String("realtime".to_string())
             );
             assert_eq!(
                 first_json["session"]["instructions"],
                 Value::String("backend prompt".to_string())
+            );
+            assert_eq!(
+                first_json["session"]["output_modalities"][0],
+                Value::String("audio".to_string())
             );
             assert_eq!(
                 first_json["session"]["audio"]["input"]["format"]["type"],
@@ -871,8 +987,44 @@ mod tests {
                 Value::from(24_000)
             );
             assert_eq!(
+                first_json["session"]["audio"]["input"]["turn_detection"]["type"],
+                Value::String("server_vad".to_string())
+            );
+            assert_eq!(
+                first_json["session"]["audio"]["input"]["turn_detection"]["interrupt_response"],
+                Value::Bool(true)
+            );
+            assert_eq!(
+                first_json["session"]["audio"]["input"]["turn_detection"]["create_response"],
+                Value::Bool(true)
+            );
+            assert_eq!(
+                first_json["session"]["audio"]["output"]["format"]["type"],
+                Value::String("audio/pcm".to_string())
+            );
+            assert_eq!(
+                first_json["session"]["audio"]["output"]["format"]["rate"],
+                Value::from(24_000)
+            );
+            assert_eq!(
                 first_json["session"]["audio"]["output"]["voice"],
-                Value::String("fathom".to_string())
+                Value::String("marin".to_string())
+            );
+            assert_eq!(
+                first_json["session"]["tool_choice"],
+                Value::String("auto".to_string())
+            );
+            assert_eq!(
+                first_json["session"]["tools"][0]["type"],
+                Value::String("function".to_string())
+            );
+            assert_eq!(
+                first_json["session"]["tools"][0]["name"],
+                Value::String("codex".to_string())
+            );
+            assert_eq!(
+                first_json["session"]["tools"][0]["parameters"]["required"][0],
+                Value::String("prompt".to_string())
             );
 
             ws.send(Message::Text(
@@ -915,13 +1067,43 @@ mod tests {
                 .into_text()
                 .expect("text");
             let fourth_json: Value = serde_json::from_str(&fourth).expect("json");
-            assert_eq!(fourth_json["type"], "conversation.handoff.append");
-            assert_eq!(fourth_json["handoff_id"], "handoff_1");
-            assert_eq!(fourth_json["output_text"], "hello from codex");
+            assert_eq!(fourth_json["type"], "conversation.item.create");
+            assert_eq!(fourth_json["item"]["type"], "message");
+            assert_eq!(fourth_json["item"]["role"], "assistant");
+            assert_eq!(
+                fourth_json["item"]["content"][0]["type"],
+                Value::String("output_text".to_string())
+            );
+            assert_eq!(
+                fourth_json["item"]["content"][0]["text"],
+                Value::String("hello from codex".to_string())
+            );
+
+            let fifth = ws
+                .next()
+                .await
+                .expect("fifth msg")
+                .expect("fifth msg ok")
+                .into_text()
+                .expect("text");
+            let fifth_json: Value = serde_json::from_str(&fifth).expect("json");
+            assert_eq!(fifth_json["type"], "conversation.item.create");
+            assert_eq!(fifth_json["item"]["type"], "function_call_output");
+            assert_eq!(fifth_json["item"]["call_id"], "handoff_1");
+
+            let sixth = ws
+                .next()
+                .await
+                .expect("sixth msg")
+                .expect("sixth msg ok")
+                .into_text()
+                .expect("text");
+            let sixth_json: Value = serde_json::from_str(&sixth).expect("json");
+            assert_eq!(sixth_json["type"], "response.create");
 
             ws.send(Message::Text(
                 json!({
-                    "type": "conversation.output_audio.delta",
+                    "type": "response.output_audio.delta",
                     "delta": "AQID",
                     "sample_rate": 48000,
                     "channels": 1
@@ -967,10 +1149,18 @@ mod tests {
 
             ws.send(Message::Text(
                 json!({
-                    "type": "conversation.handoff.requested",
-                    "handoff_id": "handoff_1",
-                    "item_id": "item_2",
-                    "input_transcript": "delegate now"
+                    "type": "response.done",
+                    "response": {
+                        "output": [
+                            {
+                                "id": "item_2",
+                                "type": "function_call",
+                                "name": "codex",
+                                "call_id": "handoff_1",
+                                "arguments": "{\"prompt\":\"delegate now\"}"
+                            }
+                        ]
+                    }
                 })
                 .to_string()
                 .into(),
@@ -1040,6 +1230,14 @@ mod tests {
             )
             .await
             .expect("send handoff");
+        connection
+            .send_function_call_output("handoff_1".to_string(), "final from codex".to_string())
+            .await
+            .expect("send function output");
+        connection
+            .send_response_create()
+            .await
+            .expect("send response.create");
 
         let audio_event = connection
             .next_event()
