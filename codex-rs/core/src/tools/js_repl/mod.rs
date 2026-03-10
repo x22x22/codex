@@ -1348,7 +1348,7 @@ impl JsReplManager {
                     .collect(),
             ),
             None,
-            exec.turn.dynamic_tools.as_slice(),
+            &exec.turn.dynamic_tools,
         );
 
         let payload =

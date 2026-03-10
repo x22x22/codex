@@ -6263,6 +6263,7 @@ async fn built_tools(
     skills_outcome: Option<&SkillLoadOutcome>,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<Arc<ToolRouter>> {
+    let dynamic_tools = &turn_context.dynamic_tools;
     let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
     let has_mcp_servers = mcp_connection_manager.has_servers();
     let mut mcp_tools = mcp_connection_manager
@@ -6333,7 +6334,7 @@ async fn built_tools(
                 .collect()
         }),
         app_tools,
-        turn_context.dynamic_tools.as_slice(),
+        dynamic_tools,
     )))
 }
 
