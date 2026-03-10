@@ -187,16 +187,24 @@ impl FileSystemSandboxPolicy {
                 }
 
                 match &entry.path {
-                    FileSystemPath::Path { .. } => true,
+                    FileSystemPath::Path { .. } => !self.has_same_target_write_override(entry),
                     FileSystemPath::Special { value } => match value {
                         FileSystemSpecialPath::Root => entry.access == FileSystemAccessMode::None,
                         FileSystemSpecialPath::Minimal | FileSystemSpecialPath::Unknown { .. } => {
                             false
                         }
-                        _ => true,
+                        _ => !self.has_same_target_write_override(entry),
                     },
                 }
             })
+    }
+
+    fn has_same_target_write_override(&self, entry: &FileSystemSandboxEntry) -> bool {
+        self.entries.iter().any(|candidate| {
+            candidate.access.can_write()
+                && access_priority(candidate.access) > access_priority(entry.access)
+                && file_system_paths_share_target(&candidate.path, &entry.path)
+        })
     }
 
     pub fn unrestricted() -> Self {
@@ -754,14 +762,79 @@ fn resolve_candidate_path(path: &Path, cwd: &Path) -> Option<AbsolutePathBuf> {
     }
 }
 
-fn resolved_entry_precedence(entry: &ResolvedFileSystemEntry) -> (usize, u8) {
-    let specificity = entry.path.as_path().components().count();
-    let access_priority = match entry.access {
+fn access_priority(access: FileSystemAccessMode) -> u8 {
+    match access {
         FileSystemAccessMode::Read => 0,
         FileSystemAccessMode::Write => 1,
         FileSystemAccessMode::None => 2,
-    };
-    (specificity, access_priority)
+    }
+}
+
+fn file_system_paths_share_target(left: &FileSystemPath, right: &FileSystemPath) -> bool {
+    match (left, right) {
+        (FileSystemPath::Path { path: left }, FileSystemPath::Path { path: right }) => {
+            left == right
+        }
+        (FileSystemPath::Special { value: left }, FileSystemPath::Special { value: right }) => {
+            special_paths_share_target(left, right)
+        }
+        (FileSystemPath::Path { path }, FileSystemPath::Special { value })
+        | (FileSystemPath::Special { value }, FileSystemPath::Path { path }) => {
+            special_path_matches_absolute_path(value, path)
+        }
+    }
+}
+
+fn special_paths_share_target(left: &FileSystemSpecialPath, right: &FileSystemSpecialPath) -> bool {
+    match (left, right) {
+        (FileSystemSpecialPath::Root, FileSystemSpecialPath::Root)
+        | (FileSystemSpecialPath::Minimal, FileSystemSpecialPath::Minimal)
+        | (
+            FileSystemSpecialPath::CurrentWorkingDirectory,
+            FileSystemSpecialPath::CurrentWorkingDirectory,
+        )
+        | (FileSystemSpecialPath::Tmpdir, FileSystemSpecialPath::Tmpdir)
+        | (FileSystemSpecialPath::SlashTmp, FileSystemSpecialPath::SlashTmp) => true,
+        (
+            FileSystemSpecialPath::CurrentWorkingDirectory,
+            FileSystemSpecialPath::ProjectRoots { subpath: None },
+        )
+        | (
+            FileSystemSpecialPath::ProjectRoots { subpath: None },
+            FileSystemSpecialPath::CurrentWorkingDirectory,
+        ) => true,
+        (
+            FileSystemSpecialPath::ProjectRoots { subpath: left },
+            FileSystemSpecialPath::ProjectRoots { subpath: right },
+        ) => left == right,
+        (
+            FileSystemSpecialPath::Unknown {
+                path: left,
+                subpath: left_subpath,
+            },
+            FileSystemSpecialPath::Unknown {
+                path: right,
+                subpath: right_subpath,
+            },
+        ) => left == right && left_subpath == right_subpath,
+        _ => false,
+    }
+}
+
+fn special_path_matches_absolute_path(
+    value: &FileSystemSpecialPath,
+    path: &AbsolutePathBuf,
+) -> bool {
+    match value {
+        FileSystemSpecialPath::Root => path.as_path().parent().is_none(),
+        FileSystemSpecialPath::SlashTmp => path.as_path() == Path::new("/tmp"),
+        _ => false,
+    }
+}
+
+fn resolved_entry_precedence(entry: &ResolvedFileSystemEntry) -> (usize, u8) {
+    let specificity = entry.path.as_path().components().count();
+    (specificity, access_priority(entry.access))
 }
 
 fn absolute_root_path_for_cwd(cwd: &AbsolutePathBuf) -> AbsolutePathBuf {
@@ -1122,6 +1195,35 @@ mod tests {
         assert_eq!(
             policy.resolve_access_with_cwd(root.as_path(), cwd.path()),
             FileSystemAccessMode::None
+        );
+    }
+
+    #[test]
+    fn same_specificity_write_override_keeps_full_disk_write_access() {
+        let cwd = TempDir::new().expect("tempdir");
+        let docs =
+            AbsolutePathBuf::resolve_path_against_base("docs", cwd.path()).expect("resolve docs");
+        let policy = FileSystemSandboxPolicy::restricted(vec![
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Special {
+                    value: FileSystemSpecialPath::Root,
+                },
+                access: FileSystemAccessMode::Write,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: docs.clone() },
+                access: FileSystemAccessMode::Read,
+            },
+            FileSystemSandboxEntry {
+                path: FileSystemPath::Path { path: docs.clone() },
+                access: FileSystemAccessMode::Write,
+            },
+        ]);
+
+        assert!(policy.has_full_disk_write_access());
+        assert_eq!(
+            policy.resolve_access_with_cwd(docs.as_path(), cwd.path()),
+            FileSystemAccessMode::Write
         );
     }
 }
