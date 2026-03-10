@@ -277,8 +277,10 @@ mod tests {
         std::fs::create_dir_all(denied.parent().expect("parent")).expect("create parent");
         std::fs::write(&denied, "secret").expect("write secret");
 
-        let mut policy = FileSystemSandboxPolicy::default();
-        policy.deny_read_patterns = vec![format!("{}/private/secret?.txt", temp.path().display())];
+        let policy = FileSystemSandboxPolicy {
+            deny_read_patterns: vec![format!("{}/private/secret?.txt", temp.path().display())],
+            ..Default::default()
+        };
 
         assert_eq!(is_read_denied(&denied, &policy, temp.path()), true);
         assert_eq!(
