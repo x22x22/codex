@@ -296,10 +296,12 @@ pub fn generate_python_with_options(
     let bundle = read_json_value(&bundle_path)?;
     let root_schema_path = temp_json_dir.join("codex_app_server_protocol.python.schemas.json");
     let mut root_schema = build_python_root_schema(&bundle)?;
+    normalize_python_integer_formats(&mut root_schema);
     rename_python_envelope_titles(&mut root_schema);
     write_pretty_json(root_schema_path.clone(), &root_schema)?;
     let v2_schema_path = temp_json_dir.join("codex_app_server_protocol.v2.schemas.json");
     let mut v2_schema = read_json_value(&v2_schema_path)?;
+    normalize_python_integer_formats(&mut v2_schema);
     rename_python_envelope_titles(&mut v2_schema);
     write_pretty_json(v2_schema_path.clone(), &v2_schema)?;
 
@@ -357,6 +359,7 @@ fn generate_python_models(schema_path: &Path, output_path: &Path) -> Result<()> 
         .arg("--snake-case-field")
         .arg("--use-title-as-name")
         .arg("--use-generic-base-class")
+        .arg("--use-annotated")
         .arg("--disable-timestamp")
         .arg("--formatters")
         .arg("ruff-format");
@@ -1402,6 +1405,56 @@ fn rename_python_envelope_titles(bundle: &mut Value) {
         "NotificationMethod",
         "ServerNotificationMethod",
     );
+}
+
+fn normalize_python_integer_formats(value: &mut Value) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                normalize_python_integer_formats(item);
+            }
+        }
+        Value::Object(map) => {
+            if schema_is_integer(map) {
+                let max = match map.get("format").and_then(Value::as_str) {
+                    Some("uint") => Some(None),
+                    Some("uint16") => Some(Some(u16::MAX as u64)),
+                    Some("uint32") => Some(Some(u32::MAX as u64)),
+                    Some("uint64") => Some(Some(u64::MAX)),
+                    _ => None,
+                };
+                if let Some(max) = max {
+                    map.remove("format");
+                    if !map.contains_key("minimum") && !map.contains_key("exclusiveMinimum") {
+                        map.insert("minimum".to_string(), Value::from(0));
+                    }
+                    if let Some(max) = max
+                        && !map.contains_key("maximum")
+                        && !map.contains_key("exclusiveMaximum")
+                    {
+                        map.insert("maximum".to_string(), Value::from(max));
+                    }
+                }
+            }
+
+            for child in map.values_mut() {
+                normalize_python_integer_formats(child);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+}
+
+fn schema_is_integer(map: &serde_json::Map<String, Value>) -> bool {
+    match map.get("type") {
+        Some(Value::String(type_name)) => type_name == "integer",
+        Some(Value::Array(type_names)) => type_names.iter().any(|type_name| {
+            type_name
+                .as_str()
+                .is_some_and(|type_name| type_name == "integer")
+        }),
+        Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::Object(_)) | None => false,
+    }
 }
 
 fn rename_union_titles(
@@ -3037,6 +3090,85 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn normalize_python_integer_formats_rewrites_uint_formats_as_bounds() {
+        let mut schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "plainUint": {
+                    "type": "integer",
+                    "format": "uint"
+                },
+                "u16": {
+                    "type": "integer",
+                    "format": "uint16"
+                },
+                "u32": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                },
+                "u64WithMaximum": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "maximum": 10
+                },
+                "nullableU32": {
+                    "type": ["integer", "null"],
+                    "format": "uint32"
+                },
+                "nested": {
+                    "items": [
+                        {
+                            "type": "integer",
+                            "format": "uint32"
+                        }
+                    ]
+                }
+            }
+        });
+
+        normalize_python_integer_formats(&mut schema);
+
+        assert_eq!(schema["properties"]["plainUint"].get("format"), None);
+        assert_eq!(
+            schema["properties"]["plainUint"]["minimum"],
+            serde_json::json!(0)
+        );
+        assert_eq!(schema["properties"]["plainUint"].get("maximum"), None);
+
+        assert_eq!(schema["properties"]["u16"].get("format"), None);
+        assert_eq!(schema["properties"]["u16"]["minimum"], serde_json::json!(0));
+        assert_eq!(
+            schema["properties"]["u16"]["maximum"],
+            serde_json::json!(u16::MAX)
+        );
+
+        assert_eq!(schema["properties"]["u32"].get("format"), None);
+        assert_eq!(schema["properties"]["u32"]["minimum"], serde_json::json!(0));
+        assert_eq!(
+            schema["properties"]["u32"]["maximum"],
+            serde_json::json!(u32::MAX)
+        );
+
+        assert_eq!(schema["properties"]["u64WithMaximum"].get("format"), None);
+        assert_eq!(
+            schema["properties"]["u64WithMaximum"]["maximum"],
+            serde_json::json!(10)
+        );
+
+        assert_eq!(schema["properties"]["nullableU32"].get("format"), None);
+        assert_eq!(
+            schema["properties"]["nullableU32"]["maximum"],
+            serde_json::json!(u32::MAX)
+        );
+
+        assert_eq!(
+            schema["properties"]["nested"]["items"][0]["maximum"],
+            serde_json::json!(u32::MAX)
+        );
     }
 
     #[test]
