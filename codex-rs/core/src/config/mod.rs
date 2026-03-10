@@ -2006,7 +2006,11 @@ impl Config {
             let configured_network_proxy_config =
                 network_proxy_config_from_profile_network(profile.network.as_ref());
             let (mut file_system_sandbox_policy, network_sandbox_policy) =
-                compile_permission_profile(permissions, default_permissions)?;
+                compile_permission_profile(
+                    permissions,
+                    default_permissions,
+                    &mut startup_warnings,
+                )?;
             let mut sandbox_policy = file_system_sandbox_policy
                 .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd)?;
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
@@ -2039,7 +2043,8 @@ impl Config {
                     }
                 }
             }
-            let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+            let file_system_sandbox_policy =
+                FileSystemSandboxPolicy::from_legacy_sandbox_policy(&sandbox_policy, &resolved_cwd);
             let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
             (
                 configured_network_proxy_config,
@@ -2405,6 +2410,7 @@ impl Config {
             } else {
                 FileSystemSandboxPolicy::from_legacy_sandbox_policy_preserving_read_denies(
                     &effective_sandbox_policy,
+                    &resolved_cwd,
                     &file_system_sandbox_policy,
                 )
             };
