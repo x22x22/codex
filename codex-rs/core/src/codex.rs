@@ -388,6 +388,16 @@ impl Codex {
             let _ = config.features.disable(Feature::Collab);
         }
 
+        if config.features.enabled(Feature::CodeMode)
+            && let Some(reason) = codex_code_mode::unsupported_reason()
+        {
+            let _ = config.features.disable(Feature::CodeMode);
+            let message =
+                format!("Disabled `code_mode` for this session because it is unavailable: {reason}");
+            warn!("{message}");
+            config.startup_warnings.push(message);
+        }
+
         if config.features.enabled(Feature::JsRepl)
             && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
         {

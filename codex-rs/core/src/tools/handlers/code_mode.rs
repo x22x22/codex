@@ -37,6 +37,9 @@ impl ToolHandler for CodeModeHandler {
                 "code_mode is disabled by feature flag".to_string(),
             ));
         }
+        if let Some(reason) = codex_code_mode::unsupported_reason() {
+            return Err(FunctionCallError::RespondToModel(reason.to_string()));
+        }
 
         let code = match payload {
             ToolPayload::Custom { input } => input,

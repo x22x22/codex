@@ -1777,6 +1777,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-code-mode"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "v8",
+]
+
+[[package]]
 name = "codex-config"
 version = "0.0.0"
 dependencies = [
@@ -1822,6 +1831,7 @@ dependencies = [
  "codex-artifacts",
  "codex-async-utils",
  "codex-client",
+ "codex-code-mode",
  "codex-config",
  "codex-execpolicy",
  "codex-file-search",
@@ -1905,7 +1915,6 @@ dependencies = [
  "tracing-test",
  "url",
  "uuid",
- "v8",
  "walkdir",
  "which 8.0.0",
  "wildmatch",

@@ -95,7 +95,7 @@ impl ToolsConfig {
             session_source,
         } = params;
         let include_apply_patch_tool = features.enabled(Feature::ApplyPatchFreeform);
-        let include_code_mode = features.enabled(Feature::CodeMode);
+        let include_code_mode = features.enabled(Feature::CodeMode) && codex_code_mode::is_supported();
         let include_js_repl = features.enabled(Feature::JsRepl);
         let include_js_repl_tools_only =
             include_js_repl && features.enabled(Feature::JsReplToolsOnly);
