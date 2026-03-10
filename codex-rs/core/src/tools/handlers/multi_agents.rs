@@ -167,14 +167,16 @@ mod spawn {
         apply_role_to_config(&mut config, role_name)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
-        apply_spawn_agent_model_overrides(
-            &session,
-            turn.as_ref(),
-            &mut config,
-            requested_model.as_deref(),
-            requested_reasoning_effort,
-        )
-        .await?;
+        if role_name.is_none() {
+            apply_spawn_agent_model_overrides(
+                &session,
+                turn.as_ref(),
+                &mut config,
+                requested_model.as_deref(),
+                requested_reasoning_effort,
+            )
+            .await?;
+        }
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
 
@@ -1742,7 +1744,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn spawn_agent_explicit_model_override_beats_role_model() {
+    async fn spawn_agent_role_model_beats_explicit_model_override() {
         #[derive(Debug, Deserialize)]
         struct SpawnAgentResult {
             agent_id: String,
@@ -1810,7 +1812,7 @@ mod tests {
             .expect("spawned agent thread should exist")
             .config_snapshot()
             .await;
-        assert_eq!(snapshot.model, selected_model.model);
+        assert_eq!(snapshot.model, role_model.model);
     }
 
     #[tokio::test]
