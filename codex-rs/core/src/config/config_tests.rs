@@ -638,6 +638,7 @@ fn permissions_profiles_allow_unknown_special_paths() -> std::io::Result<()> {
             )]),
         }),
         network: None,
+        macos: None,
     })?;
 
     assert_eq!(
@@ -682,6 +683,7 @@ fn permissions_profiles_allow_unknown_special_paths_with_nested_entries() -> std
             )]),
         }),
         network: None,
+        macos: None,
     })?;
 
     assert_eq!(
@@ -708,6 +710,7 @@ fn permissions_profiles_allow_missing_filesystem_with_warning() -> std::io::Resu
     let config = load_workspace_permission_profile(PermissionProfileToml {
         filesystem: None,
         network: None,
+        macos: None,
     })?;
 
     assert_eq!(
@@ -741,6 +744,7 @@ fn permissions_profiles_allow_empty_filesystem_with_warning() -> std::io::Result
             entries: BTreeMap::new(),
         }),
         network: None,
+        macos: None,
     })?;
 
     assert_eq!(

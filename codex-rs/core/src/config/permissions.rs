@@ -379,6 +379,20 @@ fn filesystem_permission_toml_from_entry(
                 ":slash_tmp".to_string(),
                 FilesystemPermissionToml::Access(access),
             )),
+            FileSystemSpecialPath::Unknown {
+                path,
+                subpath: None,
+            } => Ok((path.clone(), FilesystemPermissionToml::Access(access))),
+            FileSystemSpecialPath::Unknown {
+                path,
+                subpath: Some(subpath),
+            } => Ok((
+                path.clone(),
+                FilesystemPermissionToml::Scoped(BTreeMap::from([(
+                    subpath.to_string_lossy().to_string(),
+                    access,
+                )])),
+            )),
         },
     }
 }
