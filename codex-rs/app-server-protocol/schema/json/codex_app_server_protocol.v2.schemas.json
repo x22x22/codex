@@ -8044,16 +8044,17 @@
       "type": "object"
     },
     "MacOsAutomationPermission": {
-      "oneOf": [
+      "anyOf": [
         {
-          "enum": [
-            "none",
-            "all"
-          ],
-          "type": "string"
+          "$ref": "#/definitions/MacOsAutomationPermissionModeSchema"
         },
         {
-          "additionalProperties": false,
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
           "properties": {
             "bundle_ids": {
               "items": {
@@ -8069,6 +8070,13 @@
           "type": "object"
         }
       ]
+    },
+    "MacOsAutomationPermissionModeSchema": {
+      "enum": [
+        "none",
+        "all"
+      ],
+      "type": "string"
     },
     "MacOsPreferencesPermission": {
       "enum": [

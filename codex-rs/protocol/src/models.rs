@@ -3,6 +3,7 @@ use std::path::Path;
 
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt;
+use schemars::SchemaGenerator;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -25,6 +26,7 @@ use codex_git::GhostCommit;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_image::error::ImageProcessingError;
 use schemars::JsonSchema;
+use schemars::schema::Schema;
 
 use crate::mcp::CallToolResult;
 
@@ -110,7 +112,7 @@ pub enum MacOsPreferencesPermission {
     ReadWrite,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize, JsonSchema, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case", try_from = "MacOsAutomationPermissionDe")]
 pub enum MacOsAutomationPermission {
     #[default]
@@ -164,6 +166,33 @@ impl TryFrom<MacOsAutomationPermissionDe> for MacOsAutomationPermission {
         };
 
         Ok(permission)
+    }
+}
+
+impl JsonSchema for MacOsAutomationPermission {
+    fn schema_name() -> String {
+        "MacOsAutomationPermission".to_string()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        #[derive(JsonSchema)]
+        #[allow(dead_code)]
+        #[serde(rename_all = "snake_case")]
+        enum MacOsAutomationPermissionModeSchema {
+            None,
+            All,
+        }
+
+        #[derive(JsonSchema)]
+        #[allow(dead_code)]
+        #[serde(untagged)]
+        enum MacOsAutomationPermissionSchema {
+            Mode(MacOsAutomationPermissionModeSchema),
+            BundleIds(Vec<String>),
+            BundleIdsObject { bundle_ids: Vec<String> },
+        }
+
+        MacOsAutomationPermissionSchema::json_schema(generator)
     }
 }
 
@@ -1541,6 +1570,25 @@ mod tests {
         assert_eq!(
             permission,
             MacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string(),])
+        );
+    }
+
+    #[test]
+    fn macos_automation_permission_schema_accepts_bundle_id_arrays() {
+        let schema = schemars::schema_for!(MacOsAutomationPermission);
+        let schema = serde_json::to_value(&schema).expect("serialize schema");
+        let variants = schema["oneOf"]
+            .as_array()
+            .or_else(|| schema["anyOf"].as_array())
+            .or_else(|| schema["definitions"]["MacOsAutomationPermission"]["oneOf"].as_array())
+            .or_else(|| schema["definitions"]["MacOsAutomationPermission"]["anyOf"].as_array())
+            .expect("schema should use oneOf");
+
+        assert!(
+            variants
+                .iter()
+                .any(|variant| variant["type"] == "array" && variant["items"]["type"] == "string"),
+            "expected bare array schema variant, got {variants:?}"
         );
     }
 
