@@ -1,38 +1,113 @@
 # Codex App Server Python SDK (Experimental)
 
-Experimental Python SDK for `codex app-server` JSON-RPC v2 over stdio, with a small default surface optimized for real scripts and apps.
+Experimental Python SDK for `codex app-server` JSON-RPC v2.
+The generated wire models come from the bundled v2 schema and use snake_case Python fields while preserving camelCase wire serialization.
 
-The generated wire-model layer is currently sourced from the bundled v2 schema and exposed as Pydantic models with snake_case Python fields that serialize back to the app-server’s camelCase wire format.
+It gives you a small typed API for:
 
-## Install
+- starting or resuming threads
+- creating turns from Python
+- streaming events or waiting for a final `TurnResult`
+- using the same shape in sync and async code
+
+## Experimental
+
+This SDK is still experimental.
+
+- it is not published yet
+- API details may still change before the first release
+- packaging and release workflow are still evolving
+
+Use it for local development, dogfooding, and iteration inside this repo. Do not treat it as a stable public package yet.
+
+## What You Need
+
+- Python `>=3.10`
+- local Codex auth/session already configured
+- this repo checked out locally
+
+## Install From Source
 
 ```bash
 cd sdk/python
 python -m pip install -e .
 ```
 
+The package includes bundled Codex runtime binaries and automatically selects the binary for the current platform through `AppServerConfig().codex_bin`.
+
+## Core Model
+
+The public API is intentionally small:
+
+- `Codex` / `AsyncCodex`: session entrypoint
+- `Thread` / `AsyncThread`: a conversation thread
+- `Turn` / `AsyncTurn`: one user turn within a thread
+- `TurnResult`: final status, text, items, and usage
+
+Typical flow:
+
+1. create a `Codex` client
+2. start or resume a thread
+3. create a turn from input
+4. call `run()` or iterate `stream()`
+
 ## Quickstart
+
+### Sync
 
 ```python
 from codex_app_server import Codex, TextInput
 
 with Codex() as codex:
-    thread = codex.thread_start(model="gpt-5")
+    thread = codex.thread_start(
+        model="gpt-5",
+        config={"model_reasoning_effort": "high"},
+    )
     result = thread.turn(TextInput("Say hello in one sentence.")).run()
-    print(result.text)
+
+    print("status:", result.status)
+    print("text:", result.text)
 ```
 
-## Docs map
+### Async
 
-- Golden path tutorial: `docs/getting-started.md`
-- API reference (signatures + behavior): `docs/api-reference.md`
-- Common decisions and pitfalls: `docs/faq.md`
-- Runnable examples index: `examples/README.md`
-- Jupyter walkthrough notebook: `notebooks/sdk_walkthrough.ipynb`
+```python
+import asyncio
 
-## Examples
+from codex_app_server import AsyncCodex, TextInput
 
-Start here:
+
+async def main() -> None:
+    async with AsyncCodex() as codex:
+        thread = await codex.thread_start(
+            model="gpt-5",
+            config={"model_reasoning_effort": "high"},
+        )
+        turn = await thread.turn(TextInput("Say hello in one sentence."))
+        result = await turn.run()
+
+        print("status:", result.status)
+        print("text:", result.text)
+
+
+asyncio.run(main())
+```
+
+## Current Limitations
+
+- Only one active `Turn.stream()` or `Turn.run()` consumer is supported per client instance.
+- Starting a second active turn consumer on the same `Codex` or `AsyncCodex` raises `RuntimeError`.
+- `Codex()` is eager and performs startup plus `initialize` in the constructor.
+
+## Behavior Notes
+
+- `AsyncCodex` is intended to be used with `async with AsyncCodex() as codex:`.
+- `TurnResult.text` prefers streamed assistant deltas and falls back to completed raw response items when no deltas are emitted.
+- For transient overload handling, use `retry_on_overload(...)`.
+
+## Learn By Example
+
+Runnable examples:
 
 ```bash
 cd sdk/python
@@ -40,40 +115,32 @@ python examples/01_quickstart_constructor/sync.py
 python examples/01_quickstart_constructor/async.py
 ```
 
-## Bundled runtime binaries (out of the box)
+More docs:
 
-The SDK ships with platform-specific bundled binaries, so end users do not need updater scripts.
+- Getting started: `docs/getting-started.md`
+- API reference: `docs/api-reference.md`
+- FAQ and pitfalls: `docs/faq.md`
+- Examples index: `examples/README.md`
+- Notebook walkthrough: `notebooks/sdk_walkthrough.ipynb`
 
-Runtime binary source (single source, no fallback):
+## Maintainer Workflow
 
-- `src/codex_app_server/bin/darwin-arm64/codex`
-- `src/codex_app_server/bin/darwin-x64/codex`
-- `src/codex_app_server/bin/linux-arm64/codex`
-- `src/codex_app_server/bin/linux-x64/codex`
-- `src/codex_app_server/bin/windows-arm64/codex.exe`
-- `src/codex_app_server/bin/windows-x64/codex.exe`
-
-## Maintainer workflow (refresh binaries/types)
+Refresh bundled binaries and generated artifacts with:
 
 ```bash
 cd sdk/python
 python scripts/update_sdk_artifacts.py --channel stable --bundle-all-platforms
-# or
+```
+
+or:
+
+```bash
+cd sdk/python
 python scripts/update_sdk_artifacts.py --channel alpha --bundle-all-platforms
 ```
 
-This refreshes all bundled OS/arch binaries and regenerates protocol-derived Python types.
+## Compatibility
 
-## Compatibility and versioning
-
-- Package: `codex-app-server-sdk`
-- Current SDK version in this repo: `0.2.0`
-- Python: `>=3.10`
+- Package name: `codex-app-server-sdk`
+- SDK version in this repo: `0.2.0`
 - Target protocol: Codex `app-server` JSON-RPC v2
-- Recommendation: keep SDK and `codex` CLI reasonably up to date together
-
-## Notes
-
-- `Codex()` is eager and performs startup + `initialize` in the constructor.
-- Use context managers (`with Codex() as codex:`) to ensure shutdown.
-- For transient overload, use `codex_app_server.retry.retry_on_overload`.
