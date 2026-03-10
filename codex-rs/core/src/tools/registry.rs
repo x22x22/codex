@@ -358,15 +358,15 @@ impl ToolRegistryBuilder {
         self.specs.push(ConfiguredToolSpec::new(
             spec,
             supports_parallel_tool_calls,
-            false,
+            true,
         ));
     }
 
-    pub fn push_builtin_spec(&mut self, spec: ToolSpec) {
-        self.push_builtin_spec_with_parallel_support(spec, false);
+    pub fn push_external_spec(&mut self, spec: ToolSpec) {
+        self.push_external_spec_with_parallel_support(spec, false);
     }
 
-    pub fn push_builtin_spec_with_parallel_support(
+    pub fn push_external_spec_with_parallel_support(
         &mut self,
         spec: ToolSpec,
         supports_parallel_tool_calls: bool,
@@ -374,11 +374,20 @@ impl ToolRegistryBuilder {
         self.specs.push(ConfiguredToolSpec::new(
             spec,
             supports_parallel_tool_calls,
-            true,
+            false,
         ));
     }
 
     pub fn register_handler<H>(&mut self, name: impl Into<String>, handler: Arc<H>)
+    where
+        H: ToolHandler + 'static,
+    {
+        let name = name.into();
+        self.builtin_handler_names.insert(name.clone());
+        self.register_external_handler(name, handler);
+    }
+
+    pub fn register_external_handler<H>(&mut self, name: impl Into<String>, handler: Arc<H>)
     where
         H: ToolHandler + 'static,
     {
@@ -391,15 +400,6 @@ impl ToolRegistryBuilder {
         {
             warn!("overwriting handler for tool {name}");
         }
-    }
-
-    pub fn register_builtin_handler<H>(&mut self, name: impl Into<String>, handler: Arc<H>)
-    where
-        H: ToolHandler + 'static,
-    {
-        let name = name.into();
-        self.builtin_handler_names.insert(name.clone());
-        self.register_handler(name, handler);
     }
 
     // TODO(jif) for dynamic tools.

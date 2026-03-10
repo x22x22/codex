@@ -2233,10 +2233,10 @@ pub(crate) fn build_specs(
 
     if config.shell_type != ConfigShellToolType::Disabled {
         // Always register shell aliases so older prompts remain compatible.
-        builder.register_builtin_handler("shell", shell_handler.clone());
-        builder.register_builtin_handler("container.exec", shell_handler.clone());
-        builder.register_builtin_handler("local_shell", shell_handler);
-        builder.register_builtin_handler("shell_command", shell_command_handler);
+        builder.register_handler("shell", shell_handler.clone());
+        builder.register_handler("container.exec", shell_handler.clone());
+        builder.register_handler("local_shell", shell_handler);
+        builder.register_handler("shell_command", shell_command_handler);
     }
 
     if mcp_tools.is_some() {
@@ -2340,7 +2340,7 @@ pub(crate) fn build_specs(
                 );
             }
         }
-        builder.register_builtin_handler("apply_patch", apply_patch_handler);
+        builder.register_handler("apply_patch", apply_patch_handler);
     }
 
     if config
