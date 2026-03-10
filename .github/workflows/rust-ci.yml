@@ -200,11 +200,6 @@ jobs:
         with:
           targets: ${{ matrix.target }}
           components: clippy
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - uses: astral-sh/setup-uv@v6
-
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Use hermetic Cargo home (musl)
         shell: bash
@@ -243,6 +238,11 @@ jobs:
           key: cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-${{ steps.lockhash.outputs.hash }}-${{ steps.lockhash.outputs.toolchain_hash }}
           restore-keys: |
             cargo-home-${{ matrix.runner }}-${{ matrix.target }}-${{ matrix.profile }}-
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v6
 
       # Install and restore sccache cache
       - name: Install sccache
