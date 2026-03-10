@@ -2378,6 +2378,7 @@ impl App {
                         app_id,
                         title,
                         description,
+                        suggest_reason: None,
                         instructions,
                         url,
                         is_installed,

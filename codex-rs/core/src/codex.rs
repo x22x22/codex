@@ -6281,6 +6281,21 @@ async fn built_tools(
             &effective_explicitly_enabled_connectors,
         )
     });
+    let search_tool_connectors =
+        if turn_context.tools_config.search_tool && turn_context.apps_enabled() {
+            match connectors::list_cached_connectors(&turn_context.config).await {
+                Some(connectors) => Some(connectors),
+                None => match connectors::list_connectors(&turn_context.config).await {
+                    Ok(connectors) => Some(connectors),
+                    Err(err) => {
+                        warn!("failed to load connectors for search tool description: {err}");
+                        None
+                    }
+                },
+            }
+        } else {
+            None
+        };
 
     if let Some(connectors) = connectors.as_ref() {
         let skill_name_counts_lower = skills_outcome.map_or_else(HashMap::new, |outcome| {
@@ -6312,7 +6327,7 @@ async fn built_tools(
         );
     }
 
-    Ok(Arc::new(ToolRouter::from_config(
+    Ok(Arc::new(ToolRouter::from_config_with_connectors(
         &turn_context.tools_config,
         has_mcp_servers.then(|| {
             mcp_tools
@@ -6322,6 +6337,7 @@ async fn built_tools(
         }),
         app_tools,
         turn_context.dynamic_tools.as_slice(),
+        search_tool_connectors.as_deref(),
     )))
 }
 

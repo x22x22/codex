@@ -8,6 +8,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::LazyLock;
 
 use crate::connectors;
 use crate::function_tool::FunctionCallError;
@@ -26,6 +27,9 @@ pub struct SearchToolBm25Handler;
 
 pub(crate) const SEARCH_TOOL_BM25_TOOL_NAME: &str = "search_tool_bm25";
 pub(crate) const DEFAULT_LIMIT: usize = 8;
+const ALLOWLISTED_DISCOVERABLE_CONNECTOR_ID: &str = "connector_2128aebfecb84f64a069897515042a44";
+pub(crate) static INSTALLABLE_DISCOVERABLE_CONNECTOR_IDS: LazyLock<HashSet<&str>> =
+    LazyLock::new(|| HashSet::from([ALLOWLISTED_DISCOVERABLE_CONNECTOR_ID]));
 
 fn default_limit() -> usize {
     DEFAULT_LIMIT
@@ -337,7 +341,10 @@ fn discoverable_connector_entries(
 
     for connector in connectors {
         if !connector.is_accessible {
-            installable_entries.push(ConnectorEntry::new(connector, ToolSuggestionType::Install));
+            if INSTALLABLE_DISCOVERABLE_CONNECTOR_IDS.contains(connector.id.as_str()) {
+                installable_entries
+                    .push(ConnectorEntry::new(connector, ToolSuggestionType::Install));
+            }
         } else if !connector.is_enabled {
             disabled_entries.push(ConnectorEntry::new(connector, ToolSuggestionType::Enable));
         }
@@ -609,6 +616,21 @@ mod tests {
     #[test]
     fn discoverable_connector_entries_prioritize_install_before_enable() {
         let installable = AppInfo {
+            id: ALLOWLISTED_DISCOVERABLE_CONNECTOR_ID.to_string(),
+            name: "Calendar".to_string(),
+            description: None,
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: None,
+            is_accessible: false,
+            is_enabled: false,
+            plugin_display_names: Vec::new(),
+        };
+        let non_allowlisted_installable = AppInfo {
             id: "calendar".to_string(),
             name: "Calendar".to_string(),
             description: None,
@@ -639,15 +661,21 @@ mod tests {
             plugin_display_names: Vec::new(),
         };
 
-        let (installable_entries, disabled_entries) =
-            discoverable_connector_entries(vec![disabled, installable]);
+        let (installable_entries, disabled_entries) = discoverable_connector_entries(vec![
+            disabled,
+            installable,
+            non_allowlisted_installable,
+        ]);
 
         assert_eq!(
             installable_entries
                 .iter()
                 .map(|entry| (entry.connector_id.clone(), entry.suggestion_type))
                 .collect::<Vec<_>>(),
-            vec![("calendar".to_string(), ToolSuggestionType::Install)]
+            vec![(
+                ALLOWLISTED_DISCOVERABLE_CONNECTOR_ID.to_string(),
+                ToolSuggestionType::Install,
+            )]
         );
         assert_eq!(
             disabled_entries

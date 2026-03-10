@@ -84,6 +84,7 @@ pub(crate) struct AppLinkViewParams {
     pub(crate) app_id: String,
     pub(crate) title: String,
     pub(crate) description: Option<String>,
+    pub(crate) suggest_reason: Option<String>,
     pub(crate) instructions: String,
     pub(crate) url: String,
     pub(crate) is_installed: bool,
@@ -100,6 +101,7 @@ struct ToolSuggestionMeta {
     suggestion_type: ToolSuggestionType,
     connector_id: String,
     connector_name: String,
+    suggest_reason: Option<String>,
     connector_description: Option<String>,
     install_url: String,
 }
@@ -131,6 +133,7 @@ pub(crate) fn tool_suggestion_params_from_event(
         app_id: meta.connector_id,
         title: meta.connector_name,
         description: meta.connector_description,
+        suggest_reason: meta.suggest_reason,
         instructions,
         url: meta.install_url,
         is_installed,
@@ -148,6 +151,7 @@ pub(crate) struct AppLinkView {
     app_id: String,
     title: String,
     description: Option<String>,
+    suggest_reason: Option<String>,
     instructions: String,
     url: String,
     is_installed: bool,
@@ -166,6 +170,7 @@ impl AppLinkView {
             app_id,
             title,
             description,
+            suggest_reason,
             instructions,
             url,
             is_installed,
@@ -177,6 +182,7 @@ impl AppLinkView {
             app_id,
             title,
             description,
+            suggest_reason,
             instructions,
             url,
             is_installed,
@@ -326,6 +332,17 @@ impl AppLinkView {
         {
             for line in wrap(description, usable_width) {
                 lines.push(Line::from(line.into_owned().dim()));
+            }
+        }
+        if let Some(suggest_reason) = self
+            .suggest_reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|suggest_reason| !suggest_reason.is_empty())
+        {
+            let suggest_reason = format!("Reason: {suggest_reason}");
+            for line in wrap(&suggest_reason, usable_width) {
+                lines.push(Line::from(line.into_owned()));
             }
         }
 
@@ -604,6 +621,7 @@ mod tests {
             app_id: "connector_1".to_string(),
             title: "Notion".to_string(),
             description: None,
+            suggest_reason: None,
             instructions: "Manage app".to_string(),
             url: "https://example.test/notion".to_string(),
             is_installed: true,
@@ -746,6 +764,7 @@ mod tests {
                     "suggestion_type": "install",
                     "connector_id": "connector_1",
                     "connector_name": "Notion",
+                    "suggest_reason": "The user asked for workspace docs",
                     "connector_description": "Docs and notes",
                     "install_url": "https://example.test/notion",
                 })),
@@ -765,6 +784,7 @@ mod tests {
                 app_id: "connector_1".to_string(),
                 title: "Notion".to_string(),
                 description: Some("Docs and notes".to_string()),
+                suggest_reason: Some("The user asked for workspace docs".to_string()),
                 instructions: APP_LINK_INSTALL_INSTRUCTIONS.to_string(),
                 url: "https://example.test/notion".to_string(),
                 is_installed: false,
@@ -808,6 +828,7 @@ mod tests {
                 app_id: "connector_1".to_string(),
                 title: "Notion".to_string(),
                 description: Some("Docs and notes".to_string()),
+                suggest_reason: None,
                 instructions: APP_LINK_ENABLE_INSTRUCTIONS.to_string(),
                 url: "https://example.test/notion".to_string(),
                 is_installed: true,
@@ -831,6 +852,25 @@ mod tests {
 
         insta::assert_snapshot!(
             "app_link_view_enable_suggestion",
+            render_snapshot(&view, area)
+        );
+    }
+
+    #[test]
+    fn install_suggestion_with_reason_snapshot() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut params = base_params();
+        params.is_installed = false;
+        params.is_enabled = false;
+        params.suggest_reason = Some("The user asked to access their workspace docs.".to_string());
+        params.instructions = APP_LINK_INSTALL_INSTRUCTIONS.to_string();
+        params.suggestion_type = Some(ToolSuggestionType::Install);
+        let view = AppLinkView::new(params, tx);
+        let area = Rect::new(0, 0, 80, view.desired_height(80));
+
+        insta::assert_snapshot!(
+            "app_link_view_install_suggestion_with_reason",
             render_snapshot(&view, area)
         );
     }

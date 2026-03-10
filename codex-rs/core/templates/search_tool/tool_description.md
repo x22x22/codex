@@ -3,6 +3,7 @@
 Searches over apps metadata with BM25 and exposes matching enabled tools for the next model call, or discoverable apps when requested.
 
 MCP tools of the apps ({{app_names}}) are hidden until you search for them with this tool (`search_tool_bm25`).
+Known discoverable tools (connectors, plugins) via this tool: {{discoverable_connector_names}}.
 
 Follow this workflow:
 
@@ -17,7 +18,7 @@ Follow this workflow:
 6. `discoverable` results prefer:
    - connectors that are not installed
    - connectors that are installed but disabled
-7. If `discoverable` finds the right app, call `tool_suggest` with the returned `connector_id`, `tool_type`, and `suggestion_type`.
+7. If `discoverable` finds the right app, call `tool_suggest` with the returned `connector_id`, `tool_type`, and `suggestion_type`, include a concise one-liner, user-facing `suggest_reason` for the `tool_suggest` tool.
 
 Notes:
 - Core tools remain available without searching.
@@ -30,7 +31,8 @@ Notes:
   - `description`
   - `connector_name`
   - input schema property keys (`input_keys`)
-- In `discoverable` mode, `query` is matched against app metadata such as connector id, name, description, labels, categories, and plugin display names.
+- In `discoverable` mode, `query` is matched against various kinds of tool metadata such as connector id, name, description, labels, categories, and plugin display names.
+- `discoverable` can also surface connectors that are already installed but currently disabled, even if they are not listed above.
 - If the needed app is already explicit in the prompt (for example `[$app-name](app://{connector_id})`) or already present in the current `tools` list, you can call that tool directly.
 - Do not call app MCP tools for apps returned only by `discoverable` mode until the user installs or enables them.
-- Do not use `search_tool_bm25` for non-apps/local tasks (filesystem, repo search, or shell-only workflows) or anything not related to {{app_names}}.
+- Do not use `search_tool_bm25` for non-apps/local tasks (filesystem, repo search, or shell-only workflows) or anything not related to the specific tool names mentioned above.

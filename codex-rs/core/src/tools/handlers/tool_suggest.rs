@@ -68,6 +68,7 @@ struct ToolSuggestArgs {
     connector_id: String,
     tool_type: ToolSuggestionToolType,
     suggestion_type: ToolSuggestionType,
+    suggest_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +79,7 @@ struct ToolSuggestElicitationContent {
 fn tool_suggest_message(
     suggestion_type: ToolSuggestionType,
     connector_name: &str,
+    suggest_reason: Option<&str>,
     connector_description: Option<&str>,
     url: &str,
 ) -> String {
@@ -85,13 +87,25 @@ fn tool_suggest_message(
         "{} {connector_name} to continue?",
         suggestion_type.verb()
     )];
-    if let Some(description) = connector_description.map(str::trim)
-        && !description.is_empty()
-    {
-        parts.push(description.to_string());
+    if let Some(suggest_reason) = normalized_optional_text(suggest_reason) {
+        parts.push(format!("Reason: {suggest_reason}"));
+    }
+    if let Some(description) = normalized_optional_text(connector_description) {
+        parts.push(description);
     }
     parts.push(format!("Open URL: {url}"));
     parts.join(" | ")
+}
+
+fn normalized_optional_text(text: Option<&str>) -> Option<String> {
+    text.and_then(|text| {
+        let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    })
 }
 
 fn tool_suggest_requested_schema() -> McpElicitationSchema {
@@ -108,10 +122,11 @@ fn tool_suggest_elicitation_meta(
     suggestion_type: ToolSuggestionType,
     connector_id: &str,
     connector_name: &str,
+    suggest_reason: Option<&str>,
     connector_description: Option<&str>,
     install_url: &str,
 ) -> Value {
-    json!({
+    let mut meta = json!({
         TOOL_SUGGEST_META_KIND_KEY: TOOL_SUGGEST_META_KIND_VALUE,
         "tool_type": tool_type,
         "suggestion_type": suggestion_type,
@@ -119,7 +134,13 @@ fn tool_suggest_elicitation_meta(
         "connector_name": connector_name,
         "connector_description": connector_description,
         "install_url": install_url,
-    })
+    });
+    if let Some(suggest_reason) = suggest_reason
+        && let Some(meta) = meta.as_object_mut()
+    {
+        meta.insert("suggest_reason".to_string(), json!(suggest_reason));
+    }
+    meta
 }
 
 fn parse_tool_suggest_elicitation_response(
@@ -246,6 +267,7 @@ impl ToolHandler for ToolSuggestHandler {
             .install_url
             .clone()
             .unwrap_or_else(|| connectors::connector_install_url(&connector.name, &connector.id));
+        let suggest_reason = normalized_optional_text(args.suggest_reason.as_deref());
         let request_id = RequestId::String(format!("{TOOL_SUGGEST_TOOL_NAME}_{call_id}").into());
         let elicitation_response = session
             .request_mcp_server_elicitation(
@@ -261,12 +283,14 @@ impl ToolHandler for ToolSuggestHandler {
                             args.suggestion_type,
                             &connector.id,
                             &connector.name,
+                            suggest_reason.as_deref(),
                             connector.description.as_deref(),
                             &install_url,
                         )),
                         message: tool_suggest_message(
                             args.suggestion_type,
                             &connector.name,
+                            suggest_reason.as_deref(),
                             connector.description.as_deref(),
                             &install_url,
                         ),
@@ -291,14 +315,19 @@ impl ToolHandler for ToolSuggestHandler {
                 .await;
         }
 
+        let user_declined_suggestion =
+            user_decision == TOOL_SUGGEST_DECISION_NOT_NOW && elicitation_action != "cancel";
+
         let assistant_instruction = if user_decision == TOOL_SUGGEST_DECISION_INSTALL {
             "The user confirmed they completed the install flow. Treat this connector as selectable for this turn, but verify its tools appear in a `search_tool_bm25` search with `mode: \"enabled\"` before trying to use them. If they still do not appear, it may also need enabling."
         } else if user_decision == TOOL_SUGGEST_DECISION_ENABLE {
             "The user confirmed they enabled this connector. Treat it as selectable for this turn, but verify its tools appear in a `search_tool_bm25` search with `mode: \"enabled\"` before trying to use them."
+        } else if user_declined_suggestion {
+            "The user declined this suggestion. Do not ask them again to install or enable this connector unless they later ask for it. Do not try to use this tool in this turn."
         } else {
             "The user did not complete this suggestion flow. Do not try to use this tool in this turn."
         };
-        let content = json!({
+        let mut content = json!({
             "connector_id": connector.id,
             "connector_name": connector.name,
             "connector_description": connector.description,
@@ -308,8 +337,13 @@ impl ToolHandler for ToolSuggestHandler {
             "elicitation_action": elicitation_action,
             "user_decision": user_decision,
             "assistant_instruction": assistant_instruction,
-        })
-        .to_string();
+        });
+        if let Some(suggest_reason) = suggest_reason
+            && let Some(content) = content.as_object_mut()
+        {
+            content.insert("suggest_reason".to_string(), json!(suggest_reason));
+        }
+        let content = content.to_string();
 
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
@@ -333,13 +367,14 @@ mod tests {
         let message = tool_suggest_message(
             ToolSuggestionType::Install,
             "Docs & Notes",
+            Some("Need access to\n workspace docs"),
             Some("Install <now> & sync"),
             "https://example.com/apps?name=Docs",
         );
 
         assert_eq!(
             message,
-            "Install Docs & Notes to continue? | Install <now> & sync | Open URL: https://example.com/apps?name=Docs"
+            "Install Docs & Notes to continue? | Reason: Need access to workspace docs | Install <now> & sync | Open URL: https://example.com/apps?name=Docs"
         );
     }
 

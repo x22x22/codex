@@ -47,7 +47,7 @@ use wiremock::matchers::path;
 
 const SEARCH_TOOL_INSTRUCTION_SNIPPETS: [&str; 2] = [
     "Always search `mode: \"enabled\"` first.",
-    "If `discoverable` finds the right app, call `tool_suggest` with the returned `connector_id`, `tool_type`, and `suggestion_type`.",
+    "If `discoverable` finds the right app, call `tool_suggest` with the returned `connector_id`, `tool_type`, and `suggestion_type`, include a concise one-liner, user-facing `suggest_reason` for the `tool_suggest` tool.",
 ];
 const SEARCH_TOOL_BM25_TOOL_NAME: &str = "search_tool_bm25";
 const TOOL_SUGGEST_TOOL_NAME: &str = "tool_suggest";
@@ -57,6 +57,10 @@ const RMCP_ECHO_TOOL: &str = "mcp__rmcp__echo";
 const RMCP_IMAGE_TOOL: &str = "mcp__rmcp__image";
 const CALENDAR_CREATE_QUERY: &str = "create calendar event";
 const CALENDAR_LIST_QUERY: &str = "list calendar events";
+const ALLOWLISTED_INSTALLABLE_CONNECTOR_ID: &str = "connector_2128aebfecb84f64a069897515042a44";
+const ALLOWLISTED_INSTALLABLE_CONNECTOR_NAME: &str = "Docs Connector";
+const ALLOWLISTED_INSTALLABLE_CONNECTOR_DESCRIPTION: &str = "Approved workspace docs";
+const ALLOWLISTED_INSTALLABLE_QUERY: &str = "approved workspace docs";
 const NOTION_CONNECTOR_ID: &str = "notion";
 const NOTION_CONNECTOR_NAME: &str = "Notion";
 const NOTION_CONNECTOR_DESCRIPTION: &str = "Workspace docs and notes";
@@ -163,6 +167,14 @@ async fn mount_directory_connectors(server: &wiremock::MockServer) {
                     "id": NOTION_CONNECTOR_ID,
                     "name": NOTION_CONNECTOR_NAME,
                     "description": NOTION_CONNECTOR_DESCRIPTION,
+                    "appMetadata": {
+                        "categories": ["docs"]
+                    }
+                },
+                {
+                    "id": ALLOWLISTED_INSTALLABLE_CONNECTOR_ID,
+                    "name": ALLOWLISTED_INSTALLABLE_CONNECTOR_NAME,
+                    "description": ALLOWLISTED_INSTALLABLE_CONNECTOR_DESCRIPTION,
                     "appMetadata": {
                         "categories": ["docs"]
                     }
@@ -428,6 +440,10 @@ async fn search_tool_adds_discovery_instructions_to_tool_description() -> Result
             .iter()
             .all(|snippet| description.contains(snippet)),
         "search tool description should include search tool workflow: {description:?}"
+    );
+    assert!(
+        description.contains("connector metadata unavailable"),
+        "search tool description should explain missing discoverable connector metadata: {description:?}"
     );
 
     Ok(())
@@ -1360,7 +1376,7 @@ async fn installable_search_returns_inaccessible_connectors_without_selecting_to
     mount_directory_connectors(&server).await;
     let call_id = "installable-search";
     let args = json!({
-        "query": "notion docs",
+        "query": ALLOWLISTED_INSTALLABLE_QUERY,
         "limit": 5,
         "mode": "discoverable",
     });
@@ -1388,7 +1404,7 @@ async fn installable_search_returns_inaccessible_connectors_without_selecting_to
     let test = builder.build(&server).await?;
 
     test.submit_turn_with_policies(
-        "find installable notion app",
+        "find installable docs app",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,
     )
@@ -1425,7 +1441,7 @@ async fn installable_search_returns_inaccessible_connectors_without_selecting_to
     );
     assert_eq!(
         connectors[0].get("connector_id").and_then(Value::as_str),
-        Some(NOTION_CONNECTOR_ID),
+        Some(ALLOWLISTED_INSTALLABLE_CONNECTOR_ID),
     );
     assert_eq!(
         connectors[0].get("tool_type").and_then(Value::as_str),
@@ -1437,13 +1453,13 @@ async fn installable_search_returns_inaccessible_connectors_without_selecting_to
     );
     assert_eq!(
         connectors[0].get("connector_name").and_then(Value::as_str),
-        Some(NOTION_CONNECTOR_NAME),
+        Some(ALLOWLISTED_INSTALLABLE_CONNECTOR_NAME),
     );
     assert_eq!(
         connectors[0]
             .get("connector_description")
             .and_then(Value::as_str),
-        Some(NOTION_CONNECTOR_DESCRIPTION),
+        Some(ALLOWLISTED_INSTALLABLE_CONNECTOR_DESCRIPTION),
     );
 
     Ok(())
@@ -1481,7 +1497,7 @@ async fn installable_search_preserves_available_selection() -> Result<()> {
                 installable_call_id,
                 SEARCH_TOOL_BM25_TOOL_NAME,
                 &serde_json::to_string(&json!({
-                    "query": "notion docs",
+                    "query": ALLOWLISTED_INSTALLABLE_QUERY,
                     "limit": 5,
                     "mode": "discoverable",
                 }))?,
@@ -1505,7 +1521,7 @@ async fn installable_search_preserves_available_selection() -> Result<()> {
     )
     .await?;
     test.submit_turn_with_policies(
-        "find installable notion app",
+        "find installable docs app",
         AskForApproval::Never,
         SandboxPolicy::DangerFullAccess,
     )
@@ -1538,7 +1554,7 @@ async fn installable_search_preserves_available_selection() -> Result<()> {
             .first()
             .and_then(|connector| connector.get("connector_id"))
             .and_then(Value::as_str),
-        Some(NOTION_CONNECTOR_ID),
+        Some(ALLOWLISTED_INSTALLABLE_CONNECTOR_ID),
     );
 
     Ok(())
@@ -1624,6 +1640,7 @@ async fn tool_suggest_prompts_install_via_elicitation() -> Result<()> {
         "connector_id": NOTION_CONNECTOR_ID,
         "tool_type": "connector",
         "suggestion_type": "install",
+        "suggest_reason": "The user asked to access their workspace docs.",
     });
     let mock = mount_sse_sequence(
         &server,
@@ -1664,7 +1681,7 @@ async fn tool_suggest_prompts_install_via_elicitation() -> Result<()> {
     assert_eq!(
         message,
         format!(
-            "Install {NOTION_CONNECTOR_NAME} to continue? | {NOTION_CONNECTOR_DESCRIPTION} | Open URL: https://chatgpt.com/apps/notion/notion"
+            "Install {NOTION_CONNECTOR_NAME} to continue? | Reason: The user asked to access their workspace docs. | {NOTION_CONNECTOR_DESCRIPTION} | Open URL: https://chatgpt.com/apps/notion/notion"
         )
     );
     assert_eq!(
@@ -1675,6 +1692,7 @@ async fn tool_suggest_prompts_install_via_elicitation() -> Result<()> {
             "suggestion_type": "install",
             "connector_id": NOTION_CONNECTOR_ID,
             "connector_name": NOTION_CONNECTOR_NAME,
+            "suggest_reason": "The user asked to access their workspace docs.",
             "connector_description": NOTION_CONNECTOR_DESCRIPTION,
             "install_url": "https://chatgpt.com/apps/notion/notion",
         }))
@@ -1718,6 +1736,10 @@ async fn tool_suggest_prompts_install_via_elicitation() -> Result<()> {
     assert_eq!(
         payload.get("connector_name").and_then(Value::as_str),
         Some(NOTION_CONNECTOR_NAME),
+    );
+    assert_eq!(
+        payload.get("suggest_reason").and_then(Value::as_str),
+        Some("The user asked to access their workspace docs."),
     );
     assert_eq!(
         payload.get("connector_description").and_then(Value::as_str),
@@ -1884,9 +1906,7 @@ async fn tool_suggest_reports_not_now_when_user_declines_install() -> Result<()>
         payload
             .get("assistant_instruction")
             .and_then(Value::as_str)
-            .is_some_and(
-                |instruction| instruction.contains("did not complete this suggestion flow")
-            ),
+            .is_some_and(|instruction| instruction.contains("Do not ask them again")),
         "unexpected tool_suggest payload: {payload:?}"
     );
 
