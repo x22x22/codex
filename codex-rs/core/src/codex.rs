@@ -392,8 +392,9 @@ impl Codex {
             && let Some(reason) = codex_code_mode::unsupported_reason()
         {
             let _ = config.features.disable(Feature::CodeMode);
-            let message =
-                format!("Disabled `code_mode` for this session because it is unavailable: {reason}");
+            let message = format!(
+                "Disabled `code_mode` for this session because it is unavailable: {reason}"
+            );
             warn!("{message}");
             config.startup_warnings.push(message);
         }

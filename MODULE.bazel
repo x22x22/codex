@@ -88,6 +88,14 @@ crate.annotation(
     ],
 )
 
+crate.annotation(
+    crate = "v8",
+    patch_args = ["-p1"],
+    patches = [
+        "//patches:v8_relative_prebuilt_binding_path.patch",
+    ],
+)
+
 inject_repo(crate, "zstd")
 
 bazel_dep(name = "bzip2", version = "1.0.8.bcr.3")

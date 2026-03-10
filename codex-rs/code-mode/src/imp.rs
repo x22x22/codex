@@ -3,7 +3,6 @@ use std::sync::Once;
 
 use crate::EnabledTool;
 use crate::ToolCallHandler;
-use rusty_v8 as v8;
 use serde_json::Value as JsonValue;
 
 const CODE_MODE_BOOTSTRAP_SOURCE: &str = include_str!("code_mode_bridge.js");
@@ -101,7 +100,11 @@ fn install_tool_call_binding(scope: &mut v8::PinScope<'_, '_>) -> Result<(), Str
     }
 }
 
-fn run_script(scope: &mut v8::PinScope<'_, '_>, filename: &str, source: &str) -> Result<(), String> {
+fn run_script(
+    scope: &mut v8::PinScope<'_, '_>,
+    filename: &str,
+    source: &str,
+) -> Result<(), String> {
     let scope = pin!(v8::TryCatch::new(scope));
     let scope = &mut scope.init();
     let source = v8_string(scope, source)?;
@@ -386,7 +389,10 @@ fn wait_for_module_promise(
 }
 
 fn read_content_items(scope: &mut v8::PinScope<'_, '_>) -> Result<Vec<JsonValue>, String> {
-    let source = v8_string(scope, "JSON.stringify(globalThis.__codexContentItems ?? [])")?;
+    let source = v8_string(
+        scope,
+        "JSON.stringify(globalThis.__codexContentItems ?? [])",
+    )?;
     let script = v8::Script::compile(scope, source, None)
         .ok_or_else(|| "failed to read code_mode content items".to_string())?;
     let value = script
@@ -396,7 +402,8 @@ fn read_content_items(scope: &mut v8::PinScope<'_, '_>) -> Result<Vec<JsonValue>
         .to_string(scope)
         .ok_or_else(|| "failed to serialize code_mode content items".to_string())?
         .to_rust_string_lossy(scope);
-    serde_json::from_str(&serialized).map_err(|err| format!("invalid code_mode content items: {err}"))
+    serde_json::from_str(&serialized)
+        .map_err(|err| format!("invalid code_mode content items: {err}"))
 }
 
 fn build_bootstrap_source(enabled_tools: &[EnabledTool]) -> Result<String, String> {
@@ -453,9 +460,7 @@ fn throw_v8_exception<'s, T>(
     None
 }
 
-fn format_v8_exception(
-    try_catch: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>,
-) -> String {
+fn format_v8_exception(try_catch: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>) -> String {
     let Some(exception) = try_catch.exception() else {
         return "JavaScript execution failed".to_string();
     };

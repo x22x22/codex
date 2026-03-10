@@ -1,0 +1,49 @@
+diff --git a/build.rs b/build.rs
+--- a/build.rs
++++ b/build.rs
+@@ -578,6 +578,16 @@
+ }
+ 
+ fn static_lib_dir() -> PathBuf {
++  if let Some(out_dir) = env::var_os("OUT_DIR") {
++    let out_dir = PathBuf::from(out_dir);
++    if out_dir
++      .components()
++      .any(|component| component.as_os_str() == "bazel-out")
++    {
++      return out_dir;
++    }
++  }
++
+   build_dir().join("gn_out").join("obj")
+ }
+ 
+@@ -591,6 +601,13 @@
+   );
+   let out_dir_abs = cwd.join(out_dir);
+ 
++  if out_dir_abs
++    .components()
++    .any(|component| component.as_os_str() == "bazel-out")
++  {
++    return out_dir_abs.parent().unwrap().to_path_buf();
++  }
++
+   // This would be `target/debug` or `target/release`
+   out_dir_abs
+     .parent()
+@@ -861,9 +878,13 @@
+     download_file(&url, &src_binding_path);
+   }
+ 
++  // `src/binding.rs` includes this path directly, so keep it relative to that
++  // source file instead of the build script's synthetic runfiles directory.
++  let include_path = Path::new("..").join("gen").join(name);
++
+   println!(
+     "cargo:rustc-env=RUSTY_V8_SRC_BINDING_PATH={}",
+-    src_binding_path.display()
++    include_path.display()
+   );
+ }
+ 
