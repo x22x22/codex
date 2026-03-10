@@ -149,6 +149,13 @@ def codex_rust_crate(
         "BAZEL_PACKAGE": native.package_name(),
     } | rustc_env
 
+    linux_allow_multiple_definitions_flags = select({
+        "@platforms//os:linux": [
+            "-Clink-arg=-Wl,--allow-multiple-definition",
+        ],
+        "//conditions:default": [],
+    })
+
     binaries = DEP_DATA.get(native.package_name())["binaries"]
 
     lib_srcs = crate_srcs or native.glob(["src/**/*.rs"], exclude = binaries.values(), allow_empty = True)
@@ -195,7 +202,7 @@ def codex_rust_crate(
             rustc_flags = rustc_flags_extra + [
                 "--remap-path-prefix=../codex-rs=",
                 "--remap-path-prefix=codex-rs=",
-            ],
+            ] + linux_allow_multiple_definitions_flags,
             rustc_env = rustc_env,
             data = test_data_extra,
             tags = test_tags + ["manual"],
@@ -224,7 +231,7 @@ def codex_rust_crate(
             crate_root = main,
             deps = all_crate_deps() + maybe_deps + deps_extra,
             edition = crate_edition,
-            rustc_flags = rustc_flags_extra,
+            rustc_flags = rustc_flags_extra + linux_allow_multiple_definitions_flags,
             srcs = native.glob(["src/**/*.rs"]),
             visibility = ["//visibility:public"],
         )
@@ -255,7 +262,7 @@ def codex_rust_crate(
             rustc_flags = rustc_flags_extra + [
                 "--remap-path-prefix=../codex-rs=",
                 "--remap-path-prefix=codex-rs=",
-            ],
+            ] + linux_allow_multiple_definitions_flags,
             rustc_env = rustc_env,
             # Important: do not merge `test_env` here. Its unit-test-only
             # `INSTA_WORKSPACE_ROOT="codex-rs"` is tuned for unit tests that
