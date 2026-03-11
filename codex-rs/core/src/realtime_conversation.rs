@@ -628,6 +628,11 @@ fn spawn_realtime_input_task(
                                 warn!("failed to send input text: {mapped_error}");
                                 break;
                             }
+                            if let Err(err) = writer.send_response_create().await {
+                                let mapped_error = map_api_error(err);
+                                warn!("failed to send text response.create: {mapped_error}");
+                                break;
+                            }
                         }
                         Err(_) => break,
                     }

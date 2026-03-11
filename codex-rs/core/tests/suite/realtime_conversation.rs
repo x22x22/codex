@@ -138,6 +138,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
                     }
                 }),
             ],
+            vec![],
         ],
     ])
     .await;
@@ -196,10 +197,16 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     .await;
     assert_eq!(audio_out.frame.data, "AQID");
 
+    let response_create = server.wait_for_request(1, 3).await;
+    assert_eq!(
+        response_create.body_json()["type"].as_str(),
+        Some("response.create")
+    );
+
     let connections = server.connections();
     assert_eq!(connections.len(), 2);
     let connection = &connections[1];
-    assert_eq!(connection.len(), 3);
+    assert_eq!(connection.len(), 4);
     assert_eq!(
         connection[0].body_json()["type"].as_str(),
         Some("session.update")
@@ -233,6 +240,10 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
             .as_str()
             .expect("request type")
             .to_string(),
+        response_create.body_json()["type"]
+            .as_str()
+            .expect("request type")
+            .to_string(),
     ];
     request_types.sort();
     assert_eq!(
@@ -240,7 +251,16 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         [
             "conversation.item.create".to_string(),
             "input_audio_buffer.append".to_string(),
+            "response.create".to_string(),
         ]
+    );
+    let conversation_item_create = connection[1..]
+        .iter()
+        .find(|request| request.body_json()["type"].as_str() == Some("conversation.item.create"))
+        .expect("conversation.item.create request");
+    assert_eq!(
+        websocket_request_text(conversation_item_create),
+        Some("hello".to_string())
     );
 
     test.codex.submit(Op::RealtimeConversationClose).await?;

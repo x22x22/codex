@@ -11,6 +11,7 @@ use codex_protocol::protocol::RealtimeOutputAudioDelta;
 use codex_protocol::protocol::RealtimeToolAction;
 use codex_protocol::protocol::RealtimeToolActionRequested;
 use codex_protocol::protocol::RealtimeToolCallCompleteParams;
+use codex_protocol::user_input::ByteRange;
 use serde_json::json;
 
 const REALTIME_CONVERSATION_PROMPT: &str = concat!(
@@ -83,6 +84,10 @@ impl RealtimeConversationUiState {
 impl RealtimeConversationUiState {
     pub(super) fn set_phase_for_test(&mut self, phase: RealtimeConversationPhase) {
         self.phase = phase;
+    }
+
+    pub(super) fn set_meter_placeholder_id_for_test(&mut self, id: Option<String>) {
+        self.meter_placeholder_id = id;
     }
 
     pub(super) fn phase_for_test(&self) -> RealtimeConversationPhase {
@@ -230,10 +235,10 @@ impl ChatWidget {
         }
 
         let UserMessage {
-            text,
+            mut text,
             local_images,
             remote_image_urls,
-            text_elements,
+            mut text_elements,
             mention_bindings,
         } = user_message;
 
@@ -264,6 +269,37 @@ impl ChatWidget {
 
         self.realtime_conversation
             .warned_unsupported_composer_submission = false;
+
+        if self.realtime_conversation.meter_placeholder_id.is_some() {
+            let mut stripped_bytes = 0usize;
+            let mut stripped_chars = 0usize;
+            for (idx, ch) in text.char_indices() {
+                if matches!(ch, '⠤' | '⠴' | '⠶' | '⠷' | '⡷' | '⡿' | '⣿') && stripped_chars < 4
+                {
+                    stripped_chars += 1;
+                    stripped_bytes = idx + ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+
+            if stripped_chars == 4 {
+                text = text[stripped_bytes..].to_string();
+                text_elements = text_elements
+                    .into_iter()
+                    .filter_map(|element| {
+                        if element.byte_range.end <= stripped_bytes {
+                            None
+                        } else {
+                            Some(element.map_range(|range| ByteRange {
+                                start: range.start.saturating_sub(stripped_bytes),
+                                end: range.end.saturating_sub(stripped_bytes),
+                            }))
+                        }
+                    })
+                    .collect();
+            }
+        }
 
         if !self.submit_op(Op::RealtimeConversationText(ConversationTextParams {
             text: text.clone(),

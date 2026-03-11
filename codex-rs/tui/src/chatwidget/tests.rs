@@ -10408,9 +10408,14 @@ async fn enter_submits_typed_text_while_realtime_mode_is_live() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.realtime_conversation
         .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
+    chat.realtime_conversation
+        .set_meter_placeholder_id_for_test(Some("meter".to_string()));
 
-    chat.bottom_pane
-        .set_composer_text("typed via realtime".to_string(), Vec::new(), Vec::new());
+    chat.bottom_pane.set_composer_text(
+        "⠤⠤⠤⠤typed via realtime".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_eq!(chat.bottom_pane.composer_text(), "");
