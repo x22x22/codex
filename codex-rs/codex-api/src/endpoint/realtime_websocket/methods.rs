@@ -448,7 +448,7 @@ impl RealtimeWebsocketWriter {
                     SessionTool {
                         kind: "function".to_string(),
                         name: "manage_message_queue".to_string(),
-                        description: "Inspect or edit queued draft messages. Supported actions: list, replace_last, remove_last, clear. Queue editing affects queued draft messages only, not pending steers.".to_string(),
+                        description: "Inspect or edit queued draft messages. Prefer this over codex when the user asks what is queued or wants to replace, remove, or clear queued draft work. Supported actions: list, replace_last, remove_last, clear. Queue editing affects queued draft messages only, not pending steers.".to_string(),
                         parameters: SessionToolParameters {
                             kind: "object".to_string(),
                             properties: BTreeMap::from([
@@ -473,7 +473,7 @@ impl RealtimeWebsocketWriter {
                     SessionTool {
                         kind: "function".to_string(),
                         name: "manage_runtime_settings".to_string(),
-                        description: "Inspect or update runtime settings for future Codex turns. Call with no setting fields to list current settings, possible settings, and allowed values. Supported setting keys: model, working_directory, reasoning_effort, fast_mode, personality, collaboration_mode. Changes are not persisted to disk.".to_string(),
+                        description: "Inspect or update runtime settings for future Codex turns. Prefer this over codex when the user wants to inspect or change model, working_directory, reasoning_effort, fast_mode, personality, or collaboration_mode. Call with no setting fields to list current settings, possible settings, and allowed values. Supported setting keys: model, working_directory, reasoning_effort, fast_mode, personality, collaboration_mode. Changes are not persisted to disk.".to_string(),
                         parameters: SessionToolParameters {
                             kind: "object".to_string(),
                             properties: BTreeMap::from([
@@ -526,7 +526,7 @@ impl RealtimeWebsocketWriter {
                     SessionTool {
                         kind: "function".to_string(),
                         name: "run_tui_command".to_string(),
-                        description: "Run a small set of built-in TUI actions. Supported commands: compact, review, plan, diff, agent. review can take an optional prompt for custom review instructions. plan can take an optional prompt to switch to Plan mode and submit work immediately.".to_string(),
+                        description: "Run a small set of built-in TUI actions. Prefer this over codex for built-in control actions like compact, review, plan, diff, or opening the agent picker. Supported commands: compact, review, plan, diff, agent. review can take an optional prompt for custom review instructions. plan can take an optional prompt to switch to Plan mode and submit work immediately.".to_string(),
                         parameters: SessionToolParameters {
                             kind: "object".to_string(),
                             properties: BTreeMap::from([
