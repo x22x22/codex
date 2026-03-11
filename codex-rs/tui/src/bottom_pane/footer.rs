@@ -84,6 +84,11 @@ pub(crate) struct FooterProps {
     /// When both this label and the configured status line are available, they are rendered on the
     /// same row separated by ` · `.
     pub(crate) active_agent_label: Option<String>,
+    /// Realtime voice status rendered as a compact contextual footer segment.
+    ///
+    /// When present, this shares the footer row with the configured status line and any active
+    /// agent label instead of replacing the whole footer with a dedicated override.
+    pub(crate) realtime_status_label: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -648,6 +653,19 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
         }
     }
 
+    if let Some(realtime_status_label) = props.realtime_status_label.as_ref() {
+        if let Some(existing) = line.as_mut() {
+            existing.spans.push(" · ".into());
+            existing
+                .spans
+                .push(Span::from(realtime_status_label.clone()).cyan());
+        } else {
+            line = Some(Line::from(vec![
+                Span::from(realtime_status_label.clone()).cyan(),
+            ]));
+        }
+    }
+
     line
 }
 
@@ -655,10 +673,14 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
 ///
 /// In practice this means the composer is idle, or it has a draft but is not currently running a
 /// task, so the footer can spend the row on ambient context instead of "what to do next" text.
+/// Realtime voice status is the exception: when it is active we keep the contextual row visible
+/// even while work is running so the live meter can share space with the status line.
 pub(crate) fn shows_passive_footer_line(props: &FooterProps) -> bool {
     match props.mode {
         FooterMode::ComposerEmpty => true,
-        FooterMode::ComposerHasDraft => !props.is_task_running,
+        FooterMode::ComposerHasDraft => {
+            props.realtime_status_label.is_some() || !props.is_task_running
+        }
         FooterMode::QuitShortcutReminder | FooterMode::ShortcutOverlay | FooterMode::EscHint => {
             false
         }
@@ -1266,6 +1288,7 @@ mod tests {
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
+                realtime_status_label: None,
             },
         );
 
@@ -1284,6 +1307,7 @@ mod tests {
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
+                realtime_status_label: None,
             },
         );
 
@@ -1302,6 +1326,7 @@ mod tests {
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
+                realtime_status_label: None,
             },
         );
 
@@ -1320,6 +1345,7 @@ mod tests {
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
+                realtime_status_label: None,
             },
         );
 
@@ -1338,6 +1364,7 @@ mod tests {
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
+                realtime_status_label: None,
             },
         );
 
@@ -1356,6 +1383,7 @@ mod tests {
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
+                realtime_status_label: None,
             },
         );
 
@@ -1374,6 +1402,7 @@ mod tests {
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
+                realtime_status_label: None,
             },
         );
 
@@ -1392,6 +1421,7 @@ mod tests {
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
+                realtime_status_label: None,
             },
         );
 
@@ -1410,6 +1440,7 @@ mod tests {
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
+                realtime_status_label: None,
             },
         );
 
@@ -1428,6 +1459,7 @@ mod tests {
                 status_line_value: None,
                 status_line_enabled: false,
                 active_agent_label: None,
+                realtime_status_label: None,
             },
         );
 
@@ -1444,6 +1476,7 @@ mod tests {
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,
+            realtime_status_label: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1473,6 +1506,7 @@ mod tests {
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,
+            realtime_status_label: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1495,6 +1529,7 @@ mod tests {
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
             active_agent_label: None,
+            realtime_status_label: None,
         };
 
         snapshot_footer("footer_status_line_overrides_shortcuts", props);
@@ -1512,6 +1547,7 @@ mod tests {
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
             active_agent_label: None,
+            realtime_status_label: None,
         };
 
         snapshot_footer("footer_status_line_yields_to_queue_hint", props);
@@ -1529,6 +1565,7 @@ mod tests {
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
             active_agent_label: None,
+            realtime_status_label: None,
         };
 
         snapshot_footer("footer_status_line_overrides_draft_idle", props);
@@ -1546,6 +1583,7 @@ mod tests {
             status_line_value: None, // command timed out / empty
             status_line_enabled: true,
             active_agent_label: None,
+            realtime_status_label: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1568,6 +1606,7 @@ mod tests {
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,
+            realtime_status_label: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1590,6 +1629,7 @@ mod tests {
             status_line_value: None,
             status_line_enabled: true,
             active_agent_label: None,
+            realtime_status_label: None,
         };
 
         // has status line and no collaboration mode
@@ -1615,6 +1655,7 @@ mod tests {
             )),
             status_line_enabled: true,
             active_agent_label: None,
+            realtime_status_label: None,
         };
 
         snapshot_footer_with_mode_indicator(
@@ -1637,6 +1678,7 @@ mod tests {
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: Some("Robie [explorer]".to_string()),
+            realtime_status_label: None,
         };
 
         snapshot_footer("footer_active_agent_label", props);
@@ -1654,6 +1696,7 @@ mod tests {
             status_line_value: Some(Line::from("Status line content".to_string())),
             status_line_enabled: true,
             active_agent_label: Some("Robie [explorer]".to_string()),
+            realtime_status_label: None,
         };
 
         snapshot_footer("footer_status_line_with_active_agent_label", props);
@@ -1677,6 +1720,7 @@ mod tests {
             )),
             status_line_enabled: true,
             active_agent_label: None,
+            realtime_status_label: None,
         };
 
         let screen =

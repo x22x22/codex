@@ -412,6 +412,7 @@ pub(crate) struct ChatComposer {
     status_line_enabled: bool,
     // Agent label injected into the footer's contextual row when multi-agent mode is active.
     active_agent_label: Option<String>,
+    realtime_status_label: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -533,6 +534,7 @@ impl ChatComposer {
             status_line_value: None,
             status_line_enabled: false,
             active_agent_label: None,
+            realtime_status_label: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -3195,6 +3197,7 @@ impl ChatComposer {
             status_line_value: self.status_line_value.clone(),
             status_line_enabled: self.status_line_enabled,
             active_agent_label: self.active_agent_label.clone(),
+            realtime_status_label: self.realtime_status_label.clone(),
         }
     }
 
@@ -3777,6 +3780,17 @@ impl ChatComposer {
             return false;
         }
         self.active_agent_label = active_agent_label;
+        true
+    }
+
+    pub(crate) fn set_realtime_status_label(
+        &mut self,
+        realtime_status_label: Option<String>,
+    ) -> bool {
+        if self.realtime_status_label == realtime_status_label {
+            return false;
+        }
+        self.realtime_status_label = realtime_status_label;
         true
     }
 }

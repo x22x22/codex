@@ -1135,6 +1135,15 @@ impl BottomPane {
             self.request_redraw();
         }
     }
+
+    pub(crate) fn set_realtime_status_label(&mut self, realtime_status_label: Option<String>) {
+        if self
+            .composer
+            .set_realtime_status_label(realtime_status_label)
+        {
+            self.request_redraw();
+        }
+    }
 }
 
 #[cfg(not(target_os = "linux"))]

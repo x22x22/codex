@@ -303,18 +303,23 @@ impl ChatWidget {
         None
     }
 
-    fn realtime_footer_hint_items(&self) -> Vec<(String, String)> {
-        let mut items = vec![("/realtime".to_string(), "stop live voice".to_string())];
-        if let Some(meter_text) = self.realtime_conversation.meter_text.as_ref() {
-            items.push(("mic".to_string(), meter_text.clone()));
+    fn realtime_status_label(&self) -> Option<String> {
+        match self.realtime_conversation.phase {
+            RealtimeConversationPhase::Inactive => None,
+            RealtimeConversationPhase::Starting => Some("voice starting".to_string()),
+            RealtimeConversationPhase::Active => Some(
+                self.realtime_conversation
+                    .meter_text
+                    .as_ref()
+                    .map(|meter_text| format!("voice {meter_text}"))
+                    .unwrap_or_else(|| "voice live".to_string()),
+            ),
+            RealtimeConversationPhase::Stopping => Some("voice stopping".to_string()),
         }
-        items
     }
 
-    fn refresh_realtime_footer_hint(&mut self) {
-        if self.realtime_conversation.is_live() && !self.realtime_conversation.requested_close {
-            self.set_footer_hint_override(Some(self.realtime_footer_hint_items()));
-        }
+    fn sync_realtime_status_label(&mut self) {
+        self.set_realtime_status_label(self.realtime_status_label());
     }
 
     pub(crate) fn update_realtime_recording_meter(
@@ -331,7 +336,7 @@ impl ChatWidget {
         }
 
         self.realtime_conversation.meter_text = Some(text);
-        self.refresh_realtime_footer_hint();
+        self.sync_realtime_status_label();
         true
     }
 
@@ -343,7 +348,7 @@ impl ChatWidget {
         self.realtime_conversation.meter_text = None;
         self.realtime_conversation
             .warned_unsupported_composer_submission = false;
-        self.set_footer_hint_override(Some(self.realtime_footer_hint_items()));
+        self.sync_realtime_status_label();
         self.submit_op(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
             session_id: None,
@@ -362,7 +367,7 @@ impl ChatWidget {
         self.realtime_conversation.requested_close = true;
         self.realtime_conversation.phase = RealtimeConversationPhase::Stopping;
         self.stop_realtime_local_audio();
-        self.set_footer_hint_override(None);
+        self.sync_realtime_status_label();
 
         if self.bottom_pane.is_task_running() {
             self.realtime_conversation.close_when_idle = true;
@@ -393,7 +398,6 @@ impl ChatWidget {
         self.realtime_conversation.requested_close = true;
         self.realtime_conversation.close_when_idle = false;
         self.stop_realtime_local_audio();
-        self.set_footer_hint_override(None);
         self.submit_op(Op::RealtimeConversationClose);
         self.reset_realtime_conversation_state();
 
@@ -415,7 +419,6 @@ impl ChatWidget {
 
     pub(super) fn reset_realtime_conversation_state(&mut self) {
         self.stop_realtime_local_audio();
-        self.set_footer_hint_override(None);
         self.realtime_conversation.phase = RealtimeConversationPhase::Inactive;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.close_when_idle = false;
@@ -423,6 +426,7 @@ impl ChatWidget {
         self.realtime_conversation.meter_text = None;
         self.realtime_conversation
             .warned_unsupported_composer_submission = false;
+        self.sync_realtime_status_label();
     }
 
     pub(super) fn on_realtime_conversation_started(
@@ -438,7 +442,7 @@ impl ChatWidget {
         self.realtime_conversation.session_id = ev.session_id;
         self.realtime_conversation
             .warned_unsupported_composer_submission = false;
-        self.set_footer_hint_override(Some(self.realtime_footer_hint_items()));
+        self.sync_realtime_status_label();
         self.start_realtime_local_audio();
         self.request_redraw();
     }
@@ -1393,7 +1397,7 @@ impl ChatWidget {
             self.realtime_conversation.meter_generation.wrapping_add(1);
         let meter_generation = self.realtime_conversation.meter_generation;
         self.realtime_conversation.meter_text = Some("⠤⠤⠤⠤".to_string());
-        self.refresh_realtime_footer_hint();
+        self.sync_realtime_status_label();
         self.request_redraw();
 
         let capture = match crate::voice::VoiceCapture::start_realtime(
@@ -1403,7 +1407,7 @@ impl ChatWidget {
             Ok(capture) => capture,
             Err(err) => {
                 self.realtime_conversation.meter_text = None;
-                self.refresh_realtime_footer_hint();
+                self.sync_realtime_status_label();
                 self.add_error_message(format!("Failed to start microphone capture: {err}"));
                 return;
             }

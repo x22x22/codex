@@ -31,6 +31,7 @@ use codex_protocol::protocol::RealtimeHandoffRequested;
 use http::HeaderMap;
 use http::HeaderValue;
 use http::header::AUTHORIZATION;
+use serde_json::Value;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -47,6 +48,8 @@ const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_000;
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
+const ACTIVE_RESPONSE_CONFLICT_ERROR_PREFIX: &str =
+    "Conversation already has an active response in progress:";
 const INTERRUPT_TOOL_OUTPUT_CANCELLED: &str = "Cancelled the current Codex operation.";
 const INTERRUPT_TOOL_OUTPUT_IDLE: &str = "No active Codex operation was running.";
 
@@ -614,6 +617,9 @@ fn spawn_realtime_input_task(
     handoff_state: RealtimeHandoffState,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let mut active_response_id: Option<String> = None;
+        let mut pending_response_create = false;
+        let mut response_in_progress = false;
         loop {
             tokio::select! {
                 text = user_text_rx.recv() => {
@@ -624,10 +630,16 @@ fn spawn_realtime_input_task(
                                 warn!("failed to send input text: {mapped_error}");
                                 break;
                             }
-                            if let Err(err) = writer.send_response_create().await {
-                                let mapped_error = map_api_error(err);
-                                warn!("failed to send text response.create: {mapped_error}");
-                                break;
+                            if response_in_progress {
+                                pending_response_create = true;
+                            } else {
+                                if let Err(err) = writer.send_response_create().await {
+                                    let mapped_error = map_api_error(err);
+                                    warn!("failed to send text response.create: {mapped_error}");
+                                    break;
+                                }
+                                pending_response_create = false;
+                                response_in_progress = true;
                             }
                         }
                         Err(_) => break,
@@ -662,12 +674,18 @@ fn spawn_realtime_input_task(
                                         warn!("failed to send handoff tool output: {mapped_error}");
                                         break;
                                     }
-                                    if let Err(err) = writer.send_response_create().await {
-                                        let mapped_error = map_api_error(err);
-                                        warn!(
-                                            "failed to send handoff response.create: {mapped_error}"
-                                        );
-                                        break;
+                                    if response_in_progress {
+                                        pending_response_create = true;
+                                    } else {
+                                        if let Err(err) = writer.send_response_create().await {
+                                            let mapped_error = map_api_error(err);
+                                            warn!(
+                                                "failed to send handoff response.create: {mapped_error}"
+                                            );
+                                            break;
+                                        }
+                                        pending_response_create = false;
+                                        response_in_progress = true;
                                     }
                                 }
                             }
@@ -678,13 +696,87 @@ fn spawn_realtime_input_task(
                 event = events.next_event() => {
                     match event {
                         Ok(Some(event)) => {
-                            if let RealtimeEvent::HandoffRequested(handoff) = &event {
-                                *handoff_state.active_handoff.lock().await =
-                                    Some(handoff.handoff_id.clone());
-                                *handoff_state.last_output_text.lock().await = None;
+                            let mut forward_event = true;
+                            let mut should_stop = false;
+                            match &event {
+                                RealtimeEvent::ConversationItemAdded(parsed) => {
+                                    match parsed.get("type").and_then(Value::as_str) {
+                                        Some("response.created") => {
+                                            active_response_id = parsed
+                                                .get("response")
+                                                .and_then(Value::as_object)
+                                                .and_then(|response| response.get("id"))
+                                                .and_then(Value::as_str)
+                                                .map(str::to_string);
+                                            response_in_progress = true;
+                                        }
+                                        Some("response.done") => {
+                                            active_response_id = None;
+                                            response_in_progress = false;
+                                            if pending_response_create {
+                                                if let Err(err) = writer.send_response_create().await {
+                                                    let mapped_error = map_api_error(err);
+                                                    warn!(
+                                                        "failed to send deferred response.create: {mapped_error}"
+                                                    );
+                                                    break;
+                                                }
+                                                pending_response_create = false;
+                                                response_in_progress = true;
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                RealtimeEvent::ResponseCancelled(_) => {
+                                    active_response_id = None;
+                                    response_in_progress = false;
+                                    if pending_response_create {
+                                        if let Err(err) = writer.send_response_create().await {
+                                            let mapped_error = map_api_error(err);
+                                            warn!(
+                                                "failed to send deferred response.create after cancellation: {mapped_error}"
+                                            );
+                                            break;
+                                        }
+                                        pending_response_create = false;
+                                        response_in_progress = true;
+                                    }
+                                }
+                                RealtimeEvent::HandoffRequested(handoff) => {
+                                    *handoff_state.active_handoff.lock().await =
+                                        Some(handoff.handoff_id.clone());
+                                    *handoff_state.last_output_text.lock().await = None;
+                                    active_response_id = None;
+                                    response_in_progress = false;
+                                }
+                                RealtimeEvent::InterruptRequested(_)
+                                | RealtimeEvent::ToolActionRequested(_) => {
+                                    active_response_id = None;
+                                    response_in_progress = false;
+                                }
+                                RealtimeEvent::CloseRequested(_) => {
+                                    active_response_id = None;
+                                    pending_response_create = false;
+                                    response_in_progress = false;
+                                }
+                                RealtimeEvent::Error(message)
+                                    if message.starts_with(ACTIVE_RESPONSE_CONFLICT_ERROR_PREFIX) =>
+                                {
+                                    warn!(
+                                        active_response_id,
+                                        "realtime rejected response.create because a response is already in progress; deferring follow-up response.create"
+                                    );
+                                    pending_response_create = true;
+                                    response_in_progress = true;
+                                    forward_event = false;
+                                }
+                                RealtimeEvent::Error(_) => {
+                                    should_stop = true;
+                                }
+                                _ => {}
                             }
-                            let should_stop = matches!(&event, RealtimeEvent::Error(_));
-                            if events_tx.send(event).await.is_err() {
+                            if forward_event && events_tx.send(event).await.is_err() {
                                 break;
                             }
                             if should_stop {

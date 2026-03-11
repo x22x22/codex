@@ -1033,6 +1033,237 @@ async fn conversation_startup_context_is_truncated_and_sent_once_per_start() -> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_text_waits_for_active_response_to_finish_before_creating_next_response()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_active_response", "instructions": "backend prompt" }
+            }),
+            json!({
+                "type": "response.created",
+                "response": { "id": "resp_active" }
+            }),
+        ],
+        vec![],
+        vec![json!({
+            "type": "response.done",
+            "response": {
+                "id": "resp_active",
+                "status": "completed",
+                "output": []
+            }
+        })],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build_with_websocket_server(&startup_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) if session_id == "sess_active_response" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    test.codex
+        .submit(Op::RealtimeConversationText(ConversationTextParams {
+            text: "hello".to_string(),
+        }))
+        .await?;
+
+    let text_request = realtime_server.wait_for_request(0, 1).await;
+    assert_eq!(
+        text_request.body_json()["type"].as_str(),
+        Some("conversation.item.create")
+    );
+    assert_eq!(
+        websocket_request_text(&text_request),
+        Some("hello".to_string())
+    );
+
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            realtime_server.wait_for_request(0, 2)
+        )
+        .await
+        .is_err()
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
+            frame: RealtimeAudioFrame {
+                data: "AQID".to_string(),
+                sample_rate: 24_000,
+                num_channels: 1,
+                samples_per_channel: Some(480),
+            },
+        }))
+        .await?;
+
+    let audio_request = realtime_server.wait_for_request(0, 2).await;
+    assert_eq!(
+        audio_request.body_json()["type"].as_str(),
+        Some("input_audio_buffer.append")
+    );
+
+    let response_create = realtime_server.wait_for_request(0, 3).await;
+    assert_eq!(
+        response_create.body_json()["type"].as_str(),
+        Some("response.create")
+    );
+
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_recovers_from_active_response_conflict_error() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let startup_server = start_websocket_server(vec![vec![]]).await;
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_conflict", "instructions": "backend prompt" }
+            }),
+            json!({
+                "type": "response.created",
+                "response": { "id": "resp_conflict" }
+            }),
+        ],
+        vec![json!({
+            "type": "error",
+            "message": "Conversation already has an active response in progress: resp_conflict. Wait until the response is finished before creating a new one."
+        })],
+        vec![json!({
+            "type": "response.done",
+            "response": {
+                "id": "resp_conflict",
+                "status": "completed",
+                "output": []
+            }
+        })],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build_with_websocket_server(&startup_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) if session_id == "sess_conflict" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    test.codex
+        .submit(Op::RealtimeConversationText(ConversationTextParams {
+            text: "hello".to_string(),
+        }))
+        .await?;
+
+    let text_request = realtime_server.wait_for_request(0, 1).await;
+    assert_eq!(
+        text_request.body_json()["type"].as_str(),
+        Some("conversation.item.create")
+    );
+    assert_eq!(
+        websocket_request_text(&text_request),
+        Some("hello".to_string())
+    );
+
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            wait_for_event_match(&test.codex, |msg| match msg {
+                EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::Error(message),
+                }) => Some(message.clone()),
+                EventMsg::RealtimeConversationClosed(event) => {
+                    Some(format!("closed:{:?}", event.reason))
+                }
+                _ => None,
+            }),
+        )
+        .await
+        .is_err()
+    );
+
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            realtime_server.wait_for_request(0, 2)
+        )
+        .await
+        .is_err()
+    );
+
+    test.codex
+        .submit(Op::RealtimeConversationAudio(ConversationAudioParams {
+            frame: RealtimeAudioFrame {
+                data: "AQID".to_string(),
+                sample_rate: 24_000,
+                num_channels: 1,
+                samples_per_channel: Some(480),
+            },
+        }))
+        .await?;
+
+    let audio_request = realtime_server.wait_for_request(0, 2).await;
+    assert_eq!(
+        audio_request.body_json()["type"].as_str(),
+        Some("input_audio_buffer.append")
+    );
+
+    let response_create = realtime_server.wait_for_request(0, 3).await;
+    assert_eq!(
+        response_create.body_json()["type"].as_str(),
+        Some("response.create")
+    );
+
+    startup_server.shutdown().await;
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_mirrors_assistant_message_text_to_realtime_handoff() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

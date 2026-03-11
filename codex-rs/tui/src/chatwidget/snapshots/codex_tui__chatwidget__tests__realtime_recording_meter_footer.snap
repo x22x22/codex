@@ -4,9 +4,9 @@ expression: term.backend().vt100().screen().contents()
 ---
 
 
+• Working (0s • esc to interrupt)
 
 
+› draft while realtime is live
 
-› Ask Codex to do anything
-
-   /realtime stop live voice    mic ⡿⣷⣄⠄                     100% context left
+  gpt-5.4 · /Users/pbakkum/code/codex · voice ⡿⣷⣄⠄

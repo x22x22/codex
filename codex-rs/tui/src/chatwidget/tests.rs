@@ -10477,10 +10477,16 @@ async fn realtime_recording_meter_renders_in_footer_snapshot() {
     chat.realtime_conversation
         .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
     chat.realtime_conversation.set_meter_generation_for_test(7);
-    chat.set_footer_hint_override(Some(vec![(
-        "/realtime".to_string(),
-        "stop live voice".to_string(),
-    )]));
+    chat.bottom_pane.set_status_line_enabled(true);
+    chat.set_status_line(Some(ratatui::text::Line::from(
+        "gpt-5.4 · /Users/pbakkum/code/codex",
+    )));
+    chat.on_task_started();
+    chat.bottom_pane.set_composer_text(
+        "draft while realtime is live".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
     assert!(chat.update_realtime_recording_meter(7, "⡿⣷⣄⠄".to_string()));
 
     let width: u16 = 80;
