@@ -201,7 +201,9 @@ async fn call_nested_tool(
     input: Option<JsonValue>,
 ) -> Result<JsonValue, String> {
     if tool_name == "code_mode" {
-        return Ok(JsonValue::String("code_mode cannot invoke itself".to_string()));
+        return Ok(JsonValue::String(
+            "code_mode cannot invoke itself".to_string(),
+        ));
     }
 
     let router = build_nested_router(&exec).await;

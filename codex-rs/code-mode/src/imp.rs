@@ -365,7 +365,10 @@ fn build_namespaced_tools_module_source(
     for tool in enabled_tools {
         if namespaces_match(&tool.namespace, namespace) && is_valid_identifier(&tool.name) {
             let export_name = js_string_literal(&tool.name)?;
-            source.push_str(&format!("export const {} = tools[{export_name}];\n", tool.name));
+            source.push_str(&format!(
+                "export const {} = tools[{export_name}];\n",
+                tool.name
+            ));
         }
     }
     Ok(source)
@@ -381,7 +384,8 @@ fn namespaces_match(left: &[String], right: &[&str]) -> bool {
 }
 
 fn js_string_literal(value: &str) -> Result<String, String> {
-    serde_json::to_string(value).map_err(|err| format!("failed to serialize code_mode string: {err}"))
+    serde_json::to_string(value)
+        .map_err(|err| format!("failed to serialize code_mode string: {err}"))
 }
 
 fn instantiate_and_evaluate_module(
@@ -558,8 +562,8 @@ where
     T: serde::de::DeserializeOwned,
 {
     let source = v8_string(scope, &format!("JSON.stringify({expression})"))?;
-    let script =
-        v8::Script::compile(scope, source, None).ok_or_else(|| format!("failed to read {expression}"))?;
+    let script = v8::Script::compile(scope, source, None)
+        .ok_or_else(|| format!("failed to read {expression}"))?;
     let value = script
         .run(scope)
         .ok_or_else(|| format!("failed to evaluate {expression}"))?;
@@ -583,7 +587,10 @@ fn build_bootstrap_source(
             "__CODE_MODE_ENABLED_TOOLS_PLACEHOLDER__",
             &enabled_tools_json,
         )
-        .replace("__CODE_MODE_STORED_VALUES_PLACEHOLDER__", &stored_values_json))
+        .replace(
+            "__CODE_MODE_STORED_VALUES_PLACEHOLDER__",
+            &stored_values_json,
+        ))
 }
 
 fn v8_string<'s>(
@@ -631,9 +638,7 @@ fn throw_v8_exception<'s, T>(
     None
 }
 
-fn format_v8_exception(
-    try_catch: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>,
-) -> String {
+fn format_v8_exception(try_catch: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>) -> String {
     let Some(exception) = try_catch.exception() else {
         return "JavaScript execution failed".to_string();
     };
