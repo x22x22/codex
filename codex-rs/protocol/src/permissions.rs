@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io;
@@ -34,6 +35,11 @@ impl NetworkSandboxPolicy {
     }
 }
 
+/// Access mode for a filesystem entry.
+///
+/// When two equally specific entries target the same path, we compare these by
+/// conflict precedence rather than by capability breadth: `none` beats
+/// `write`, and `write` beats `read`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
@@ -44,12 +50,32 @@ pub enum FileSystemAccessMode {
 }
 
 impl FileSystemAccessMode {
+    fn precedence_rank(self) -> u8 {
+        match self {
+            FileSystemAccessMode::Read => 0,
+            FileSystemAccessMode::Write => 1,
+            FileSystemAccessMode::None => 2,
+        }
+    }
+
     pub fn can_read(self) -> bool {
         !matches!(self, FileSystemAccessMode::None)
     }
 
     pub fn can_write(self) -> bool {
         matches!(self, FileSystemAccessMode::Write)
+    }
+}
+
+impl PartialOrd for FileSystemAccessMode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FileSystemAccessMode {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.precedence_rank().cmp(&other.precedence_rank())
     }
 }
 
@@ -211,7 +237,7 @@ impl FileSystemSandboxPolicy {
     fn has_same_target_write_override(&self, entry: &FileSystemSandboxEntry) -> bool {
         self.entries.iter().any(|candidate| {
             candidate.access.can_write()
-                && access_priority(candidate.access) > access_priority(entry.access)
+                && candidate.access > entry.access
                 && file_system_paths_share_target(&candidate.path, &entry.path)
         })
     }
@@ -771,16 +797,6 @@ fn resolve_candidate_path(path: &Path, cwd: &Path) -> Option<AbsolutePathBuf> {
     }
 }
 
-/// Mirrors the tie-breaker used by `resolve_access_with_cwd`: for equally
-/// specific entries, `none` beats `write`, and `write` beats `read`.
-fn access_priority(access: FileSystemAccessMode) -> u8 {
-    match access {
-        FileSystemAccessMode::Read => 0,
-        FileSystemAccessMode::Write => 1,
-        FileSystemAccessMode::None => 2,
-    }
-}
-
 /// Returns true when two config paths refer to the same exact target before
 /// any prefix matching is applied.
 ///
@@ -857,10 +873,10 @@ fn special_path_matches_absolute_path(
 }
 
 /// Orders resolved entries so the most specific path wins first, then applies
-/// the access tie-breaker from `access_priority`.
-fn resolved_entry_precedence(entry: &ResolvedFileSystemEntry) -> (usize, u8) {
+/// the access tie-breaker from [`FileSystemAccessMode`].
+fn resolved_entry_precedence(entry: &ResolvedFileSystemEntry) -> (usize, FileSystemAccessMode) {
     let specificity = entry.path.as_path().components().count();
-    (specificity, access_priority(entry.access))
+    (specificity, entry.access)
 }
 
 fn absolute_root_path_for_cwd(cwd: &AbsolutePathBuf) -> AbsolutePathBuf {
@@ -1251,5 +1267,11 @@ mod tests {
             policy.resolve_access_with_cwd(docs.as_path(), cwd.path()),
             FileSystemAccessMode::Write
         );
+    }
+
+    #[test]
+    fn file_system_access_mode_orders_by_conflict_precedence() {
+        assert!(FileSystemAccessMode::Write > FileSystemAccessMode::Read);
+        assert!(FileSystemAccessMode::None > FileSystemAccessMode::Write);
     }
 }
