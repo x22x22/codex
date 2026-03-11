@@ -18,6 +18,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 use serde_json::json;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -61,6 +62,17 @@ fn has_subagent_notification(req: &ResponsesRequest) -> bool {
     req.message_input_texts("user")
         .iter()
         .any(|text| text.contains("<subagent_notification>"))
+}
+
+fn call_output_text(req: &ResponsesRequest, call_id: &str) -> String {
+    let raw = req.function_call_output(call_id);
+    assert_eq!(
+        raw.get("call_id").and_then(Value::as_str),
+        Some(call_id),
+        "mismatched call_id in function_call_output"
+    );
+    req.function_call_output_text(call_id)
+        .unwrap_or_else(|| panic!("function_call_output text present"))
 }
 
 async fn wait_for_spawned_thread_id(test: &TestCodex) -> Result<String> {
@@ -395,7 +407,7 @@ async fn spawn_agent_requested_model_and_reasoning_override_inherited_settings_w
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> Result<()> {
+async fn spawn_agent_role_sets_model_and_reasoning_without_explicit_override() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
@@ -404,8 +416,6 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
         json!({
             "message": CHILD_PROMPT,
             "agent_type": "custom",
-            "model": REQUESTED_MODEL,
-            "reasoning_effort": REQUESTED_REASONING_EFFORT,
         }),
         |builder| {
             builder.with_config(|config| {
@@ -432,6 +442,137 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
 
     assert_eq!(child_snapshot.model, ROLE_MODEL);
     assert_eq!(child_snapshot.reasoning_effort, Some(ROLE_REASONING_EFFORT));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_rejects_requested_model_when_role_locks_model() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "agent_type": "custom",
+        "model": REQUESTED_MODEL,
+    }))?;
+
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+    let followup = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-turn1-2"),
+            ev_assistant_message("msg-turn1-2", "parent done"),
+            ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        let role_path = config.codex_home.join("custom-role.toml");
+        std::fs::write(&role_path, format!("model = \"{ROLE_MODEL}\"\n"))
+            .expect("write role config");
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: Some("Custom role".to_string()),
+                config_file: Some(role_path),
+                nickname_candidates: None,
+            },
+        );
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let output = call_output_text(&followup.single_request(), SPAWN_CALL_ID);
+    assert!(output.contains(
+        &format!(
+            "`model` is set to `{ROLE_MODEL}` per the `custom` role and cannot be changed; omit `model` from this spawn_agent call."
+        )
+    ));
+    assert_eq!(test.thread_manager.list_thread_ids().await.len(), 1);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_rejects_requested_reasoning_effort_when_role_locks_effort() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let spawn_args = serde_json::to_string(&json!({
+        "message": CHILD_PROMPT,
+        "agent_type": "custom",
+        "reasoning_effort": REQUESTED_REASONING_EFFORT,
+    }))?;
+
+    mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, TURN_1_PROMPT),
+        sse(vec![
+            ev_response_created("resp-turn1-1"),
+            ev_function_call(SPAWN_CALL_ID, "spawn_agent", &spawn_args),
+            ev_completed("resp-turn1-1"),
+        ]),
+    )
+    .await;
+    let followup = mount_sse_once_match(
+        &server,
+        |req: &wiremock::Request| body_contains(req, SPAWN_CALL_ID),
+        sse(vec![
+            ev_response_created("resp-turn1-2"),
+            ev_assistant_message("msg-turn1-2", "parent done"),
+            ev_completed("resp-turn1-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        config
+            .features
+            .enable(Feature::Collab)
+            .expect("test config should allow feature update");
+        let role_path = config.codex_home.join("custom-role.toml");
+        std::fs::write(
+            &role_path,
+            format!("model_reasoning_effort = \"{ROLE_REASONING_EFFORT}\"\n"),
+        )
+        .expect("write role config");
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: Some("Custom role".to_string()),
+                config_file: Some(role_path),
+                nickname_candidates: None,
+            },
+        );
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn(TURN_1_PROMPT).await?;
+
+    let output = call_output_text(&followup.single_request(), SPAWN_CALL_ID);
+    assert!(output.contains(
+        &format!(
+            "`reasoning_effort` is set to `{ROLE_REASONING_EFFORT}` per the `custom` role and cannot be changed; omit `reasoning_effort` from this spawn_agent call."
+        )
+    ));
+    assert_eq!(test.thread_manager.list_thread_ids().await.len(), 1);
 
     Ok(())
 }

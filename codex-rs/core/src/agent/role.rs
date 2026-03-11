@@ -19,12 +19,19 @@ use codex_app_server_protocol::ConfigLayerSource;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 use toml::Value as TomlValue;
 
 /// The role name used when a caller omits `agent_type`.
 pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RoleSettingsLocks {
+    pub(crate) model: Option<String>,
+    pub(crate) reasoning_effort: Option<String>,
+}
 
 /// Applies a named role layer to `config` while preserving caller-owned model selection.
 ///
@@ -39,46 +46,13 @@ pub(crate) async fn apply_role_to_config(
     role_name: Option<&str>,
 ) -> Result<(), String> {
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
-    let is_built_in = !config.agent_roles.contains_key(role_name);
-    let (config_file, is_built_in) = resolve_role_config(config, role_name)
-        .map(|role| (&role.config_file, is_built_in))
-        .ok_or_else(|| format!("unknown agent_type '{role_name}'"))?;
-    let Some(config_file) = config_file.as_ref() else {
+    let Some(role) = resolve_role_config(config, role_name) else {
+        return Err(format!("unknown agent_type '{role_name}'"));
+    };
+    if role.config_file.is_none() {
         return Ok(());
-    };
-
-    let (role_config_toml, role_config_base) = if is_built_in {
-        let role_config_contents = built_in::config_file_contents(config_file)
-            .map(str::to_owned)
-            .ok_or_else(|| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
-        let role_config_toml: TomlValue = toml::from_str(&role_config_contents)
-            .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
-        (role_config_toml, config.codex_home.as_path())
-    } else {
-        let role_config_contents = tokio::fs::read_to_string(config_file)
-            .await
-            .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
-        let role_config_toml = parse_agent_role_file_contents(
-            &role_config_contents,
-            config_file,
-            config_file
-                .parent()
-                .ok_or_else(|| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?,
-            Some(role_name),
-        )
-        .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?
-        .config;
-        (
-            role_config_toml,
-            config_file
-                .parent()
-                .ok_or_else(|| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?,
-        )
-    };
-    deserialize_config_toml_with_base(role_config_toml.clone(), role_config_base)
-        .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
-    let role_layer_toml = resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)
-        .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+    }
+    let role_layer_toml = load_role_layer_toml(config, role_name).await?;
     let role_selects_provider = role_layer_toml.get("model_provider").is_some();
     let role_selects_profile = role_layer_toml.get("profile").is_some();
     let role_updates_active_profile_provider = config
@@ -142,6 +116,25 @@ pub(crate) async fn apply_role_to_config(
     Ok(())
 }
 
+pub(crate) async fn role_settings_locks(
+    config: &Config,
+    role_name: Option<&str>,
+) -> Result<RoleSettingsLocks, String> {
+    let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
+    let role_layer_toml = load_role_layer_toml(config, role_name).await?;
+
+    Ok(RoleSettingsLocks {
+        model: role_layer_toml
+            .get("model")
+            .and_then(TomlValue::as_str)
+            .map(str::to_string),
+        reasoning_effort: role_layer_toml
+            .get("model_reasoning_effort")
+            .and_then(TomlValue::as_str)
+            .map(str::to_string),
+    })
+}
+
 pub(crate) fn resolve_role_config<'a>(
     config: &'a Config,
     role_name: &str,
@@ -150,6 +143,60 @@ pub(crate) fn resolve_role_config<'a>(
         .agent_roles
         .get(role_name)
         .or_else(|| built_in::configs().get(role_name))
+}
+
+async fn load_role_layer_toml(config: &Config, role_name: &str) -> Result<TomlValue, String> {
+    let is_built_in = !config.agent_roles.contains_key(role_name);
+    let (config_file, is_built_in) = resolve_role_config(config, role_name)
+        .map(|role| (&role.config_file, is_built_in))
+        .ok_or_else(|| format!("unknown agent_type '{role_name}'"))?;
+    let Some(config_file) = config_file.as_ref() else {
+        return Ok(TomlValue::Table(Default::default()));
+    };
+
+    let (role_config_toml, role_config_base) = read_role_config_source(
+        config.codex_home.as_path(),
+        config_file,
+        is_built_in,
+        role_name,
+    )
+    .await?;
+    deserialize_config_toml_with_base(role_config_toml.clone(), role_config_base)
+        .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+    resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)
+        .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())
+}
+
+async fn read_role_config_source<'a>(
+    codex_home: &'a Path,
+    config_file: &'a PathBuf,
+    is_built_in: bool,
+    role_name: &str,
+) -> Result<(TomlValue, &'a Path), String> {
+    if is_built_in {
+        let role_config_contents = built_in::config_file_contents(config_file)
+            .map(str::to_owned)
+            .ok_or_else(|| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+        let role_config_toml: TomlValue = toml::from_str(&role_config_contents)
+            .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+        Ok((role_config_toml, codex_home))
+    } else {
+        let role_config_base = config_file
+            .parent()
+            .ok_or_else(|| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+        let role_config_contents = tokio::fs::read_to_string(config_file)
+            .await
+            .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+        let role_config_toml = parse_agent_role_file_contents(
+            &role_config_contents,
+            config_file,
+            role_config_base,
+            Some(role_name),
+        )
+        .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?
+        .config;
+        Ok((role_config_toml, role_config_base))
+    }
 }
 
 pub(crate) mod spawn_tool_spec {
@@ -170,12 +217,12 @@ pub(crate) mod spawn_tool_spec {
         let mut formatted_roles = Vec::new();
         for (name, declaration) in user_defined_roles {
             if seen.insert(name.as_str()) {
-                formatted_roles.push(format_role(name, declaration));
+                formatted_roles.push(format_role(name, declaration, false));
             }
         }
         for (name, declaration) in built_in_roles {
             if seen.insert(name.as_str()) {
-                formatted_roles.push(format_role(name, declaration));
+                formatted_roles.push(format_role(name, declaration, true));
             }
         }
 
@@ -188,12 +235,91 @@ Available roles:
         )
     }
 
-    fn format_role(name: &str, declaration: &AgentRoleConfig) -> String {
+    fn format_role(name: &str, declaration: &AgentRoleConfig, is_built_in: bool) -> String {
+        let locks = declaration
+            .config_file
+            .as_ref()
+            .and_then(|config_file| {
+                locks_from_role_config_path(name, config_file, is_built_in).ok()
+            })
+            .filter(|locks| locks.model.is_some() || locks.reasoning_effort.is_some());
+        let lock_lines = locks
+            .as_ref()
+            .map(render_lock_lines)
+            .filter(|lines| !lines.is_empty());
+
         if let Some(description) = &declaration.description {
-            format!("{name}: {{\n{description}\n}}")
+            match lock_lines {
+                Some(lock_lines) => format!("{name}: {{\n{description}\n{lock_lines}\n}}"),
+                None => format!("{name}: {{\n{description}\n}}"),
+            }
         } else {
-            format!("{name}: no description")
+            match lock_lines {
+                Some(lock_lines) => format!("{name}: {{\n{lock_lines}\n}}"),
+                None => format!("{name}: no description"),
+            }
         }
+    }
+
+    fn locks_from_role_config_path(
+        role_name: &str,
+        config_file: &Path,
+        is_built_in: bool,
+    ) -> Result<RoleSettingsLocks, String> {
+        let (role_config_toml, role_config_base) = if is_built_in {
+            let role_config_contents = built_in::config_file_contents(config_file)
+                .map(str::to_owned)
+                .ok_or_else(|| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+            let role_config_toml: TomlValue = toml::from_str(&role_config_contents)
+                .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+            (role_config_toml, Path::new("."))
+        } else {
+            let role_config_base = config_file
+                .parent()
+                .ok_or_else(|| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+            let role_config_contents = std::fs::read_to_string(config_file)
+                .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+            let role_config_toml = parse_agent_role_file_contents(
+                &role_config_contents,
+                config_file,
+                role_config_base,
+                Some(role_name),
+            )
+            .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?
+            .config;
+            (role_config_toml, role_config_base)
+        };
+        deserialize_config_toml_with_base(role_config_toml.clone(), role_config_base)
+            .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+        let role_layer_toml =
+            resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)
+                .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
+
+        Ok(RoleSettingsLocks {
+            model: role_layer_toml
+                .get("model")
+                .and_then(TomlValue::as_str)
+                .map(str::to_string),
+            reasoning_effort: role_layer_toml
+                .get("model_reasoning_effort")
+                .and_then(TomlValue::as_str)
+                .map(str::to_string),
+        })
+    }
+
+    fn render_lock_lines(locks: &RoleSettingsLocks) -> String {
+        let mut lines = Vec::new();
+        if let Some(model) = locks.model.as_deref() {
+            lines.push(format!(
+                "- This role sets model to `{model}`. This is set per this role and cannot be changed."
+            ));
+        }
+        if let Some(reasoning_effort) = locks.reasoning_effort.as_deref() {
+            lines.push(format!(
+                "- This role sets reasoning effort to `{reasoning_effort}`. This is set per this role and cannot be changed."
+            ));
+        }
+        lines.join("\n")
     }
 }
 
@@ -899,6 +1025,65 @@ enabled = false
             .expect("find built-in role");
 
         assert!(user_index < built_in_index);
+    }
+
+    #[tokio::test]
+    async fn role_settings_locks_reads_locked_model_and_reasoning_effort() {
+        let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+        let role_path = write_role_config(
+            &home,
+            "locked-role.toml",
+            "model = \"gpt-5.1\"\nmodel_reasoning_effort = \"high\"\n",
+        )
+        .await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+                nickname_candidates: None,
+            },
+        );
+
+        let locks = role_settings_locks(&config, Some("custom"))
+            .await
+            .expect("role locks should load");
+
+        assert_eq!(
+            locks,
+            RoleSettingsLocks {
+                model: Some("gpt-5.1".to_string()),
+                reasoning_effort: Some("high".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn spawn_tool_spec_includes_lock_notices_for_user_defined_roles() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let role_path = temp_dir.path().join("custom-role.toml");
+        std::fs::write(
+            &role_path,
+            "model = \"gpt-5.1\"\nmodel_reasoning_effort = \"high\"\n",
+        )
+        .expect("write role config");
+        let user_defined_roles = BTreeMap::from([(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+                nickname_candidates: None,
+            },
+        )]);
+
+        let spec = spawn_tool_spec::build(&user_defined_roles);
+
+        assert!(spec.contains(
+            "This role sets model to `gpt-5.1`. This is set per this role and cannot be changed."
+        ));
+        assert!(spec.contains(
+            "This role sets reasoning effort to `high`. This is set per this role and cannot be changed."
+        ));
     }
 
     #[test]

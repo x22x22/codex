@@ -105,7 +105,9 @@ mod spawn {
     use super::*;
     use crate::agent::control::SpawnAgentOptions;
     use crate::agent::role::DEFAULT_ROLE_NAME;
+    use crate::agent::role::RoleSettingsLocks;
     use crate::agent::role::apply_role_to_config;
+    use crate::agent::role::role_settings_locks;
 
     use crate::agent::exceeds_thread_spawn_depth_limit;
     use crate::agent::next_thread_spawn_depth;
@@ -140,6 +142,9 @@ mod spawn {
             .as_deref()
             .map(str::trim)
             .filter(|role| !role.is_empty());
+        let mut config =
+            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
+        reject_role_locked_spawn_overrides(&config, role_name, &args).await?;
         let input_items = parse_collab_input(args.message, args.items)?;
         let prompt = input_preview(&input_items);
         let session_source = turn.session_source.clone();
@@ -161,8 +166,6 @@ mod spawn {
                 .into(),
             )
             .await;
-        let mut config =
-            build_agent_spawn_config(&session.get_base_instructions().await, turn.as_ref())?;
         apply_requested_spawn_agent_model_overrides(
             &session,
             turn.as_ref(),
@@ -240,6 +243,54 @@ mod spawn {
         })?;
 
         Ok(FunctionToolOutput::from_text(content, Some(true)))
+    }
+
+    async fn reject_role_locked_spawn_overrides(
+        config: &Config,
+        role_name: Option<&str>,
+        args: &SpawnAgentArgs,
+    ) -> Result<(), FunctionCallError> {
+        let Some(role_name) = role_name else {
+            return Ok(());
+        };
+
+        let locks = role_settings_locks(config, Some(role_name))
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
+        let rejection = build_locked_override_rejection(role_name, &locks, args);
+        if let Some(message) = rejection {
+            return Err(FunctionCallError::RespondToModel(message));
+        }
+
+        Ok(())
+    }
+
+    fn build_locked_override_rejection(
+        role_name: &str,
+        locks: &RoleSettingsLocks,
+        args: &SpawnAgentArgs,
+    ) -> Option<String> {
+        let mut locked_fields = Vec::new();
+        if let Some(model) = locks.model.as_deref()
+            && args.model.is_some()
+        {
+            locked_fields.push(format!(
+                "`model` is set to `{model}` per the `{role_name}` role and cannot be changed; omit `model` from this spawn_agent call."
+            ));
+        }
+        if let Some(reasoning_effort) = locks.reasoning_effort.as_deref()
+            && args.reasoning_effort.is_some()
+        {
+            locked_fields.push(format!(
+                "`reasoning_effort` is set to `{reasoning_effort}` per the `{role_name}` role and cannot be changed; omit `reasoning_effort` from this spawn_agent call."
+            ));
+        }
+
+        if locked_fields.is_empty() {
+            None
+        } else {
+            Some(locked_fields.join(" "))
+        }
     }
 }
 

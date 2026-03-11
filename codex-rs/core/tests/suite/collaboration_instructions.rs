@@ -1,4 +1,6 @@
 use anyhow::Result;
+use codex_core::config::AgentRoleConfig;
+use codex_core::features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -17,6 +19,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use std::fs;
 
 fn collab_mode_with_mode_and_instructions(
     mode: ModeKind,
@@ -61,6 +64,25 @@ fn collab_xml(text: &str) -> String {
 
 fn count_exact(texts: &[String], target: &str) -> usize {
     texts.iter().filter(|text| text.as_str() == target).count()
+}
+
+fn spawn_agent_type_description(body: &Value) -> Option<&str> {
+    body.get("tools")?.as_array()?.iter().find_map(|tool| {
+        let name = tool
+            .get("name")
+            .and_then(Value::as_str)
+            .or_else(|| tool.get("function")?.get("name")?.as_str());
+        if name == Some("spawn_agent") {
+            tool.get("parameters")
+                .or_else(|| tool.get("function")?.get("parameters"))
+                .and_then(|parameters| parameters.get("properties"))
+                .and_then(|properties| properties.get("agent_type"))
+                .and_then(|agent_type| agent_type.get("description"))
+                .and_then(Value::as_str)
+        } else {
+            None
+        }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -767,6 +789,65 @@ async fn empty_collaboration_instructions_are_ignored() -> Result<()> {
     assert_eq!(dev_texts.len(), 1);
     let collab_text = collab_xml("");
     assert_eq!(count_exact(&dev_texts, &collab_text), 0);
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spawn_agent_tool_description_mentions_role_locked_model_and_reasoning() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let test = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::Collab)
+                .expect("test config should allow feature update");
+            let role_path = config.codex_home.join("custom-role.toml");
+            fs::write(
+                &role_path,
+                "model = \"gpt-5.1\"\nmodel_reasoning_effort = \"high\"\n",
+            )
+            .expect("write role config");
+            config.agent_roles.insert(
+                "custom".to_string(),
+                AgentRoleConfig {
+                    description: Some("Custom role".to_string()),
+                    config_file: Some(role_path),
+                    nickname_candidates: None,
+                },
+            );
+        })
+        .build(&server)
+        .await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = req.single_request().body_json();
+    let description = spawn_agent_type_description(&request_body)
+        .expect("spawn_agent agent_type description should exist");
+    assert!(description.contains(
+        "This role sets model to `gpt-5.1`. This is set per this role and cannot be changed."
+    ));
+    assert!(description.contains(
+        "This role sets reasoning effort to `high`. This is set per this role and cannot be changed."
+    ));
 
     Ok(())
 }
