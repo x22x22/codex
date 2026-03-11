@@ -250,7 +250,9 @@ impl OutgoingMessageSender {
         connection_id: ConnectionId,
         thread_id: ThreadId,
     ) {
-        let requests = self.pending_requests_for_thread(thread_id).await;
+        let requests = self
+            .pending_requests_for_thread_and_connection(thread_id, Some(connection_id))
+            .await;
         for request in requests {
             if let Err(err) = self
                 .sender
@@ -387,15 +389,33 @@ impl OutgoingMessageSender {
         request_id_to_callback.remove_entry(id)
     }
 
+    #[cfg(test)]
     pub(crate) async fn pending_requests_for_thread(
         &self,
         thread_id: ThreadId,
+    ) -> Vec<ServerRequest> {
+        self.pending_requests_for_thread_and_connection(thread_id, None)
+            .await
+    }
+
+    async fn pending_requests_for_thread_and_connection(
+        &self,
+        thread_id: ThreadId,
+        connection_id: Option<ConnectionId>,
     ) -> Vec<ServerRequest> {
         let request_id_to_callback = self.request_id_to_callback.lock().await;
         let mut requests = request_id_to_callback
             .iter()
             .filter_map(|(_, entry)| {
-                (entry.thread_id == Some(thread_id)).then_some(entry.request.clone())
+                (entry.thread_id == Some(thread_id)
+                    && entry
+                        .allowed_responder_connections
+                        .as_ref()
+                        .is_none_or(|allowed| {
+                            connection_id
+                                .is_none_or(|connection_id| allowed.contains(&connection_id))
+                        }))
+                .then_some(entry.request.clone())
             })
             .collect::<Vec<_>>();
         requests.sort_by(|left, right| left.id().cmp(right.id()));
@@ -1292,5 +1312,130 @@ mod tests {
             .expect("replayed waiter should resolve")
             .expect("replayed waiter should receive a callback");
         assert_eq!(result, Ok(json!({ "ok": true })));
+    }
+
+    #[tokio::test]
+    async fn replay_to_non_owner_filters_targeted_requests() {
+        let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let thread_id = ThreadId::new();
+        let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing.clone(),
+            vec![ConnectionId(7)],
+            thread_id,
+        );
+
+        let (_targeted_request_id, _targeted_waiter) = thread_outgoing
+            .send_request_to_connection(
+                ConnectionId(7),
+                ServerRequestPayload::DynamicToolCall(DynamicToolCallParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    call_id: "call-0".to_string(),
+                    tool: "tool".to_string(),
+                    arguments: json!({}),
+                }),
+            )
+            .await;
+        let (_thread_request_id, _thread_waiter) = thread_outgoing
+            .send_request(ServerRequestPayload::ToolRequestUserInput(
+                ToolRequestUserInputParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    item_id: "call-1".to_string(),
+                    questions: vec![],
+                },
+            ))
+            .await;
+
+        let _ = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("targeted request should be sent")
+            .expect("targeted request envelope should exist");
+        let _ = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("thread request should be sent")
+            .expect("thread request envelope should exist");
+
+        outgoing
+            .replay_requests_to_connection_for_thread(ConnectionId(9), thread_id)
+            .await;
+
+        let replayed = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("non-targeted request should be replayed")
+            .expect("replayed envelope should exist");
+        let OutgoingEnvelope::ToConnection {
+            connection_id,
+            message,
+        } = replayed
+        else {
+            panic!("expected replayed connection envelope");
+        };
+        assert_eq!(connection_id, ConnectionId(9));
+        let OutgoingMessage::Request(request) = message else {
+            panic!("expected replayed request");
+        };
+        assert!(matches!(
+            request,
+            ServerRequest::ToolRequestUserInput { .. }
+        ));
+        assert!(
+            timeout(Duration::from_millis(100), rx.recv())
+                .await
+                .is_err(),
+            "targeted request should not be replayed to a non-owner",
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_to_owner_preserves_targeted_requests() {
+        let (tx, mut rx) = mpsc::channel::<OutgoingEnvelope>(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let thread_id = ThreadId::new();
+        let thread_outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing.clone(),
+            vec![ConnectionId(7)],
+            thread_id,
+        );
+
+        let (_request_id, _waiter) = thread_outgoing
+            .send_request_to_connection(
+                ConnectionId(7),
+                ServerRequestPayload::DynamicToolCall(DynamicToolCallParams {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    call_id: "call-0".to_string(),
+                    tool: "tool".to_string(),
+                    arguments: json!({}),
+                }),
+            )
+            .await;
+
+        let _ = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("initial targeted request should be sent")
+            .expect("initial targeted request envelope should exist");
+
+        outgoing
+            .replay_requests_to_connection_for_thread(ConnectionId(7), thread_id)
+            .await;
+
+        let replayed = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("targeted request should be replayed to the owner")
+            .expect("replayed envelope should exist");
+        let OutgoingEnvelope::ToConnection {
+            connection_id,
+            message,
+        } = replayed
+        else {
+            panic!("expected replayed connection envelope");
+        };
+        assert_eq!(connection_id, ConnectionId(7));
+        let OutgoingMessage::Request(request) = message else {
+            panic!("expected replayed request");
+        };
+        assert!(matches!(request, ServerRequest::DynamicToolCall { .. }));
     }
 }
