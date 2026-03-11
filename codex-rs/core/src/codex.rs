@@ -386,6 +386,7 @@ impl Codex {
         if let SessionSource::SubAgent(SubAgentSource::ThreadSpawn { depth, .. }) = session_source
             && depth >= config.agent_max_depth
         {
+            let _ = config.features.disable(Feature::SpawnCsv);
             let _ = config.features.disable(Feature::Collab);
         }
 
@@ -410,7 +411,7 @@ impl Codex {
             && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
         {
             let message = format!(
-                "Disabled `code_mode` for this session because the configured Node runtime is unavailable or incompatible. {err}"
+                "Disabled `exec` for this session because the configured Node runtime is unavailable or incompatible. {err}"
             );
             warn!("{message}");
             let _ = config.features.disable(Feature::CodeMode);
@@ -1645,6 +1646,7 @@ impl Session {
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
             ),
+            code_mode_store: Default::default(),
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -6271,7 +6273,7 @@ async fn run_sampling_request(
     }
 }
 
-async fn built_tools(
+pub(crate) async fn built_tools(
     sess: &Session,
     turn_context: &TurnContext,
     input: &[ResponseItem],
@@ -6855,8 +6857,7 @@ async fn handle_assistant_item_done_in_plan_mode(
     {
         maybe_complete_plan_item_from_message(sess, turn_context, state, item).await;
 
-        if let Some(turn_item) =
-            handle_non_tool_response_item(item, true, Some(&turn_context.cwd)).await
+        if let Some(turn_item) = handle_non_tool_response_item(sess, turn_context, item, true).await
         {
             emit_turn_item_in_plan_mode(
                 sess,
@@ -7037,8 +7038,13 @@ async fn try_run_sampling_request(
                 needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
-                if let Some(turn_item) =
-                    handle_non_tool_response_item(&item, plan_mode, Some(&turn_context.cwd)).await
+                if let Some(turn_item) = handle_non_tool_response_item(
+                    sess.as_ref(),
+                    turn_context.as_ref(),
+                    &item,
+                    plan_mode,
+                )
+                .await
                 {
                     let mut turn_item = turn_item;
                     let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
