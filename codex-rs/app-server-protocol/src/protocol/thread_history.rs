@@ -204,7 +204,11 @@ impl ThreadHistoryBuilder {
             .unwrap_or_else(|| self.new_turn(None));
         let id = self.next_item_id();
         let content = self.build_user_inputs(payload);
-        turn.items.push(ThreadItem::UserMessage { id, content });
+        turn.items.push(ThreadItem::UserMessage {
+            id,
+            content,
+            metadata: None,
+        });
         self.current_turn = Some(turn);
     }
 
@@ -214,9 +218,12 @@ impl ThreadHistoryBuilder {
         }
 
         let id = self.next_item_id();
-        self.ensure_turn()
-            .items
-            .push(ThreadItem::AgentMessage { id, text, phase });
+        self.ensure_turn().items.push(ThreadItem::AgentMessage {
+            id,
+            text,
+            phase,
+            metadata: None,
+        });
     }
 
     fn handle_agent_reasoning(&mut self, payload: &AgentReasoningEvent) {
@@ -236,6 +243,7 @@ impl ThreadHistoryBuilder {
             id,
             summary: vec![payload.text.clone()],
             content: Vec::new(),
+            metadata: None,
         });
     }
 
@@ -256,6 +264,7 @@ impl ThreadHistoryBuilder {
             id,
             summary: Vec::new(),
             content: vec![payload.text.clone()],
+            metadata: None,
         });
     }
 
@@ -304,6 +313,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             query: String::new(),
             action: None,
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -313,6 +323,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             query: payload.query.clone(),
             action: Some(WebSearchAction::from(payload.action.clone())),
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -336,6 +347,7 @@ impl ThreadHistoryBuilder {
             aggregated_output: None,
             exit_code: None,
             duration_ms: None,
+            metadata: None,
         };
         self.upsert_item_in_turn_id(&payload.turn_id, item);
     }
@@ -366,6 +378,7 @@ impl ThreadHistoryBuilder {
             aggregated_output,
             exit_code: Some(payload.exit_code),
             duration_ms: Some(duration_ms),
+            metadata: None,
         };
         // Command completions can arrive out of order. Unified exec may return
         // while a PTY is still running, then emit ExecCommandEnd later from a
@@ -380,6 +393,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status: PatchApplyStatus::InProgress,
+            metadata: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -393,6 +407,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status: PatchApplyStatus::InProgress,
+            metadata: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -407,6 +422,7 @@ impl ThreadHistoryBuilder {
             id: payload.call_id.clone(),
             changes: convert_patch_changes(&payload.changes),
             status,
+            metadata: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -427,6 +443,7 @@ impl ThreadHistoryBuilder {
             content_items: None,
             success: None,
             duration_ms: None,
+            metadata: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -450,6 +467,7 @@ impl ThreadHistoryBuilder {
             content_items: Some(convert_dynamic_tool_content_items(&payload.content_items)),
             success: Some(payload.success),
             duration_ms,
+            metadata: None,
         };
         if payload.turn_id.is_empty() {
             self.upsert_item_in_current_turn(item);
@@ -472,6 +490,7 @@ impl ThreadHistoryBuilder {
             result: None,
             error: None,
             duration_ms: None,
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -511,6 +530,7 @@ impl ThreadHistoryBuilder {
             result,
             error,
             duration_ms,
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -519,6 +539,7 @@ impl ThreadHistoryBuilder {
         let item = ThreadItem::ImageView {
             id: payload.call_id.clone(),
             path: payload.path.to_string_lossy().into_owned(),
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -529,6 +550,7 @@ impl ThreadHistoryBuilder {
             status: String::new(),
             revised_prompt: None,
             result: String::new(),
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -539,6 +561,7 @@ impl ThreadHistoryBuilder {
             status: payload.status.clone(),
             revised_prompt: payload.revised_prompt.clone(),
             result: payload.result.clone(),
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -555,6 +578,7 @@ impl ThreadHistoryBuilder {
             receiver_thread_ids: Vec::new(),
             prompt: Some(payload.prompt.clone()),
             agents_states: HashMap::new(),
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -588,6 +612,7 @@ impl ThreadHistoryBuilder {
             receiver_thread_ids,
             prompt: Some(payload.prompt.clone()),
             agents_states,
+            metadata: None,
         });
     }
 
@@ -603,6 +628,7 @@ impl ThreadHistoryBuilder {
             receiver_thread_ids: vec![payload.receiver_thread_id.to_string()],
             prompt: Some(payload.prompt.clone()),
             agents_states: HashMap::new(),
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -625,6 +651,7 @@ impl ThreadHistoryBuilder {
             receiver_thread_ids: vec![receiver_id.clone()],
             prompt: Some(payload.prompt.clone()),
             agents_states: [(receiver_id, received_status)].into_iter().collect(),
+            metadata: None,
         });
     }
 
@@ -644,6 +671,7 @@ impl ThreadHistoryBuilder {
                 .collect(),
             prompt: None,
             agents_states: HashMap::new(),
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -677,6 +705,7 @@ impl ThreadHistoryBuilder {
             receiver_thread_ids,
             prompt: None,
             agents_states,
+            metadata: None,
         });
     }
 
@@ -692,6 +721,7 @@ impl ThreadHistoryBuilder {
             receiver_thread_ids: vec![payload.receiver_thread_id.to_string()],
             prompt: None,
             agents_states: HashMap::new(),
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -716,6 +746,7 @@ impl ThreadHistoryBuilder {
             receiver_thread_ids: vec![receiver_id],
             prompt: None,
             agents_states,
+            metadata: None,
         });
     }
 
@@ -731,6 +762,7 @@ impl ThreadHistoryBuilder {
             receiver_thread_ids: vec![payload.receiver_thread_id.to_string()],
             prompt: None,
             agents_states: HashMap::new(),
+            metadata: None,
         };
         self.upsert_item_in_current_turn(item);
     }
@@ -758,6 +790,7 @@ impl ThreadHistoryBuilder {
             receiver_thread_ids: vec![receiver_id],
             prompt: None,
             agents_states,
+            metadata: None,
         });
     }
 
@@ -765,7 +798,7 @@ impl ThreadHistoryBuilder {
         let id = self.next_item_id();
         self.ensure_turn()
             .items
-            .push(ThreadItem::ContextCompaction { id });
+            .push(ThreadItem::ContextCompaction { id, metadata: None });
     }
 
     fn handle_entered_review_mode(&mut self, payload: &codex_protocol::protocol::ReviewRequest) {
@@ -776,7 +809,11 @@ impl ThreadHistoryBuilder {
         let id = self.next_item_id();
         self.ensure_turn()
             .items
-            .push(ThreadItem::EnteredReviewMode { id, review });
+            .push(ThreadItem::EnteredReviewMode {
+                id,
+                review,
+                metadata: None,
+            });
     }
 
     fn handle_exited_review_mode(
@@ -789,9 +826,11 @@ impl ThreadHistoryBuilder {
             .map(render_review_output_text)
             .unwrap_or_else(|| REVIEW_FALLBACK_MESSAGE.to_string());
         let id = self.next_item_id();
-        self.ensure_turn()
-            .items
-            .push(ThreadItem::ExitedReviewMode { id, review });
+        self.ensure_turn().items.push(ThreadItem::ExitedReviewMode {
+            id,
+            review,
+            metadata: None,
+        });
     }
 
     fn handle_error(&mut self, payload: &ErrorEvent) {
@@ -1201,6 +1240,7 @@ mod tests {
                         url: "https://example.com/one.png".into(),
                     }
                 ],
+                metadata: None,
             }
         );
         assert_eq!(
@@ -1209,6 +1249,7 @@ mod tests {
                 id: "item-2".into(),
                 text: "Hi there".into(),
                 phase: None,
+                metadata: None,
             }
         );
         assert_eq!(
@@ -1217,6 +1258,7 @@ mod tests {
                 id: "item-3".into(),
                 summary: vec!["thinking".into()],
                 content: vec!["full reasoning".into()],
+                metadata: None,
             }
         );
 
@@ -1232,6 +1274,7 @@ mod tests {
                     text: "Second turn".into(),
                     text_elements: Vec::new(),
                 }],
+                metadata: None,
             }
         );
         assert_eq!(
@@ -1240,6 +1283,7 @@ mod tests {
                 id: "item-5".into(),
                 text: "Reply two".into(),
                 phase: None,
+                metadata: None,
             }
         );
     }
@@ -1266,6 +1310,7 @@ mod tests {
                 item: CoreTurnItem::UserMessage(CoreUserMessageItem {
                     id: "user-item-id".to_string(),
                     content: Vec::new(),
+                    metadata: None,
                 }),
             }),
             EventMsg::TurnComplete(TurnCompleteEvent {
@@ -1289,6 +1334,7 @@ mod tests {
                     text: "hello".into(),
                     text_elements: Vec::new(),
                 }],
+                metadata: None,
             }
         );
     }
@@ -1312,6 +1358,7 @@ mod tests {
                 id: "item-1".into(),
                 text: "Final reply".into(),
                 phase: Some(MessagePhase::FinalAnswer),
+                metadata: None,
             }
         );
     }
@@ -1355,6 +1402,7 @@ mod tests {
                 id: "item-2".into(),
                 summary: vec!["first summary".into()],
                 content: vec!["first content".into()],
+                metadata: None,
             }
         );
         assert_eq!(
@@ -1363,6 +1411,7 @@ mod tests {
                 id: "item-4".into(),
                 summary: vec!["second summary".into()],
                 content: Vec::new(),
+                metadata: None,
             }
         );
     }
@@ -1414,6 +1463,7 @@ mod tests {
                     text: "Please do the thing".into(),
                     text_elements: Vec::new(),
                 }],
+                metadata: None,
             }
         );
         assert_eq!(
@@ -1422,6 +1472,7 @@ mod tests {
                 id: "item-2".into(),
                 text: "Working...".into(),
                 phase: None,
+                metadata: None,
             }
         );
 
@@ -1436,6 +1487,7 @@ mod tests {
                     text: "Let's try again".into(),
                     text_elements: Vec::new(),
                 }],
+                metadata: None,
             }
         );
         assert_eq!(
@@ -1444,6 +1496,7 @@ mod tests {
                 id: "item-4".into(),
                 text: "Second attempt complete.".into(),
                 phase: None,
+                metadata: None,
             }
         );
     }
@@ -1504,11 +1557,13 @@ mod tests {
                         text: "First".into(),
                         text_elements: Vec::new(),
                     }],
+                    metadata: None,
                 },
                 ThreadItem::AgentMessage {
                     id: "item-2".into(),
                     text: "A1".into(),
                     phase: None,
+                    metadata: None,
                 },
             ]
         );
@@ -1521,11 +1576,13 @@ mod tests {
                         text: "Third".into(),
                         text_elements: Vec::new(),
                     }],
+                    metadata: None,
                 },
                 ThreadItem::AgentMessage {
                     id: "item-4".into(),
                     text: "A3".into(),
                     phase: None,
+                    metadata: None,
                 },
             ]
         );
@@ -1607,6 +1664,7 @@ mod tests {
                         text: "Start".into(),
                         text_elements: Vec::new(),
                     }],
+                    metadata: None,
                 },
                 ThreadItem::UserMessage {
                     id: "item-2".into(),
@@ -1614,6 +1672,7 @@ mod tests {
                         text: "Steer".into(),
                         text_elements: Vec::new(),
                     }],
+                    metadata: None,
                 },
             ]
         );
@@ -1688,6 +1747,7 @@ mod tests {
                     query: Some("codex".into()),
                     queries: None,
                 }),
+                metadata: None,
             }
         );
         assert_eq!(
@@ -1704,6 +1764,7 @@ mod tests {
                 aggregated_output: Some("hello world\n".into()),
                 exit_code: Some(0),
                 duration_ms: Some(12),
+                metadata: None,
             }
         );
         assert_eq!(
@@ -1719,6 +1780,7 @@ mod tests {
                     message: "boom".into(),
                 }),
                 duration_ms: Some(8),
+                metadata: None,
             }
         );
     }
@@ -1778,6 +1840,7 @@ mod tests {
                 }]),
                 success: Some(true),
                 duration_ms: Some(42),
+                metadata: None,
             }
         );
     }
@@ -1852,6 +1915,7 @@ mod tests {
                 aggregated_output: Some("exec command rejected by user".into()),
                 exit_code: Some(-1),
                 duration_ms: Some(0),
+                metadata: None,
             }
         );
         assert_eq!(
@@ -1864,6 +1928,7 @@ mod tests {
                     diff: "hello\n".into(),
                 }],
                 status: PatchApplyStatus::Declined,
+                metadata: None,
             }
         );
     }
@@ -1946,6 +2011,7 @@ mod tests {
                 aggregated_output: Some("done\n".into()),
                 exit_code: Some(0),
                 duration_ms: Some(5),
+                metadata: None,
             }
         );
     }
@@ -2022,6 +2088,7 @@ mod tests {
                     text: "second".into(),
                     text_elements: Vec::new(),
                 }],
+                metadata: None,
             }
         );
     }
@@ -2075,6 +2142,7 @@ mod tests {
                         text: "apply patch".into(),
                         text_elements: Vec::new(),
                     }],
+                    metadata: None,
                 },
                 ThreadItem::FileChange {
                     id: "patch-call".into(),
@@ -2084,6 +2152,7 @@ mod tests {
                         diff: "hello\n".into(),
                     }],
                     status: PatchApplyStatus::InProgress,
+                    metadata: None,
                 },
             ]
         );
@@ -2139,6 +2208,7 @@ mod tests {
                         text: "apply patch".into(),
                         text_elements: Vec::new(),
                     }],
+                    metadata: None,
                 },
                 ThreadItem::FileChange {
                     id: "patch-call".into(),
@@ -2148,6 +2218,7 @@ mod tests {
                         diff: "hello\n".into(),
                     }],
                     status: PatchApplyStatus::InProgress,
+                    metadata: None,
                 },
             ]
         );
@@ -2334,6 +2405,7 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
+                metadata: None,
             }
         );
     }
@@ -2409,6 +2481,7 @@ mod tests {
                         text: "hello".into(),
                         text_elements: Vec::new(),
                     }],
+                    metadata: None,
                 }],
             }
         );

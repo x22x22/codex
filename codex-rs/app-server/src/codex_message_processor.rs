@@ -6109,6 +6109,7 @@ impl CodexMessageProcessor {
                     // Review prompt display text is synthesized; no UI element ranges to preserve.
                     text_elements: Vec::new(),
                 }],
+                metadata: None,
             }]
         };
 

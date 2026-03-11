@@ -200,6 +200,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         content_items,
         success,
         duration_ms,
+        ..
     } = started.item
     else {
         panic!("expected dynamic tool call item");
@@ -253,6 +254,7 @@ async fn dynamic_tool_call_round_trip_sends_text_content_items_to_model() -> Res
         content_items,
         success,
         duration_ms,
+        ..
     } = completed.item
     else {
         panic!("expected dynamic tool call item");

@@ -6419,6 +6419,7 @@ impl ProposedPlanItemState {
         let item = TurnItem::Plan(PlanItem {
             id: self.item_id.clone(),
             text: String::new(),
+            metadata: None,
         });
         sess.emit_turn_item_started(turn_context, &item).await;
     }
@@ -6453,6 +6454,7 @@ impl ProposedPlanItemState {
         let item = TurnItem::Plan(PlanItem {
             id: self.item_id.clone(),
             text,
+            metadata: None,
         });
         sess.emit_turn_item_completed(turn_context, item).await;
     }
@@ -6765,6 +6767,7 @@ async fn emit_agent_message_in_plan_mode(
                     id: agent_message_id.clone(),
                     content: Vec::new(),
                     phase: None,
+                    metadata: None,
                 })
             });
         sess.emit_turn_item_started(turn_context, &start_item).await;

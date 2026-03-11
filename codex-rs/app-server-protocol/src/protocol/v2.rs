@@ -25,7 +25,9 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::ItemSandboxPolicy as CoreItemSandboxPolicy;
 use codex_protocol::items::TurnItem as CoreTurnItem;
+use codex_protocol::items::TurnItemMetadata as CoreTurnItemMetadata;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
@@ -3794,6 +3796,41 @@ pub enum UserInput {
     },
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+pub enum ItemSandboxPolicy {
+    ReadOnly,
+    Sandbox,
+    FullAccess,
+}
+
+impl From<CoreItemSandboxPolicy> for ItemSandboxPolicy {
+    fn from(value: CoreItemSandboxPolicy) -> Self {
+        match value {
+            CoreItemSandboxPolicy::ReadOnly => ItemSandboxPolicy::ReadOnly,
+            CoreItemSandboxPolicy::Sandbox => ItemSandboxPolicy::Sandbox,
+            CoreItemSandboxPolicy::FullAccess => ItemSandboxPolicy::FullAccess,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[ts(export_to = "v2/")]
+pub struct ItemMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_policy: Option<ItemSandboxPolicy>,
+}
+
+impl From<CoreTurnItemMetadata> for ItemMetadata {
+    fn from(value: CoreTurnItemMetadata) -> Self {
+        Self {
+            sandbox_policy: value.sandbox_policy.map(Into::into),
+        }
+    }
+}
+
 impl UserInput {
     pub fn into_core(self) -> CoreUserInput {
         match self {
@@ -3850,7 +3887,12 @@ impl UserInput {
 pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    UserMessage { id: String, content: Vec<UserInput> },
+    UserMessage {
+        id: String,
+        content: Vec<UserInput>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     AgentMessage {
@@ -3858,12 +3900,19 @@ pub enum ThreadItem {
         text: String,
         #[serde(default)]
         phase: Option<MessagePhase>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     /// EXPERIMENTAL - proposed plan item content. The completed plan item is
     /// authoritative and may not match the concatenation of `PlanDelta` text.
-    Plan { id: String, text: String },
+    Plan {
+        id: String,
+        text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Reasoning {
@@ -3872,6 +3921,8 @@ pub enum ThreadItem {
         summary: Vec<String>,
         #[serde(default)]
         content: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -3895,6 +3946,8 @@ pub enum ThreadItem {
         /// The duration of the command execution in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -3902,6 +3955,8 @@ pub enum ThreadItem {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -3916,6 +3971,8 @@ pub enum ThreadItem {
         /// The duration of the MCP tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -3929,6 +3986,8 @@ pub enum ThreadItem {
         /// The duration of the dynamic tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -3948,6 +4007,8 @@ pub enum ThreadItem {
         prompt: Option<String>,
         /// Last known status of the target agents, when available.
         agents_states: HashMap<String, CollabAgentState>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -3955,10 +4016,17 @@ pub enum ThreadItem {
         id: String,
         query: String,
         action: Option<WebSearchAction>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ImageView { id: String, path: String },
+    ImageView {
+        id: String,
+        path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ImageGeneration {
@@ -3966,16 +4034,32 @@ pub enum ThreadItem {
         status: String,
         revised_prompt: Option<String>,
         result: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    EnteredReviewMode { id: String, review: String },
+    EnteredReviewMode {
+        id: String,
+        review: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ExitedReviewMode { id: String, review: String },
+    ExitedReviewMode {
+        id: String,
+        review: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
+    },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ContextCompaction { id: String },
+    ContextCompaction {
+        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        metadata: Option<ItemMetadata>,
+    },
 }
 
 impl ThreadItem {
@@ -4043,6 +4127,7 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::UserMessage(user) => ThreadItem::UserMessage {
                 id: user.id,
                 content: user.content.into_iter().map(UserInput::from).collect(),
+                metadata: user.metadata.map(Into::into),
             },
             CoreTurnItem::AgentMessage(agent) => {
                 let text = agent
@@ -4056,31 +4141,37 @@ impl From<CoreTurnItem> for ThreadItem {
                     id: agent.id,
                     text,
                     phase: agent.phase,
+                    metadata: agent.metadata.map(Into::into),
                 }
             }
             CoreTurnItem::Plan(plan) => ThreadItem::Plan {
                 id: plan.id,
                 text: plan.text,
+                metadata: plan.metadata.map(Into::into),
             },
             CoreTurnItem::Reasoning(reasoning) => ThreadItem::Reasoning {
                 id: reasoning.id,
                 summary: reasoning.summary_text,
                 content: reasoning.raw_content,
+                metadata: reasoning.metadata.map(Into::into),
             },
             CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
                 id: search.id,
                 query: search.query,
                 action: Some(WebSearchAction::from(search.action)),
+                metadata: search.metadata.map(Into::into),
             },
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,
                 status: image.status,
                 revised_prompt: image.revised_prompt,
                 result: image.result,
+                metadata: image.metadata.map(Into::into),
             },
-            CoreTurnItem::ContextCompaction(compaction) => {
-                ThreadItem::ContextCompaction { id: compaction.id }
-            }
+            CoreTurnItem::ContextCompaction(compaction) => ThreadItem::ContextCompaction {
+                id: compaction.id,
+                metadata: compaction.metadata.map(Into::into),
+            },
         }
     }
 }
@@ -6807,6 +6898,7 @@ mod tests {
                     path: "app://demo-app".to_string(),
                 },
             ],
+            metadata: None,
         });
 
         assert_eq!(
@@ -6833,6 +6925,7 @@ mod tests {
                         path: "app://demo-app".to_string(),
                     },
                 ],
+                metadata: None,
             }
         );
 
@@ -6847,6 +6940,7 @@ mod tests {
                 },
             ],
             phase: None,
+            metadata: None,
         });
 
         assert_eq!(
@@ -6855,6 +6949,7 @@ mod tests {
                 id: "agent-1".to_string(),
                 text: "Hello world".to_string(),
                 phase: None,
+                metadata: None,
             }
         );
 
@@ -6864,6 +6959,7 @@ mod tests {
                 text: "final".to_string(),
             }],
             phase: Some(MessagePhase::FinalAnswer),
+            metadata: None,
         });
 
         assert_eq!(
@@ -6872,6 +6968,7 @@ mod tests {
                 id: "agent-2".to_string(),
                 text: "final".to_string(),
                 phase: Some(MessagePhase::FinalAnswer),
+                metadata: None,
             }
         );
 
@@ -6879,6 +6976,7 @@ mod tests {
             id: "reasoning-1".to_string(),
             summary_text: vec!["line one".to_string(), "line two".to_string()],
             raw_content: vec![],
+            metadata: None,
         });
 
         assert_eq!(
@@ -6887,6 +6985,7 @@ mod tests {
                 id: "reasoning-1".to_string(),
                 summary: vec!["line one".to_string(), "line two".to_string()],
                 content: vec![],
+                metadata: None,
             }
         );
 
@@ -6897,6 +6996,7 @@ mod tests {
                 query: Some("docs".to_string()),
                 queries: None,
             },
+            metadata: None,
         });
 
         assert_eq!(
@@ -6908,6 +7008,7 @@ mod tests {
                     query: Some("docs".to_string()),
                     queries: None,
                 }),
+                metadata: None,
             }
         );
     }
