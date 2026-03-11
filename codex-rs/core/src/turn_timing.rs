@@ -215,6 +215,7 @@ mod tests {
                     id: "msg-1".to_string(),
                     content: Vec::new(),
                     phase: None,
+                    metadata: None,
                 }))
                 .await
                 .is_some()
@@ -225,6 +226,7 @@ mod tests {
                     id: "msg-2".to_string(),
                     content: Vec::new(),
                     phase: None,
+                    metadata: None,
                 }))
                 .await,
             None

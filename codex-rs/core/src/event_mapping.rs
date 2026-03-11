@@ -492,6 +492,7 @@ mod tests {
                         query: Some("weather".to_string()),
                         queries: None,
                     },
+                    metadata: None,
                 }
             ),
             other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -519,6 +520,7 @@ mod tests {
                     action: WebSearchAction::OpenPage {
                         url: Some("https://example.com".to_string()),
                     },
+                    metadata: None,
                 }
             ),
             other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -548,6 +550,7 @@ mod tests {
                         url: Some("https://example.com".to_string()),
                         pattern: Some("needle".to_string()),
                     },
+                    metadata: None,
                 }
             ),
             other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -570,6 +573,7 @@ mod tests {
                     id: "ws_partial".to_string(),
                     query: String::new(),
                     action: WebSearchAction::Other,
+                    metadata: None,
                 }
             ),
             other => panic!("expected TurnItem::WebSearch, got {other:?}"),
