@@ -2402,7 +2402,7 @@ impl Session {
             BaseInstructions {
                 text: base_instructions,
             },
-            None,
+            false,
         );
         let startup_turn_metadata_header = startup_turn_context
             .turn_metadata_state
@@ -5677,7 +5677,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
-            inline_server_side_compaction_threshold(&sess, &turn_context),
+            inline_server_side_compaction_enabled(&sess, &turn_context),
             &turn_enabled_connectors,
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
@@ -5709,7 +5709,7 @@ pub(crate) async fn run_turn(
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
                 if token_limit_reached
                     && needs_follow_up
-                    && inline_server_side_compaction_threshold(&sess, &turn_context).is_none()
+                    && !inline_server_side_compaction_enabled(&sess, &turn_context)
                     && run_auto_compact(
                         &sess,
                         &turn_context,
@@ -5869,19 +5869,12 @@ pub(crate) async fn run_turn(
     last_agent_message
 }
 
-fn inline_server_side_compaction_threshold(
-    sess: &Session,
-    turn_context: &TurnContext,
-) -> Option<i64> {
-    if !sess.enabled(Feature::ServerSideCompaction) {
-        return None;
-    }
-    if !should_use_remote_compact_task(&turn_context.provider) {
-        return None;
-    }
-    // Inline Responses compaction has no prompt override; manual `/compact` still uses the
-    // point-in-time compact endpoint.
-    turn_context.model_info.auto_compact_token_limit()
+fn inline_server_side_compaction_enabled(sess: &Session, turn_context: &TurnContext) -> bool {
+    sess.enabled(Feature::ServerSideCompaction)
+        && should_use_remote_compact_task(&turn_context.provider)
+        // Inline Responses compaction has no prompt override; manual `/compact` still uses the
+        // point-in-time compact endpoint.
+        && turn_context.model_info.auto_compact_token_limit().is_some()
 }
 
 async fn run_pre_sampling_compact(
@@ -5905,7 +5898,7 @@ async fn run_pre_sampling_compact(
         .unwrap_or(i64::MAX);
     // Compact if the total usage tokens are greater than or equal to the auto-compact limit.
     if total_usage_tokens >= auto_compact_limit
-        && inline_server_side_compaction_threshold(sess, turn_context).is_none()
+        && !inline_server_side_compaction_enabled(sess, turn_context)
     {
         run_auto_compact(sess, turn_context, InitialContextInjection::DoNotInject).await?;
     }
@@ -6141,7 +6134,7 @@ fn build_prompt(
     router: &ToolRouter,
     turn_context: &TurnContext,
     base_instructions: BaseInstructions,
-    inline_compaction_threshold: Option<i64>,
+    inline_server_side_compaction_enabled: bool,
 ) -> Prompt {
     Prompt {
         input,
@@ -6150,7 +6143,7 @@ fn build_prompt(
         base_instructions,
         personality: turn_context.personality,
         output_schema: turn_context.final_output_json_schema.clone(),
-        inline_compaction_threshold,
+        inline_server_side_compaction_enabled,
     }
 }
 #[allow(clippy::too_many_arguments)]
@@ -6169,7 +6162,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
-    inline_compaction_threshold: Option<i64>,
+    inline_server_side_compaction_enabled: bool,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     server_model_warning_emitted_for_turn: &mut bool,
@@ -6192,7 +6185,7 @@ async fn run_sampling_request(
         router.as_ref(),
         turn_context.as_ref(),
         base_instructions,
-        inline_compaction_threshold,
+        inline_server_side_compaction_enabled,
     );
     let mut retries = 0;
     loop {

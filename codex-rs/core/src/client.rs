@@ -574,10 +574,14 @@ impl ModelClientSession {
         };
         let text = create_text_param_for_request(verbosity, &prompt.output_schema);
         let prompt_cache_key = Some(self.client.state.conversation_id.to_string());
-        let context_management = prompt
-            .inline_compaction_threshold
-            .map(ApiContextManagement::compaction)
-            .map(|entry| vec![entry]);
+        let context_management = if prompt.inline_server_side_compaction_enabled {
+            model_info
+                .auto_compact_token_limit()
+                .map(ApiContextManagement::compaction)
+                .map(|entry| vec![entry])
+        } else {
+            None
+        };
         let request = ResponsesApiRequest {
             model: model_info.slug.clone(),
             instructions: instructions.clone(),

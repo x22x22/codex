@@ -43,8 +43,8 @@ pub struct Prompt {
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
 
-    /// Optional inline server-side compaction threshold for the next Responses request.
-    pub inline_compaction_threshold: Option<i64>,
+    /// Whether the next Responses request should opt into inline server-side compaction.
+    pub inline_server_side_compaction_enabled: bool,
 }
 
 impl Prompt {

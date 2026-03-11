@@ -340,7 +340,7 @@ mod job {
             },
             personality: None,
             output_schema: Some(output_schema()),
-            inline_compaction_threshold: None,
+            inline_server_side_compaction_enabled: false,
         };
 
         let mut client_session = session.services.model_client.new_session();
