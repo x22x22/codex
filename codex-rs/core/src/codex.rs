@@ -5872,8 +5872,6 @@ pub(crate) async fn run_turn(
 fn inline_server_side_compaction_enabled(sess: &Session, turn_context: &TurnContext) -> bool {
     sess.enabled(Feature::ServerSideCompaction)
         && should_use_remote_compact_task(&turn_context.provider)
-        // Inline Responses compaction has no prompt override; manual `/compact` still uses the
-        // point-in-time compact endpoint.
         && turn_context.model_info.auto_compact_token_limit().is_some()
 }
 
@@ -5882,15 +5880,12 @@ async fn run_pre_sampling_compact(
     turn_context: &Arc<TurnContext>,
 ) -> CodexResult<()> {
     let total_usage_tokens_before_compaction = sess.get_total_token_usage().await;
-    if maybe_run_previous_model_inline_compact(
+    maybe_run_previous_model_inline_compact(
         sess,
         turn_context,
         total_usage_tokens_before_compaction,
     )
-    .await?
-    {
-        return Ok(());
-    }
+    .await?;
     let total_usage_tokens = sess.get_total_token_usage().await;
     let auto_compact_limit = turn_context
         .model_info
@@ -5907,17 +5902,13 @@ async fn run_pre_sampling_compact(
 
 /// Runs pre-sampling compaction against the previous model when switching to a smaller
 /// context-window model.
-///
-/// Returns `Ok(true)` when compaction ran successfully, `Ok(false)` when compaction was skipped
-/// because the model/context-window preconditions were not met, and `Err(_)` only when compaction
-/// was attempted and failed.
 async fn maybe_run_previous_model_inline_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     total_usage_tokens: i64,
-) -> CodexResult<bool> {
+) -> CodexResult<()> {
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
-        return Ok(false);
+        return Ok(());
     };
     let previous_model_turn_context = Arc::new(
         turn_context
@@ -5926,10 +5917,10 @@ async fn maybe_run_previous_model_inline_compact(
     );
 
     let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
-        return Ok(false);
+        return Ok(());
     };
     let Some(new_context_window) = turn_context.model_context_window() else {
-        return Ok(false);
+        return Ok(());
     };
     let new_auto_compact_limit = turn_context
         .model_info
@@ -5945,9 +5936,8 @@ async fn maybe_run_previous_model_inline_compact(
             InitialContextInjection::DoNotInject,
         )
         .await?;
-        return Ok(true);
     }
-    Ok(false)
+    Ok(())
 }
 
 async fn run_auto_compact(
