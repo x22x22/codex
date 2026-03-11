@@ -410,7 +410,7 @@ impl RealtimeWebsocketWriter {
                         kind: "function".to_string(),
                         name: "codex".to_string(),
                         description:
-                            "Delegate a request to Codex and return the final result to the user."
+                            "Delegate a request to Codex and return the final result to the user. Use this as the default action. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later."
                                 .to_string(),
                         parameters: SessionToolParameters {
                             kind: "object".to_string(),
