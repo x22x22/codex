@@ -1641,7 +1641,9 @@ impl ChatWidget {
             self.saw_plan_item_this_turn = false;
         }
         // If there is a queued user message, send exactly one now to begin the next turn.
-        self.maybe_send_next_queued_input();
+        if !self.maybe_close_realtime_conversation_when_idle() {
+            self.maybe_send_next_queued_input();
+        }
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
             response: last_agent_message.unwrap_or_default(),
@@ -2027,7 +2029,9 @@ impl ChatWidget {
 
         self.mcp_startup_status = None;
         self.update_task_running_state();
-        self.maybe_send_next_queued_input();
+        if !self.maybe_close_realtime_conversation_when_idle() {
+            self.maybe_send_next_queued_input();
+        }
         self.request_redraw();
     }
 
@@ -2072,6 +2076,7 @@ impl ChatWidget {
             self.restore_user_message_to_composer(combined);
         }
         self.refresh_pending_input_preview();
+        self.maybe_close_realtime_conversation_when_idle();
 
         self.request_redraw();
     }
@@ -7335,10 +7340,9 @@ impl ChatWidget {
             self.bottom_pane
                 .set_audio_device_selection_enabled(self.realtime_audio_device_selection_enabled());
             if !realtime_conversation_enabled && self.realtime_conversation.is_live() {
-                self.request_realtime_conversation_close(Some(
+                self.force_close_realtime_conversation(Some(
                     "Realtime voice mode was closed because the feature was disabled.".to_string(),
                 ));
-                self.reset_realtime_conversation_state();
             }
         }
         if feature == Feature::FastMode {
@@ -7466,6 +7470,14 @@ impl ChatWidget {
             RealtimeAudioDeviceKind::Microphone => self.config.realtime_audio.microphone = name,
             RealtimeAudioDeviceKind::Speaker => self.config.realtime_audio.speaker = name,
         }
+    }
+
+    pub(crate) fn set_working_directory(&mut self, cwd: PathBuf) {
+        self.current_cwd = Some(cwd.clone());
+        self.config.cwd = cwd;
+        self.request_status_line_branch_refresh();
+        self.refresh_status_line();
+        self.request_redraw();
     }
 
     /// Set the syntax theme override in the widget's config copy.

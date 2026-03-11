@@ -6,6 +6,8 @@ pub use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
 pub use codex_protocol::protocol::RealtimeInterruptRequested;
 pub use codex_protocol::protocol::RealtimeOutputAudioDelta;
 pub use codex_protocol::protocol::RealtimeResponseCancelled;
+pub use codex_protocol::protocol::RealtimeToolAction;
+pub use codex_protocol::protocol::RealtimeToolActionRequested;
 pub use codex_protocol::protocol::RealtimeTranscriptDelta;
 pub use codex_protocol::protocol::RealtimeTranscriptEntry;
 use serde::Deserialize;
@@ -36,7 +38,7 @@ pub(super) enum RealtimeOutboundMessage {
         audio_end_ms: u32,
     },
     #[serde(rename = "session.update")]
-    SessionUpdate { session: SessionUpdateSession },
+    SessionUpdate { session: Box<SessionUpdateSession> },
     #[serde(rename = "conversation.item.create")]
     ConversationItemCreate { item: ConversationItem },
 }
@@ -273,6 +275,9 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
             if let Some(close) = parse_close_requested(&parsed) {
                 return Some(RealtimeEvent::CloseRequested(close));
             }
+            if let Some(tool_action) = parse_tool_action_requested(&parsed) {
+                return Some(RealtimeEvent::ToolActionRequested(tool_action));
+            }
             if let Some(cancelled) = parse_response_cancelled(&parsed) {
                 return Some(RealtimeEvent::ResponseCancelled(cancelled));
             }
@@ -355,6 +360,179 @@ fn parse_close_requested(parsed: &Value) -> Option<RealtimeCloseRequested> {
             .and_then(Value::as_str)
             .map(str::to_string)?,
     })
+}
+
+fn parse_tool_action_requested(parsed: &Value) -> Option<RealtimeToolActionRequested> {
+    #[derive(Debug, Deserialize, Default)]
+    struct ReplaceLastQueuedMessageArguments {
+        #[serde(default)]
+        message: String,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct ManageMessageQueueArguments {
+        #[serde(default)]
+        action: String,
+        #[serde(default)]
+        message: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct UpdateRuntimeSettingsArguments {
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        working_directory: Option<String>,
+        #[serde(default)]
+        reasoning_effort: Option<String>,
+        #[serde(default)]
+        fast_mode: Option<bool>,
+        #[serde(default)]
+        personality: Option<String>,
+        #[serde(default)]
+        collaboration_mode: Option<String>,
+    }
+
+    #[derive(Debug, Deserialize, Default)]
+    struct RunTuiCommandArguments {
+        #[serde(default)]
+        command: String,
+        #[serde(default)]
+        prompt: Option<String>,
+    }
+
+    let parse_call_id = |function_call: &Value| {
+        function_call
+            .get("call_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    };
+
+    if let Some(function_call) = find_function_call(parsed, "manage_message_queue") {
+        let arguments = function_call
+            .get("arguments")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let parsed_arguments =
+            serde_json::from_str::<ManageMessageQueueArguments>(arguments).unwrap_or_default();
+        return Some(RealtimeToolActionRequested {
+            call_id: parse_call_id(function_call)?,
+            action: RealtimeToolAction::ManageMessageQueue {
+                action: parsed_arguments.action,
+                message: parsed_arguments.message,
+            },
+        });
+    }
+
+    if let Some(function_call) = find_function_call(parsed, "list_message_queue") {
+        return Some(RealtimeToolActionRequested {
+            call_id: parse_call_id(function_call)?,
+            action: RealtimeToolAction::ListMessageQueue,
+        });
+    }
+
+    if let Some(function_call) = find_function_call(parsed, "replace_last_queued_message") {
+        let arguments = function_call
+            .get("arguments")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let parsed_arguments = serde_json::from_str::<ReplaceLastQueuedMessageArguments>(arguments)
+            .unwrap_or_else(|_| ReplaceLastQueuedMessageArguments {
+                message: arguments.to_string(),
+            });
+        return Some(RealtimeToolActionRequested {
+            call_id: parse_call_id(function_call)?,
+            action: RealtimeToolAction::ReplaceLastQueuedMessage {
+                message: parsed_arguments.message,
+            },
+        });
+    }
+
+    if let Some(function_call) = find_function_call(parsed, "remove_last_queued_message") {
+        return Some(RealtimeToolActionRequested {
+            call_id: parse_call_id(function_call)?,
+            action: RealtimeToolAction::RemoveLastQueuedMessage,
+        });
+    }
+
+    if let Some(function_call) = find_function_call(parsed, "clear_queued_messages") {
+        return Some(RealtimeToolActionRequested {
+            call_id: parse_call_id(function_call)?,
+            action: RealtimeToolAction::ClearQueuedMessages,
+        });
+    }
+
+    if let Some(function_call) = find_function_call(parsed, "list_runtime_settings") {
+        return Some(RealtimeToolActionRequested {
+            call_id: parse_call_id(function_call)?,
+            action: RealtimeToolAction::ListRuntimeSettings,
+        });
+    }
+
+    if let Some(function_call) = find_function_call(parsed, "manage_runtime_settings") {
+        let arguments = function_call
+            .get("arguments")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let parsed_arguments =
+            serde_json::from_str::<UpdateRuntimeSettingsArguments>(arguments).unwrap_or_default();
+        return Some(RealtimeToolActionRequested {
+            call_id: parse_call_id(function_call)?,
+            action: RealtimeToolAction::ManageRuntimeSettings {
+                model: parsed_arguments.model,
+                working_directory: parsed_arguments.working_directory,
+                reasoning_effort: parsed_arguments.reasoning_effort,
+                fast_mode: parsed_arguments.fast_mode,
+                personality: parsed_arguments.personality,
+                collaboration_mode: parsed_arguments.collaboration_mode,
+            },
+        });
+    }
+
+    if let Some(function_call) = find_function_call(parsed, "update_runtime_settings") {
+        let arguments = function_call
+            .get("arguments")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let parsed_arguments =
+            serde_json::from_str::<UpdateRuntimeSettingsArguments>(arguments).unwrap_or_default();
+        return Some(RealtimeToolActionRequested {
+            call_id: parse_call_id(function_call)?,
+            action: RealtimeToolAction::UpdateRuntimeSettings {
+                model: parsed_arguments.model,
+                working_directory: parsed_arguments.working_directory,
+                reasoning_effort: parsed_arguments.reasoning_effort,
+                fast_mode: parsed_arguments.fast_mode,
+                personality: parsed_arguments.personality,
+                collaboration_mode: parsed_arguments.collaboration_mode,
+            },
+        });
+    }
+
+    if let Some(function_call) = find_function_call(parsed, "run_tui_command") {
+        let arguments = function_call
+            .get("arguments")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let parsed_arguments =
+            serde_json::from_str::<RunTuiCommandArguments>(arguments).unwrap_or_default();
+        return Some(RealtimeToolActionRequested {
+            call_id: parse_call_id(function_call)?,
+            action: RealtimeToolAction::RunTuiCommand {
+                command: parsed_arguments.command,
+                prompt: parsed_arguments.prompt,
+            },
+        });
+    }
+
+    if let Some(function_call) = find_function_call(parsed, "compact_conversation") {
+        return Some(RealtimeToolActionRequested {
+            call_id: parse_call_id(function_call)?,
+            action: RealtimeToolAction::CompactConversation,
+        });
+    }
+
+    None
 }
 
 fn parse_response_cancelled(parsed: &Value) -> Option<RealtimeResponseCancelled> {

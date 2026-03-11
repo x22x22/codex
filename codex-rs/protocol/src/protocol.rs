@@ -170,6 +170,63 @@ pub struct RealtimeCloseRequested {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RealtimeToolAction {
+    ManageMessageQueue {
+        action: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+    },
+    ListMessageQueue,
+    ReplaceLastQueuedMessage {
+        message: String,
+    },
+    RemoveLastQueuedMessage,
+    ClearQueuedMessages,
+    ManageRuntimeSettings {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        working_directory: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fast_mode: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        personality: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        collaboration_mode: Option<String>,
+    },
+    ListRuntimeSettings,
+    UpdateRuntimeSettings {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        working_directory: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        fast_mode: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        personality: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        collaboration_mode: Option<String>,
+    },
+    RunTuiCommand {
+        command: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        prompt: Option<String>,
+    },
+    CompactConversation,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeToolActionRequested {
+    pub call_id: String,
+    pub action: RealtimeToolAction,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RealtimeInputAudioSpeechStarted {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub item_id: Option<String>,
@@ -199,6 +256,7 @@ pub enum RealtimeEvent {
     HandoffRequested(RealtimeHandoffRequested),
     InterruptRequested(RealtimeInterruptRequested),
     CloseRequested(RealtimeCloseRequested),
+    ToolActionRequested(RealtimeToolActionRequested),
     Error(String),
 }
 
@@ -217,6 +275,12 @@ pub struct ConversationAudioTruncateParams {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ConversationTextParams {
     pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeToolCallCompleteParams {
+    pub call_id: String,
+    pub output_text: String,
 }
 
 /// Submission operation
@@ -246,6 +310,9 @@ pub enum Op {
 
     /// Close the running realtime conversation stream.
     RealtimeConversationClose,
+
+    /// Send a tool-call result back to the running realtime conversation stream.
+    RealtimeConversationToolCallComplete(RealtimeToolCallCompleteParams),
 
     /// Legacy user input.
     ///

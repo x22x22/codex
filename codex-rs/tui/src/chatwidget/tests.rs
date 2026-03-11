@@ -48,6 +48,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::openai_models::ModelPreset;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::openai_models::default_input_modalities;
 use codex_protocol::parse_command::ParsedCommand;
@@ -85,6 +86,8 @@ use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeToolAction;
+use codex_protocol::protocol::RealtimeToolActionRequested;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionSource;
@@ -95,6 +98,7 @@ use codex_protocol::protocol::ThreadRolledBackEvent;
 use codex_protocol::protocol::TokenCountEvent;
 use codex_protocol::protocol::TokenUsage;
 use codex_protocol::protocol::TokenUsageInfo;
+use codex_protocol::protocol::TurnAbortedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UndoCompletedEvent;
@@ -1938,6 +1942,55 @@ fn next_interrupt_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected interrupt op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected interrupt op but channel closed"),
+        }
+    }
+}
+
+fn next_realtime_close_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::RealtimeConversationClose) => return,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => {
+                panic!("expected realtime close op but queue was empty")
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected realtime close op but channel closed")
+            }
+        }
+    }
+}
+
+fn next_app_event(rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>) -> AppEvent {
+    rx.try_recv().expect("expected app event")
+}
+
+fn next_realtime_tool_call_complete(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+) -> codex_protocol::protocol::RealtimeToolCallCompleteParams {
+    loop {
+        match rx.try_recv() {
+            Ok(AppEvent::CodexOp(Op::RealtimeConversationToolCallComplete(params))) => {
+                return params;
+            }
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => {
+                panic!("expected realtime tool completion but queue was empty")
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected realtime tool completion but channel closed")
+            }
+        }
+    }
+}
+
+fn next_review_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> ReviewRequest {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::Review { review_request }) => return review_request,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected review op but queue was empty"),
+            Err(TryRecvError::Disconnected) => panic!("expected review op but channel closed"),
         }
     }
 }
@@ -10458,6 +10511,403 @@ async fn realtime_handoff_can_send_immediately_while_turn_is_running() {
             );
         }
         other => panic!("unexpected op: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn realtime_close_request_interrupts_before_disconnect_when_turn_is_running() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.realtime_conversation
+        .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
+    chat.on_task_started();
+
+    chat.handle_codex_event(Event {
+        id: "rt-close-1".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::CloseRequested(
+                codex_protocol::protocol::RealtimeCloseRequested {
+                    call_id: "close_1".to_string(),
+                },
+            ),
+        }),
+    });
+
+    assert_eq!(
+        chat.realtime_conversation.phase_for_test(),
+        super::realtime::RealtimeConversationPhase::Stopping
+    );
+    assert!(chat.realtime_conversation.requested_close_for_test());
+    assert!(chat.realtime_conversation.close_when_idle_for_test());
+    next_interrupt_op(&mut op_rx);
+
+    let inserted = drain_insert_history(&mut rx);
+    let rendered = inserted
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .find(|text| text.contains("Stopping realtime voice mode after current work is cancelled."))
+        .expect("expected close deferral info message");
+    assert!(rendered.contains("Stopping realtime voice mode after current work is cancelled."));
+
+    chat.handle_codex_event(Event {
+        id: "turn-abort".into(),
+        msg: EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    next_realtime_close_op(&mut op_rx);
+    assert!(!chat.realtime_conversation.close_when_idle_for_test());
+}
+
+#[tokio::test]
+async fn realtime_close_request_closes_immediately_when_idle() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.realtime_conversation
+        .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
+
+    chat.handle_codex_event(Event {
+        id: "rt-close-2".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::CloseRequested(
+                codex_protocol::protocol::RealtimeCloseRequested {
+                    call_id: "close_2".to_string(),
+                },
+            ),
+        }),
+    });
+
+    next_realtime_close_op(&mut op_rx);
+    assert!(!chat.realtime_conversation.close_when_idle_for_test());
+
+    let inserted = drain_insert_history(&mut rx);
+    let rendered = inserted
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .find(|text| text.contains("Realtime voice mode turned off."))
+        .expect("expected immediate close info message");
+    assert!(rendered.contains("Realtime voice mode turned off."));
+}
+
+#[tokio::test]
+async fn realtime_manage_message_queue_updates_queue_and_completes_tool_call() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.queued_user_messages
+        .push_back(UserMessage::from("old queued message".to_string()));
+
+    chat.handle_codex_event(Event {
+        id: "rt-queue-replace".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::ToolActionRequested(RealtimeToolActionRequested {
+                call_id: "queue-tool-1".to_string(),
+                action: RealtimeToolAction::ManageMessageQueue {
+                    action: "replace_last".to_string(),
+                    message: Some("new queued message".to_string()),
+                },
+            }),
+        }),
+    });
+
+    assert_eq!(
+        chat.queued_user_messages
+            .back()
+            .map(|message| message.text.as_str()),
+        Some("new queued message")
+    );
+
+    match next_app_event(&mut rx) {
+        AppEvent::CodexOp(Op::RealtimeConversationToolCallComplete(params)) => {
+            assert_eq!(params.call_id, "queue-tool-1");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&params.output_text)
+                    .expect("valid json tool output"),
+                serde_json::json!({
+                    "status": "ok",
+                    "previous_message": "old queued message",
+                    "message": "new queued message",
+                    "queued_message_count": 1,
+                })
+            );
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn realtime_manage_runtime_settings_updates_state_and_emits_follow_up_ops() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    let temp = tempdir().expect("tempdir");
+    let next_cwd = temp.path().join("nested");
+    std::fs::create_dir_all(&next_cwd).expect("create nested dir");
+    let canonical_cwd = next_cwd.canonicalize().expect("canonicalize cwd");
+
+    chat.handle_codex_event(Event {
+        id: "rt-settings-1".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::ToolActionRequested(RealtimeToolActionRequested {
+                call_id: "settings-tool-1".to_string(),
+                action: RealtimeToolAction::ManageRuntimeSettings {
+                    model: Some("gpt-5.3-codex".to_string()),
+                    working_directory: Some(next_cwd.display().to_string()),
+                    reasoning_effort: Some("low".to_string()),
+                    fast_mode: None,
+                    personality: None,
+                    collaboration_mode: None,
+                },
+            }),
+        }),
+    });
+
+    assert_eq!(chat.config.cwd, canonical_cwd);
+    assert_eq!(chat.current_model(), "gpt-5.3-codex");
+    assert_eq!(chat.current_reasoning_effort(), Some(ReasoningEffort::Low));
+
+    match next_app_event(&mut rx) {
+        AppEvent::UpdateWorkingDirectory(cwd) => assert_eq!(cwd, canonical_cwd),
+        other => panic!("unexpected app event: {other:?}"),
+    }
+    match next_app_event(&mut rx) {
+        AppEvent::CodexOp(Op::ListSkills { cwds, force_reload }) => {
+            assert!(cwds.is_empty());
+            assert!(!force_reload);
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+    match next_app_event(&mut rx) {
+        AppEvent::CodexOp(Op::OverrideTurnContext {
+            cwd, model, effort, ..
+        }) => {
+            assert_eq!(cwd, Some(canonical_cwd.clone()));
+            assert_eq!(model.as_deref(), Some("gpt-5.3-codex"));
+            assert_eq!(effort, Some(Some(ReasoningEffort::Low)));
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+    match next_app_event(&mut rx) {
+        AppEvent::CodexOp(Op::RealtimeConversationToolCallComplete(params)) => {
+            assert_eq!(params.call_id, "settings-tool-1");
+            let output =
+                serde_json::from_str::<serde_json::Value>(&params.output_text).expect("json");
+            assert_eq!(output["status"], "ok");
+            assert_eq!(output["updated"]["model"], "gpt-5.3-codex");
+            assert_eq!(
+                output["updated"]["working_directory"],
+                canonical_cwd.display().to_string()
+            );
+            assert_eq!(output["updated"]["reasoning_effort"], "low");
+            assert_eq!(
+                output["current_settings"]["working_directory"],
+                canonical_cwd.display().to_string()
+            );
+            assert_eq!(output["current_settings"]["model"], "gpt-5.3-codex");
+            assert_eq!(output["current_settings"]["reasoning_effort"], "low");
+            assert_eq!(
+                output["possible_settings"]["keys"],
+                serde_json::json!([
+                    "model",
+                    "working_directory",
+                    "reasoning_effort",
+                    "fast_mode",
+                    "personality",
+                    "collaboration_mode",
+                ])
+            );
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn realtime_manage_runtime_settings_lists_possible_settings() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+
+    chat.handle_codex_event(Event {
+        id: "rt-settings-list".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::ToolActionRequested(RealtimeToolActionRequested {
+                call_id: "settings-tool-list".to_string(),
+                action: RealtimeToolAction::ManageRuntimeSettings {
+                    model: None,
+                    working_directory: None,
+                    reasoning_effort: None,
+                    fast_mode: None,
+                    personality: None,
+                    collaboration_mode: None,
+                },
+            }),
+        }),
+    });
+
+    match next_app_event(&mut rx) {
+        AppEvent::CodexOp(Op::RealtimeConversationToolCallComplete(params)) => {
+            assert_eq!(params.call_id, "settings-tool-list");
+            let output =
+                serde_json::from_str::<serde_json::Value>(&params.output_text).expect("json");
+            assert_eq!(output["status"], "ok");
+            assert_eq!(output["current_settings"]["model"], "gpt-5.2-codex");
+            assert_eq!(
+                output["possible_settings"]["keys"],
+                serde_json::json!([
+                    "model",
+                    "working_directory",
+                    "reasoning_effort",
+                    "fast_mode",
+                    "personality",
+                    "collaboration_mode",
+                ])
+            );
+            assert_eq!(
+                output["possible_settings"]["reasoning_effort_values"],
+                serde_json::json!([
+                    "default", "none", "minimal", "low", "medium", "high", "xhigh"
+                ])
+            );
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn realtime_run_tui_command_compact_emits_compact_and_tool_completion() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "rt-compact-1".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::ToolActionRequested(RealtimeToolActionRequested {
+                call_id: "compact-tool-1".to_string(),
+                action: RealtimeToolAction::RunTuiCommand {
+                    command: "compact".to_string(),
+                    prompt: None,
+                },
+            }),
+        }),
+    });
+
+    match next_app_event(&mut rx) {
+        AppEvent::CodexOp(Op::Compact) => {}
+        other => panic!("unexpected app event: {other:?}"),
+    }
+    match next_app_event(&mut rx) {
+        AppEvent::CodexOp(Op::RealtimeConversationToolCallComplete(params)) => {
+            assert_eq!(params.call_id, "compact-tool-1");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&params.output_text).expect("json"),
+                serde_json::json!({
+                    "status": "ok",
+                    "message": "Started compacting the current conversation.",
+                    "possible_commands": ["compact", "review", "plan", "diff", "agent"],
+                })
+            );
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn realtime_run_tui_command_review_emits_review_op_and_tool_completion() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "rt-review-1".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::ToolActionRequested(RealtimeToolActionRequested {
+                call_id: "review-tool-1".to_string(),
+                action: RealtimeToolAction::RunTuiCommand {
+                    command: "review".to_string(),
+                    prompt: Some("focus on risky changes".to_string()),
+                },
+            }),
+        }),
+    });
+
+    assert_eq!(
+        next_review_op(&mut op_rx),
+        ReviewRequest {
+            target: ReviewTarget::Custom {
+                instructions: "focus on risky changes".to_string(),
+            },
+            user_facing_hint: None,
+        }
+    );
+    let params = next_realtime_tool_call_complete(&mut rx);
+    assert_eq!(params.call_id, "review-tool-1");
+    let output = serde_json::from_str::<serde_json::Value>(&params.output_text).expect("json");
+    assert_eq!(output["status"], "ok");
+    assert_eq!(output["command"], "review");
+    assert_eq!(
+        output["possible_commands"],
+        serde_json::json!(["compact", "review", "plan", "diff", "agent"])
+    );
+}
+
+#[tokio::test]
+async fn realtime_run_tui_command_plan_switches_mode_and_queues_prompt() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+
+    chat.handle_codex_event(Event {
+        id: "rt-plan-1".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::ToolActionRequested(RealtimeToolActionRequested {
+                call_id: "plan-tool-1".to_string(),
+                action: RealtimeToolAction::RunTuiCommand {
+                    command: "plan".to_string(),
+                    prompt: Some("plan the migration".to_string()),
+                },
+            }),
+        }),
+    });
+
+    assert_eq!(chat.active_mode_kind(), ModeKind::Plan);
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages
+            .front()
+            .map(|message| message.text.as_str()),
+        Some("plan the migration")
+    );
+
+    let params = next_realtime_tool_call_complete(&mut rx);
+    assert_eq!(params.call_id, "plan-tool-1");
+    let output = serde_json::from_str::<serde_json::Value>(&params.output_text).expect("json");
+    assert_eq!(output["status"], "ok");
+    assert_eq!(output["command"], "plan");
+    assert_eq!(
+        output["message"],
+        "Switched to Plan mode and queued the plan request."
+    );
+}
+
+#[tokio::test]
+async fn realtime_run_tui_command_agent_opens_picker_and_completes_tool_call() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.handle_codex_event(Event {
+        id: "rt-agent-1".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::ToolActionRequested(RealtimeToolActionRequested {
+                call_id: "agent-tool-1".to_string(),
+                action: RealtimeToolAction::RunTuiCommand {
+                    command: "agent".to_string(),
+                    prompt: None,
+                },
+            }),
+        }),
+    });
+
+    match next_app_event(&mut rx) {
+        AppEvent::OpenAgentPicker => {}
+        other => panic!("unexpected app event: {other:?}"),
+    }
+    match next_app_event(&mut rx) {
+        AppEvent::CodexOp(Op::RealtimeConversationToolCallComplete(params)) => {
+            assert_eq!(params.call_id, "agent-tool-1");
+            let output =
+                serde_json::from_str::<serde_json::Value>(&params.output_text).expect("json");
+            assert_eq!(output["status"], "ok");
+            assert_eq!(output["command"], "agent");
+        }
+        other => panic!("unexpected app event: {other:?}"),
     }
 }
 

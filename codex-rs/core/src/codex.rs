@@ -2547,6 +2547,19 @@ impl Session {
         {
             debug!("failed to send final realtime handoff tool output: {err}");
         }
+        if let EventMsg::TurnAborted(event) = msg
+            && event.reason == TurnAbortReason::Interrupted
+            && let Some(call_id) = self.conversation.active_handoff_id().await
+            && let Err(err) = self
+                .conversation
+                .tool_call_complete(
+                    call_id,
+                    "Cancelled the current Codex operation.".to_string(),
+                )
+                .await
+        {
+            debug!("failed to send interrupted realtime handoff tool output: {err}");
+        }
         if matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
             self.conversation.clear_active_handoff().await;
         }
@@ -4070,6 +4083,23 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                 }
                 Op::RealtimeConversationClose => {
                     handle_realtime_conversation_close(&sess, sub.id.clone()).await;
+                    false
+                }
+                Op::RealtimeConversationToolCallComplete(params) => {
+                    if let Err(err) = sess
+                        .conversation
+                        .tool_call_complete(params.call_id, params.output_text)
+                        .await
+                    {
+                        sess.send_event_raw(Event {
+                            id: sub.id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: err.to_string(),
+                                codex_error_info: Some(CodexErrorInfo::Other),
+                            }),
+                        })
+                        .await;
+                    }
                     false
                 }
                 Op::OverrideTurnContext {

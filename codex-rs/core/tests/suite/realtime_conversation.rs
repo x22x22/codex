@@ -16,6 +16,7 @@ use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::SessionSource;
+use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
@@ -1321,6 +1322,134 @@ async fn conversation_handoff_persists_across_item_done_until_turn_complete() ->
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_interrupt_resolves_active_handoff() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let (_gate_completion_tx, gate_completion_rx) = oneshot::channel();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(responses::ev_response_created("resp-1")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(responses::ev_assistant_message(
+                "msg-1",
+                "assistant message 1",
+            )),
+        },
+        StreamingSseChunk {
+            gate: Some(gate_completion_rx),
+            body: sse_event(responses::ev_completed("resp-1")),
+        },
+    ];
+    let (api_server, _completions) = start_streaming_sse_server(vec![first_chunks]).await;
+
+    let realtime_server = start_websocket_server(vec![vec![
+        vec![
+            json!({
+                "type": "session.updated",
+                "session": { "id": "sess_interrupt", "instructions": "backend prompt" }
+            }),
+            realtime_handoff_requested_event("handoff_interrupt", "item_interrupt", "delegate now"),
+        ],
+        vec![realtime_interrupt_requested_event("cancel_1")],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    ]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build_with_streaming_server(&api_server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) if session_id == "sess_interrupt" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::HandoffRequested(handoff),
+        }) if handoff.handoff_id == "handoff_interrupt" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let first_append = realtime_server.wait_for_request(0, 1).await;
+    assert_eq!(
+        first_append.body_json()["type"].as_str(),
+        Some("conversation.item.create")
+    );
+    assert_eq!(
+        first_append.body_json()["item"]["type"].as_str(),
+        Some("message")
+    );
+    assert_eq!(
+        first_append.body_json()["item"]["role"].as_str(),
+        Some("assistant")
+    );
+    assert_eq!(
+        first_append.body_json()["item"]["content"][0]["text"].as_str(),
+        Some("assistant message 1")
+    );
+
+    let _ = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::TurnAborted(event) if event.reason == TurnAbortReason::Interrupted => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let cancel_output_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "cancel_current_operation tool output",
+        |request| {
+            request.body_json()["item"]["type"].as_str() == Some("function_call_output")
+                && request.body_json()["item"]["call_id"].as_str() == Some("cancel_1")
+        },
+    )
+    .await;
+    assert_eq!(
+        cancel_output_request.body_json()["item"]["output"].as_str(),
+        Some("{\"content\":\"Cancelled the current Codex operation.\"}")
+    );
+
+    let interrupted_handoff_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "interrupted realtime handoff tool output",
+        |request| {
+            request.body_json()["item"]["type"].as_str() == Some("function_call_output")
+                && request.body_json()["item"]["call_id"].as_str() == Some("handoff_interrupt")
+        },
+    )
+    .await;
+    assert_eq!(
+        interrupted_handoff_request.body_json()["item"]["output"].as_str(),
+        Some("{\"content\":\"Cancelled the current Codex operation.\"}")
+    );
+
+    realtime_server.shutdown().await;
+    api_server.shutdown().await;
+    Ok(())
+}
+
 fn sse_event(event: Value) -> String {
     responses::sse(vec![event])
 }
@@ -1336,6 +1465,23 @@ fn realtime_handoff_requested_event(handoff_id: &str, item_id: &str, prompt: &st
                     "name": "codex",
                     "call_id": handoff_id,
                     "arguments": json!({ "prompt": prompt, "send_immediately": true }).to_string(),
+                }
+            ]
+        }
+    })
+}
+
+fn realtime_interrupt_requested_event(call_id: &str) -> Value {
+    json!({
+        "type": "response.done",
+        "response": {
+            "output": [
+                {
+                    "id": "item_cancel",
+                    "type": "function_call",
+                    "name": "cancel_current_operation",
+                    "call_id": call_id,
+                    "arguments": "{}",
                 }
             ]
         }

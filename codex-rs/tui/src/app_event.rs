@@ -187,6 +187,9 @@ pub(crate) enum AppEvent {
     /// Update the current personality in the running app and widget.
     UpdatePersonality(Personality),
 
+    /// Update the app-level working directory state after the chat widget already applied it.
+    UpdateWorkingDirectory(PathBuf),
+
     /// Persist the selected model and reasoning effort to the appropriate config.
     PersistModelSelection {
         model: String,

@@ -2417,6 +2417,11 @@ impl App {
             AppEvent::UpdatePersonality(personality) => {
                 self.on_update_personality(personality);
             }
+            AppEvent::UpdateWorkingDirectory(cwd) => {
+                self.config.cwd = cwd.clone();
+                self.file_search.update_search_dir(cwd);
+                self.refresh_status_line();
+            }
             AppEvent::OpenRealtimeAudioDeviceSelection { kind } => {
                 self.chat_widget.open_realtime_audio_device_selection(kind);
             }

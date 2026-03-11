@@ -334,6 +334,21 @@ pub(crate) async fn apply_bespoke_event_handling(
                             .await;
                     }
                     RealtimeEvent::CloseRequested(_) => {}
+                    RealtimeEvent::ToolActionRequested(request) => {
+                        let notification = ThreadRealtimeItemAddedNotification {
+                            thread_id: conversation_id.to_string(),
+                            item: serde_json::json!({
+                                "type": "tool_action_request",
+                                "call_id": request.call_id,
+                                "action": request.action,
+                            }),
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                                notification,
+                            ))
+                            .await;
+                    }
                     RealtimeEvent::Error(message) => {
                         let notification = ThreadRealtimeErrorNotification {
                             thread_id: conversation_id.to_string(),

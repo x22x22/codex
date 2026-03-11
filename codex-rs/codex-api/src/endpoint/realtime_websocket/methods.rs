@@ -369,7 +369,7 @@ impl RealtimeWebsocketWriter {
 
     pub async fn send_session_update(&self, instructions: String) -> Result<(), ApiError> {
         self.send_json(RealtimeOutboundMessage::SessionUpdate {
-            session: SessionUpdateSession {
+            session: Box::new(SessionUpdateSession {
                 kind: "realtime".to_string(),
                 instructions,
                 output_modalities: vec!["audio".to_string()],
@@ -396,54 +396,161 @@ impl RealtimeWebsocketWriter {
                         voice: "marin".to_string(),
                     },
                 },
-                tools: vec![SessionTool {
-                    kind: "function".to_string(),
-                    name: "codex".to_string(),
-                    description:
-                        "Delegate a request to Codex and return the final result to the user."
-                            .to_string(),
-                    parameters: SessionToolParameters {
-                        kind: "object".to_string(),
-                        properties: BTreeMap::from([
-                            (
-                                "prompt".to_string(),
-                                SessionToolProperty {
-                                    kind: "string".to_string(),
-                                    description: "The user request to delegate to Codex."
-                                        .to_string(),
-                                },
-                            ),
-                            (
-                                "send_immediately".to_string(),
-                                SessionToolProperty {
-                                    kind: "boolean".to_string(),
-                                    description: "When true, send this to Codex immediately, steering any running turn. When false or omitted, queue it for the next turn.".to_string(),
-                                },
-                            ),
-                        ]),
-                        required: vec!["prompt".to_string()],
+                tools: vec![
+                    SessionTool {
+                        kind: "function".to_string(),
+                        name: "codex".to_string(),
+                        description:
+                            "Delegate a request to Codex and return the final result to the user."
+                                .to_string(),
+                        parameters: SessionToolParameters {
+                            kind: "object".to_string(),
+                            properties: BTreeMap::from([
+                                (
+                                    "prompt".to_string(),
+                                    SessionToolProperty {
+                                        kind: "string".to_string(),
+                                        description: "The user request to delegate to Codex."
+                                            .to_string(),
+                                    },
+                                ),
+                                (
+                                    "send_immediately".to_string(),
+                                    SessionToolProperty {
+                                        kind: "boolean".to_string(),
+                                        description: "When true, send this to Codex immediately, steering any running turn. When false or omitted, queue it for the next turn.".to_string(),
+                                    },
+                                ),
+                            ]),
+                            required: vec!["prompt".to_string()],
+                        },
                     },
-                }, SessionTool {
-                    kind: "function".to_string(),
-                    name: "cancel_current_operation".to_string(),
-                    description: "Cancel the current Codex operation, equivalent to pressing Ctrl-C without exiting Codex.".to_string(),
-                    parameters: SessionToolParameters {
-                        kind: "object".to_string(),
-                        properties: BTreeMap::new(),
-                        required: Vec::new(),
+                    SessionTool {
+                        kind: "function".to_string(),
+                        name: "cancel_current_operation".to_string(),
+                        description: "Cancel the current Codex operation, equivalent to pressing Ctrl-C without exiting Codex.".to_string(),
+                        parameters: SessionToolParameters {
+                            kind: "object".to_string(),
+                            properties: BTreeMap::new(),
+                            required: Vec::new(),
+                        },
                     },
-                }, SessionTool {
-                    kind: "function".to_string(),
-                    name: "turn_off_realtime_mode".to_string(),
-                    description: "Turn off realtime voice mode, equivalent to using /realtime to stop live voice.".to_string(),
-                    parameters: SessionToolParameters {
-                        kind: "object".to_string(),
-                        properties: BTreeMap::new(),
-                        required: Vec::new(),
+                    SessionTool {
+                        kind: "function".to_string(),
+                        name: "turn_off_realtime_mode".to_string(),
+                        description: "Turn off realtime voice mode, equivalent to using /realtime to stop live voice.".to_string(),
+                        parameters: SessionToolParameters {
+                            kind: "object".to_string(),
+                            properties: BTreeMap::new(),
+                            required: Vec::new(),
+                        },
                     },
-                }],
+                    SessionTool {
+                        kind: "function".to_string(),
+                        name: "manage_message_queue".to_string(),
+                        description: "Inspect or edit queued draft messages. Supported actions: list, replace_last, remove_last, clear. Queue editing affects queued draft messages only, not pending steers.".to_string(),
+                        parameters: SessionToolParameters {
+                            kind: "object".to_string(),
+                            properties: BTreeMap::from([
+                                (
+                                    "action".to_string(),
+                                    SessionToolProperty {
+                                        kind: "string".to_string(),
+                                        description: "Queue action to run. Use one of: list, replace_last, remove_last, clear.".to_string(),
+                                    },
+                                ),
+                                (
+                                    "message".to_string(),
+                                    SessionToolProperty {
+                                        kind: "string".to_string(),
+                                        description: "Replacement text for action=replace_last.".to_string(),
+                                    },
+                                ),
+                            ]),
+                            required: vec!["action".to_string()],
+                        },
+                    },
+                    SessionTool {
+                        kind: "function".to_string(),
+                        name: "manage_runtime_settings".to_string(),
+                        description: "Inspect or update runtime settings for future Codex turns. Call with no setting fields to list current settings, possible settings, and allowed values. Supported setting keys: model, working_directory, reasoning_effort, fast_mode, personality, collaboration_mode. Changes are not persisted to disk.".to_string(),
+                        parameters: SessionToolParameters {
+                            kind: "object".to_string(),
+                            properties: BTreeMap::from([
+                                (
+                                    "model".to_string(),
+                                    SessionToolProperty {
+                                        kind: "string".to_string(),
+                                        description: "Optional model slug to use for future Codex turns.".to_string(),
+                                    },
+                                ),
+                                (
+                                    "working_directory".to_string(),
+                                    SessionToolProperty {
+                                        kind: "string".to_string(),
+                                        description: "Optional working directory for future Codex turns. Relative paths are resolved against the current working directory.".to_string(),
+                                    },
+                                ),
+                                (
+                                    "reasoning_effort".to_string(),
+                                    SessionToolProperty {
+                                        kind: "string".to_string(),
+                                        description: "Optional reasoning effort. Supported values: default, minimal, low, medium, high, xhigh.".to_string(),
+                                    },
+                                ),
+                                (
+                                    "fast_mode".to_string(),
+                                    SessionToolProperty {
+                                        kind: "boolean".to_string(),
+                                        description: "Optional Fast mode toggle for future Codex turns.".to_string(),
+                                    },
+                                ),
+                                (
+                                    "personality".to_string(),
+                                    SessionToolProperty {
+                                        kind: "string".to_string(),
+                                        description: "Optional personality. Supported values: none, friendly, pragmatic.".to_string(),
+                                    },
+                                ),
+                                (
+                                    "collaboration_mode".to_string(),
+                                    SessionToolProperty {
+                                        kind: "string".to_string(),
+                                        description: "Optional collaboration mode. Supported values: default, plan.".to_string(),
+                                    },
+                                ),
+                            ]),
+                            required: Vec::new(),
+                        },
+                    },
+                    SessionTool {
+                        kind: "function".to_string(),
+                        name: "run_tui_command".to_string(),
+                        description: "Run a small set of built-in TUI actions. Supported commands: compact, review, plan, diff, agent. review can take an optional prompt for custom review instructions. plan can take an optional prompt to switch to Plan mode and submit work immediately.".to_string(),
+                        parameters: SessionToolParameters {
+                            kind: "object".to_string(),
+                            properties: BTreeMap::from([
+                                (
+                                    "command".to_string(),
+                                    SessionToolProperty {
+                                        kind: "string".to_string(),
+                                        description: "Built-in TUI command to run. Use one of: compact, review, plan, diff, agent.".to_string(),
+                                    },
+                                ),
+                                (
+                                    "prompt".to_string(),
+                                    SessionToolProperty {
+                                        kind: "string".to_string(),
+                                        description: "Optional text argument for command=review or command=plan.".to_string(),
+                                    },
+                                ),
+                            ]),
+                            required: vec!["command".to_string()],
+                        },
+                    },
+                ],
                 tool_choice: "auto".to_string(),
-            },
+            }),
         })
         .await
     }
@@ -552,6 +659,7 @@ impl RealtimeWebsocketEvents {
             | RealtimeEvent::ResponseCancelled(_)
             | RealtimeEvent::ConversationItemAdded(_)
             | RealtimeEvent::ConversationItemDone { .. }
+            | RealtimeEvent::ToolActionRequested(_)
             | RealtimeEvent::Error(_) => {}
         }
     }
@@ -748,6 +856,8 @@ mod tests {
     use crate::endpoint::realtime_websocket::protocol::RealtimeInterruptRequested;
     use crate::endpoint::realtime_websocket::protocol::RealtimeOutputAudioDelta;
     use crate::endpoint::realtime_websocket::protocol::RealtimeResponseCancelled;
+    use crate::endpoint::realtime_websocket::protocol::RealtimeToolAction;
+    use crate::endpoint::realtime_websocket::protocol::RealtimeToolActionRequested;
     use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
     use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
     use http::HeaderValue;
@@ -986,6 +1096,106 @@ mod tests {
             Some(RealtimeEvent::CloseRequested(RealtimeCloseRequested {
                 call_id: "close_123".to_string(),
             }))
+        );
+    }
+
+    #[test]
+    fn parse_manage_message_queue_requested_event() {
+        let payload = json!({
+            "type": "response.done",
+            "response": {
+                "output": [
+                    {
+                        "id": "item_queue",
+                        "type": "function_call",
+                        "name": "manage_message_queue",
+                        "call_id": "queue_123",
+                        "arguments": "{\"action\":\"list\"}"
+                    }
+                ]
+            }
+        })
+        .to_string();
+
+        assert_eq!(
+            parse_realtime_event(payload.as_str()),
+            Some(RealtimeEvent::ToolActionRequested(
+                RealtimeToolActionRequested {
+                    call_id: "queue_123".to_string(),
+                    action: RealtimeToolAction::ManageMessageQueue {
+                        action: "list".to_string(),
+                        message: None,
+                    },
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_manage_runtime_settings_requested_event() {
+        let payload = json!({
+            "type": "response.done",
+            "response": {
+                "output": [
+                    {
+                        "id": "item_settings",
+                        "type": "function_call",
+                        "name": "manage_runtime_settings",
+                        "call_id": "settings_123",
+                        "arguments": "{\"model\":\"gpt-5\",\"working_directory\":\"src\",\"reasoning_effort\":\"low\"}"
+                    }
+                ]
+            }
+        })
+        .to_string();
+
+        assert_eq!(
+            parse_realtime_event(payload.as_str()),
+            Some(RealtimeEvent::ToolActionRequested(
+                RealtimeToolActionRequested {
+                    call_id: "settings_123".to_string(),
+                    action: RealtimeToolAction::ManageRuntimeSettings {
+                        model: Some("gpt-5".to_string()),
+                        working_directory: Some("src".to_string()),
+                        reasoning_effort: Some("low".to_string()),
+                        fast_mode: None,
+                        personality: None,
+                        collaboration_mode: None,
+                    },
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_run_tui_command_requested_event() {
+        let payload = json!({
+            "type": "response.done",
+            "response": {
+                "output": [
+                    {
+                        "id": "item_command",
+                        "type": "function_call",
+                        "name": "run_tui_command",
+                        "call_id": "command_123",
+                        "arguments": "{\"command\":\"plan\",\"prompt\":\"make a plan\"}"
+                    }
+                ]
+            }
+        })
+        .to_string();
+
+        assert_eq!(
+            parse_realtime_event(payload.as_str()),
+            Some(RealtimeEvent::ToolActionRequested(
+                RealtimeToolActionRequested {
+                    call_id: "command_123".to_string(),
+                    action: RealtimeToolAction::RunTuiCommand {
+                        command: "plan".to_string(),
+                        prompt: Some("make a plan".to_string()),
+                    },
+                }
+            ))
         );
     }
 
@@ -1294,6 +1504,27 @@ mod tests {
             assert_eq!(
                 first_json["session"]["tools"][2]["parameters"]["properties"],
                 json!({})
+            );
+            assert_eq!(
+                first_json["session"]["tools"]
+                    .as_array()
+                    .expect("tools array")
+                    .iter()
+                    .map(|tool| tool["name"].as_str().expect("tool name"))
+                    .collect::<Vec<_>>(),
+                vec![
+                    "codex",
+                    "cancel_current_operation",
+                    "turn_off_realtime_mode",
+                    "manage_message_queue",
+                    "manage_runtime_settings",
+                    "run_tui_command",
+                ]
+            );
+            assert_eq!(
+                first_json["session"]["tools"][4]["parameters"]["properties"]["working_directory"]
+                    ["type"],
+                Value::String("string".to_string())
             );
 
             ws.send(Message::Text(

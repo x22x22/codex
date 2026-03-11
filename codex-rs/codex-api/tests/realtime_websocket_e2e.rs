@@ -161,6 +161,27 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
             first_json["session"]["tools"][1]["parameters"]["properties"],
             json!({})
         );
+        assert_eq!(
+            first_json["session"]["tools"]
+                .as_array()
+                .expect("tools array")
+                .iter()
+                .map(|tool| tool["name"].as_str().expect("tool name"))
+                .collect::<Vec<_>>(),
+            vec![
+                "codex",
+                "cancel_current_operation",
+                "turn_off_realtime_mode",
+                "manage_message_queue",
+                "manage_runtime_settings",
+                "run_tui_command",
+            ]
+        );
+        assert_eq!(
+            first_json["session"]["tools"][4]["parameters"]["properties"]["working_directory"]
+                ["type"],
+            Value::String("string".to_string())
+        );
 
         ws.send(Message::Text(
             json!({
