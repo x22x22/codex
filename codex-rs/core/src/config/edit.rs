@@ -46,7 +46,11 @@ pub enum ConfigEdit {
     /// Replace the entire `[mcp_servers]` table.
     ReplaceMcpServers(BTreeMap<String, McpServerConfig>),
     /// Set or clear a skill config entry under `[[skills.config]]`.
-    SetSkillConfig { path: PathBuf, enabled: bool },
+    SetSkillConfig {
+        path: PathBuf,
+        enabled: bool,
+        always_allow_permissions: Option<bool>,
+    },
     /// Set trust_level under `[projects."<path>"]`,
     /// migrating inline tables to explicit tables.
     SetProjectTrustLevel { path: PathBuf, level: TrustLevel },
@@ -371,9 +375,11 @@ impl ConfigDocument {
                 value(*acknowledged),
             )),
             ConfigEdit::ReplaceMcpServers(servers) => Ok(self.replace_mcp_servers(servers)),
-            ConfigEdit::SetSkillConfig { path, enabled } => {
-                Ok(self.set_skill_config(path.as_path(), *enabled))
-            }
+            ConfigEdit::SetSkillConfig {
+                path,
+                enabled,
+                always_allow_permissions,
+            } => Ok(self.set_skill_config(path.as_path(), *enabled, *always_allow_permissions)),
             ConfigEdit::SetPath { segments, value } => Ok(self.insert(segments, value.clone())),
             ConfigEdit::ClearPath { segments } => Ok(self.clear_owned(segments)),
             ConfigEdit::SetProjectTrustLevel { path, level } => {
@@ -463,7 +469,12 @@ impl ConfigDocument {
         true
     }
 
-    fn set_skill_config(&mut self, path: &Path, enabled: bool) -> bool {
+    fn set_skill_config(
+        &mut self,
+        path: &Path,
+        enabled: bool,
+        always_allow_permissions: Option<bool>,
+    ) -> bool {
         let normalized_path = normalize_skill_config_path(path);
         let mut remove_skills_table = false;
         let mut mutated = false;
@@ -473,7 +484,7 @@ impl ConfigDocument {
             let skills_item = match root.get_mut("skills") {
                 Some(item) => item,
                 None => {
-                    if enabled {
+                    if enabled && always_allow_permissions != Some(true) {
                         return false;
                     }
                     root.insert(
@@ -488,7 +499,7 @@ impl ConfigDocument {
             };
 
             if document_helpers::ensure_table_for_write(skills_item).is_none() {
-                if enabled {
+                if enabled && always_allow_permissions != Some(true) {
                     return false;
                 }
                 *skills_item = TomlItem::Table(document_helpers::new_implicit_table());
@@ -500,7 +511,7 @@ impl ConfigDocument {
             let config_item = match skills_table.get_mut("config") {
                 Some(item) => item,
                 None => {
-                    if enabled {
+                    if enabled && always_allow_permissions != Some(true) {
                         return false;
                     }
                     skills_table.insert("config", TomlItem::ArrayOfTables(ArrayOfTables::new()));
@@ -512,7 +523,7 @@ impl ConfigDocument {
             };
 
             if !matches!(config_item, TomlItem::ArrayOfTables(_)) {
-                if enabled {
+                if enabled && always_allow_permissions != Some(true) {
                     return false;
                 }
                 *config_item = TomlItem::ArrayOfTables(ArrayOfTables::new());
@@ -532,31 +543,44 @@ impl ConfigDocument {
                     .map(|_| idx)
             });
 
-            if enabled {
-                if let Some(index) = existing_index {
+            if let Some(index) = existing_index {
+                let existing_always_allow_permissions = overrides
+                    .get(index)
+                    .and_then(|table| table.get("always_allow_permissions"))
+                    .and_then(TomlItem::as_bool)
+                    .unwrap_or(false);
+                let effective_always_allow_permissions =
+                    always_allow_permissions.unwrap_or(existing_always_allow_permissions);
+                let remove_entry = enabled && !effective_always_allow_permissions;
+
+                if remove_entry {
                     overrides.remove(index);
                     mutated = true;
-                    if overrides.is_empty() {
-                        skills_table.remove("config");
-                        if skills_table.is_empty() {
-                            remove_skills_table = true;
-                        }
+                } else if let Some(table) = overrides.get_mut(index) {
+                    table["path"] = value(normalized_path);
+                    table["enabled"] = value(enabled);
+                    if effective_always_allow_permissions {
+                        table["always_allow_permissions"] = value(true);
+                    } else {
+                        table.remove("always_allow_permissions");
                     }
+                    mutated = true;
                 }
-            } else if let Some(index) = existing_index {
-                for (idx, table) in overrides.iter_mut().enumerate() {
-                    if idx == index {
-                        table["path"] = value(normalized_path);
-                        table["enabled"] = value(false);
-                        mutated = true;
-                        break;
+
+                if remove_entry && overrides.is_empty() {
+                    skills_table.remove("config");
+                    if skills_table.is_empty() {
+                        remove_skills_table = true;
                     }
                 }
             } else {
                 let mut entry = TomlTable::new();
                 entry.set_implicit(false);
                 entry["path"] = value(normalized_path);
-                entry["enabled"] = value(false);
+                entry["enabled"] = value(enabled);
+                if always_allow_permissions == Some(true) {
+                    entry["always_allow_permissions"] = value(true);
+                }
                 overrides.push(entry);
                 mutated = true;
             }
@@ -1031,6 +1055,7 @@ gpt-foo = 4
             .with_edits([ConfigEdit::SetSkillConfig {
                 path: PathBuf::from("/tmp/skills/demo/SKILL.md"),
                 enabled: false,
+                always_allow_permissions: None,
             }])
             .apply_blocking()
             .expect("persist");
@@ -1061,6 +1086,7 @@ enabled = false
             .with_edits([ConfigEdit::SetSkillConfig {
                 path: PathBuf::from("/tmp/skills/demo/SKILL.md"),
                 enabled: true,
+                always_allow_permissions: None,
             }])
             .apply_blocking()
             .expect("persist");
@@ -1068,6 +1094,63 @@ enabled = false
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents, "");
+    }
+
+    #[test]
+    fn set_skill_config_writes_always_allow_entry_for_enabled_skill() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        ConfigEditsBuilder::new(codex_home)
+            .with_edits([ConfigEdit::SetSkillConfig {
+                path: PathBuf::from("/tmp/skills/demo/SKILL.md"),
+                enabled: true,
+                always_allow_permissions: Some(true),
+            }])
+            .apply_blocking()
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[[skills.config]]
+path = "/tmp/skills/demo/SKILL.md"
+enabled = true
+always_allow_permissions = true
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[test]
+    fn set_skill_config_preserves_existing_always_allow_when_enabling() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+        std::fs::write(
+            codex_home.join(CONFIG_TOML_FILE),
+            r#"[[skills.config]]
+path = "/tmp/skills/demo/SKILL.md"
+enabled = false
+always_allow_permissions = true
+"#,
+        )
+        .expect("seed config");
+
+        ConfigEditsBuilder::new(codex_home)
+            .with_edits([ConfigEdit::SetSkillConfig {
+                path: PathBuf::from("/tmp/skills/demo/SKILL.md"),
+                enabled: true,
+                always_allow_permissions: None,
+            }])
+            .apply_blocking()
+            .expect("persist");
+
+        let contents =
+            std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let expected = r#"[[skills.config]]
+path = "/tmp/skills/demo/SKILL.md"
+enabled = true
+always_allow_permissions = true
+"#;
+        assert_eq!(contents, expected);
     }
 
     #[test]

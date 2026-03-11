@@ -3031,6 +3031,10 @@ pub enum ReviewDecision {
     /// User has approved this command and the agent should execute it.
     Approved,
 
+    /// User has approved this skill command and wants future prompts for the
+    /// same skill permissions to be automatically approved across sessions.
+    ApprovedForAlways,
+
     /// User has approved this command and wants to apply the proposed execpolicy
     /// amendment so future matching commands are permitted.
     ApprovedExecpolicyAmendment {
@@ -3064,6 +3068,7 @@ impl ReviewDecision {
     pub fn to_opaque_string(&self) -> &'static str {
         match self {
             ReviewDecision::Approved => "approved",
+            ReviewDecision::ApprovedForAlways => "approved_for_always",
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => "approved_with_amendment",
             ReviewDecision::ApprovedForSession => "approved_for_session",
             ReviewDecision::NetworkPolicyAmendment {

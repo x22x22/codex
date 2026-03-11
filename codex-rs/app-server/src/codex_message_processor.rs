@@ -5502,7 +5502,11 @@ impl CodexMessageProcessor {
         params: SkillsConfigWriteParams,
     ) {
         let SkillsConfigWriteParams { path, enabled } = params;
-        let edits = vec![ConfigEdit::SetSkillConfig { path, enabled }];
+        let edits = vec![ConfigEdit::SetSkillConfig {
+            path,
+            enabled,
+            always_allow_permissions: None,
+        }];
         let result = ConfigEditsBuilder::new(&self.config.codex_home)
             .with_edits(edits)
             .apply()

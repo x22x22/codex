@@ -211,10 +211,9 @@ pub(crate) fn bundled_skills_enabled_from_stack(
     skills.bundled.unwrap_or_default().enabled
 }
 
-fn disabled_paths_from_stack(
+fn skill_configs_from_stack(
     config_layer_stack: &crate::config_loader::ConfigLayerStack,
-) -> HashSet<PathBuf> {
-    let mut disabled = HashSet::new();
+) -> HashMap<PathBuf, crate::config::types::SkillConfig> {
     let mut configs = HashMap::new();
     for layer in
         config_layer_stack.get_layers(ConfigLayerStackOrdering::LowestPrecedenceFirst, true)
@@ -239,17 +238,31 @@ fn disabled_paths_from_stack(
 
         for entry in skills.config {
             let path = normalize_override_path(entry.path.as_path());
-            configs.insert(path, entry.enabled);
+            configs.insert(path, entry);
         }
     }
 
-    for (path, enabled) in configs {
-        if !enabled {
-            disabled.insert(path);
-        }
-    }
+    configs
+}
 
-    disabled
+fn disabled_paths_from_stack(
+    config_layer_stack: &crate::config_loader::ConfigLayerStack,
+) -> HashSet<PathBuf> {
+    skill_configs_from_stack(config_layer_stack)
+        .into_iter()
+        .filter_map(|(path, entry)| (!entry.enabled).then_some(path))
+        .collect()
+}
+
+fn always_allow_permission_paths_from_stack(
+    config_layer_stack: &crate::config_loader::ConfigLayerStack,
+) -> HashSet<PathBuf> {
+    skill_configs_from_stack(config_layer_stack)
+        .into_iter()
+        .filter_map(|(path, entry)| {
+            (entry.enabled && entry.always_allow_permissions).then_some(path)
+        })
+        .collect()
 }
 
 fn finalize_skill_outcome(
@@ -257,6 +270,8 @@ fn finalize_skill_outcome(
     config_layer_stack: &crate::config_loader::ConfigLayerStack,
 ) -> SkillLoadOutcome {
     outcome.disabled_paths = disabled_paths_from_stack(config_layer_stack);
+    outcome.always_allow_permissions_paths =
+        Arc::new(always_allow_permission_paths_from_stack(config_layer_stack));
     let (by_scripts_dir, by_doc_path) =
         build_implicit_skill_path_indexes(outcome.allowed_skills_for_implicit_invocation());
     outcome.implicit_skills_by_scripts_dir = Arc::new(by_scripts_dir);
@@ -636,6 +651,49 @@ enabled = false
 
         assert_eq!(
             disabled_paths_from_stack(&stack),
+            HashSet::from([skill_path])
+        );
+    }
+
+    #[cfg_attr(windows, ignore)]
+    #[test]
+    fn always_allow_permission_paths_from_stack_uses_highest_precedence_entry() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let skill_path = tempdir.path().join("skills").join("demo").join("SKILL.md");
+        let user_file = AbsolutePathBuf::try_from(tempdir.path().join("config.toml"))
+            .expect("user config path should be absolute");
+        let user_layer = ConfigLayerEntry::new(
+            ConfigLayerSource::User { file: user_file },
+            toml::from_str(&format!(
+                r#"[[skills.config]]
+path = "{}"
+enabled = true
+"#,
+                skill_path.display()
+            ))
+            .expect("user layer toml"),
+        );
+        let session_layer = ConfigLayerEntry::new(
+            ConfigLayerSource::SessionFlags,
+            toml::from_str(&format!(
+                r#"[[skills.config]]
+path = "{}"
+enabled = true
+always_allow_permissions = true
+"#,
+                skill_path.display()
+            ))
+            .expect("session layer toml"),
+        );
+        let stack = ConfigLayerStack::new(
+            vec![user_layer, session_layer],
+            Default::default(),
+            ConfigRequirementsToml::default(),
+        )
+        .expect("valid config layer stack");
+
+        assert_eq!(
+            always_allow_permission_paths_from_stack(&stack),
             HashSet::from([skill_path])
         );
     }

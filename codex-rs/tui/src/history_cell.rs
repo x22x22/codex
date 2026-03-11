@@ -806,6 +806,19 @@ pub fn new_approval_decision_cell(
                 ],
             )
         }
+        ApprovedForAlways => {
+            let snippet = Span::from(exec_snippet(&command)).dim();
+            (
+                "✔ ".green(),
+                vec![
+                    "You ".into(),
+                    "approved".bold(),
+                    " codex to always run ".into(),
+                    snippet,
+                    " with this skill's permissions".bold(),
+                ],
+            )
+        }
         ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } => {
@@ -2552,6 +2565,24 @@ mod tests {
         let cell = new_unified_exec_interaction(None, String::new());
         let lines = render_transcript(&cell);
         assert_eq!(lines, vec!["• Waited for background terminal"]);
+    }
+
+    #[test]
+    fn approval_decision_cell_renders_skill_permission_persistence() {
+        let cell = new_approval_decision_cell(
+            vec!["cat".to_string(), "/tmp/readme.txt".to_string()],
+            codex_protocol::protocol::ReviewDecision::ApprovedForAlways,
+        );
+        let lines = render_lines(&cell.display_lines(80));
+
+        assert_eq!(
+            lines,
+            vec![
+                "✔ You approved codex to always run cat /tmp/readme.txt with this skill's"
+                    .to_string(),
+                "  permissions".to_string(),
+            ]
+        );
     }
 
     #[test]

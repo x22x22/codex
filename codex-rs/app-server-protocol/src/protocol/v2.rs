@@ -876,6 +876,9 @@ pub struct ConfigEdit {
 pub enum CommandExecutionApprovalDecision {
     /// User approved the command.
     Accept,
+    /// User approved the command and wants future prompts for the same skill
+    /// permissions to run without prompting.
+    AcceptForAlways,
     /// User approved the command and future prompts in the same session-scoped
     /// approval cache should run without prompting.
     AcceptForSession,
@@ -898,6 +901,7 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
     fn from(value: CoreReviewDecision) -> Self {
         match value {
             CoreReviewDecision::Approved => Self::Accept,
+            CoreReviewDecision::ApprovedForAlways => Self::AcceptForAlways,
             CoreReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment,
             } => Self::AcceptWithExecpolicyAmendment {

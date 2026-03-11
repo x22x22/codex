@@ -158,6 +158,8 @@ use crate::config::Constrained;
 use crate::config::ConstraintResult;
 use crate::config::GhostSnapshotConfig;
 use crate::config::StartedNetworkProxy;
+use crate::config::edit::ConfigEdit;
+use crate::config::edit::ConfigEditsBuilder;
 use crate::config::resolve_web_search_mode_for_turn;
 use crate::config::types::McpServerConfig;
 use crate::config::types::ShellEnvironmentPolicy;
@@ -303,6 +305,7 @@ use crate::turn_timing::record_turn_ttft_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
+use anyhow::Context;
 use codex_async_utils::OrCancelExt;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
@@ -2469,6 +2472,36 @@ impl Session {
         self.services.plugins_manager.clear_cache();
     }
 
+    pub(crate) async fn persist_skill_permission_profile(
+        &self,
+        skill: &SkillMetadata,
+    ) -> anyhow::Result<()> {
+        if skill
+            .permission_profile
+            .as_ref()
+            .is_none_or(PermissionProfile::is_empty)
+        {
+            anyhow::bail!("skill permissions must be present before persisting approval");
+        }
+
+        let codex_home = {
+            let state = self.state.lock().await;
+            state.session_configuration.codex_home.clone()
+        };
+
+        ConfigEditsBuilder::new(&codex_home)
+            .with_edits([ConfigEdit::SetSkillConfig {
+                path: skill.path_to_skills_md.clone(),
+                enabled: true,
+                always_allow_permissions: Some(true),
+            }])
+            .apply()
+            .await
+            .context("persist skill permissions to config.toml")?;
+        self.reload_user_config_layer().await;
+        Ok(())
+    }
+
     pub(crate) async fn new_default_turn_with_sub_id(&self, sub_id: String) -> Arc<TurnContext> {
         let session_configuration = {
             let state = self.state.lock().await;
@@ -2838,6 +2871,7 @@ impl Session {
                 proposed_execpolicy_amendment.as_ref(),
                 proposed_network_policy_amendments.as_deref(),
                 additional_permissions.as_ref(),
+                skill_metadata.as_ref(),
             )
         });
         let event = EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {

@@ -99,7 +99,10 @@ where
         ],
     );
 
-    if matches!(decision, ReviewDecision::ApprovedForSession) {
+    if matches!(
+        decision,
+        ReviewDecision::ApprovedForSession | ReviewDecision::ApprovedForAlways
+    ) {
         let mut store = services.tool_approvals.lock().await;
         for key in keys {
             store.put(key, ReviewDecision::ApprovedForSession);

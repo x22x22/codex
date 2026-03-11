@@ -34,6 +34,13 @@
           "type": "string"
         },
         {
+          "description": "User has approved this skill command and wants future prompts for the same skill permissions to be automatically approved across sessions.",
+          "enum": [
+            "approved_for_always"
+          ],
+          "type": "string"
+        },
+        {
           "additionalProperties": false,
           "description": "User has approved this command and wants to apply the proposed execpolicy amendment so future matching commands are permitted.",
           "properties": {

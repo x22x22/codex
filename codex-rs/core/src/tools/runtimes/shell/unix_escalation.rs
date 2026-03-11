@@ -399,12 +399,22 @@ impl CoreShellActionProvider {
                     )
                     .await;
                 }
+                let can_persist_skill_permissions =
+                    matches!(decision_source, DecisionSource::SkillScript { .. })
+                        && additional_permissions
+                            .as_ref()
+                            .is_some_and(|permissions| !permissions.is_empty());
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),
                     // Currently, ApprovedForSession is only honored for skills,
                     // so only offer it for skill script approvals.
                     if matches!(decision_source, DecisionSource::SkillScript { .. }) {
                         Some(ReviewDecision::ApprovedForSession)
+                    } else {
+                        None
+                    },
+                    if can_persist_skill_permissions {
+                        Some(ReviewDecision::ApprovedForAlways)
                     } else {
                         None
                     },
@@ -438,6 +448,49 @@ impl CoreShellActionProvider {
                     .await
             })
             .await)
+    }
+
+    async fn remember_skill_session_approval(
+        &self,
+        program: &AbsolutePathBuf,
+        skill: &SkillMetadata,
+    ) {
+        tracing::debug!(
+            "Adding session approval for {program:?} due to user approval of skill script {skill:?}"
+        );
+        self.session
+            .services
+            .execve_session_approvals
+            .write()
+            .await
+            .insert(
+                program.clone(),
+                ExecveSessionApproval {
+                    skill: Some(skill.clone()),
+                },
+            );
+    }
+
+    fn always_allow_skill_permissions(&self, skill: &SkillMetadata) -> bool {
+        if self
+            .turn
+            .turn_skills
+            .outcome
+            .always_allow_permissions_paths
+            .contains(&skill.path_to_skills_md)
+        {
+            return true;
+        }
+
+        dunce::canonicalize(&skill.path_to_skills_md)
+            .ok()
+            .is_some_and(|path| {
+                self.turn
+                    .turn_skills
+                    .outcome
+                    .always_allow_permissions_paths
+                    .contains(&path)
+            })
     }
 
     /// Because we should be intercepting execve(2) calls, `program` should be
@@ -497,7 +550,7 @@ impl CoreShellActionProvider {
                             argv,
                             workdir,
                             &self.stopwatch,
-                            prompt_permissions,
+                            prompt_permissions.clone(),
                             &decision_source,
                         )
                         .await?
@@ -515,20 +568,29 @@ impl CoreShellActionProvider {
                             // skill scripts because we are storing only the
                             // `program` whereas prefix rules may be restricted by a longer prefix.
                             if let DecisionSource::SkillScript { skill } = decision_source {
-                                tracing::debug!(
-                                    "Adding session approval for {program:?} due to user approval of skill script {skill:?}"
-                                );
-                                self.session
-                                    .services
-                                    .execve_session_approvals
-                                    .write()
-                                    .await
-                                    .insert(
-                                        program.clone(),
-                                        ExecveSessionApproval {
-                                            skill: Some(skill.clone()),
-                                        },
+                                self.remember_skill_session_approval(program, &skill).await;
+                            }
+
+                            if needs_escalation {
+                                EscalationDecision::escalate(escalation_execution.clone())
+                            } else {
+                                EscalationDecision::run()
+                            }
+                        }
+                        ReviewDecision::ApprovedForAlways => {
+                            if let DecisionSource::SkillScript { skill } = decision_source {
+                                if prompt_permissions.is_some()
+                                    && let Err(err) =
+                                        self.session.persist_skill_permission_profile(&skill).await
+                                {
+                                    tracing::error!(
+                                        error = %err,
+                                        skill = %skill.name,
+                                        path = %skill.path_to_skills_md.display(),
+                                        "failed to persist skill permission approval"
                                     );
+                                }
+                                self.remember_skill_session_approval(program, &skill).await;
                             }
 
                             if needs_escalation {
@@ -635,6 +697,14 @@ impl EscalationPolicy for CoreShellActionProvider {
                 );
                 return Ok(EscalationDecision::escalate(
                     EscalationExecution::TurnDefault,
+                ));
+            }
+            if self.always_allow_skill_permissions(&skill) {
+                tracing::debug!(
+                    "Matched {program:?} to skill {skill:?} with persisted always-allow approval, allowing execution without prompt"
+                );
+                return Ok(EscalationDecision::escalate(
+                    Self::skill_escalation_execution(&skill),
                 ));
             }
             tracing::debug!("Matched {program:?} to skill {skill:?}, prompting for approval");

@@ -3139,6 +3139,7 @@ impl App {
                 let edits = [ConfigEdit::SetSkillConfig {
                     path: path.clone(),
                     enabled,
+                    always_allow_permissions: None,
                 }];
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits(edits)

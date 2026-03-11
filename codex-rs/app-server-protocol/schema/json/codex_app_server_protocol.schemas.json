@@ -1614,6 +1614,13 @@
           "type": "string"
         },
         {
+          "description": "User approved the command and wants future prompts for the same skill permissions to run without prompting.",
+          "enum": [
+            "acceptForAlways"
+          ],
+          "type": "string"
+        },
+        {
           "description": "User approved the command and future prompts in the same session-scoped approval cache should run without prompting.",
           "enum": [
             "acceptForSession"
@@ -6977,6 +6984,13 @@
           "description": "User has approved this command and the agent should execute it.",
           "enum": [
             "approved"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "User has approved this skill command and wants future prompts for the same skill permissions to be automatically approved across sessions.",
+          "enum": [
+            "approved_for_always"
           ],
           "type": "string"
         },

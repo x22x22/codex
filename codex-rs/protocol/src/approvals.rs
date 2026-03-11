@@ -166,6 +166,7 @@ impl ExecApprovalRequestEvent {
                 self.proposed_execpolicy_amendment.as_ref(),
                 self.proposed_network_policy_amendments.as_deref(),
                 self.additional_permissions.as_ref(),
+                self.skill_metadata.as_ref(),
             ),
         }
     }
@@ -175,6 +176,7 @@ impl ExecApprovalRequestEvent {
         proposed_execpolicy_amendment: Option<&ExecPolicyAmendment>,
         proposed_network_policy_amendments: Option<&[NetworkPolicyAmendment]>,
         additional_permissions: Option<&PermissionProfile>,
+        skill_metadata: Option<&ExecApprovalRequestSkillMetadata>,
     ) -> Vec<ReviewDecision> {
         if network_approval_context.is_some() {
             let mut decisions = vec![ReviewDecision::Approved, ReviewDecision::ApprovedForSession];
@@ -192,7 +194,13 @@ impl ExecApprovalRequestEvent {
         }
 
         if additional_permissions.is_some() {
-            return vec![ReviewDecision::Approved, ReviewDecision::Abort];
+            let mut decisions = vec![ReviewDecision::Approved];
+            if skill_metadata.is_some() {
+                decisions.push(ReviewDecision::ApprovedForSession);
+                decisions.push(ReviewDecision::ApprovedForAlways);
+            }
+            decisions.push(ReviewDecision::Abort);
+            return decisions;
         }
 
         let mut decisions = vec![ReviewDecision::Approved];
@@ -270,4 +278,45 @@ pub struct ApplyPatchApprovalRequestEvent {
     /// When set, the agent is asking the user to allow writes under this root for the remainder of the session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_root: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn default_available_decisions_only_offer_always_for_skill_permissions() {
+        let permissions = PermissionProfile::default();
+
+        assert_eq!(
+            ExecApprovalRequestEvent::default_available_decisions(
+                None,
+                None,
+                None,
+                Some(&permissions),
+                None,
+            ),
+            vec![ReviewDecision::Approved, ReviewDecision::Abort]
+        );
+
+        assert_eq!(
+            ExecApprovalRequestEvent::default_available_decisions(
+                None,
+                None,
+                None,
+                Some(&permissions),
+                Some(&ExecApprovalRequestSkillMetadata {
+                    path_to_skills_md: PathBuf::from("/tmp/skills/demo/SKILL.md"),
+                }),
+            ),
+            vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::ApprovedForAlways,
+                ReviewDecision::Abort,
+            ]
+        );
+    }
 }

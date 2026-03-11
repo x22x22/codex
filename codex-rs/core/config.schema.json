@@ -1457,6 +1457,9 @@
     "SkillConfig": {
       "additionalProperties": false,
       "properties": {
+        "always_allow_permissions": {
+          "type": "boolean"
+        },
         "enabled": {
           "type": "boolean"
         },

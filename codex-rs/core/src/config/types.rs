@@ -773,6 +773,8 @@ impl Notice {
 pub struct SkillConfig {
     pub path: AbsolutePathBuf,
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub always_allow_permissions: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]

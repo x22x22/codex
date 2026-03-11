@@ -278,12 +278,17 @@ impl ApprovalOverlay {
             return;
         };
         let granted_permissions = match decision {
-            ReviewDecision::Approved | ReviewDecision::ApprovedForSession => permissions.clone(),
+            ReviewDecision::Approved
+            | ReviewDecision::ApprovedForAlways
+            | ReviewDecision::ApprovedForSession => permissions.clone(),
             ReviewDecision::Denied | ReviewDecision::Abort => Default::default(),
             ReviewDecision::ApprovedExecpolicyAmendment { .. }
             | ReviewDecision::NetworkPolicyAmendment { .. } => Default::default(),
         };
-        let scope = if matches!(decision, ReviewDecision::ApprovedForSession) {
+        let scope = if matches!(
+            decision,
+            ReviewDecision::ApprovedForAlways | ReviewDecision::ApprovedForSession
+        ) {
             PermissionGrantScope::Session
         } else {
             PermissionGrantScope::Turn
@@ -702,6 +707,12 @@ fn exec_options(
                 decision: ApprovalDecision::Review(ReviewDecision::ApprovedForSession),
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
+            }),
+            ReviewDecision::ApprovedForAlways => Some(ApprovalOption {
+                label: "Yes, and always allow these permissions for this skill".to_string(),
+                decision: ApprovalDecision::Review(ReviewDecision::ApprovedForAlways),
+                display_shortcut: None,
+                additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
             }),
             ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment,
@@ -1225,6 +1236,38 @@ mod tests {
     }
 
     #[test]
+    fn additional_permissions_exec_options_can_offer_allow_for_always() {
+        let additional_permissions = PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![absolute_path("/tmp/readme.txt")]),
+                write: Some(vec![absolute_path("/tmp/out.txt")]),
+            }),
+            ..Default::default()
+        };
+        let options = exec_options(
+            &[
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::ApprovedForAlways,
+                ReviewDecision::Abort,
+            ],
+            None,
+            Some(&additional_permissions),
+        );
+
+        let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Yes, proceed".to_string(),
+                "Yes, and allow these permissions for this session".to_string(),
+                "Yes, and always allow these permissions for this skill".to_string(),
+                "No, and tell Codex what to do differently".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn additional_permissions_exec_options_hide_execpolicy_amendment() {
         let additional_permissions = PermissionProfile {
             file_system: Some(FileSystemPermissions {
@@ -1350,7 +1393,12 @@ mod tests {
             id: "test".into(),
             command: vec!["cat".into(), "/tmp/readme.txt".into()],
             reason: Some("need filesystem access".into()),
-            available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
+            available_decisions: vec![
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::ApprovedForAlways,
+                ReviewDecision::Abort,
+            ],
             network_approval_context: None,
             additional_permissions: Some(PermissionProfile {
                 network: Some(NetworkPermissions {
