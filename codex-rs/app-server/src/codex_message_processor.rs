@@ -3926,7 +3926,7 @@ impl CodexMessageProcessor {
                 return;
             }
         };
-        self.sync_registered_dynamic_tools_for_thread(thread.as_ref())
+        self.sync_registered_dynamic_tools_for_thread(forked_thread.as_ref())
             .await;
 
         // Auto-attach a conversation listener when forking a thread.

@@ -3,7 +3,6 @@ use super::connection_handling_websocket::connect_websocket;
 use super::connection_handling_websocket::create_config_toml;
 use super::connection_handling_websocket::read_jsonrpc_message;
 use super::connection_handling_websocket::read_response_for_id;
-use super::connection_handling_websocket::reserve_local_addr;
 use super::connection_handling_websocket::send_initialize_request;
 use super::connection_handling_websocket::send_request;
 use super::connection_handling_websocket::spawn_websocket_server;
@@ -57,8 +56,7 @@ async fn websocket_tool_provider_routes_dynamic_tool_calls_to_owner_connection()
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
 
-    let bind_addr = reserve_local_addr()?;
-    let mut process = spawn_websocket_server(codex_home.path(), bind_addr).await?;
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
 
     let test_result = async {
         let mut provider = connect_websocket(bind_addr).await?;
@@ -237,8 +235,7 @@ async fn websocket_tool_provider_disconnect_fails_in_flight_request_after_grace_
     let codex_home = TempDir::new()?;
     create_config_toml(codex_home.path(), &server.uri(), "never")?;
 
-    let bind_addr = reserve_local_addr()?;
-    let mut process = spawn_websocket_server(codex_home.path(), bind_addr).await?;
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
 
     let test_result = async {
         let mut provider = connect_websocket(bind_addr).await?;
