@@ -72,6 +72,13 @@ impl AnyToolResult {
         } = self;
         result.to_response_item(&call_id, &payload)
     }
+
+    pub(crate) fn code_mode_result(self) -> serde_json::Value {
+        let Self {
+            payload, result, ..
+        } = self;
+        result.code_mode_result(&payload)
+    }
 }
 
 #[async_trait]

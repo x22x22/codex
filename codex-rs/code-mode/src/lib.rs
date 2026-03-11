@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
@@ -13,8 +15,17 @@ pub enum ToolKind {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct EnabledTool {
+    pub tool_name: String,
+    pub namespace: Vec<String>,
     pub name: String,
     pub kind: ToolKind,
+}
+
+#[derive(Debug)]
+pub struct ExecutionResult {
+    pub content_items: Vec<JsonValue>,
+    pub stored_values: HashMap<String, JsonValue>,
+    pub max_output_tokens_per_exec_call: usize,
 }
 
 const MUSL_UNSUPPORTED_REASON: &str = "code_mode is unavailable on musl Linux";
@@ -41,10 +52,12 @@ pub use imp::execute;
 pub fn execute(
     code: String,
     enabled_tools: Vec<EnabledTool>,
+    stored_values: HashMap<String, JsonValue>,
     on_tool_call: Box<ToolCallHandler>,
-) -> Result<Vec<JsonValue>, String> {
+) -> Result<ExecutionResult, String> {
     let _ = code;
     let _ = enabled_tools;
+    let _ = stored_values;
     let _ = on_tool_call;
     Err(MUSL_UNSUPPORTED_REASON.to_string())
 }
