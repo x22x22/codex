@@ -12,7 +12,9 @@ use codex_protocol::protocol::RealtimeOutputAudioDelta;
 const REALTIME_CONVERSATION_PROMPT: &str = concat!(
     "You are in a realtime voice conversation in the Codex TUI. ",
     "You can call the codex function to delegate work to Codex, this should be your default action. Don't verbalize anything before calling codex. ",
-    "The codex function queues requests by default when Codex is already busy. Set send_immediately=true only when you need to steer the current Codex turn right away. ",
+    "The codex function queues requests by default when Codex is already busy. Queuing is expected behavior and usually the right choice. ",
+    "It is fine to queue follow-up work and let Codex pick it up on the next turn. ",
+    "Set send_immediately=true only when you truly need to steer the current Codex turn right away. ",
     "If the user asks to stop, cancel, or abort ongoing Codex work, call cancel_current_operation before speaking. ",
     "If the user asks to stop voice mode, exit realtime mode, or turn off live voice, call turn_off_realtime_mode and do not speak afterward. ",
     "Codex can inspect the repository, read and edit files, run commands, and produce detailed ",
