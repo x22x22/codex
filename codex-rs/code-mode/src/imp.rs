@@ -198,7 +198,7 @@ fn create_tools_module<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     enabled_tools: &[EnabledTool],
 ) -> Result<v8::Local<'s, v8::Module>, String> {
-    let mut export_names = vec![v8_string(scope, "tools")?];
+    let mut export_names = vec![v8_string(scope, "tools")?, v8_string(scope, "ALL_TOOLS")?];
     for tool in enabled_tools {
         if tool.tool_name != "tools" && is_valid_identifier(&tool.tool_name) {
             export_names.push(v8_string(scope, &tool.tool_name)?);
@@ -229,6 +229,13 @@ fn evaluate_tools_module<'s>(
         return throw_v8_exception(scope, "code_mode tools namespace is not an object");
     };
     module.set_synthetic_module_export(scope, global_name, tools_object.into())?;
+    let Some(all_tools_name) = v8::String::new(scope, "ALL_TOOLS") else {
+        return throw_v8_exception(scope, "failed to allocate ALL_TOOLS export name");
+    };
+    let Some(all_tools_value) = global.get(scope, all_tools_name.into()) else {
+        return throw_v8_exception(scope, "code_mode ALL_TOOLS export is unavailable");
+    };
+    module.set_synthetic_module_export(scope, all_tools_name, all_tools_value)?;
 
     let enabled_tools = match scope.get_slot::<RuntimeState>() {
         Some(runtime_state) => runtime_state.enabled_tools.clone(),

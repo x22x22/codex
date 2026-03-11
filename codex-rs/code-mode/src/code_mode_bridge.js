@@ -1,5 +1,15 @@
 const __codexEnabledTools = __CODE_MODE_ENABLED_TOOLS_PLACEHOLDER__;
 const __codexEnabledToolNames = __codexEnabledTools.map((tool) => tool.tool_name);
+const __codexAllTools = Object.freeze(
+  __codexEnabledTools.map((tool) =>
+    Object.freeze({
+      module: tool.module,
+      name: tool.name,
+      description: tool.description,
+    }),
+  ),
+);
+const __codexTools = Object.create(null);
 const __codexContentItems = Array.isArray(globalThis.__codexContentItems)
   ? globalThis.__codexContentItems
   : [];
@@ -87,6 +97,12 @@ Object.defineProperty(globalThis, '__codexStoredValues', {
   enumerable: false,
   writable: false,
 });
+Object.defineProperty(globalThis, 'ALL_TOOLS', {
+  value: __codexAllTools,
+  configurable: true,
+  enumerable: false,
+  writable: false,
+});
 
 globalThis.codex = {
   enabledTools: Object.freeze(__codexEnabledToolNames.slice()),
@@ -135,13 +151,6 @@ globalThis.__codex_set_max_output_tokens_per_exec_call = (value) => {
   return __codex_set_max_output_tokens_per_exec_call_native(value);
 };
 
-globalThis.tools = new Proxy(Object.create(null), {
-  get(_target, prop) {
-    const name = String(prop);
-    return async (args) => __codex_tool_call(name, args);
-  },
-});
-
 globalThis.console = Object.freeze({
   log() {},
   info() {},
@@ -151,12 +160,25 @@ globalThis.console = Object.freeze({
 });
 
 for (const name of __codexEnabledToolNames) {
-  if (/^[A-Za-z_$][0-9A-Za-z_$]*$/.test(name) && !(name in globalThis)) {
+  Object.defineProperty(__codexTools, name, {
+    value: async (args) => __codex_tool_call(name, args),
+    configurable: false,
+    enumerable: true,
+    writable: false,
+  });
+  if (!(name in globalThis)) {
     Object.defineProperty(globalThis, name, {
-      value: async (args) => __codex_tool_call(name, args),
+      value: __codexTools[name],
       configurable: true,
       enumerable: false,
       writable: false,
     });
   }
 }
+
+Object.defineProperty(globalThis, 'tools', {
+  value: Object.freeze(__codexTools),
+  configurable: true,
+  enumerable: false,
+  writable: false,
+});

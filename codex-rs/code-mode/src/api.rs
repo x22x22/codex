@@ -16,8 +16,11 @@ pub enum ToolKind {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct EnabledTool {
     pub tool_name: String,
+    #[serde(rename = "module")]
+    pub module_path: String,
     pub namespace: Vec<String>,
     pub name: String,
+    pub description: String,
     pub kind: ToolKind,
 }
 
