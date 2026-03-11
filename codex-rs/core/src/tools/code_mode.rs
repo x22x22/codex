@@ -24,6 +24,8 @@ use serde_json::Value as JsonValue;
 use tokio::runtime::Handle;
 use tokio::runtime::RuntimeFlavor;
 
+pub(crate) const PUBLIC_TOOL_NAME: &str = "exec";
+
 #[derive(Clone)]
 struct ExecContext {
     session: Arc<Session>,
@@ -36,12 +38,20 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
         return None;
     }
 
-    let mut section = String::from("## Code Mode\n");
-    section.push_str("- Use `code_mode` for JavaScript execution in an embedded V8 runtime.\n");
-    section.push_str("- `code_mode` is a freeform/custom tool. Direct `code_mode` calls must send raw JavaScript tool input. Do not wrap code in JSON, quotes, or markdown code fences.\n");
-    section.push_str("- Direct tool calls remain available while `code_mode` is enabled.\n");
+    let mut section = String::from("## Exec\n");
+    section.push_str(&format!(
+        "- Use `{PUBLIC_TOOL_NAME}` for JavaScript execution in an embedded V8 runtime.\n",
+    ));
+    section.push_str(&format!(
+        "- `{PUBLIC_TOOL_NAME}` is a freeform/custom tool. Direct `{PUBLIC_TOOL_NAME}` calls must send raw JavaScript tool input. Do not wrap code in JSON, quotes, or markdown code fences.\n",
+    ));
+    section.push_str(&format!(
+        "- Direct tool calls remain available while `{PUBLIC_TOOL_NAME}` is enabled.\n",
+    ));
     section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
-    section.push_str("- Import `{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `code_mode` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `code_mode` execution; the default is `10000`. This guards the overall `code_mode` output, not individual nested tool invocations. When truncation happens, the final text uses the unified-exec style `Original token count:` / `Output:` wrapper and the usual `…N tokens truncated…` marker.\n");
+    section.push_str(&format!(
+        "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution; the default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. When truncation happens, the final text uses the unified-exec style `Original token count:` / `Output:` wrapper and the usual `…N tokens truncated…` marker.\n",
+    ));
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
     );
@@ -135,7 +145,7 @@ async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
     let mut out = Vec::new();
     for spec in router.specs() {
         let tool_name = spec.name().to_string();
-        if tool_name == "code_mode" {
+        if tool_name == PUBLIC_TOOL_NAME {
             continue;
         }
 
@@ -188,10 +198,12 @@ fn run_tool_call(
         RuntimeFlavor::MultiThread => tokio::task::block_in_place(|| {
             Handle::current().block_on(call_nested_tool(exec.clone(), tool_name, input))
         }),
-        RuntimeFlavor::CurrentThread => {
-            Err("code_mode tool calls require a multi-thread Tokio runtime".to_string())
-        }
-        _ => Err("code_mode tool calls require a supported Tokio runtime".to_string()),
+        RuntimeFlavor::CurrentThread => Err(format!(
+            "{PUBLIC_TOOL_NAME} tool calls require a multi-thread Tokio runtime"
+        )),
+        _ => Err(format!(
+            "{PUBLIC_TOOL_NAME} tool calls require a supported Tokio runtime"
+        )),
     }
 }
 
@@ -200,10 +212,10 @@ async fn call_nested_tool(
     tool_name: String,
     input: Option<JsonValue>,
 ) -> Result<JsonValue, String> {
-    if tool_name == "code_mode" {
-        return Ok(JsonValue::String(
-            "code_mode cannot invoke itself".to_string(),
-        ));
+    if tool_name == PUBLIC_TOOL_NAME {
+        return Ok(JsonValue::String(format!(
+            "{PUBLIC_TOOL_NAME} cannot invoke itself"
+        )));
     }
 
     let router = build_nested_router(&exec).await;
@@ -220,7 +232,7 @@ async fn call_nested_tool(
 
     let call = ToolCall {
         tool_name: tool_name.clone(),
-        call_id: format!("code_mode-{}", uuid::Uuid::new_v4()),
+        call_id: format!("{PUBLIC_TOOL_NAME}-{}", uuid::Uuid::new_v4()),
         payload,
     };
     let result = router
@@ -250,7 +262,7 @@ fn tool_kind_for_name(specs: &[ToolSpec], tool_name: &str) -> Result<CodeModeToo
         .iter()
         .find(|spec| spec.name() == tool_name)
         .map(tool_kind_for_spec)
-        .ok_or_else(|| format!("tool `{tool_name}` is not enabled in code_mode"))
+        .ok_or_else(|| format!("tool `{tool_name}` is not enabled in {PUBLIC_TOOL_NAME}"))
 }
 
 fn build_nested_tool_payload(
@@ -303,8 +315,9 @@ fn output_content_items_from_json_values(
         .into_iter()
         .enumerate()
         .map(|(index, item)| {
-            serde_json::from_value(item)
-                .map_err(|err| format!("invalid code_mode content item at index {index}: {err}"))
+            serde_json::from_value(item).map_err(|err| {
+                format!("invalid {PUBLIC_TOOL_NAME} content item at index {index}: {err}")
+            })
         })
         .collect()
 }

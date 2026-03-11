@@ -50,7 +50,7 @@ async fn run_code_mode_turn(
         server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_custom_tool_call("call-1", "code_mode", code),
+            ev_custom_tool_call("call-1", "exec", code),
             ev_completed("resp-1"),
         ]),
     )
@@ -114,7 +114,7 @@ async fn run_code_mode_turn_with_rmcp(
         server,
         sse(vec![
             ev_response_created("resp-1"),
-            ev_custom_tool_call("call-1", "code_mode", code),
+            ev_custom_tool_call("call-1", "exec", code),
             ev_completed("resp-1"),
         ]),
     )
@@ -141,7 +141,7 @@ async fn code_mode_can_return_exec_command_output() -> Result<()> {
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to run exec_command",
+        "use exec to run exec_command",
         r#"
 import { exec_command } from "tools.js";
 
@@ -156,7 +156,7 @@ add_content(JSON.stringify(await exec_command({ cmd: "printf code_mode_exec_mark
     assert_ne!(
         success,
         Some(false),
-        "code_mode call failed unexpectedly: {output}"
+        "exec call failed unexpectedly: {output}"
     );
     let parsed: Value = serde_json::from_str(&output)?;
     assert!(
@@ -184,7 +184,7 @@ async fn code_mode_can_truncate_final_result_with_configured_budget() -> Result<
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to truncate the final result",
+        "use exec to truncate the final result",
         r#"
 import { exec_command } from "tools.js";
 import { set_max_output_tokens_per_exec_call } from "@openai/code_mode";
@@ -205,7 +205,7 @@ add_content(JSON.stringify(await exec_command({
     assert_ne!(
         success,
         Some(false),
-        "code_mode call failed unexpectedly: {output}"
+        "exec call failed unexpectedly: {output}"
     );
     let expected_pattern = r#"(?sx)
 \A
@@ -228,7 +228,7 @@ async fn code_mode_can_output_serialized_text_via_openai_code_mode_module() -> R
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to return structured text",
+        "use exec to return structured text",
         r#"
 import { output_text } from "@openai/code_mode";
 
@@ -243,7 +243,7 @@ output_text({ json: true });
     assert_ne!(
         success,
         Some(false),
-        "code_mode call failed unexpectedly: {output}"
+        "exec call failed unexpectedly: {output}"
     );
     assert_eq!(output, r#"{"json":true}"#);
 
@@ -257,7 +257,7 @@ async fn code_mode_surfaces_output_text_stringify_errors() -> Result<()> {
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to return circular text",
+        "use exec to return circular text",
         r#"
 import { output_text } from "@openai/code_mode";
 
@@ -288,7 +288,7 @@ async fn code_mode_can_output_images_via_openai_code_mode_module() -> Result<()>
     let server = responses::start_mock_server().await;
     let (_test, second_mock) = run_code_mode_turn(
         &server,
-        "use code_mode to return images",
+        "use exec to return images",
         r#"
 import { output_image } from "@openai/code_mode";
 
@@ -341,14 +341,14 @@ async fn code_mode_can_apply_patch_via_nested_tool() -> Result<()> {
     );
 
     let (test, second_mock) =
-        run_code_mode_turn(&server, "use code_mode to run apply_patch", &code, true).await?;
+        run_code_mode_turn(&server, "use exec to run apply_patch", &code, true).await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "code_mode apply_patch call failed unexpectedly: {output}"
+        "exec apply_patch call failed unexpectedly: {output}"
     );
 
     let file_path = test.cwd_path().join(file_name);
@@ -377,15 +377,14 @@ add_content(
 "#;
 
     let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use code_mode to run the rmcp echo tool", code)
-            .await?;
+        run_code_mode_turn_with_rmcp(&server, "use exec to run the rmcp echo tool", code).await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp echo call failed unexpectedly: {output}"
+        "exec rmcp echo call failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
@@ -417,15 +416,14 @@ add_content(
 "#;
 
     let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use code_mode to run the rmcp echo tool", code)
-            .await?;
+        run_code_mode_turn_with_rmcp(&server, "use exec to run the rmcp echo tool", code).await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp echo call failed unexpectedly: {output}"
+        "exec rmcp echo call failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
@@ -459,7 +457,7 @@ add_content(
 
     let (_test, second_mock) = run_code_mode_turn_with_rmcp(
         &server,
-        "use code_mode to run the rmcp image scenario tool",
+        "use exec to run the rmcp image scenario tool",
         code,
     )
     .await?;
@@ -469,7 +467,7 @@ add_content(
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp image scenario call failed unexpectedly: {output}"
+        "exec rmcp image scenario call failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
@@ -503,15 +501,14 @@ add_content(
 "#;
 
     let (_test, second_mock) =
-        run_code_mode_turn_with_rmcp(&server, "use code_mode to call rmcp echo badly", code)
-            .await?;
+        run_code_mode_turn_with_rmcp(&server, "use exec to call rmcp echo badly", code).await?;
 
     let req = second_mock.single_request();
     let (output, success) = custom_tool_output_text_and_success(&req, "call-1");
     assert_ne!(
         success,
         Some(false),
-        "code_mode rmcp error call failed unexpectedly: {output}"
+        "exec rmcp error call failed unexpectedly: {output}"
     );
     assert_eq!(
         output,
@@ -539,7 +536,7 @@ async fn code_mode_can_store_and_load_values_across_turns() -> Result<()> {
             ev_response_created("resp-1"),
             ev_custom_tool_call(
                 "call-1",
-                "code_mode",
+                "exec",
                 r#"
 import { store } from "@openai/code_mode";
 
@@ -568,7 +565,7 @@ add_content("stored");
     assert_ne!(
         first_success,
         Some(false),
-        "code_mode store call failed unexpectedly: {first_output}"
+        "exec store call failed unexpectedly: {first_output}"
     );
     assert_eq!(first_output, "stored");
 
@@ -578,7 +575,7 @@ add_content("stored");
             ev_response_created("resp-3"),
             ev_custom_tool_call(
                 "call-2",
-                "code_mode",
+                "exec",
                 r#"
 import { load } from "openai/code_mode";
 
@@ -606,7 +603,7 @@ add_content(JSON.stringify(load("nb")));
     assert_ne!(
         second_success,
         Some(false),
-        "code_mode load call failed unexpectedly: {second_output}"
+        "exec load call failed unexpectedly: {second_output}"
     );
     let loaded: Value = serde_json::from_str(&second_output)?;
     assert_eq!(

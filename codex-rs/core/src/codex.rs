@@ -393,7 +393,8 @@ impl Codex {
         {
             let _ = config.features.disable(Feature::CodeMode);
             let message = format!(
-                "Disabled `code_mode` for this session because it is unavailable: {reason}"
+                "Disabled `{}` for this session because it is unavailable: {reason}",
+                crate::tools::code_mode::PUBLIC_TOOL_NAME
             );
             warn!("{message}");
             config.startup_warnings.push(message);
