@@ -193,7 +193,7 @@ impl ToolRouter {
                 "direct tool calls are disabled for this dynamic tool; use js_repl and codex.tool(...) instead"
                     .to_string(),
             );
-            return Ok(Self::failure_response(
+            return Ok(Self::failure_result(
                 failure_call_id,
                 payload_outputs_custom,
                 err,
