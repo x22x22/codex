@@ -3899,6 +3899,7 @@ pub enum ThreadItem {
         id: String,
         content: Vec<UserInput>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3909,6 +3910,7 @@ pub enum ThreadItem {
         #[serde(default)]
         phase: Option<MessagePhase>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3919,6 +3921,7 @@ pub enum ThreadItem {
         id: String,
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3930,6 +3933,7 @@ pub enum ThreadItem {
         #[serde(default)]
         content: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3955,6 +3959,7 @@ pub enum ThreadItem {
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3964,6 +3969,7 @@ pub enum ThreadItem {
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3980,6 +3986,7 @@ pub enum ThreadItem {
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3995,6 +4002,7 @@ pub enum ThreadItem {
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4016,6 +4024,7 @@ pub enum ThreadItem {
         /// Last known status of the target agents, when available.
         agents_states: HashMap<String, CollabAgentState>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4025,6 +4034,7 @@ pub enum ThreadItem {
         query: String,
         action: Option<WebSearchAction>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4033,6 +4043,7 @@ pub enum ThreadItem {
         id: String,
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4043,6 +4054,7 @@ pub enum ThreadItem {
         revised_prompt: Option<String>,
         result: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4051,6 +4063,7 @@ pub enum ThreadItem {
         id: String,
         review: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4059,6 +4072,7 @@ pub enum ThreadItem {
         id: String,
         review: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4066,6 +4080,7 @@ pub enum ThreadItem {
     ContextCompaction {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
 }
