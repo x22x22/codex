@@ -68,6 +68,11 @@ pub(crate) fn builder_from_items<'a>(
     scan_builder_from_items(items, rollout_path).builder
 }
 
+// Metadata extraction needs two facts from the same forward scan:
+// whether the rollout yielded any readable items at all, and whether those
+// items contained enough information to seed a `ThreadMetadataBuilder`.
+// Keeping them together avoids an extra eager collection just to drive the
+// unreadable-rollout guard.
 struct BuilderScan {
     saw_any_items: bool,
     builder: Option<ThreadMetadataBuilder>,
