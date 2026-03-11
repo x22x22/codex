@@ -437,12 +437,8 @@ pub(crate) async fn handle_start(
             msg,
         };
         while let Ok(event) = events_rx.recv().await {
-            // if not audio out, log the event
             if !matches!(event, RealtimeEvent::AudioOut(_)) {
-                info!(
-                    event = ?event,
-                    "received realtime conversation event"
-                );
+                debug!(event = ?event, "received realtime conversation event");
             }
             let maybe_routed_text = match &event {
                 RealtimeEvent::HandoffRequested(handoff) if handoff.send_immediately => {

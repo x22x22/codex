@@ -4,6 +4,7 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeAudioFrame;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEvent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeOutboundMessage;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
+use crate::endpoint::realtime_websocket::protocol::RealtimeToolAction;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
 use crate::endpoint::realtime_websocket::protocol::SessionAudio;
@@ -46,6 +47,14 @@ use tracing::info;
 use tracing::trace;
 use tungstenite::protocol::WebSocketConfig;
 use url::Url;
+
+const REALTIME_AUDIO_FORMAT: &str = "audio/pcm";
+const REALTIME_SAMPLE_RATE_HZ: u32 = 24_000;
+const REALTIME_NOISE_REDUCTION: &str = "near_field";
+const REALTIME_TURN_DETECTION: &str = "server_vad";
+const REALTIME_INTERRUPT_RESPONSE: bool = true;
+const REALTIME_CREATE_RESPONSE: bool = true;
+const REALTIME_VOICE: &str = "marin";
 
 struct WsStream {
     tx_command: mpsc::Sender<WsCommand>,
@@ -376,24 +385,24 @@ impl RealtimeWebsocketWriter {
                 audio: SessionAudio {
                     input: SessionAudioInput {
                         format: SessionAudioFormat {
-                            kind: "audio/pcm".to_string(),
-                            rate: 24_000,
+                            kind: REALTIME_AUDIO_FORMAT.to_string(),
+                            rate: REALTIME_SAMPLE_RATE_HZ,
                         },
                         noise_reduction: SessionNoiseReduction {
-                            kind: "near_field".to_string(),
+                            kind: REALTIME_NOISE_REDUCTION.to_string(),
                         },
                         turn_detection: SessionTurnDetection {
-                            kind: "server_vad".to_string(),
-                            interrupt_response: true,
-                            create_response: true,
+                            kind: REALTIME_TURN_DETECTION.to_string(),
+                            interrupt_response: REALTIME_INTERRUPT_RESPONSE,
+                            create_response: REALTIME_CREATE_RESPONSE,
                         },
                     },
                     output: SessionAudioOutput {
                         format: SessionAudioOutputFormat {
-                            kind: "audio/pcm".to_string(),
-                            rate: 24_000,
+                            kind: REALTIME_AUDIO_FORMAT.to_string(),
+                            rate: REALTIME_SAMPLE_RATE_HZ,
                         },
-                        voice: "marin".to_string(),
+                        voice: REALTIME_VOICE.to_string(),
                     },
                 },
                 tools: vec![
@@ -615,6 +624,7 @@ impl RealtimeWebsocketEvents {
                 Message::Text(text) => {
                     if let Some(mut event) = parse_realtime_event(&text) {
                         self.update_active_transcript(&mut event).await;
+                        log_realtime_event(&event);
                         debug!(?event, "realtime websocket parsed event");
                         return Ok(Some(event));
                     }
@@ -731,9 +741,19 @@ impl RealtimeWebsocketClient {
 
         let (stream, rx_message) = WsStream::new(stream);
         let connection = RealtimeWebsocketConnection::new(stream, rx_message);
-        debug!(
-            session_id = config.session_id.as_deref().unwrap_or("<none>"),
-            "realtime websocket sending session.update"
+        info!(
+            requested_session_id = config.session_id.as_deref().unwrap_or("<none>"),
+            model = config.model.as_deref().unwrap_or("<provider-default>"),
+            input_audio_format = REALTIME_AUDIO_FORMAT,
+            input_sample_rate_hz = REALTIME_SAMPLE_RATE_HZ,
+            output_audio_format = REALTIME_AUDIO_FORMAT,
+            output_sample_rate_hz = REALTIME_SAMPLE_RATE_HZ,
+            voice = REALTIME_VOICE,
+            turn_detection = REALTIME_TURN_DETECTION,
+            interrupt_response = REALTIME_INTERRUPT_RESPONSE,
+            create_response = REALTIME_CREATE_RESPONSE,
+            noise_reduction = REALTIME_NOISE_REDUCTION,
+            "sending realtime session.update"
         );
         connection
             .writer
@@ -756,6 +776,128 @@ fn merge_request_headers(
         }
     }
     headers
+}
+
+fn log_realtime_event(event: &RealtimeEvent) {
+    match event {
+        RealtimeEvent::SessionUpdated { session_id, .. } => {
+            info!(session_id = %session_id, "realtime session updated");
+        }
+        RealtimeEvent::HandoffRequested(handoff) => {
+            info!(
+                function_name = "codex",
+                call_id = %handoff.handoff_id,
+                arguments = %json!({
+                    "prompt": handoff.input_transcript,
+                    "send_immediately": handoff.send_immediately,
+                }),
+                "realtime function call requested"
+            );
+        }
+        RealtimeEvent::InterruptRequested(interrupt) => {
+            info!(
+                function_name = "cancel_current_operation",
+                call_id = %interrupt.call_id,
+                arguments = %json!({}),
+                "realtime function call requested"
+            );
+        }
+        RealtimeEvent::CloseRequested(close) => {
+            info!(
+                function_name = "turn_off_realtime_mode",
+                call_id = %close.call_id,
+                arguments = %json!({}),
+                "realtime function call requested"
+            );
+        }
+        RealtimeEvent::ToolActionRequested(request) => {
+            let (function_name, arguments) = normalized_realtime_tool_call(&request.action);
+            info!(
+                function_name,
+                call_id = %request.call_id,
+                arguments = %arguments,
+                "realtime function call requested"
+            );
+        }
+        _ => {}
+    }
+}
+
+fn normalized_realtime_tool_call(action: &RealtimeToolAction) -> (&'static str, serde_json::Value) {
+    match action {
+        RealtimeToolAction::ManageMessageQueue { action, message } => (
+            "manage_message_queue",
+            json!({
+                "action": action,
+                "message": message,
+            }),
+        ),
+        RealtimeToolAction::ListMessageQueue => (
+            "manage_message_queue",
+            json!({
+                "action": "list",
+            }),
+        ),
+        RealtimeToolAction::ReplaceLastQueuedMessage { message } => (
+            "manage_message_queue",
+            json!({
+                "action": "replace_last",
+                "message": message,
+            }),
+        ),
+        RealtimeToolAction::RemoveLastQueuedMessage => (
+            "manage_message_queue",
+            json!({
+                "action": "remove_last",
+            }),
+        ),
+        RealtimeToolAction::ClearQueuedMessages => (
+            "manage_message_queue",
+            json!({
+                "action": "clear",
+            }),
+        ),
+        RealtimeToolAction::ManageRuntimeSettings {
+            model,
+            working_directory,
+            reasoning_effort,
+            fast_mode,
+            personality,
+            collaboration_mode,
+        }
+        | RealtimeToolAction::UpdateRuntimeSettings {
+            model,
+            working_directory,
+            reasoning_effort,
+            fast_mode,
+            personality,
+            collaboration_mode,
+        } => (
+            "manage_runtime_settings",
+            json!({
+                "model": model,
+                "working_directory": working_directory,
+                "reasoning_effort": reasoning_effort,
+                "fast_mode": fast_mode,
+                "personality": personality,
+                "collaboration_mode": collaboration_mode,
+            }),
+        ),
+        RealtimeToolAction::ListRuntimeSettings => ("manage_runtime_settings", json!({})),
+        RealtimeToolAction::RunTuiCommand { command, prompt } => (
+            "run_tui_command",
+            json!({
+                "command": command,
+                "prompt": prompt,
+            }),
+        ),
+        RealtimeToolAction::CompactConversation => (
+            "run_tui_command",
+            json!({
+                "command": "compact",
+            }),
+        ),
+    }
 }
 
 fn with_session_id_header(

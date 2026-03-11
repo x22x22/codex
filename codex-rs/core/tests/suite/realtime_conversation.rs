@@ -197,11 +197,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
     .await;
     assert_eq!(audio_out.frame.data, "AQID");
 
-    let response_create = server.wait_for_request(1, 3).await;
-    assert_eq!(
-        response_create.body_json()["type"].as_str(),
-        Some("response.create")
-    );
+    let _ = server.wait_for_request(1, 3).await;
 
     let connections = server.connections();
     assert_eq!(connections.len(), 2);
@@ -240,7 +236,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
             .as_str()
             .expect("request type")
             .to_string(),
-        response_create.body_json()["type"]
+        connection[3].body_json()["type"]
             .as_str()
             .expect("request type")
             .to_string(),
