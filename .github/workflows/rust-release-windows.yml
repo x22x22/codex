@@ -40,14 +40,14 @@ jobs:
           - runner: windows-x64
             target: x86_64-pc-windows-msvc
             bundle: primary
-            build_args: --bin codex --bin codex-responses-api-proxy
+            build_args: --bin codex --bin codex-responses-api-proxy --bin codex-app-server
             runs_on:
               group: codex-runners
               labels: codex-windows-x64
           - runner: windows-arm64
             target: aarch64-pc-windows-msvc
             bundle: primary
-            build_args: --bin codex --bin codex-responses-api-proxy
+            build_args: --bin codex --bin codex-responses-api-proxy --bin codex-app-server
             runs_on:
               group: codex-runners
               labels: codex-windows-arm64
@@ -106,6 +106,7 @@ jobs:
           if [[ "${{ matrix.bundle }}" == "primary" ]]; then
             cp target/${{ matrix.target }}/release/codex.exe "$output_dir/codex.exe"
             cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$output_dir/codex-responses-api-proxy.exe"
+            cp target/${{ matrix.target }}/release/codex-app-server.exe "$output_dir/codex-app-server.exe"
           else
             cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$output_dir/codex-windows-sandbox-setup.exe"
             cp target/${{ matrix.target }}/release/codex-command-runner.exe "$output_dir/codex-command-runner.exe"
@@ -167,6 +168,7 @@ jobs:
           set -euo pipefail
           ls -lh target/${{ matrix.target }}/release/codex.exe
           ls -lh target/${{ matrix.target }}/release/codex-responses-api-proxy.exe
+          ls -lh target/${{ matrix.target }}/release/codex-app-server.exe
           ls -lh target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe
           ls -lh target/${{ matrix.target }}/release/codex-command-runner.exe
 
@@ -189,6 +191,7 @@ jobs:
 
           cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
           cp target/${{ matrix.target }}/release/codex-responses-api-proxy.exe "$dest/codex-responses-api-proxy-${{ matrix.target }}.exe"
+          cp target/${{ matrix.target }}/release/codex-app-server.exe "$dest/codex-app-server-${{ matrix.target }}.exe"
           cp target/${{ matrix.target }}/release/codex-windows-sandbox-setup.exe "$dest/codex-windows-sandbox-setup-${{ matrix.target }}.exe"
           cp target/${{ matrix.target }}/release/codex-command-runner.exe "$dest/codex-command-runner-${{ matrix.target }}.exe"
 
