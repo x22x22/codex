@@ -19,7 +19,7 @@ import type { PatchApplyStatus } from "./PatchApplyStatus";
 import type { UserInput } from "./UserInput";
 import type { WebSearchAction } from "./WebSearchAction";
 
-export type ThreadItem = { "type": "userMessage", id: string, content: Array<UserInput>, metadata?: ItemMetadata | null, } | { "type": "agentMessage", id: string, text: string, phase: MessagePhase | null, metadata?: ItemMetadata | null, } | { "type": "plan", id: string, text: string, metadata?: ItemMetadata | null, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>, metadata?: ItemMetadata | null, } | { "type": "commandExecution", id: string, 
+export type ThreadItem = { "type": "userMessage", id: string, content: Array<UserInput>, metadata?: ItemMetadata, } | { "type": "agentMessage", id: string, text: string, phase: MessagePhase | null, metadata?: ItemMetadata, } | { "type": "plan", id: string, text: string, metadata?: ItemMetadata, } | { "type": "reasoning", id: string, summary: Array<string>, content: Array<string>, metadata?: ItemMetadata, } | { "type": "commandExecution", id: string, 
 /**
  * The command to be executed.
  */
@@ -49,15 +49,15 @@ exitCode: number | null,
 /**
  * The duration of the command execution in milliseconds.
  */
-durationMs: number | null, metadata?: ItemMetadata | null, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: PatchApplyStatus, metadata?: ItemMetadata | null, } | { "type": "mcpToolCall", id: string, server: string, tool: string, status: McpToolCallStatus, arguments: JsonValue, result: McpToolCallResult | null, error: McpToolCallError | null, 
+durationMs: number | null, metadata?: ItemMetadata, } | { "type": "fileChange", id: string, changes: Array<FileUpdateChange>, status: PatchApplyStatus, metadata?: ItemMetadata, } | { "type": "mcpToolCall", id: string, server: string, tool: string, status: McpToolCallStatus, arguments: JsonValue, result: McpToolCallResult | null, error: McpToolCallError | null, 
 /**
  * The duration of the MCP tool call in milliseconds.
  */
-durationMs: number | null, metadata?: ItemMetadata | null, } | { "type": "dynamicToolCall", id: string, tool: string, arguments: JsonValue, status: DynamicToolCallStatus, contentItems: Array<DynamicToolCallOutputContentItem> | null, success: boolean | null, 
+durationMs: number | null, metadata?: ItemMetadata, } | { "type": "dynamicToolCall", id: string, tool: string, arguments: JsonValue, status: DynamicToolCallStatus, contentItems: Array<DynamicToolCallOutputContentItem> | null, success: boolean | null, 
 /**
  * The duration of the dynamic tool call in milliseconds.
  */
-durationMs: number | null, metadata?: ItemMetadata | null, } | { "type": "collabAgentToolCall", 
+durationMs: number | null, metadata?: ItemMetadata, } | { "type": "collabAgentToolCall", 
 /**
  * Unique identifier for this collab tool call.
  */
@@ -86,4 +86,4 @@ prompt: string | null,
 /**
  * Last known status of the target agents, when available.
  */
-agentsStates: { [key in string]?: CollabAgentState }, metadata?: ItemMetadata | null, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null, metadata?: ItemMetadata | null, } | { "type": "imageView", id: string, path: string, metadata?: ItemMetadata | null, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, metadata?: ItemMetadata | null, } | { "type": "enteredReviewMode", id: string, review: string, metadata?: ItemMetadata | null, } | { "type": "exitedReviewMode", id: string, review: string, metadata?: ItemMetadata | null, } | { "type": "contextCompaction", id: string, metadata?: ItemMetadata | null, };
+agentsStates: { [key in string]?: CollabAgentState }, metadata?: ItemMetadata, } | { "type": "webSearch", id: string, query: string, action: WebSearchAction | null, metadata?: ItemMetadata, } | { "type": "imageView", id: string, path: string, metadata?: ItemMetadata, } | { "type": "imageGeneration", id: string, status: string, revisedPrompt: string | null, result: string, metadata?: ItemMetadata, } | { "type": "enteredReviewMode", id: string, review: string, metadata?: ItemMetadata, } | { "type": "exitedReviewMode", id: string, review: string, metadata?: ItemMetadata, } | { "type": "contextCompaction", id: string, metadata?: ItemMetadata, };
