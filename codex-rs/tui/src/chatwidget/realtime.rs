@@ -11,7 +11,6 @@ use codex_protocol::protocol::RealtimeOutputAudioDelta;
 use codex_protocol::protocol::RealtimeToolAction;
 use codex_protocol::protocol::RealtimeToolActionRequested;
 use codex_protocol::protocol::RealtimeToolCallCompleteParams;
-use codex_protocol::user_input::ByteRange;
 use serde_json::json;
 
 const REALTIME_CONVERSATION_PROMPT: &str = concat!(
@@ -56,7 +55,8 @@ pub(super) struct RealtimeConversationUiState {
     close_when_idle: bool,
     session_id: Option<String>,
     warned_unsupported_composer_submission: bool,
-    meter_placeholder_id: Option<String>,
+    meter_generation: u64,
+    meter_text: Option<String>,
     #[cfg(not(target_os = "linux"))]
     capture_stop_flag: Option<Arc<AtomicBool>>,
     #[cfg(not(target_os = "linux"))]
@@ -86,8 +86,8 @@ impl RealtimeConversationUiState {
         self.phase = phase;
     }
 
-    pub(super) fn set_meter_placeholder_id_for_test(&mut self, id: Option<String>) {
-        self.meter_placeholder_id = id;
+    pub(super) fn set_meter_generation_for_test(&mut self, generation: u64) {
+        self.meter_generation = generation;
     }
 
     pub(super) fn phase_for_test(&self) -> RealtimeConversationPhase {
@@ -235,10 +235,10 @@ impl ChatWidget {
         }
 
         let UserMessage {
-            mut text,
+            text,
             local_images,
             remote_image_urls,
-            mut text_elements,
+            text_elements,
             mention_bindings,
         } = user_message;
 
@@ -269,37 +269,6 @@ impl ChatWidget {
 
         self.realtime_conversation
             .warned_unsupported_composer_submission = false;
-
-        if self.realtime_conversation.meter_placeholder_id.is_some() {
-            let mut stripped_bytes = 0usize;
-            let mut stripped_chars = 0usize;
-            for (idx, ch) in text.char_indices() {
-                if matches!(ch, '⠤' | '⠴' | '⠶' | '⠷' | '⡷' | '⡿' | '⣿') && stripped_chars < 4
-                {
-                    stripped_chars += 1;
-                    stripped_bytes = idx + ch.len_utf8();
-                } else {
-                    break;
-                }
-            }
-
-            if stripped_chars == 4 {
-                text = text[stripped_bytes..].to_string();
-                text_elements = text_elements
-                    .into_iter()
-                    .filter_map(|element| {
-                        if element.byte_range.end <= stripped_bytes {
-                            None
-                        } else {
-                            Some(element.map_range(|range| ByteRange {
-                                start: range.start.saturating_sub(stripped_bytes),
-                                end: range.end.saturating_sub(stripped_bytes),
-                            }))
-                        }
-                    })
-                    .collect();
-            }
-        }
 
         if !self.submit_op(Op::RealtimeConversationText(ConversationTextParams {
             text: text.clone(),
@@ -334,8 +303,36 @@ impl ChatWidget {
         None
     }
 
-    fn realtime_footer_hint_items() -> Vec<(String, String)> {
-        vec![("/realtime".to_string(), "stop live voice".to_string())]
+    fn realtime_footer_hint_items(&self) -> Vec<(String, String)> {
+        let mut items = vec![("/realtime".to_string(), "stop live voice".to_string())];
+        if let Some(meter_text) = self.realtime_conversation.meter_text.as_ref() {
+            items.push(("mic".to_string(), meter_text.clone()));
+        }
+        items
+    }
+
+    fn refresh_realtime_footer_hint(&mut self) {
+        if self.realtime_conversation.is_live() && !self.realtime_conversation.requested_close {
+            self.set_footer_hint_override(Some(self.realtime_footer_hint_items()));
+        }
+    }
+
+    pub(crate) fn update_realtime_recording_meter(
+        &mut self,
+        generation: u64,
+        text: String,
+    ) -> bool {
+        if !self.realtime_conversation.is_live()
+            || self.realtime_conversation.requested_close
+            || self.realtime_conversation.meter_generation != generation
+            || self.realtime_conversation.meter_text.as_deref() == Some(text.as_str())
+        {
+            return false;
+        }
+
+        self.realtime_conversation.meter_text = Some(text);
+        self.refresh_realtime_footer_hint();
+        true
     }
 
     pub(super) fn start_realtime_conversation(&mut self) {
@@ -343,9 +340,10 @@ impl ChatWidget {
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.close_when_idle = false;
         self.realtime_conversation.session_id = None;
+        self.realtime_conversation.meter_text = None;
         self.realtime_conversation
             .warned_unsupported_composer_submission = false;
-        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
+        self.set_footer_hint_override(Some(self.realtime_footer_hint_items()));
         self.submit_op(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
             session_id: None,
@@ -422,6 +420,7 @@ impl ChatWidget {
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.close_when_idle = false;
         self.realtime_conversation.session_id = None;
+        self.realtime_conversation.meter_text = None;
         self.realtime_conversation
             .warned_unsupported_composer_submission = false;
     }
@@ -439,7 +438,7 @@ impl ChatWidget {
         self.realtime_conversation.session_id = ev.session_id;
         self.realtime_conversation
             .warned_unsupported_composer_submission = false;
-        self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
+        self.set_footer_hint_override(Some(self.realtime_footer_hint_items()));
         self.start_realtime_local_audio();
         self.request_redraw();
     }
@@ -1390,8 +1389,11 @@ impl ChatWidget {
             return;
         }
 
-        let placeholder_id = self.bottom_pane.insert_transcription_placeholder("⠤⠤⠤⠤");
-        self.realtime_conversation.meter_placeholder_id = Some(placeholder_id.clone());
+        self.realtime_conversation.meter_generation =
+            self.realtime_conversation.meter_generation.wrapping_add(1);
+        let meter_generation = self.realtime_conversation.meter_generation;
+        self.realtime_conversation.meter_text = Some("⠤⠤⠤⠤".to_string());
+        self.refresh_realtime_footer_hint();
         self.request_redraw();
 
         let capture = match crate::voice::VoiceCapture::start_realtime(
@@ -1400,8 +1402,8 @@ impl ChatWidget {
         ) {
             Ok(capture) => capture,
             Err(err) => {
-                self.remove_transcription_placeholder(&placeholder_id);
-                self.realtime_conversation.meter_placeholder_id = None;
+                self.realtime_conversation.meter_text = None;
+                self.refresh_realtime_footer_hint();
                 self.add_error_message(format!("Failed to start microphone capture: {err}"));
                 return;
             }
@@ -1409,7 +1411,6 @@ impl ChatWidget {
 
         let stop_flag = capture.stopped_flag();
         let peak = capture.last_peak_arc();
-        let meter_placeholder_id = placeholder_id;
         let app_event_tx = self.app_event_tx.clone();
 
         self.realtime_conversation.capture_stop_flag = Some(stop_flag.clone());
@@ -1428,8 +1429,8 @@ impl ChatWidget {
                 }
 
                 let meter_text = meter.next_text(peak.load(Ordering::Relaxed));
-                app_event_tx.send(AppEvent::UpdateRecordingMeter {
-                    id: meter_placeholder_id.clone(),
+                app_event_tx.send(AppEvent::UpdateRealtimeRecordingMeter {
+                    generation: meter_generation,
                     text: meter_text,
                 });
 
@@ -1483,7 +1484,7 @@ impl ChatWidget {
 
     #[cfg(target_os = "linux")]
     fn stop_realtime_local_audio(&mut self) {
-        self.realtime_conversation.meter_placeholder_id = None;
+        self.realtime_conversation.meter_text = None;
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -1494,9 +1495,7 @@ impl ChatWidget {
         if let Some(capture) = self.realtime_conversation.capture.take() {
             let _ = capture.stop();
         }
-        if let Some(id) = self.realtime_conversation.meter_placeholder_id.take() {
-            self.remove_transcription_placeholder(&id);
-        }
+        self.realtime_conversation.meter_text = None;
     }
 
     #[cfg(not(target_os = "linux"))]

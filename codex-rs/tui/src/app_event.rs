@@ -392,6 +392,13 @@ pub(crate) enum AppEvent {
         text: String,
     },
 
+    /// Live update for the realtime voice meter shown in the footer strip.
+    #[cfg(not(target_os = "linux"))]
+    UpdateRealtimeRecordingMeter {
+        generation: u64,
+        text: String,
+    },
+
     /// Voice transcription finished for the given placeholder id.
     #[cfg(not(target_os = "linux"))]
     TranscriptionComplete {

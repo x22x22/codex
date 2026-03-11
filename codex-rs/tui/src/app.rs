@@ -3343,6 +3343,15 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
             }
+            #[cfg(not(target_os = "linux"))]
+            AppEvent::UpdateRealtimeRecordingMeter { generation, text } => {
+                let updated = self
+                    .chat_widget
+                    .update_realtime_recording_meter(generation, text);
+                if updated {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
             AppEvent::StatusLineSetup { items } => {
                 let ids = items.iter().map(ToString::to_string).collect::<Vec<_>>();
                 let edit = codex_core::config::edit::status_line_items_edit(&ids);

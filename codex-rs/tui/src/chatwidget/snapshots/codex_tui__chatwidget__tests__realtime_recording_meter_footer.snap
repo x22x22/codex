@@ -1,0 +1,12 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: term.backend().vt100().screen().contents()
+---
+
+
+
+
+
+› Ask Codex to do anything
+
+   /realtime stop live voice    mic ⡿⣷⣄⠄                     100% context left

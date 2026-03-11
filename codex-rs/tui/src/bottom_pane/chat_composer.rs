@@ -4049,13 +4049,6 @@ impl ChatComposer {
         self.textarea.update_named_element_by_id(id, text)
     }
 
-    #[cfg(not(target_os = "linux"))]
-    pub fn insert_transcription_placeholder(&mut self, text: &str) -> String {
-        let id = self.next_id();
-        self.textarea.insert_named_element(text, id.clone());
-        id
-    }
-
     pub fn remove_transcription_placeholder(&mut self, id: &str) {
         self.stop_transcription_spinner(id);
         let _ = self.textarea.replace_element_by_id(id, "");

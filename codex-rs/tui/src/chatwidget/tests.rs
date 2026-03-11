@@ -10454,14 +10454,9 @@ async fn enter_submits_typed_text_while_realtime_mode_is_live() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.realtime_conversation
         .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
-    chat.realtime_conversation
-        .set_meter_placeholder_id_for_test(Some("meter".to_string()));
 
-    chat.bottom_pane.set_composer_text(
-        "⠤⠤⠤⠤typed via realtime".to_string(),
-        Vec::new(),
-        Vec::new(),
-    );
+    chat.bottom_pane
+        .set_composer_text("typed via realtime".to_string(), Vec::new(), Vec::new());
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_eq!(chat.bottom_pane.composer_text(), "");
@@ -10473,6 +10468,34 @@ async fn enter_submits_typed_text_while_realtime_mode_is_live() {
     assert_snapshot!(
         "realtime_typed_text_submission",
         lines_to_single_string(&inserted[0])
+    );
+}
+
+#[tokio::test]
+async fn realtime_recording_meter_renders_in_footer_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.realtime_conversation
+        .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
+    chat.realtime_conversation.set_meter_generation_for_test(7);
+    chat.set_footer_hint_override(Some(vec![(
+        "/realtime".to_string(),
+        "stop live voice".to_string(),
+    )]));
+    assert!(chat.update_realtime_recording_meter(7, "⡿⣷⣄⠄".to_string()));
+
+    let width: u16 = 80;
+    let height: u16 = 8;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    let desired_height = chat.desired_height(width).min(height);
+    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
+    assert_snapshot!(
+        "realtime_recording_meter_footer",
+        term.backend().vt100().screen().contents()
     );
 }
 
