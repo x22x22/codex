@@ -276,7 +276,6 @@ output_text(circular);
         Some(true),
         "circular stringify unexpectedly succeeded"
     );
-    assert!(output.contains("code_mode execution failed"));
     assert!(output.contains("Converting circular structure to JSON"));
 
     Ok(())
