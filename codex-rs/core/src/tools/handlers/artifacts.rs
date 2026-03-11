@@ -1,13 +1,11 @@
 use async_trait::async_trait;
 use codex_artifacts::ArtifactBuildRequest;
 use codex_artifacts::ArtifactCommandOutput;
-use codex_artifacts::ArtifactRuntimeError;
-use codex_artifacts::ArtifactRuntimePlatform;
+use codex_artifacts::ArtifactRuntimeManager;
+use codex_artifacts::ArtifactRuntimeManagerConfig;
 use codex_artifacts::ArtifactsClient;
 use codex_artifacts::ArtifactsError;
-use codex_artifacts::InstalledArtifactRuntime;
 use serde_json::Value as JsonValue;
-use std::path::Path;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -18,8 +16,8 @@ use crate::exec::StreamOutput;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::protocol::ExecCommandSource;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -27,11 +25,10 @@ use crate::tools::events::ToolEventFailure;
 use crate::tools::events::ToolEventStage;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
-use codex_protocol::models::FunctionCallOutputBody;
 
 const ARTIFACTS_TOOL_NAME: &str = "artifacts";
 const ARTIFACTS_PRAGMA_PREFIXES: [&str; 2] = ["// codex-artifacts:", "// codex-artifact-tool:"];
-const PINNED_ARTIFACT_RUNTIME_VERSION: &str = "2.4.0";
+pub(crate) const PINNED_ARTIFACT_RUNTIME_VERSION: &str = "2.4.0";
 const DEFAULT_EXECUTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ArtifactsHandler;
@@ -44,6 +41,8 @@ struct ArtifactsToolArgs {
 
 #[async_trait]
 impl ToolHandler for ArtifactsHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
@@ -56,7 +55,7 @@ impl ToolHandler for ArtifactsHandler {
         true
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -80,10 +79,9 @@ impl ToolHandler for ArtifactsHandler {
             }
         };
 
-        let runtime = resolve_preinstalled_runtime(&turn.config.codex_home)
-            .await
-            .map_err(artifacts_error)?;
-        let client = ArtifactsClient::from_installed_runtime(runtime);
+        let client = ArtifactsClient::from_runtime_manager(default_runtime_manager(
+            turn.config.codex_home.clone(),
+        ));
 
         let started_at = Instant::now();
         emit_exec_begin(session.as_ref(), turn.as_ref(), &call_id).await;
@@ -115,36 +113,11 @@ impl ToolHandler for ArtifactsHandler {
         )
         .await;
 
-        Ok(ToolOutput::Function {
-            body: FunctionCallOutputBody::Text(format_artifact_output(&output)),
-            success: Some(success),
-        })
+        Ok(FunctionToolOutput::from_text(
+            format_artifact_output(&output),
+            Some(success),
+        ))
     }
-}
-
-async fn resolve_preinstalled_runtime(
-    codex_home: &Path,
-) -> Result<InstalledArtifactRuntime, ArtifactsError> {
-    let platform = ArtifactRuntimePlatform::detect_current()
-        .map_err(ArtifactRuntimeError::from)
-        .map_err(ArtifactsError::Runtime)?;
-    let install_dir = codex_home
-        .join("packages")
-        .join("artifacts")
-        .join(PINNED_ARTIFACT_RUNTIME_VERSION)
-        .join(platform.as_str());
-    if !install_dir.exists() {
-        return Err(ArtifactsError::Io {
-            context: format!(
-                "artifact runtime {} is not installed at {}",
-                PINNED_ARTIFACT_RUNTIME_VERSION,
-                install_dir.display()
-            ),
-            source: std::io::Error::new(std::io::ErrorKind::NotFound, "missing artifact runtime"),
-        });
-    }
-
-    InstalledArtifactRuntime::load(install_dir, platform).map_err(ArtifactsError::Runtime)
 }
 
 fn parse_freeform_args(input: &str) -> Result<ArtifactsToolArgs, FunctionCallError> {
@@ -240,8 +213,11 @@ fn parse_pragma_prefix(line: &str) -> Option<&str> {
         .find_map(|prefix| line.strip_prefix(prefix))
 }
 
-fn artifacts_error(error: ArtifactsError) -> FunctionCallError {
-    FunctionCallError::RespondToModel(error.to_string())
+fn default_runtime_manager(codex_home: std::path::PathBuf) -> ArtifactRuntimeManager {
+    ArtifactRuntimeManager::new(ArtifactRuntimeManagerConfig::with_default_release(
+        codex_home,
+        PINNED_ARTIFACT_RUNTIME_VERSION,
+    ))
 }
 
 async fn emit_exec_begin(session: &Session, turn: &TurnContext, call_id: &str) {
@@ -357,10 +333,26 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn resolve_preinstalled_runtime_reads_pinned_cache_path() {
+    #[test]
+    fn default_runtime_manager_uses_openai_codex_release_base() {
         let codex_home = TempDir::new().expect("create temp codex home");
-        let platform = ArtifactRuntimePlatform::detect_current().expect("detect platform");
+        let manager = default_runtime_manager(codex_home.path().to_path_buf());
+
+        assert_eq!(
+            manager.config().release().base_url().as_str(),
+            "https://github.com/openai/codex/releases/download/"
+        );
+        assert_eq!(
+            manager.config().release().runtime_version(),
+            PINNED_ARTIFACT_RUNTIME_VERSION
+        );
+    }
+
+    #[test]
+    fn load_cached_runtime_reads_pinned_cache_path() {
+        let codex_home = TempDir::new().expect("create temp codex home");
+        let platform =
+            codex_artifacts::ArtifactRuntimePlatform::detect_current().expect("detect platform");
         let install_dir = codex_home
             .path()
             .join("packages")
@@ -382,10 +374,28 @@ mod tests {
             .to_string(),
         )
         .expect("write manifest");
+        std::fs::create_dir_all(install_dir.join("artifact-tool/dist"))
+            .expect("create build entrypoint dir");
+        std::fs::create_dir_all(install_dir.join("granola-render/dist"))
+            .expect("create render entrypoint dir");
+        std::fs::write(
+            install_dir.join("artifact-tool/dist/artifact_tool.mjs"),
+            "export const ok = true;\n",
+        )
+        .expect("write build entrypoint");
+        std::fs::write(
+            install_dir.join("granola-render/dist/render_cli.mjs"),
+            "export const ok = true;\n",
+        )
+        .expect("write render entrypoint");
 
-        let runtime = resolve_preinstalled_runtime(codex_home.path())
-            .await
-            .expect("resolve runtime");
+        let runtime = codex_artifacts::load_cached_runtime(
+            &codex_home
+                .path()
+                .join(codex_artifacts::DEFAULT_CACHE_ROOT_RELATIVE),
+            PINNED_ARTIFACT_RUNTIME_VERSION,
+        )
+        .expect("resolve runtime");
         assert_eq!(runtime.runtime_version(), PINNED_ARTIFACT_RUNTIME_VERSION);
         assert_eq!(
             runtime.manifest().entrypoints,

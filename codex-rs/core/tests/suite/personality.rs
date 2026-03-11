@@ -647,6 +647,7 @@ async fn remote_model_friendly_personality_instructions_with_feature() -> anyhow
         default_verbosity: None,
         availability_nux: None,
         apply_patch_tool_type: None,
+        web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
@@ -761,6 +762,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
         default_verbosity: None,
         availability_nux: None,
         apply_patch_tool_type: None,
+        web_search_tool_type: Default::default(),
         truncation_policy: TruncationPolicyConfig::bytes(10_000),
         supports_parallel_tool_calls: false,
         supports_image_detail_original: false,
@@ -865,7 +867,7 @@ async fn user_turn_personality_remote_model_template_includes_update_message() -
     let developer_texts = request.message_input_texts("developer");
     let personality_text = developer_texts
         .iter()
-        .find(|text| text.contains("<personality_spec>"))
+        .find(|text| text.contains(remote_friendly_message))
         .expect("expected personality update message in developer input");
 
     assert!(
