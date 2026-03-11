@@ -1,34 +1,8 @@
-use std::collections::HashMap;
-
-use serde::Serialize;
-use serde_json::Value as JsonValue;
-
-pub type ToolCallHandler =
-    dyn FnMut(String, Option<JsonValue>) -> Result<JsonValue, String> + Send + 'static;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolKind {
-    Function,
-    Freeform,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct EnabledTool {
-    pub tool_name: String,
-    pub namespace: Vec<String>,
-    pub name: String,
-    pub kind: ToolKind,
-}
-
-#[derive(Debug)]
-pub struct ExecutionResult {
-    pub content_items: Vec<JsonValue>,
-    pub stored_values: HashMap<String, JsonValue>,
-    pub max_output_tokens_per_exec_call: usize,
-    pub success: bool,
-    pub error_text: Option<String>,
-}
+mod api;
+pub use api::EnabledTool;
+pub use api::ExecutionResult;
+pub use api::ToolCallHandler;
+pub use api::ToolKind;
 
 const MUSL_UNSUPPORTED_REASON: &str = "code_mode is unavailable on musl Linux";
 
@@ -54,7 +28,7 @@ pub use imp::execute;
 pub fn execute(
     code: String,
     enabled_tools: Vec<EnabledTool>,
-    stored_values: HashMap<String, JsonValue>,
+    stored_values: std::collections::HashMap<String, serde_json::Value>,
     on_tool_call: Box<ToolCallHandler>,
 ) -> Result<ExecutionResult, String> {
     let _ = code;

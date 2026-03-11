@@ -1,19 +1,19 @@
-load("@rules_cc//cc:defs.bzl", "cc_library")
-load("//:defs.bzl", "codex_rust_crate")
+load("@rules_rust//rust:defs.bzl", "rust_library")
 
-codex_rust_crate(
+rust_library(
     name = "code-mode",
     crate_name = "codex_code_mode",
-    compile_data = ["src/code_mode_bridge.js"],
-    deps_extra = select({
-        "@platforms//os:linux": [":libc_stack_end_shim"],
-        "//conditions:default": [],
-    }),
-)
-
-cc_library(
-    name = "libc_stack_end_shim",
-    srcs = ["src/libc_stack_end_shim.cc"],
-    target_compatible_with = ["@platforms//os:linux"],
-    visibility = ["//visibility:private"],
+    crate_root = "src/bazel_stub.rs",
+    srcs = [
+        "src/api.rs",
+        "src/bazel_stub.rs",
+    ],
+    deps = [
+        "@crates//:serde",
+        "@crates//:serde_json",
+    ],
+    rustc_env = {
+        "BAZEL_PACKAGE": "codex-rs/code-mode",
+    },
+    visibility = ["//visibility:public"],
 )
