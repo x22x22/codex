@@ -10,7 +10,7 @@ pub struct DynamicToolSpec {
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
-    #[serde(default = "default_inject_into_context")]
+    #[serde(default = "default_enabled")]
     pub inject_into_context: bool,
     #[serde(default)]
     pub provider_owned: bool,
@@ -45,6 +45,6 @@ pub enum DynamicToolCallOutputContentItem {
     InputImage { image_url: String },
 }
 
-fn default_inject_into_context() -> bool {
+fn default_enabled() -> bool {
     true
 }

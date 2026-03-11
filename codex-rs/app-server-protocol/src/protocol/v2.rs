@@ -509,7 +509,7 @@ pub struct DynamicToolSpec {
     pub name: String,
     pub description: String,
     pub input_schema: JsonValue,
-    #[serde(default = "default_dynamic_tool_inject_into_context")]
+    #[serde(default = "default_enabled")]
     pub inject_into_context: bool,
 }
 
@@ -547,10 +547,6 @@ pub struct ToolProviderUnregisterParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ToolProviderUnregisterResponse {}
-
-fn default_dynamic_tool_inject_into_context() -> bool {
-    true
-}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS, ExperimentalApi)]
 #[serde(rename_all = "snake_case")]
