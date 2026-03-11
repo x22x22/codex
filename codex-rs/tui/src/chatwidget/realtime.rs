@@ -26,11 +26,14 @@ const REALTIME_CONVERSATION_PROMPT: &str = concat!(
     "Use codex whenever the user asks for codebase-specific facts, debugging, file changes, ",
     "command output, or anything that benefits from tools. ",
     "Do not use codex for pure control actions when a dedicated control function fits. ",
+    "Prefer dedicated client-side control functions over codex whenever the answer can come from current TUI state instead of a new Codex turn. ",
     "Use manage_message_queue to inspect or edit queued draft work. Supported actions are list, replace_last, remove_last, and clear. ",
     "If the user asks what is queued, or asks to replace, remove, or clear queued draft work, use manage_message_queue instead of codex. ",
     "Use manage_runtime_settings to inspect or change runtime settings for future turns, including model, working_directory, reasoning_effort, fast_mode, personality, and collaboration_mode. ",
-    "If the user asks to inspect or change those runtime settings, use manage_runtime_settings instead of codex. ",
-    "If you call manage_runtime_settings without any setting fields, it returns the current settings and the list of possible settings and allowed values. ",
+    "That same function also returns quick local context like the current working_directory and git_branch, without starting a new Codex turn. ",
+    "If the user asks to inspect or change those runtime settings, or asks quick local questions like what branch Codex is on, use manage_runtime_settings instead of codex. ",
+    "For questions like what model Codex is using, what working directory it is using, what branch it is on, or what reasoning effort is active, call manage_runtime_settings instead of codex. ",
+    "If you call manage_runtime_settings without any setting fields, it returns the current settings, current local context, and the list of possible settings and allowed values. ",
     "Use run_tui_command for built-in TUI actions. Supported commands are compact, review, plan, diff, and agent. ",
     "If the user asks to compact, review, switch to Plan mode, show the diff, or open the agent picker, use run_tui_command instead of codex. ",
     "When you speak to the user directly, be extremely concise. ",
@@ -306,15 +309,15 @@ impl ChatWidget {
     fn realtime_status_label(&self) -> Option<String> {
         match self.realtime_conversation.phase {
             RealtimeConversationPhase::Inactive => None,
-            RealtimeConversationPhase::Starting => Some("voice starting".to_string()),
+            RealtimeConversationPhase::Starting => Some("realtime starting".to_string()),
             RealtimeConversationPhase::Active => Some(
                 self.realtime_conversation
                     .meter_text
                     .as_ref()
-                    .map(|meter_text| format!("voice {meter_text}"))
-                    .unwrap_or_else(|| "voice live".to_string()),
+                    .map(|meter_text| format!("realtime {meter_text}"))
+                    .unwrap_or_else(|| "realtime live".to_string()),
             ),
-            RealtimeConversationPhase::Stopping => Some("voice stopping".to_string()),
+            RealtimeConversationPhase::Stopping => Some("realtime stopping".to_string()),
         }
     }
 
@@ -766,14 +769,16 @@ impl ChatWidget {
         json!({
             "status": "ok",
             "current_settings": self.current_runtime_settings_json(),
+            "current_context": self.current_runtime_context_json(),
             "possible_settings": self.possible_runtime_settings_json(),
         })
         .to_string()
     }
 
     fn current_runtime_settings_json(&self) -> serde_json::Value {
+        let working_directory = self.status_line_cwd().display().to_string();
         json!({
-            "working_directory": self.config.cwd.display().to_string(),
+            "working_directory": working_directory,
             "model": self.current_model(),
             "reasoning_effort": Self::status_line_reasoning_effort_label(
                 self.effective_reasoning_effort(),
@@ -783,6 +788,34 @@ impl ChatWidget {
                 self.config.personality.unwrap_or(Personality::None),
             ),
             "collaboration_mode": self.realtime_collaboration_mode_name(self.active_mode_kind()),
+        })
+    }
+
+    fn current_runtime_context_json(&self) -> serde_json::Value {
+        let cwd = self.status_line_cwd();
+        let cached_git_branch = if self.status_line_branch_cwd.as_deref() == Some(cwd) {
+            self.status_line_branch.clone()
+        } else {
+            None
+        };
+        let git_branch = cached_git_branch.or_else(|| {
+            let output = std::process::Command::new("git")
+                .args(["branch", "--show-current"])
+                .current_dir(cwd)
+                .output()
+                .ok()?;
+            if !output.status.success() {
+                return None;
+            }
+            String::from_utf8(output.stdout)
+                .ok()
+                .map(|stdout| stdout.trim().to_string())
+                .filter(|branch| !branch.is_empty())
+        });
+
+        json!({
+            "working_directory": cwd.display().to_string(),
+            "git_branch": git_branch,
         })
     }
 
@@ -815,6 +848,7 @@ impl ChatWidget {
             "reasoning_effort_values": ["default", "none", "minimal", "low", "medium", "high", "xhigh"],
             "fast_mode_values": [false, true],
             "personality_values": ["none", "friendly", "pragmatic"],
+            "read_only_context_keys": ["git_branch"],
             "collaboration_mode_values": if plan_available {
                 json!(["default", "plan"])
             } else {
@@ -851,6 +885,7 @@ impl ChatWidget {
                             "status": "error",
                             "message": message,
                             "current_settings": self.current_runtime_settings_json(),
+                            "current_context": self.current_runtime_context_json(),
                             "possible_settings": self.possible_runtime_settings_json(),
                         })
                         .to_string();
@@ -869,6 +904,7 @@ impl ChatWidget {
                             "status": "error",
                             "message": message,
                             "current_settings": self.current_runtime_settings_json(),
+                            "current_context": self.current_runtime_context_json(),
                             "possible_settings": self.possible_runtime_settings_json(),
                         })
                         .to_string();
@@ -886,6 +922,7 @@ impl ChatWidget {
                         "status": "error",
                         "message": message,
                         "current_settings": self.current_runtime_settings_json(),
+                        "current_context": self.current_runtime_context_json(),
                         "possible_settings": self.possible_runtime_settings_json(),
                     })
                     .to_string();
@@ -903,6 +940,7 @@ impl ChatWidget {
                             "status": "error",
                             "message": message,
                             "current_settings": self.current_runtime_settings_json(),
+                            "current_context": self.current_runtime_context_json(),
                             "possible_settings": self.possible_runtime_settings_json(),
                         })
                         .to_string();
@@ -926,6 +964,7 @@ impl ChatWidget {
                         "status": "error",
                         "message": message,
                         "current_settings": self.current_runtime_settings_json(),
+                        "current_context": self.current_runtime_context_json(),
                         "possible_settings": self.possible_runtime_settings_json(),
                     })
                     .to_string();
@@ -964,6 +1003,7 @@ impl ChatWidget {
                     Self::status_line_reasoning_effort_label(Some(effort)),
                 ),
                 "current_settings": self.current_runtime_settings_json(),
+                "current_context": self.current_runtime_context_json(),
                 "possible_settings": self.possible_runtime_settings_json(),
             })
             .to_string();
@@ -977,6 +1017,7 @@ impl ChatWidget {
                 "status": "error",
                 "message": "The personality feature is disabled in this session.",
                 "current_settings": self.current_runtime_settings_json(),
+                "current_context": self.current_runtime_context_json(),
                 "possible_settings": self.possible_runtime_settings_json(),
             })
             .to_string();
@@ -995,6 +1036,7 @@ impl ChatWidget {
                     target_model
                 ),
                 "current_settings": self.current_runtime_settings_json(),
+                "current_context": self.current_runtime_context_json(),
                 "possible_settings": self.possible_runtime_settings_json(),
             })
             .to_string();
@@ -1013,6 +1055,7 @@ impl ChatWidget {
                 "status": "error",
                 "message": "The requested collaboration mode is not available right now.",
                 "current_settings": self.current_runtime_settings_json(),
+                "current_context": self.current_runtime_context_json(),
                 "possible_settings": self.possible_runtime_settings_json(),
             })
             .to_string();
@@ -1106,6 +1149,7 @@ impl ChatWidget {
             "status": "ok",
             "updated": updated_fields,
             "current_settings": self.current_runtime_settings_json(),
+            "current_context": self.current_runtime_context_json(),
             "possible_settings": self.possible_runtime_settings_json(),
         })
         .to_string()

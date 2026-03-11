@@ -638,35 +638,29 @@ pub(crate) fn passive_footer_status_line(props: &FooterProps) -> Option<Line<'st
         return None;
     }
 
-    let mut line = if props.status_line_enabled {
-        props.status_line_value.clone()
-    } else {
-        None
-    };
-
-    if let Some(active_agent_label) = props.active_agent_label.as_ref() {
-        if let Some(existing) = line.as_mut() {
-            existing.spans.push(" · ".into());
-            existing.spans.push(active_agent_label.clone().into());
-        } else {
-            line = Some(Line::from(active_agent_label.clone()));
-        }
-    }
+    let mut spans = Vec::new();
 
     if let Some(realtime_status_label) = props.realtime_status_label.as_ref() {
-        if let Some(existing) = line.as_mut() {
-            existing.spans.push(" · ".into());
-            existing
-                .spans
-                .push(Span::from(realtime_status_label.clone()).cyan());
-        } else {
-            line = Some(Line::from(vec![
-                Span::from(realtime_status_label.clone()).cyan(),
-            ]));
-        }
+        spans.push(Span::from(realtime_status_label.clone()).cyan());
     }
 
-    line
+    if props.status_line_enabled
+        && let Some(status_line) = props.status_line_value.clone()
+    {
+        if !spans.is_empty() {
+            spans.push(" · ".into());
+        }
+        spans.extend(status_line.spans);
+    }
+
+    if let Some(active_agent_label) = props.active_agent_label.as_ref() {
+        if !spans.is_empty() {
+            spans.push(" · ".into());
+        }
+        spans.push(active_agent_label.clone().into());
+    }
+
+    (!spans.is_empty()).then(|| Line::from(spans))
 }
 
 /// Whether the current footer mode allows contextual information to replace instructional hints.
@@ -1700,6 +1694,37 @@ mod tests {
         };
 
         snapshot_footer("footer_status_line_with_active_agent_label", props);
+    }
+
+    #[test]
+    fn passive_footer_status_line_prepends_realtime_status() {
+        let props = FooterProps {
+            mode: FooterMode::ComposerHasDraft,
+            esc_backtrack_hint: false,
+            use_shift_enter_hint: false,
+            is_task_running: true,
+            collaboration_modes_enabled: false,
+            is_wsl: false,
+            quit_shortcut_key: key_hint::ctrl(KeyCode::Char('c')),
+            context_window_percent: None,
+            context_window_used_tokens: None,
+            status_line_value: Some(Line::from("Status line content".to_string())),
+            status_line_enabled: true,
+            active_agent_label: Some("Robie [explorer]".to_string()),
+            realtime_status_label: Some("realtime live".to_string()),
+        };
+
+        let line = passive_footer_status_line(&props).expect("expected passive footer line");
+        assert_eq!(
+            line,
+            Line::from(vec![
+                Span::from("realtime live".to_string()).cyan(),
+                " · ".into(),
+                "Status line content".into(),
+                " · ".into(),
+                "Robie [explorer]".into(),
+            ])
+        );
     }
 
     #[test]

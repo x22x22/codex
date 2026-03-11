@@ -10595,6 +10595,59 @@ async fn realtime_handoff_can_send_immediately_while_turn_is_running() {
 }
 
 #[tokio::test]
+async fn realtime_interrupt_does_not_restore_pending_steer_into_composer() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.realtime_conversation
+        .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
+    chat.on_task_started();
+
+    chat.handle_codex_event(Event {
+        id: "rt-interrupt-1".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
+                handoff_id: "handoff-interrupt-1".to_string(),
+                item_id: "item-interrupt-1".to_string(),
+                input_transcript: "send via realtime".to_string(),
+                send_immediately: true,
+                active_transcript: Vec::new(),
+            }),
+        }),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            assert_matches!(
+                items.as_slice(),
+                [UserInput::Text { text, .. }] if text == "send via realtime"
+            );
+        }
+        other => panic!("unexpected op: {other:?}"),
+    }
+
+    assert_eq!(chat.pending_steers.len(), 1);
+
+    chat.handle_codex_event(Event {
+        id: "turn-abort".into(),
+        msg: EventMsg::TurnAborted(TurnAbortedEvent {
+            turn_id: Some("turn-1".to_string()),
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    assert!(chat.pending_steers.is_empty());
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+
+    let inserted = drain_insert_history(&mut rx);
+    assert!(
+        inserted
+            .iter()
+            .all(|cell| !lines_to_single_string(cell).contains("send via realtime"))
+    );
+}
+
+#[tokio::test]
 async fn realtime_close_request_interrupts_before_disconnect_when_turn_is_running() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.realtime_conversation
@@ -10779,6 +10832,10 @@ async fn realtime_manage_runtime_settings_updates_state_and_emits_follow_up_ops(
                 output["current_settings"]["working_directory"],
                 canonical_cwd.display().to_string()
             );
+            assert_eq!(
+                output["current_context"]["working_directory"],
+                canonical_cwd.display().to_string()
+            );
             assert_eq!(output["current_settings"]["model"], "gpt-5.3-codex");
             assert_eq!(output["current_settings"]["reasoning_effort"], "low");
             assert_eq!(
@@ -10842,6 +10899,86 @@ async fn realtime_manage_runtime_settings_lists_possible_settings() {
                     "default", "none", "minimal", "low", "medium", "high", "xhigh"
                 ])
             );
+            assert_eq!(
+                output["possible_settings"]["read_only_context_keys"],
+                serde_json::json!(["git_branch"])
+            );
+        }
+        other => panic!("unexpected app event: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn realtime_manage_runtime_settings_reports_live_context_and_git_branch() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
+    let temp = tempdir().expect("tempdir");
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(&repo).expect("create repo dir");
+
+    let git_env = [
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ];
+    let init_output = std::process::Command::new("git")
+        .envs(git_env)
+        .args(["init"])
+        .current_dir(&repo)
+        .output()
+        .expect("git init");
+    assert!(
+        init_output.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init_output.stderr)
+    );
+
+    let checkout_output = std::process::Command::new("git")
+        .envs(git_env)
+        .args(["checkout", "-b", "feature/realtime"])
+        .current_dir(&repo)
+        .output()
+        .expect("git checkout -b");
+    assert!(
+        checkout_output.status.success(),
+        "git checkout -b failed: {}",
+        String::from_utf8_lossy(&checkout_output.stderr)
+    );
+
+    chat.current_cwd = Some(repo.clone());
+    chat.config.cwd = temp.path().join("stale-config-cwd");
+    chat.status_line_branch = None;
+    chat.status_line_branch_cwd = None;
+
+    chat.handle_codex_event(Event {
+        id: "rt-settings-context".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::ToolActionRequested(RealtimeToolActionRequested {
+                call_id: "settings-tool-context".to_string(),
+                action: RealtimeToolAction::ManageRuntimeSettings {
+                    model: None,
+                    working_directory: None,
+                    reasoning_effort: None,
+                    fast_mode: None,
+                    personality: None,
+                    collaboration_mode: None,
+                },
+            }),
+        }),
+    });
+
+    match next_app_event(&mut rx) {
+        AppEvent::CodexOp(Op::RealtimeConversationToolCallComplete(params)) => {
+            assert_eq!(params.call_id, "settings-tool-context");
+            let output =
+                serde_json::from_str::<serde_json::Value>(&params.output_text).expect("json");
+            assert_eq!(
+                output["current_settings"]["working_directory"],
+                repo.display().to_string()
+            );
+            assert_eq!(
+                output["current_context"]["working_directory"],
+                repo.display().to_string()
+            );
+            assert_eq!(output["current_context"]["git_branch"], "feature/realtime");
         }
         other => panic!("unexpected app event: {other:?}"),
     }

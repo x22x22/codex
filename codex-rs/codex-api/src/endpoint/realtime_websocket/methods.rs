@@ -482,7 +482,7 @@ impl RealtimeWebsocketWriter {
                     SessionTool {
                         kind: "function".to_string(),
                         name: "manage_runtime_settings".to_string(),
-                        description: "Inspect or update runtime settings for future Codex turns. Prefer this over codex when the user wants to inspect or change model, working_directory, reasoning_effort, fast_mode, personality, or collaboration_mode. Call with no setting fields to list current settings, possible settings, and allowed values. Supported setting keys: model, working_directory, reasoning_effort, fast_mode, personality, collaboration_mode. Changes are not persisted to disk.".to_string(),
+                        description: "Inspect or update runtime settings for future Codex turns, and inspect quick local context like the current working_directory and git_branch. Prefer this over codex when the user wants to inspect or change model, working_directory, reasoning_effort, fast_mode, personality, or collaboration_mode, or asks quick local questions like which branch Codex is on. Call with no setting fields to list current settings, current local context, possible settings, and allowed values. Supported writable setting keys: model, working_directory, reasoning_effort, fast_mode, personality, collaboration_mode. git_branch is read-only context. Changes are not persisted to disk.".to_string(),
                         parameters: SessionToolParameters {
                             kind: "object".to_string(),
                             properties: BTreeMap::from([

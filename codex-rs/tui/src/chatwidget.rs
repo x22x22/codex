@@ -2079,6 +2079,15 @@ impl ChatWidget {
 
         // Core clears pending_input before emitting TurnAborted, so any unacknowledged steers
         // still tracked here must be restored locally instead of waiting for a later commit.
+        if reason == TurnAbortReason::Interrupted
+            && self.realtime_conversation.is_live()
+            && !send_pending_steers_immediately
+        {
+            self.pending_steers.clear();
+            self.queued_user_messages.clear();
+            self.refresh_pending_input_preview();
+            return;
+        }
         if send_pending_steers_immediately {
             let pending_steers: Vec<UserMessage> = self
                 .pending_steers
