@@ -12,8 +12,5 @@ rust_library(
         "@crates//:serde",
         "@crates//:serde_json",
     ],
-    rustc_env = {
-        "BAZEL_PACKAGE": "codex-rs/code-mode",
-    },
     visibility = ["//visibility:public"],
 )

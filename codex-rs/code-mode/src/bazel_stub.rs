@@ -8,19 +8,14 @@ pub use api::ExecutionResult;
 pub use api::ToolCallHandler;
 pub use api::ToolKind;
 
-const BAZEL_BUILD: bool = option_env!("BAZEL_PACKAGE").is_some();
 const BAZEL_UNSUPPORTED_REASON: &str = "code_mode is unavailable in Bazel builds";
 
 pub const fn is_supported() -> bool {
-    !BAZEL_BUILD
+    false
 }
 
 pub fn unsupported_reason() -> Option<&'static str> {
-    if BAZEL_BUILD {
-        Some(BAZEL_UNSUPPORTED_REASON)
-    } else {
-        None
-    }
+    Some(BAZEL_UNSUPPORTED_REASON)
 }
 
 pub fn execute(
