@@ -1622,7 +1622,7 @@ impl Session {
                 Arc::clone(&auth_manager),
             ),
             hooks,
-            rollout: Mutex::new(rollout_recorder),
+            rollout: Mutex::new(rollout_store),
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
