@@ -67,34 +67,22 @@ pub fn execute(
 
     let scope = pin!(v8::TryCatch::new(scope));
     let scope = &mut scope.init();
-    let module = compile_module(scope, CODE_MODE_MAIN_FILENAME, &code)?;
-    let Some(instantiated) = module.instantiate_module(scope, resolve_code_mode_module) else {
-        return Err(format_v8_exception(scope));
-    };
-    if !instantiated {
-        return Err("failed to instantiate code_mode module".to_string());
-    }
-
-    let Some(result) = module.evaluate(scope) else {
-        return Err(format_v8_exception(scope));
-    };
-    if result.is_promise() {
-        let promise = v8::Local::<v8::Promise>::try_from(result)
-            .map_err(|_| "code_mode module evaluation did not return a promise".to_string())?;
-        wait_for_module_promise(scope, module, promise)?;
-    } else {
-        scope.perform_microtask_checkpoint();
-    }
-
+    let execution_outcome = execute_main_module(scope, &code);
     let content_items = read_content_items(scope)?;
     let stored_values = read_stored_values(scope)?;
     let Some(runtime_state) = scope.get_slot::<RuntimeState>() else {
         return Err("code_mode runtime state missing".to_string());
     };
+    let (success, error_text) = match execution_outcome {
+        Ok(()) => (true, None),
+        Err(error_text) => (false, Some(error_text)),
+    };
     Ok(ExecutionResult {
         content_items,
         stored_values,
         max_output_tokens_per_exec_call: runtime_state.max_output_tokens_per_exec_call,
+        success,
+        error_text,
     })
 }
 
@@ -172,6 +160,38 @@ fn compile_module<'s>(
     let mut source = v8::script_compiler::Source::new(source, Some(&origin));
     v8::script_compiler::compile_module(scope, &mut source)
         .ok_or_else(|| "failed to compile code_mode module".to_string())
+}
+
+fn execute_main_module(
+    try_catch: &mut v8::PinnedRef<'_, v8::TryCatch<v8::HandleScope>>,
+    code: &str,
+) -> Result<(), String> {
+    let source = v8_string(try_catch, code)?;
+    let identifier = v8_string(try_catch, CODE_MODE_MAIN_FILENAME)?;
+    let origin = script_origin(try_catch, identifier, true);
+    let mut source = v8::script_compiler::Source::new(source, Some(&origin));
+    let Some(module) = v8::script_compiler::compile_module(try_catch, &mut source) else {
+        return Err(format_v8_exception(try_catch));
+    };
+    let Some(instantiated) = module.instantiate_module(try_catch, resolve_code_mode_module) else {
+        return Err(format_v8_exception(try_catch));
+    };
+    if !instantiated {
+        return Err("failed to instantiate code_mode module".to_string());
+    }
+
+    let Some(result) = module.evaluate(try_catch) else {
+        return Err(format_v8_exception(try_catch));
+    };
+    if result.is_promise() {
+        let promise = v8::Local::<v8::Promise>::try_from(result)
+            .map_err(|_| "code_mode module evaluation did not return a promise".to_string())?;
+        wait_for_module_promise(try_catch, module, promise)?;
+    } else {
+        try_catch.perform_microtask_checkpoint();
+    }
+
+    Ok(())
 }
 
 fn create_tools_module<'s>(

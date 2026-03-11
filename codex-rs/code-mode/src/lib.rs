@@ -26,6 +26,8 @@ pub struct ExecutionResult {
     pub content_items: Vec<JsonValue>,
     pub stored_values: HashMap<String, JsonValue>,
     pub max_output_tokens_per_exec_call: usize,
+    pub success: bool,
+    pub error_text: Option<String>,
 }
 
 const MUSL_UNSUPPORTED_REASON: &str = "code_mode is unavailable on musl Linux";

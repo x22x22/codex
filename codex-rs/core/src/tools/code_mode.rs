@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::client_common::tools::ToolSpec;
 use crate::codex::Session;
@@ -8,6 +9,7 @@ use crate::config::Config;
 use crate::features::Feature;
 use crate::function_tool::FunctionCallError;
 use crate::tools::ToolRouter;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::context::ToolPayload;
 use crate::tools::router::ToolCall;
@@ -50,7 +52,7 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     ));
     section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { tools } from \"tools.js\"`. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. `tools[name]` and identifier wrappers like `await exec_command(args)` remain available for compatibility. Nested tool calls resolve to their code-mode result values.\n");
     section.push_str(&format!(
-        "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution; the default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. When truncation happens, the final text uses the unified-exec style `Original token count:` / `Output:` wrapper and the usual `…N tokens truncated…` marker.\n",
+        "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution; the default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. The returned content starts with a separate `Script completed` or `Script failed` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker.\n",
     ));
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
@@ -66,7 +68,7 @@ pub(crate) async fn execute(
     turn: Arc<TurnContext>,
     tracker: SharedTurnDiffTracker,
     code: String,
-) -> Result<Vec<FunctionCallOutputContentItem>, FunctionCallError> {
+) -> Result<FunctionToolOutput, FunctionCallError> {
     let exec = ExecContext {
         session,
         turn,
@@ -74,6 +76,7 @@ pub(crate) async fn execute(
     };
     let enabled_tools = build_enabled_tools(&exec).await;
     let stored_values = exec.session.services.code_mode_store.stored_values().await;
+    let started_at = std::time::Instant::now();
     let callback_exec = exec.clone();
     let result = execute_code_mode(
         code,
@@ -87,12 +90,39 @@ pub(crate) async fn execute(
         .code_mode_store
         .replace_stored_values(result.stored_values)
         .await;
-    let items = output_content_items_from_json_values(result.content_items)
+    let mut items = output_content_items_from_json_values(result.content_items)
         .map_err(FunctionCallError::RespondToModel)?;
-    Ok(truncate_code_mode_result(
+    if !result.success {
+        let error_text = result
+            .error_text
+            .unwrap_or_else(|| "JavaScript execution failed".to_string());
+        items.push(FunctionCallOutputContentItem::InputText {
+            text: format!("Script error:\n{error_text}"),
+        });
+    }
+    let mut items = truncate_code_mode_result(items, Some(result.max_output_tokens_per_exec_call));
+    prepend_script_status(&mut items, result.success, started_at.elapsed());
+    Ok(FunctionToolOutput::from_content(
         items,
-        Some(result.max_output_tokens_per_exec_call),
+        Some(result.success),
     ))
+}
+
+fn prepend_script_status(
+    content_items: &mut Vec<FunctionCallOutputContentItem>,
+    success: bool,
+    wall_time: Duration,
+) {
+    let wall_time_seconds = ((wall_time.as_secs_f32()) * 10.0).round() / 10.0;
+    let header = format!(
+        "{}\nWall time {wall_time_seconds:.1} seconds\nOutput:\n",
+        if success {
+            "Script completed"
+        } else {
+            "Script failed"
+        }
+    );
+    content_items.insert(0, FunctionCallOutputContentItem::InputText { text: header });
 }
 
 fn truncate_code_mode_result(
@@ -100,25 +130,17 @@ fn truncate_code_mode_result(
     max_output_tokens_per_exec_call: Option<usize>,
 ) -> Vec<FunctionCallOutputContentItem> {
     let max_output_tokens = resolve_max_tokens(max_output_tokens_per_exec_call);
+    let policy = TruncationPolicy::Tokens(max_output_tokens);
     if items
         .iter()
         .all(|item| matches!(item, FunctionCallOutputContentItem::InputText { .. }))
     {
-        let (mut truncated_items, original_token_count) =
-            formatted_truncate_text_content_items_with_policy(
-                &items,
-                TruncationPolicy::Tokens(max_output_tokens),
-            );
-        if let Some(original_token_count) = original_token_count
-            && let Some(FunctionCallOutputContentItem::InputText { text }) =
-                truncated_items.first_mut()
-        {
-            *text = format!("Original token count: {original_token_count}\nOutput:\n{text}");
-        }
+        let (truncated_items, _) =
+            formatted_truncate_text_content_items_with_policy(&items, policy);
         return truncated_items;
     }
 
-    truncate_function_output_items_with_policy(&items, TruncationPolicy::Tokens(max_output_tokens))
+    truncate_function_output_items_with_policy(&items, policy)
 }
 
 async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
