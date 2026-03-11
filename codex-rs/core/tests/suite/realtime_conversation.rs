@@ -921,6 +921,75 @@ async fn conversation_start_injects_startup_context_from_thread_history() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_injects_recent_current_thread_turns_into_startup_context() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-thread-1"),
+            responses::ev_assistant_message("msg-thread-1", "first answer"),
+            responses::ev_completed("resp-thread-1"),
+        ]),
+    )
+    .await;
+    responses::mount_sse_once(
+        &server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-thread-2"),
+            responses::ev_assistant_message("msg-thread-2", "second answer"),
+            responses::ev_completed("resp-thread-2"),
+        ]),
+    )
+    .await;
+
+    let realtime_server = start_websocket_server(vec![vec![vec![json!({
+        "type": "session.updated",
+        "session": { "id": "sess_current_thread", "instructions": "backend prompt" }
+    })]]])
+    .await;
+
+    let mut builder = test_codex().with_config({
+        let realtime_base_url = realtime_server.uri().to_string();
+        move |config| {
+            config.experimental_realtime_ws_base_url = Some(realtime_base_url);
+        }
+    });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("first question").await?;
+    test.submit_turn("second question").await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let startup_context_request = wait_for_matching_websocket_request(
+        &realtime_server,
+        "current thread startup context request with instructions",
+        |request| websocket_request_instructions(request).is_some(),
+    )
+    .await;
+    let startup_context = websocket_request_instructions(&startup_context_request)
+        .expect("startup context request should contain instructions");
+
+    assert!(startup_context.contains("## Current Thread"));
+    assert!(startup_context.contains("Most recent user/assistant turns from this exact thread."));
+    assert!(startup_context.contains("first question"));
+    assert!(startup_context.contains("first answer"));
+    assert!(startup_context.contains("second question"));
+    assert!(startup_context.contains("second answer"));
+
+    realtime_server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_startup_context_falls_back_to_workspace_map() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

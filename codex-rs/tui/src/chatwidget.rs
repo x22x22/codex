@@ -2086,6 +2086,8 @@ impl ChatWidget {
             self.pending_steers.clear();
             self.queued_user_messages.clear();
             self.refresh_pending_input_preview();
+            self.maybe_close_realtime_conversation_when_idle();
+            self.request_redraw();
             return;
         }
         if send_pending_steers_immediately {
@@ -3886,6 +3888,16 @@ impl ChatWidget {
                             .bottom_pane
                             .take_recent_submission_mention_bindings(),
                     };
+                    if self.realtime_conversation.is_live() {
+                        if user_message.text.is_empty()
+                            && user_message.local_images.is_empty()
+                            && user_message.remote_image_urls.is_empty()
+                        {
+                            return;
+                        }
+                        self.queue_user_message(user_message);
+                        return;
+                    }
                     let Some(user_message) =
                         self.maybe_submit_user_message_for_realtime(user_message)
                     else {

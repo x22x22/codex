@@ -65,6 +65,7 @@ use codex_protocol::protocol::BackgroundEventEvent;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
 use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -1960,6 +1961,23 @@ fn next_realtime_close_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) 
             }
             Err(TryRecvError::Disconnected) => {
                 panic!("expected realtime close op but channel closed")
+            }
+        }
+    }
+}
+
+fn next_realtime_start_op(
+    op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>,
+) -> ConversationStartParams {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::RealtimeConversationStart(params)) => return params,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => {
+                panic!("expected realtime start op but queue was empty")
+            }
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected realtime start op but channel closed")
             }
         }
     }
@@ -10506,7 +10524,7 @@ async fn realtime_recording_meter_renders_in_footer_snapshot() {
 }
 
 #[tokio::test]
-async fn queue_shortcut_submits_realtime_text_while_realtime_mode_is_live() {
+async fn queue_shortcut_queues_local_draft_while_realtime_mode_is_live() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.realtime_conversation
         .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
@@ -10517,16 +10535,46 @@ async fn queue_shortcut_submits_realtime_text_while_realtime_mode_is_live() {
     chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
 
     assert_eq!(chat.bottom_pane.composer_text(), "");
-    assert!(chat.queued_user_messages.is_empty());
-    assert_eq!(next_realtime_text(&mut op_rx), "queued via realtime");
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages
+            .front()
+            .map(|message| message.text.as_str()),
+        Some("queued via realtime")
+    );
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    assert!(drain_insert_history(&mut rx).is_empty());
+}
 
-    let inserted = drain_insert_history(&mut rx);
-    let rendered = inserted
-        .iter()
-        .map(|lines| lines_to_single_string(lines))
-        .find(|text| text.contains("queued via realtime"))
-        .expect("expected rendered realtime text prompt");
-    assert!(rendered.contains("queued via realtime"));
+#[tokio::test]
+async fn realtime_queue_shortcut_renders_pending_preview_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.realtime_conversation
+        .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
+    chat.bottom_pane.set_status_line_enabled(true);
+    chat.set_status_line(Some(ratatui::text::Line::from(
+        "gpt-5.4 · /Users/pbakkum/code/codex",
+    )));
+    chat.on_task_started();
+
+    chat.bottom_pane
+        .set_composer_text("queued via realtime".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+    let width: u16 = 80;
+    let height: u16 = 10;
+    let backend = VT100Backend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    let desired_height = chat.desired_height(width).min(height);
+    term.set_viewport_area(Rect::new(0, height - desired_height, width, desired_height));
+    term.draw(|f| {
+        chat.render(f.area(), f.buffer_mut());
+    })
+    .unwrap();
+    assert_snapshot!(
+        "realtime_queue_shortcut_pending_preview",
+        term.backend().vt100().screen().contents()
+    );
 }
 
 #[tokio::test]
@@ -10720,6 +10768,64 @@ async fn realtime_close_request_closes_immediately_when_idle() {
         .find(|text| text.contains("Realtime voice mode turned off."))
         .expect("expected immediate close info message");
     assert!(rendered.contains("Realtime voice mode turned off."));
+}
+
+#[tokio::test]
+async fn unexpected_realtime_close_restarts_with_last_known_session_id() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.realtime_conversation
+        .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
+    chat.realtime_conversation
+        .set_session_id_for_test(Some("sess_reconnect".to_string()));
+
+    chat.on_realtime_conversation_closed(
+        codex_protocol::protocol::RealtimeConversationClosedEvent {
+            reason: Some("transport_closed".to_string()),
+        },
+    );
+
+    assert_eq!(
+        chat.realtime_conversation.phase_for_test(),
+        super::realtime::RealtimeConversationPhase::Starting
+    );
+    assert_eq!(chat.realtime_conversation.reconnect_attempts_for_test(), 1);
+    let restart = next_realtime_start_op(&mut op_rx);
+    assert_eq!(restart.session_id.as_deref(), Some("sess_reconnect"));
+    assert!(restart.prompt.contains("realtime voice conversation"));
+
+    let inserted = drain_insert_history(&mut rx);
+    let rendered = inserted
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .find(|text| text.contains("Realtime voice mode connection dropped. Reconnecting"))
+        .expect("expected reconnect info message");
+    assert!(rendered.contains("attempt 1/3"));
+}
+
+#[tokio::test]
+async fn requested_realtime_close_does_not_restart() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+
+    chat.realtime_conversation
+        .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
+    chat.realtime_conversation
+        .set_session_id_for_test(Some("sess_requested_close".to_string()));
+    chat.request_realtime_conversation_close(None);
+    next_realtime_close_op(&mut op_rx);
+
+    chat.on_realtime_conversation_closed(
+        codex_protocol::protocol::RealtimeConversationClosedEvent {
+            reason: Some("transport_closed".to_string()),
+        },
+    );
+
+    assert_eq!(
+        chat.realtime_conversation.phase_for_test(),
+        super::realtime::RealtimeConversationPhase::Inactive
+    );
+    assert!(matches!(op_rx.try_recv(), Err(TryRecvError::Empty)));
+    assert!(drain_insert_history(&mut rx).is_empty());
 }
 
 #[tokio::test]

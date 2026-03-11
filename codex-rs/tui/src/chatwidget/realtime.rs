@@ -41,6 +41,7 @@ const REALTIME_CONVERSATION_PROMPT: &str = concat!(
     "Do not read long code snippets, long file paths, diffs, or command output aloud unless the ",
     "user explicitly asks for that."
 );
+const MAX_REALTIME_RECONNECT_ATTEMPTS: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum RealtimeConversationPhase {
@@ -57,6 +58,7 @@ pub(super) struct RealtimeConversationUiState {
     requested_close: bool,
     close_when_idle: bool,
     session_id: Option<String>,
+    reconnect_attempts: u32,
     warned_unsupported_composer_submission: bool,
     meter_generation: u64,
     meter_text: Option<String>,
@@ -89,6 +91,10 @@ impl RealtimeConversationUiState {
         self.phase = phase;
     }
 
+    pub(super) fn set_session_id_for_test(&mut self, session_id: Option<String>) {
+        self.session_id = session_id;
+    }
+
     pub(super) fn set_meter_generation_for_test(&mut self, generation: u64) {
         self.meter_generation = generation;
     }
@@ -103,6 +109,10 @@ impl RealtimeConversationUiState {
 
     pub(super) fn close_when_idle_for_test(&self) -> bool {
         self.close_when_idle
+    }
+
+    pub(super) fn reconnect_attempts_for_test(&self) -> u32 {
+        self.reconnect_attempts
     }
 }
 
@@ -344,17 +354,21 @@ impl ChatWidget {
     }
 
     pub(super) fn start_realtime_conversation(&mut self) {
+        self.start_realtime_conversation_with_session_id(None);
+    }
+
+    fn start_realtime_conversation_with_session_id(&mut self, session_id: Option<String>) {
         self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.close_when_idle = false;
-        self.realtime_conversation.session_id = None;
+        self.realtime_conversation.session_id = session_id.clone();
         self.realtime_conversation.meter_text = None;
         self.realtime_conversation
             .warned_unsupported_composer_submission = false;
         self.sync_realtime_status_label();
         self.submit_op(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
-            session_id: None,
+            session_id,
         }));
         self.request_redraw();
     }
@@ -426,6 +440,7 @@ impl ChatWidget {
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.close_when_idle = false;
         self.realtime_conversation.session_id = None;
+        self.realtime_conversation.reconnect_attempts = 0;
         self.realtime_conversation.meter_text = None;
         self.realtime_conversation
             .warned_unsupported_composer_submission = false;
@@ -443,6 +458,7 @@ impl ChatWidget {
         }
         self.realtime_conversation.phase = RealtimeConversationPhase::Active;
         self.realtime_conversation.session_id = ev.session_id;
+        self.realtime_conversation.reconnect_attempts = 0;
         self.realtime_conversation
             .warned_unsupported_composer_submission = false;
         self.sync_realtime_status_label();
@@ -496,9 +512,24 @@ impl ChatWidget {
     pub(super) fn on_realtime_conversation_closed(&mut self, ev: RealtimeConversationClosedEvent) {
         let requested = self.realtime_conversation.requested_close;
         let reason = ev.reason;
+        let session_id = self.realtime_conversation.session_id.clone();
+        let next_reconnect_attempt = self.realtime_conversation.reconnect_attempts + 1;
+        let should_reconnect =
+            !requested && next_reconnect_attempt <= MAX_REALTIME_RECONNECT_ATTEMPTS;
         self.reset_realtime_conversation_state();
-        if !requested && let Some(reason) = reason {
-            self.add_info_message(format!("Realtime voice mode closed: {reason}"), None);
+        if should_reconnect {
+            self.realtime_conversation.reconnect_attempts = next_reconnect_attempt;
+            self.add_info_message(
+                format!(
+                    "Realtime voice mode connection dropped. Reconnecting (attempt {}/{MAX_REALTIME_RECONNECT_ATTEMPTS}).",
+                    self.realtime_conversation.reconnect_attempts
+                ),
+                None,
+            );
+            self.start_realtime_conversation_with_session_id(session_id);
+        } else if !requested {
+            let close_reason = reason.unwrap_or_else(|| "transport_closed".to_string());
+            self.add_info_message(format!("Realtime voice mode closed: {close_reason}"), None);
         }
         self.request_redraw();
     }
