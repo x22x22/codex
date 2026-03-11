@@ -9,6 +9,7 @@ use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
+use crate::tools::code_mode::PUBLIC_TOOL_NAME;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
@@ -63,7 +64,7 @@ pub(crate) enum BuiltinToolKey {
 impl BuiltinToolKey {
     pub(crate) const fn invocation_names(self) -> &'static [&'static str] {
         match self {
-            Self::CodeMode => &["code_mode"],
+            Self::CodeMode => &[PUBLIC_TOOL_NAME],
             Self::ExecCommand => &[
                 "exec_command",
                 "shell",
