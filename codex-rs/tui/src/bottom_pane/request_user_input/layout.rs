@@ -144,6 +144,11 @@ impl RequestUserInputOverlay {
         }
 
         if !notes_visible {
+            let mut spacer_after_question = 0;
+            if remaining > 0 {
+                spacer_after_question = 1;
+                remaining = remaining.saturating_sub(1);
+            }
             let mut spacer_after_options = 0;
             if remaining > footer_pref {
                 spacer_after_options = 1;
@@ -151,11 +156,6 @@ impl RequestUserInputOverlay {
             }
             let footer_lines = footer_pref.min(remaining);
             remaining = remaining.saturating_sub(footer_lines);
-            let mut spacer_after_question = 0;
-            if remaining > 0 {
-                spacer_after_question = 1;
-                remaining = remaining.saturating_sub(1);
-            }
             let grow_by = remaining.min(options.full.saturating_sub(options_height));
             options_height = options_height.saturating_add(grow_by);
             return LayoutPlan {

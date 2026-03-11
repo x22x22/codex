@@ -44,9 +44,11 @@ use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
 use rmcp::model::ToolAnnotations;
+use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use toml_edit::value;
 
 /// Handles the specified tool call dispatches the appropriate
@@ -385,6 +387,40 @@ struct McpToolApprovalPromptOptions {
     allow_persistent_approval: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct ConsequentialToolMessageTemplateCatalog {
+    templates: Vec<ConsequentialToolMessageTemplate>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ConsequentialToolMessageTemplate {
+    server_name: String,
+    connector_id: Option<String>,
+    tool_title: String,
+    action: String,
+    template_params: Vec<ConsequentialToolMessageTemplateParam>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ConsequentialToolMessageTemplateParam {
+    name: String,
+    label: String,
+}
+
+static CONSEQUENTIAL_TOOL_MESSAGE_TEMPLATES: LazyLock<
+    Option<Vec<ConsequentialToolMessageTemplate>>,
+> = LazyLock::new(|| {
+    serde_json::from_str::<ConsequentialToolMessageTemplateCatalog>(include_str!(
+        "consequential_tool_message_templates.json",
+    ))
+    .map(|catalog| catalog.templates)
+    .map_err(|err| {
+        error!("failed to parse bundled consequential tool message templates: {err}");
+        err
+    })
+    .ok()
+});
+
 const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
 const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
 const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
@@ -403,6 +439,11 @@ const MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY: &str = "connector_description
 const MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: &str = "tool_title";
 const MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: &str = "tool_description";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: &str = "tool_params";
+const MCP_TOOL_APPROVAL_ACTOR_MAX_CHARS: usize = 48;
+const MCP_TOOL_APPROVAL_ACTION_MAX_CHARS: usize = 72;
+const MCP_TOOL_APPROVAL_DETAIL_VALUE_MAX_CHARS: usize = 80;
+const MCP_TOOL_APPROVAL_DETAILS_MAX_CHARS: usize = 220;
+const MCP_TOOL_APPROVAL_TRUNCATION_SUFFIX: &str = "...";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct McpToolApprovalKey {
@@ -507,9 +548,8 @@ async fn maybe_request_mcp_tool_approval(
         question_id.clone(),
         &invocation.server,
         &invocation.tool,
-        metadata.and_then(|metadata| metadata.tool_title.as_deref()),
-        metadata.and_then(|metadata| metadata.connector_name.as_deref()),
-        annotations,
+        invocation.arguments.as_ref(),
+        metadata,
         prompt_options,
     );
     question.question =
@@ -738,34 +778,25 @@ fn build_mcp_tool_approval_question(
     question_id: String,
     server: &str,
     tool_name: &str,
-    tool_title: Option<&str>,
-    connector_name: Option<&str>,
-    annotations: Option<&ToolAnnotations>,
+    tool_params: Option<&serde_json::Value>,
+    metadata: Option<&McpToolApprovalMetadata>,
     prompt_options: McpToolApprovalPromptOptions,
 ) -> RequestUserInputQuestion {
-    let destructive =
-        annotations.and_then(|annotations| annotations.destructive_hint) == Some(true);
-    let open_world = annotations.and_then(|annotations| annotations.open_world_hint) == Some(true);
-    let reason = match (destructive, open_world) {
-        (true, true) => "may modify data and access external systems",
-        (true, false) => "may modify or delete data",
-        (false, true) => "may access external systems",
-        (false, false) => "may have side effects",
-    };
-
-    let tool_label = tool_title.unwrap_or(tool_name);
-    let app_label = connector_name
-        .map(|name| format!("The {name} app"))
-        .unwrap_or_else(|| {
-            if server == CODEX_APPS_MCP_SERVER_NAME {
-                "This app".to_string()
-            } else {
-                format!("The {server} MCP server")
-            }
-        });
-    let question = format!(
-        "{app_label} wants to run the tool \"{tool_label}\", which {reason}. Allow this action?"
-    );
+    let tool_title = metadata.and_then(|metadata| metadata.tool_title.as_deref());
+    let connector_name = metadata.and_then(|metadata| metadata.connector_name.as_deref());
+    let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
+    let annotations = metadata.and_then(|metadata| metadata.annotations.as_ref());
+    let app_label = mcp_tool_approval_app_label(server, connector_name);
+    let question = build_templated_mcp_tool_approval_question_text(
+        server,
+        tool_name,
+        connector_id,
+        connector_name,
+        tool_params,
+    )
+    .unwrap_or_else(|| {
+        build_legacy_mcp_tool_approval_question_text(&app_label, tool_name, tool_title, annotations)
+    });
 
     let mut options = vec![RequestUserInputQuestionOption {
         label: MCP_TOOL_APPROVAL_ACCEPT.to_string(),
@@ -790,12 +821,193 @@ fn build_mcp_tool_approval_question(
 
     RequestUserInputQuestion {
         id: question_id,
-        header: "Approve app tool call?".to_string(),
+        header: String::new(),
         question,
         is_other: false,
         is_secret: false,
         options: Some(options),
     }
+}
+
+fn build_templated_mcp_tool_approval_question_text(
+    server: &str,
+    tool_name: &str,
+    connector_id: Option<&str>,
+    connector_name: Option<&str>,
+    tool_params: Option<&serde_json::Value>,
+) -> Option<String> {
+    let actor = truncate_for_mcp_tool_approval_message(
+        &mcp_tool_approval_actor_label(server, connector_name),
+        MCP_TOOL_APPROVAL_ACTOR_MAX_CHARS,
+    );
+    let tool_title = derive_consequential_tool_title(tool_name, connector_name);
+    let template = find_consequential_tool_message_template(server, connector_id, &tool_title)?;
+    let action = truncate_for_mcp_tool_approval_message(
+        &template.action,
+        MCP_TOOL_APPROVAL_ACTION_MAX_CHARS,
+    );
+    let details = render_consequential_tool_details(template, tool_params)?;
+
+    if details.is_empty() {
+        Some(format!("Allow {actor} to {action}?"))
+    } else {
+        Some(format!("Allow {actor} to {action}?\n\n{details}"))
+    }
+}
+
+fn find_consequential_tool_message_template(
+    server: &str,
+    connector_id: Option<&str>,
+    tool_title: &str,
+) -> Option<&'static ConsequentialToolMessageTemplate> {
+    CONSEQUENTIAL_TOOL_MESSAGE_TEMPLATES
+        .as_ref()?
+        .iter()
+        .find(|template| {
+            template.server_name == server
+                && template.connector_id.as_deref() == connector_id
+                && template.tool_title == tool_title
+        })
+}
+
+fn derive_consequential_tool_title(tool_name: &str, connector_name: Option<&str>) -> String {
+    if let Some(connector_name) = connector_name {
+        let connector_name = connector_name.to_lowercase();
+        if let Some(suffix) = tool_name.strip_prefix(&connector_name) {
+            let tool_title = suffix.trim_start_matches('_');
+            if !tool_title.is_empty() {
+                return tool_title.to_string();
+            }
+        }
+    }
+
+    tool_name.to_string()
+}
+
+fn render_consequential_tool_details(
+    template: &ConsequentialToolMessageTemplate,
+    tool_params: Option<&serde_json::Value>,
+) -> Option<String> {
+    let tool_params = tool_params?.as_object()?;
+    let mut details = String::new();
+    let mut remaining_chars = MCP_TOOL_APPROVAL_DETAILS_MAX_CHARS;
+    for param in &template.template_params {
+        let value = format_consequential_tool_message_value(tool_params.get(&param.name)?)?;
+        let line = format!("{}: {value}", param.label);
+        let separator_chars = usize::from(!details.is_empty());
+        if remaining_chars <= separator_chars {
+            break;
+        }
+        if !details.is_empty() {
+            details.push('\n');
+            remaining_chars -= 1;
+        }
+        let line_chars = line.chars().count();
+        if line_chars <= remaining_chars {
+            details.push_str(&line);
+            remaining_chars -= line_chars;
+        } else {
+            details.push_str(&truncate_for_mcp_tool_approval_message(
+                &line,
+                remaining_chars,
+            ));
+            break;
+        }
+    }
+
+    Some(details)
+}
+
+fn format_consequential_tool_message_value(value: &serde_json::Value) -> Option<String> {
+    let formatted = match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        serde_json::Value::String(value) => {
+            let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+            if value.is_empty() { None } else { Some(value) }
+        }
+        serde_json::Value::Array(values) => {
+            let values = values
+                .iter()
+                .map(format_consequential_tool_message_value)
+                .collect::<Option<Vec<_>>>()?;
+            if values.is_empty() {
+                None
+            } else {
+                Some(values.join(", "))
+            }
+        }
+        serde_json::Value::Object(_) => serde_json::to_string(value).ok(),
+    }?;
+
+    Some(truncate_for_mcp_tool_approval_message(
+        &formatted,
+        MCP_TOOL_APPROVAL_DETAIL_VALUE_MAX_CHARS,
+    ))
+}
+
+fn truncate_for_mcp_tool_approval_message(text: &str, max_chars: usize) -> String {
+    let char_count = text.chars().count();
+    if char_count <= max_chars {
+        return text.to_string();
+    }
+
+    if max_chars == 0 {
+        return String::new();
+    }
+
+    let suffix_chars = MCP_TOOL_APPROVAL_TRUNCATION_SUFFIX.chars().count();
+    if max_chars <= suffix_chars {
+        return ".".repeat(max_chars);
+    }
+
+    let prefix: String = text.chars().take(max_chars - suffix_chars).collect();
+    format!("{prefix}{MCP_TOOL_APPROVAL_TRUNCATION_SUFFIX}")
+}
+
+fn mcp_tool_approval_app_label(server: &str, connector_name: Option<&str>) -> String {
+    connector_name
+        .map(|name| format!("The {name} app"))
+        .unwrap_or_else(|| {
+            if server == CODEX_APPS_MCP_SERVER_NAME {
+                "This app".to_string()
+            } else {
+                format!("The {server} MCP server")
+            }
+        })
+}
+
+fn mcp_tool_approval_actor_label(server: &str, connector_name: Option<&str>) -> String {
+    connector_name.map(str::to_string).unwrap_or_else(|| {
+        if server == CODEX_APPS_MCP_SERVER_NAME {
+            "this app".to_string()
+        } else {
+            format!("the {server} MCP server")
+        }
+    })
+}
+
+fn build_legacy_mcp_tool_approval_question_text(
+    app_label: &str,
+    tool_name: &str,
+    tool_title: Option<&str>,
+    annotations: Option<&ToolAnnotations>,
+) -> String {
+    let destructive =
+        annotations.and_then(|annotations| annotations.destructive_hint) == Some(true);
+    let open_world = annotations.and_then(|annotations| annotations.open_world_hint) == Some(true);
+    let reason = match (destructive, open_world) {
+        (true, true) => "may modify data and access external systems",
+        (true, false) => "may modify or delete data",
+        (false, true) => "may access external systems",
+        (false, false) => "may have side effects",
+    };
+
+    let tool_label = tool_title.unwrap_or(tool_name);
+    format!(
+        "{app_label} wants to run the tool \"{tool_label}\", which {reason}. Allow this action?"
+    )
 }
 
 fn mcp_tool_approval_question_text(question: String, monitor_reason: Option<&str>) -> String {
@@ -1282,17 +1494,18 @@ mod tests {
 
     #[test]
     fn custom_mcp_tool_question_mentions_server_name() {
+        let mut metadata = approval_metadata(None, None, None, Some("Run Action"), None);
+        metadata.annotations = Some(annotations(Some(false), Some(true), None));
         let question = build_mcp_tool_approval_question(
             "q".to_string(),
             "custom_server",
             "run_action",
-            Some("Run Action"),
             None,
-            Some(&annotations(Some(false), Some(true), None)),
+            Some(&metadata),
             prompt_options(false, false),
         );
 
-        assert_eq!(question.header, "Approve app tool call?");
+        assert!(question.header.is_empty());
         assert_eq!(
             question.question,
             "The custom_server MCP server wants to run the tool \"Run Action\", which may modify or delete data. Allow this action?"
@@ -1309,13 +1522,14 @@ mod tests {
 
     #[test]
     fn codex_apps_tool_question_keeps_legacy_app_label() {
+        let mut metadata = approval_metadata(None, None, None, Some("Run Action"), None);
+        metadata.annotations = Some(annotations(Some(false), Some(true), None));
         let question = build_mcp_tool_approval_question(
             "q".to_string(),
             CODEX_APPS_MCP_SERVER_NAME,
             "run_action",
-            Some("Run Action"),
             None,
-            Some(&annotations(Some(false), Some(true), None)),
+            Some(&metadata),
             prompt_options(true, true),
         );
 
@@ -1328,13 +1542,15 @@ mod tests {
 
     #[test]
     fn trusted_codex_apps_tool_question_offers_always_allow() {
+        let mut metadata =
+            approval_metadata(None, Some("Calendar"), None, Some("Run Action"), None);
+        metadata.annotations = Some(annotations(Some(false), Some(true), None));
         let question = build_mcp_tool_approval_question(
             "q".to_string(),
             CODEX_APPS_MCP_SERVER_NAME,
             "run_action",
-            Some("Run Action"),
-            Some("Calendar"),
-            Some(&annotations(Some(false), Some(true), None)),
+            None,
+            Some(&metadata),
             prompt_options(true, true),
         );
         let options = question.options.expect("options");
@@ -1370,13 +1586,15 @@ mod tests {
             tool_name: "run_action".to_string(),
         };
         let persistent_key = session_key.clone();
+        let mut metadata =
+            approval_metadata(None, Some("Calendar"), None, Some("Run Action"), None);
+        metadata.annotations = Some(annotations(Some(false), Some(true), None));
         let question = build_mcp_tool_approval_question(
             "q".to_string(),
             CODEX_APPS_MCP_SERVER_NAME,
             "run_action",
-            Some("Run Action"),
-            Some("Calendar"),
-            Some(&annotations(Some(false), Some(true), None)),
+            None,
+            Some(&metadata),
             mcp_tool_approval_prompt_options(Some(&session_key), Some(&persistent_key), false),
         );
 
@@ -1397,13 +1615,14 @@ mod tests {
 
     #[test]
     fn custom_mcp_tool_question_offers_session_remember_without_always_allow() {
+        let mut metadata = approval_metadata(None, None, None, Some("Run Action"), None);
+        metadata.annotations = Some(annotations(Some(false), Some(true), None));
         let question = build_mcp_tool_approval_question(
             "q".to_string(),
             "custom_server",
             "run_action",
-            Some("Run Action"),
             None,
-            Some(&annotations(Some(false), Some(true), None)),
+            Some(&metadata),
             prompt_options(true, false),
         );
 
@@ -1419,6 +1638,173 @@ mod tests {
                 MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION.to_string(),
                 MCP_TOOL_APPROVAL_CANCEL.to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn derives_consequential_tool_title_from_connector_prefix() {
+        assert_eq!(
+            derive_consequential_tool_title("gmail_send_email", Some("Gmail")),
+            "send_email".to_string()
+        );
+        assert_eq!(
+            derive_consequential_tool_title(
+                "slack (oai internal)_slack_send_message",
+                Some("Slack (OAI Internal)")
+            ),
+            "slack_send_message".to_string()
+        );
+        assert_eq!(
+            derive_consequential_tool_title("custom_tool", None),
+            "custom_tool".to_string()
+        );
+    }
+
+    #[test]
+    fn truncate_for_mcp_tool_approval_message_preserves_utf8_boundaries() {
+        assert_eq!(
+            truncate_for_mcp_tool_approval_message("aé🙂zbcdef", 8),
+            "aé..."
+        );
+        assert_eq!(truncate_for_mcp_tool_approval_message("aé🙂z", 4), "aé🙂z");
+    }
+
+    #[test]
+    fn consequential_tool_message_templates_use_at_most_three_params() {
+        let templates = CONSEQUENTIAL_TOOL_MESSAGE_TEMPLATES
+            .as_ref()
+            .expect("templates loaded");
+        let oversized = templates
+            .iter()
+            .filter(|template| template.template_params.len() > 3)
+            .map(|template| template.tool_title.clone())
+            .collect::<Vec<_>>();
+
+        assert_eq!(oversized, Vec::<String>::new());
+    }
+
+    #[test]
+    fn codex_apps_tool_question_uses_template_when_params_match() {
+        let template = CONSEQUENTIAL_TOOL_MESSAGE_TEMPLATES
+            .as_ref()
+            .expect("templates loaded")
+            .iter()
+            .find(|template| template.tool_title == "send_email")
+            .expect("send_email template");
+        let mut metadata = approval_metadata(
+            template.connector_id.as_deref(),
+            Some("Gmail"),
+            None,
+            Some("Send Email"),
+            None,
+        );
+        metadata.annotations = Some(annotations(Some(false), Some(true), Some(true)));
+
+        let question = build_mcp_tool_approval_question(
+            "q".to_string(),
+            CODEX_APPS_MCP_SERVER_NAME,
+            "gmail_send_email",
+            Some(&serde_json::json!({
+                "to": "alice@example.com",
+                "subject": "Quarterly update",
+                "body": "Status update body",
+            })),
+            Some(&metadata),
+            prompt_options(false, false),
+        );
+
+        assert_eq!(
+            question.question,
+            "Allow Gmail to send an email?\n\nTo: alice@example.com\nSubject: Quarterly update\nBody: Status update body"
+        );
+    }
+
+    #[test]
+    fn codex_apps_tool_question_falls_back_when_template_rendering_fails() {
+        let template = CONSEQUENTIAL_TOOL_MESSAGE_TEMPLATES
+            .as_ref()
+            .expect("templates loaded")
+            .iter()
+            .find(|template| template.tool_title == "send_email")
+            .expect("send_email template");
+        let mut metadata = approval_metadata(
+            template.connector_id.as_deref(),
+            Some("Gmail"),
+            None,
+            Some("Send Email"),
+            None,
+        );
+        metadata.annotations = Some(annotations(Some(false), Some(true), Some(true)));
+
+        let question = build_mcp_tool_approval_question(
+            "q".to_string(),
+            CODEX_APPS_MCP_SERVER_NAME,
+            "gmail_send_email",
+            Some(&serde_json::json!({
+                "subject": "Quarterly update",
+                "body": "Status update body",
+            })),
+            Some(&metadata),
+            prompt_options(false, false),
+        );
+
+        assert_eq!(
+            question.question,
+            "The Gmail app wants to run the tool \"Send Email\", which may modify data and access external systems. Allow this action?"
+        );
+    }
+
+    #[test]
+    fn codex_apps_tool_question_truncates_long_template_values() {
+        let template = CONSEQUENTIAL_TOOL_MESSAGE_TEMPLATES
+            .as_ref()
+            .expect("templates loaded")
+            .iter()
+            .find(|template| template.tool_title == "create_pull_request")
+            .expect("create_pull_request template");
+        let mut metadata = approval_metadata(
+            template.connector_id.as_deref(),
+            Some("GitHub"),
+            None,
+            Some("Create Pull Request"),
+            None,
+        );
+        metadata.annotations = Some(annotations(Some(false), Some(true), Some(true)));
+
+        let title = "Launch readiness review ".repeat(10);
+        let head_branch = "feature/synchronize-release-notes-and-migration-guides-".repeat(4);
+        let base_branch = "release/2026-03-11-super-long-branch-name".repeat(3);
+        let repository_full_name =
+            "openai/very-long-repository-name-for-approval-prompt-tests".repeat(3);
+        let body =
+            "This pull request includes the release notes, migration guide, and rollout plan. "
+                .repeat(4);
+
+        let question = build_mcp_tool_approval_question(
+            "q".to_string(),
+            CODEX_APPS_MCP_SERVER_NAME,
+            "github_create_pull_request",
+            Some(&serde_json::json!({
+                "title": title,
+                "head_branch": head_branch,
+                "base_branch": base_branch,
+                "repository_full_name": repository_full_name,
+                "body": body,
+            })),
+            Some(&metadata),
+            prompt_options(false, false),
+        );
+
+        assert_eq!(
+            question.question,
+            "Allow GitHub to create a pull request?\n\nTitle: Launch readiness review Launch readiness review Launch readiness review La...\nHead branch: feature/synchronize-release-notes-and-migration-guides-feature/synchronize...\nBase branch: release/2026-03-11-..."
+        );
+        assert!(
+            question.question.chars().count()
+                <= format!("Allow GitHub to create a pull request?\n\n")
+                    .chars()
+                    .count()
+                    + MCP_TOOL_APPROVAL_DETAILS_MAX_CHARS
         );
     }
 

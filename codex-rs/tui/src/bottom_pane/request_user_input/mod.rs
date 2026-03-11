@@ -1439,6 +1439,26 @@ mod tests {
         }
     }
 
+    fn question_with_long_approval_body(id: &str, header: &str) -> RequestUserInputQuestion {
+        RequestUserInputQuestion {
+            id: id.to_string(),
+            header: header.to_string(),
+            question: "Allow GitHub to create a pull request?\n\nTitle: Launch readiness review for the release branch.\nHead branch: feature/synchronize-release-notes-and-migration-guides\nBase branch: release/2026-03-11".to_string(),
+            is_other: false,
+            is_secret: false,
+            options: Some(vec![
+                RequestUserInputQuestionOption {
+                    label: "Allow".to_string(),
+                    description: "Run the tool and continue.".to_string(),
+                },
+                RequestUserInputQuestionOption {
+                    label: "Cancel".to_string(),
+                    description: "Cancel this tool call.".to_string(),
+                },
+            ]),
+        }
+    }
+
     fn question_without_options(id: &str, header: &str) -> RequestUserInputQuestion {
         RequestUserInputQuestion {
             id: id.to_string(),
@@ -2503,6 +2523,46 @@ mod tests {
             "request_user_input_tight_height",
             render_snapshot(&overlay, area)
         );
+    }
+
+    #[test]
+    fn request_user_input_long_approval_body_snapshot() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![question_with_long_approval_body("q1", "Approval")],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let area = Rect::new(0, 0, 70, 12);
+        insta::assert_snapshot!(
+            "request_user_input_long_approval_body",
+            render_snapshot(&overlay, area)
+        );
+    }
+
+    #[test]
+    fn long_approval_body_keeps_spacer_after_question() {
+        let (tx, _rx) = test_sender();
+        let overlay = RequestUserInputOverlay::new(
+            request_event(
+                "turn-1",
+                vec![question_with_long_approval_body("q1", "Approval")],
+            ),
+            tx,
+            true,
+            false,
+            false,
+        );
+        let content_area = menu_surface_inset(Rect::new(0, 0, 70, 12));
+        let sections = overlay.layout_sections(content_area);
+        let question_bottom = sections.question_area.y + sections.question_area.height;
+
+        assert_eq!(sections.options_area.y.saturating_sub(question_bottom), 1);
     }
 
     #[test]
