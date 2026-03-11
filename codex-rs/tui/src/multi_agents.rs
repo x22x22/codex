@@ -183,6 +183,7 @@ pub(crate) fn spawn_end(
         new_agent_role,
         prompt,
         status: _,
+        ..
     } = ev;
 
     let title = match new_thread_id {
