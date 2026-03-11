@@ -25,7 +25,7 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
-use codex_protocol::items::ItemSandboxPolicy as CoreItemSandboxPolicy;
+use codex_protocol::items::UserMessageType as CoreUserMessageType;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::items::TurnItemMetadata as CoreTurnItemMetadata;
 use codex_protocol::mcp::Resource as McpResource;
@@ -3799,18 +3799,26 @@ pub enum UserInput {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case", export_to = "v2/")]
-pub enum ItemSandboxPolicy {
-    ReadOnly,
-    Sandbox,
-    FullAccess,
+pub enum UserMessageType {
+    Prompt,
+    PromptSteering,
+    PromptQueued,
+    PromptWithIdeContext,
+    AgentsMdDefault,
+    AgentsMdCustom,
+    EnvironmentContext,
 }
 
-impl From<CoreItemSandboxPolicy> for ItemSandboxPolicy {
-    fn from(value: CoreItemSandboxPolicy) -> Self {
+impl From<CoreUserMessageType> for UserMessageType {
+    fn from(value: CoreUserMessageType) -> Self {
         match value {
-            CoreItemSandboxPolicy::ReadOnly => ItemSandboxPolicy::ReadOnly,
-            CoreItemSandboxPolicy::Sandbox => ItemSandboxPolicy::Sandbox,
-            CoreItemSandboxPolicy::FullAccess => ItemSandboxPolicy::FullAccess,
+            CoreUserMessageType::Prompt => UserMessageType::Prompt,
+            CoreUserMessageType::PromptSteering => UserMessageType::PromptSteering,
+            CoreUserMessageType::PromptQueued => UserMessageType::PromptQueued,
+            CoreUserMessageType::PromptWithIdeContext => UserMessageType::PromptWithIdeContext,
+            CoreUserMessageType::AgentsMdDefault => UserMessageType::AgentsMdDefault,
+            CoreUserMessageType::AgentsMdCustom => UserMessageType::AgentsMdCustom,
+            CoreUserMessageType::EnvironmentContext => UserMessageType::EnvironmentContext,
         }
     }
 }
@@ -3820,13 +3828,13 @@ impl From<CoreItemSandboxPolicy> for ItemSandboxPolicy {
 pub struct ItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub sandbox_policy: Option<ItemSandboxPolicy>,
+    pub user_message_type: Option<UserMessageType>,
 }
 
 impl From<CoreTurnItemMetadata> for ItemMetadata {
     fn from(value: CoreTurnItemMetadata) -> Self {
         Self {
-            sandbox_policy: value.sandbox_policy.map(Into::into),
+            user_message_type: value.user_message_type.map(Into::into),
         }
     }
 }
