@@ -41,12 +41,15 @@ impl From<TerminalSize> for PtySize {
     }
 }
 
+#[cfg(unix)]
 pub(crate) trait PtyHandleKeepAlive: Send {}
 
+#[cfg(unix)]
 impl<T: Send + ?Sized> PtyHandleKeepAlive for T {}
 
 pub(crate) enum PtyMasterHandle {
     Resizable(Box<dyn MasterPty + Send>),
+    #[cfg(unix)]
     Opaque {
         _handle: Box<dyn PtyHandleKeepAlive>,
     },
@@ -144,6 +147,7 @@ impl ProcessHandle {
             .ok_or_else(|| anyhow!("process is not attached to a PTY"))?;
         match &handles._master {
             PtyMasterHandle::Resizable(master) => master.resize(size.into()),
+            #[cfg(unix)]
             PtyMasterHandle::Opaque { .. } => {
                 anyhow::bail!("process PTY does not support resize")
             }
