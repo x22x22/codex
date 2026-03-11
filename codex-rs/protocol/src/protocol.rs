@@ -3895,6 +3895,7 @@ mod tests {
                     query: Some("find docs".into()),
                     queries: None,
                 },
+                metadata: None,
             }),
         };
 
@@ -3928,6 +3929,7 @@ mod tests {
                 revised_prompt: None,
                 result: String::new(),
                 saved_path: None,
+                metadata: None,
             }),
         };
 
@@ -3950,6 +3952,7 @@ mod tests {
                 revised_prompt: Some("A tiny blue square".into()),
                 result: "Zm9v".into(),
                 saved_path: Some("/tmp/ig-1.png".into()),
+                metadata: None,
             }),
         };
 
