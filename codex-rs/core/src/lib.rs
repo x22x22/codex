@@ -114,6 +114,7 @@ pub mod state_db;
 pub mod terminal;
 mod tools;
 pub mod turn_diff_tracker;
+mod turn_executor;
 mod turn_metadata;
 mod turn_timing;
 pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
