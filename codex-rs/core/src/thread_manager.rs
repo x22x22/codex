@@ -32,11 +32,14 @@ use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 use tokio::runtime::Handle;
 use tokio::runtime::RuntimeFlavor;
 use tokio::sync::RwLock;
@@ -118,6 +121,19 @@ pub struct NewThread {
     pub thread_id: ThreadId,
     pub thread: Arc<CodexThread>,
     pub session_configured: SessionConfiguredEvent,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ThreadShutdownReport {
+    pub completed: Vec<ThreadId>,
+    pub submit_failed: Vec<ThreadId>,
+    pub timed_out: Vec<ThreadId>,
+}
+
+enum ShutdownOutcome {
+    Complete,
+    SubmitFailed,
+    TimedOut,
 }
 
 /// [`ThreadManager`] is responsible for creating threads and maintaining
@@ -403,13 +419,46 @@ impl ThreadManager {
         self.state.threads.write().await.remove(thread_id)
     }
 
-    /// Closes all threads open in this ThreadManager
-    pub async fn remove_and_close_all_threads(&self) -> CodexResult<()> {
-        for thread in self.state.threads.read().await.values() {
-            thread.shutdown_and_wait().await?;
+    /// Removes all tracked threads from the manager and tries to shut them down
+    /// concurrently within the provided timeout.
+    pub async fn shutdown_all_threads_bounded(&self, timeout: Duration) -> ThreadShutdownReport {
+        let threads = {
+            let mut threads = self.state.threads.write().await;
+            std::mem::take(&mut *threads)
+        };
+
+        let mut shutdowns = threads
+            .into_iter()
+            .map(|(thread_id, thread)| async move {
+                let outcome = match tokio::time::timeout(timeout, thread.shutdown_and_wait()).await
+                {
+                    Ok(Ok(())) => ShutdownOutcome::Complete,
+                    Ok(Err(_)) => ShutdownOutcome::SubmitFailed,
+                    Err(_) => ShutdownOutcome::TimedOut,
+                };
+                (thread_id, outcome)
+            })
+            .collect::<FuturesUnordered<_>>();
+        let mut report = ThreadShutdownReport::default();
+
+        while let Some((thread_id, outcome)) = shutdowns.next().await {
+            match outcome {
+                ShutdownOutcome::Complete => report.completed.push(thread_id),
+                ShutdownOutcome::SubmitFailed => report.submit_failed.push(thread_id),
+                ShutdownOutcome::TimedOut => report.timed_out.push(thread_id),
+            }
         }
-        self.state.threads.write().await.clear();
-        Ok(())
+
+        report
+            .completed
+            .sort_by_key(|thread_id| thread_id.to_string());
+        report
+            .submit_failed
+            .sort_by_key(|thread_id| thread_id.to_string());
+        report
+            .timed_out
+            .sort_by_key(|thread_id| thread_id.to_string());
+        report
     }
 
     /// Fork an existing thread by taking messages up to the given position (not including
@@ -695,11 +744,14 @@ fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> Initia
 mod tests {
     use super::*;
     use crate::codex::make_session_and_context;
+    use crate::config::test_config;
     use assert_matches::assert_matches;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
     use pretty_assertions::assert_eq;
+    use std::time::Duration;
+    use tempfile::tempdir;
 
     fn user_msg(text: &str) -> ResponseItem {
         ResponseItem::Message {
@@ -804,5 +856,48 @@ mod tests {
             serde_json::to_value(&got_items).unwrap(),
             serde_json::to_value(&expected).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_threads_bounded_submits_shutdown_to_every_thread() {
+        let temp_dir = tempdir().expect("tempdir");
+        let mut config = test_config();
+        config.codex_home = temp_dir.path().join("codex-home");
+        config.cwd = config.codex_home.clone();
+        std::fs::create_dir_all(&config.codex_home).expect("create codex home");
+
+        let manager = ThreadManager::with_models_provider_and_home_for_tests(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        );
+        let thread_1 = manager
+            .start_thread(config.clone())
+            .await
+            .expect("start first thread")
+            .thread_id;
+        let thread_2 = manager
+            .start_thread(config)
+            .await
+            .expect("start second thread")
+            .thread_id;
+
+        let report = manager
+            .shutdown_all_threads_bounded(Duration::from_secs(10))
+            .await;
+
+        let mut expected_completed = vec![thread_1, thread_2];
+        expected_completed.sort_by_key(|thread_id| thread_id.to_string());
+        assert_eq!(report.completed, expected_completed);
+        assert!(report.submit_failed.is_empty());
+        assert!(report.timed_out.is_empty());
+        assert!(manager.list_thread_ids().await.is_empty());
+
+        let shutdown_ops = manager
+            .captured_ops()
+            .into_iter()
+            .filter(|(_, op)| matches!(op, Op::Shutdown))
+            .count();
+        assert_eq!(shutdown_ops, 2);
     }
 }

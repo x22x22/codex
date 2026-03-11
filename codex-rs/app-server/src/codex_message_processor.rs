@@ -1907,7 +1907,16 @@ impl CodexMessageProcessor {
     }
 
     pub(crate) async fn shutdown_threads(&self) {
-        let _ = self.thread_manager.remove_and_close_all_threads().await;
+        let report = self
+            .thread_manager
+            .shutdown_all_threads_bounded(Duration::from_secs(10))
+            .await;
+        for thread_id in report.submit_failed {
+            warn!("failed to submit Shutdown to thread {thread_id}");
+        }
+        for thread_id in report.timed_out {
+            warn!("timed out waiting for thread {thread_id} to shut down");
+        }
     }
 
     async fn request_trace_context(
