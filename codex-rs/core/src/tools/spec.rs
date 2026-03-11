@@ -795,8 +795,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             "model".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional model override for the new agent. Replaces the inherited model."
-                        .to_string(),
+                    "Optional model override for the new agent. Replaces the inherited model unless the selected role sets `model`, in which case the role setting wins.".to_string(),
                 ),
             },
         ),
@@ -804,8 +803,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
             "reasoning_effort".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort."
-                        .to_string(),
+                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort unless the selected role sets `reasoning_effort`, in which case the role setting wins.".to_string(),
                 ),
             },
         ),
@@ -2725,6 +2723,43 @@ mod tests {
             request_user_input_tool.spec,
             create_request_user_input_tool(CollaborationModesConfig {
                 default_mode_request_user_input: true,
+            })
+        );
+    }
+
+    #[test]
+    fn spawn_agent_override_descriptions_note_role_locked_settings() {
+        let config = test_config();
+        let model_info =
+            ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_info: &model_info,
+            features: &Features::with_defaults(),
+            web_search_mode: Some(WebSearchMode::Cached),
+            session_source: SessionSource::Cli,
+        });
+        let tool = create_spawn_agent_tool(&tools_config);
+        let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
+            panic!("spawn_agent should be a function tool");
+        };
+        let JsonSchema::Object { properties, .. } = parameters else {
+            panic!("spawn_agent parameters should be an object");
+        };
+
+        assert_eq!(
+            properties.get("model"),
+            Some(&JsonSchema::String {
+                description: Some(
+                    "Optional model override for the new agent. Replaces the inherited model unless the selected role sets `model`, in which case the role setting wins.".to_string(),
+                ),
+            })
+        );
+        assert_eq!(
+            properties.get("reasoning_effort"),
+            Some(&JsonSchema::String {
+                description: Some(
+                    "Optional reasoning effort override for the new agent. Replaces the inherited reasoning effort unless the selected role sets `reasoning_effort`, in which case the role setting wins.".to_string(),
+                ),
             })
         );
     }

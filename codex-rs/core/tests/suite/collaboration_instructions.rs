@@ -842,12 +842,14 @@ async fn spawn_agent_tool_description_mentions_role_locked_model_and_reasoning()
     let request_body = req.single_request().body_json();
     let description = spawn_agent_type_description(&request_body)
         .expect("spawn_agent agent_type description should exist");
-    assert!(description.contains(
-        "This role sets model to `gpt-5.1`. This is set per this role and cannot be changed."
-    ));
-    assert!(description.contains(
-        "This role sets reasoning effort to `high`. This is set per this role and cannot be changed."
-    ));
+    assert!(description.contains("Locked settings:"));
+    assert!(
+        description.contains("- `model` is set to `gpt-5.1` per this role and cannot be changed.")
+    );
+    assert!(
+        description
+            .contains("- `reasoning_effort` is set to `high` per this role and cannot be changed.")
+    );
 
     Ok(())
 }

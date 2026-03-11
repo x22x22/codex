@@ -123,16 +123,7 @@ pub(crate) async fn role_settings_locks(
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
     let role_layer_toml = load_role_layer_toml(config, role_name).await?;
 
-    Ok(RoleSettingsLocks {
-        model: role_layer_toml
-            .get("model")
-            .and_then(TomlValue::as_str)
-            .map(str::to_string),
-        reasoning_effort: role_layer_toml
-            .get("model_reasoning_effort")
-            .and_then(TomlValue::as_str)
-            .map(str::to_string),
-    })
+    Ok(role_settings_locks_from_layer_toml(&role_layer_toml))
 }
 
 pub(crate) fn resolve_role_config<'a>(
@@ -196,6 +187,41 @@ async fn read_role_config_source<'a>(
         .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?
         .config;
         Ok((role_config_toml, role_config_base))
+    }
+}
+
+fn role_settings_locks_from_layer_toml(role_layer_toml: &TomlValue) -> RoleSettingsLocks {
+    let selected_profile = role_layer_toml
+        .get("profile")
+        .and_then(TomlValue::as_str)
+        .and_then(|profile_name| {
+            role_layer_toml
+                .get("profiles")
+                .and_then(TomlValue::as_table)
+                .and_then(|profiles| profiles.get(profile_name))
+                .and_then(TomlValue::as_table)
+        });
+
+    RoleSettingsLocks {
+        model: role_layer_toml
+            .get("model")
+            .and_then(TomlValue::as_str)
+            .or_else(|| {
+                selected_profile
+                    .and_then(|profile| profile.get("model").and_then(TomlValue::as_str))
+            })
+            .map(str::to_string),
+        reasoning_effort: role_layer_toml
+            .get("model_reasoning_effort")
+            .and_then(TomlValue::as_str)
+            .or_else(|| {
+                selected_profile.and_then(|profile| {
+                    profile
+                        .get("model_reasoning_effort")
+                        .and_then(TomlValue::as_str)
+                })
+            })
+            .map(str::to_string),
     }
 }
 
@@ -295,31 +321,26 @@ Available roles:
             resolve_relative_paths_in_config_toml(role_config_toml, role_config_base)
                 .map_err(|_| AGENT_TYPE_UNAVAILABLE_ERROR.to_string())?;
 
-        Ok(RoleSettingsLocks {
-            model: role_layer_toml
-                .get("model")
-                .and_then(TomlValue::as_str)
-                .map(str::to_string),
-            reasoning_effort: role_layer_toml
-                .get("model_reasoning_effort")
-                .and_then(TomlValue::as_str)
-                .map(str::to_string),
-        })
+        Ok(role_settings_locks_from_layer_toml(&role_layer_toml))
     }
 
     fn render_lock_lines(locks: &RoleSettingsLocks) -> String {
         let mut lines = Vec::new();
         if let Some(model) = locks.model.as_deref() {
             lines.push(format!(
-                "- This role sets model to `{model}`. This is set per this role and cannot be changed."
+                "- `model` is set to `{model}` per this role and cannot be changed."
             ));
         }
         if let Some(reasoning_effort) = locks.reasoning_effort.as_deref() {
             lines.push(format!(
-                "- This role sets reasoning effort to `{reasoning_effort}`. This is set per this role and cannot be changed."
+                "- `reasoning_effort` is set to `{reasoning_effort}` per this role and cannot be changed."
             ));
         }
-        lines.join("\n")
+        if lines.is_empty() {
+            String::new()
+        } else {
+            format!("Locked settings:\n{}", lines.join("\n"))
+        }
     }
 }
 
@@ -1058,6 +1079,42 @@ enabled = false
         );
     }
 
+    #[tokio::test]
+    async fn role_settings_locks_reads_selected_profile_model_and_reasoning_effort() {
+        let (home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+        let role_path = write_role_config(
+            &home,
+            "profile-locked-role.toml",
+            r#"profile = "planner"
+
+[profiles.planner]
+model = "gpt-5.1-mini"
+model_reasoning_effort = "medium"
+"#,
+        )
+        .await;
+        config.agent_roles.insert(
+            "custom".to_string(),
+            AgentRoleConfig {
+                description: None,
+                config_file: Some(role_path),
+                nickname_candidates: None,
+            },
+        );
+
+        let locks = role_settings_locks(&config, Some("custom"))
+            .await
+            .expect("role locks should load");
+
+        assert_eq!(
+            locks,
+            RoleSettingsLocks {
+                model: Some("gpt-5.1-mini".to_string()),
+                reasoning_effort: Some("medium".to_string()),
+            }
+        );
+    }
+
     #[test]
     fn spawn_tool_spec_includes_lock_notices_for_user_defined_roles() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -1078,11 +1135,47 @@ enabled = false
 
         let spec = spawn_tool_spec::build(&user_defined_roles);
 
+        assert!(spec.contains("Locked settings:"));
+        assert!(
+            spec.contains("- `model` is set to `gpt-5.1` per this role and cannot be changed.")
+        );
         assert!(spec.contains(
-            "This role sets model to `gpt-5.1`. This is set per this role and cannot be changed."
+            "- `reasoning_effort` is set to `high` per this role and cannot be changed."
         ));
+    }
+
+    #[test]
+    fn spawn_tool_spec_includes_lock_notices_for_selected_profile_settings() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let role_path = temp_dir.path().join("planner-role.toml");
+        std::fs::write(
+            &role_path,
+            r#"profile = "planner"
+
+[profiles.planner]
+model = "gpt-5.1-mini"
+model_reasoning_effort = "medium"
+"#,
+        )
+        .expect("write role config");
+        let user_defined_roles = BTreeMap::from([(
+            "planner".to_string(),
+            AgentRoleConfig {
+                description: Some("Plans work.".to_string()),
+                config_file: Some(role_path),
+                nickname_candidates: None,
+            },
+        )]);
+
+        let spec = spawn_tool_spec::build(&user_defined_roles);
+
+        assert!(
+            spec.contains(
+                "- `model` is set to `gpt-5.1-mini` per this role and cannot be changed."
+            )
+        );
         assert!(spec.contains(
-            "This role sets reasoning effort to `high`. This is set per this role and cannot be changed."
+            "- `reasoning_effort` is set to `medium` per this role and cannot be changed."
         ));
     }
 
