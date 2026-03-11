@@ -10,6 +10,7 @@ use codex_login::CodexAuth;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
+use codex_protocol::protocol::RealtimeOutputAudioDelta;
 use cpal::traits::DeviceTrait;
 use cpal::traits::HostTrait;
 use cpal::traits::StreamTrait;
@@ -42,6 +43,12 @@ pub struct RecordedAudio {
     pub data: Vec<i16>,
     pub sample_rate: u32,
     pub channels: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RealtimeAudioPlaybackPosition {
+    pub(crate) item_id: String,
+    pub(crate) audio_end_ms: u32,
 }
 
 pub struct VoiceCapture {
@@ -509,7 +516,8 @@ impl RealtimeAudioPlayer {
         })
     }
 
-    pub(crate) fn enqueue_frame(&self, frame: &RealtimeAudioFrame) -> Result<(), String> {
+    pub(crate) fn enqueue_frame(&self, delta: &RealtimeOutputAudioDelta) -> Result<(), String> {
+        let frame = &delta.frame;
         if frame.num_channels == 0 || frame.sample_rate == 0 {
             return Err("invalid realtime audio frame format".to_string());
         }
@@ -538,15 +546,22 @@ impl RealtimeAudioPlayer {
             .lock()
             .map_err(|_| "failed to lock output audio queue".to_string())?;
         // TODO(aibrahim): Cap or trim this queue if we observe producer bursts outrunning playback.
-        guard.samples.extend(converted);
+        push_output_audio_samples(&mut guard, delta.item_id.as_deref(), converted);
         Ok(())
     }
 
     pub(crate) fn clear(&self) {
         if let Ok(mut guard) = self.queue.lock() {
             guard.samples.clear();
+            guard.spans.clear();
+            guard.played_item = None;
             guard.primed = false;
         }
+    }
+
+    pub(crate) fn interrupt(&self) -> Option<RealtimeAudioPlaybackPosition> {
+        let mut guard = self.queue.lock().ok()?;
+        interrupt_output_audio_queue(&mut guard, self.output_sample_rate, self.output_channels)
     }
 }
 
@@ -589,7 +604,19 @@ fn build_output_stream(
 #[derive(Default)]
 struct OutputAudioQueue {
     samples: VecDeque<i16>,
+    spans: VecDeque<OutputAudioSpan>,
+    played_item: Option<PlayedOutputAudioItem>,
     primed: bool,
+}
+
+struct OutputAudioSpan {
+    item_id: Option<String>,
+    remaining_samples: usize,
+}
+
+struct PlayedOutputAudioItem {
+    item_id: String,
+    played_samples: u64,
 }
 
 fn output_prebuffer_samples(sample_rate: u32, channels: u16) -> usize {
@@ -613,6 +640,94 @@ fn should_output_silence(queue: &mut OutputAudioQueue, min_buffer_samples: usize
     false
 }
 
+fn push_output_audio_samples(
+    queue: &mut OutputAudioQueue,
+    item_id: Option<&str>,
+    samples: Vec<i16>,
+) {
+    if samples.is_empty() {
+        return;
+    }
+
+    let sample_count = samples.len();
+    queue.samples.extend(samples);
+    if let Some(span) = queue.spans.back_mut()
+        && span.item_id.as_deref() == item_id
+    {
+        span.remaining_samples += sample_count;
+        return;
+    }
+    queue.spans.push_back(OutputAudioSpan {
+        item_id: item_id.map(str::to_string),
+        remaining_samples: sample_count,
+    });
+}
+
+fn pop_output_audio_sample(queue: &mut OutputAudioQueue) -> i16 {
+    let Some(sample) = queue.samples.pop_front() else {
+        return 0;
+    };
+
+    mark_output_audio_sample_played(queue);
+    sample
+}
+
+fn mark_output_audio_sample_played(queue: &mut OutputAudioQueue) {
+    let Some(span) = queue.spans.front_mut() else {
+        return;
+    };
+
+    let item_id = span.item_id.clone();
+
+    span.remaining_samples = span.remaining_samples.saturating_sub(1);
+    let span_depleted = span.remaining_samples == 0;
+    if span_depleted {
+        queue.spans.pop_front();
+    }
+
+    if let Some(item_id) = item_id {
+        match queue.played_item.as_mut() {
+            Some(played_item) if played_item.item_id == item_id => {
+                played_item.played_samples += 1;
+            }
+            _ => {
+                queue.played_item = Some(PlayedOutputAudioItem {
+                    item_id,
+                    played_samples: 1,
+                });
+            }
+        }
+    }
+}
+
+fn interrupt_output_audio_queue(
+    queue: &mut OutputAudioQueue,
+    output_sample_rate: u32,
+    output_channels: u16,
+) -> Option<RealtimeAudioPlaybackPosition> {
+    let item_id = queue.spans.iter().find_map(|span| span.item_id.clone());
+    let played_samples = item_id.as_ref().map_or(0, |item_id| {
+        queue
+            .played_item
+            .as_ref()
+            .filter(|played_item| played_item.item_id == *item_id)
+            .map_or(0, |played_item| played_item.played_samples)
+    });
+    let played_frames = played_samples / u64::from(output_channels.max(1));
+    let audio_end_ms = ((played_frames * 1_000) / u64::from(output_sample_rate.max(1)))
+        .min(u64::from(u32::MAX)) as u32;
+
+    queue.samples.clear();
+    queue.spans.clear();
+    queue.played_item = None;
+    queue.primed = false;
+
+    item_id.map(|item_id| RealtimeAudioPlaybackPosition {
+        item_id,
+        audio_end_ms,
+    })
+}
+
 fn fill_output_i16(
     output: &mut [i16],
     queue: &Arc<Mutex<OutputAudioQueue>>,
@@ -624,7 +739,7 @@ fn fill_output_i16(
             return;
         }
         for sample in output {
-            *sample = guard.samples.pop_front().unwrap_or(0);
+            *sample = pop_output_audio_sample(&mut guard);
         }
         return;
     }
@@ -642,7 +757,7 @@ fn fill_output_f32(
             return;
         }
         for sample in output {
-            let v = guard.samples.pop_front().unwrap_or(0);
+            let v = pop_output_audio_sample(&mut guard);
             *sample = (v as f32) / (i16::MAX as f32);
         }
         return;
@@ -661,7 +776,7 @@ fn fill_output_u16(
             return;
         }
         for sample in output {
-            let v = guard.samples.pop_front().unwrap_or(0);
+            let v = pop_output_audio_sample(&mut guard);
             *sample = (v as i32 + 32768).clamp(0, u16::MAX as i32) as u16;
         }
         return;
@@ -926,9 +1041,13 @@ async fn transcribe_bytes(
 
 #[cfg(test)]
 mod tests {
+    use super::OutputAudioQueue;
     use super::RecordedAudio;
     use super::convert_pcm16;
     use super::encode_wav_normalized;
+    use super::interrupt_output_audio_queue;
+    use super::pop_output_audio_sample;
+    use super::push_output_audio_samples;
     use pretty_assertions::assert_eq;
     use std::io::Cursor;
 
@@ -958,5 +1077,37 @@ mod tests {
         assert_eq!(spec.channels, 1);
         assert_eq!(spec.sample_rate, 24_000);
         assert_eq!(samples, vec![8_426, 29_490]);
+    }
+
+    #[test]
+    fn interrupt_output_audio_queue_reports_played_duration_for_current_item() {
+        let mut queue = OutputAudioQueue::default();
+        push_output_audio_samples(&mut queue, Some("item_1"), vec![0; 960]);
+        queue.primed = true;
+
+        for _ in 0..480 {
+            let _ = pop_output_audio_sample(&mut queue);
+        }
+
+        assert_eq!(
+            interrupt_output_audio_queue(&mut queue, 24_000, 1),
+            Some(super::RealtimeAudioPlaybackPosition {
+                item_id: "item_1".to_string(),
+                audio_end_ms: 20,
+            })
+        );
+        assert!(queue.samples.is_empty());
+        assert!(queue.spans.is_empty());
+    }
+
+    #[test]
+    fn interrupt_output_audio_queue_ignores_untracked_audio() {
+        let mut queue = OutputAudioQueue::default();
+        push_output_audio_samples(&mut queue, None, vec![0; 480]);
+        queue.primed = true;
+
+        assert_eq!(interrupt_output_audio_queue(&mut queue, 24_000, 1), None);
+        assert!(queue.samples.is_empty());
+        assert!(queue.spans.is_empty());
     }
 }

@@ -6,6 +6,7 @@ use codex_core::auth::OPENAI_API_KEY_ENV_VAR;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::ConversationAudioTruncateParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
@@ -192,7 +193,7 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         _ => None,
     })
     .await;
-    assert_eq!(audio_out.data, "AQID");
+    assert_eq!(audio_out.frame.data, "AQID");
 
     let connections = server.connections();
     assert_eq!(connections.len(), 2);
@@ -251,6 +252,71 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         closed.reason.as_deref(),
         Some("requested" | "transport_closed")
     ));
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_audio_truncate_sends_truncate_event() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![
+        vec![],
+        vec![
+            vec![json!({
+                "type": "session.updated",
+                "session": { "id": "sess_truncate", "instructions": "backend prompt" }
+            })],
+            vec![],
+        ],
+    ])
+    .await;
+
+    let mut builder = test_codex();
+    let test = builder.build_with_websocket_server(&server).await?;
+    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::SessionUpdated { session_id, .. },
+        }) if session_id == "sess_truncate" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    test.codex
+        .submit(Op::RealtimeConversationAudioTruncate(
+            ConversationAudioTruncateParams {
+                item_id: "item_audio_1".to_string(),
+                content_index: 0,
+                audio_end_ms: 320,
+            },
+        ))
+        .await?;
+
+    let truncate_request = wait_for_matching_websocket_request(
+        &server,
+        "realtime conversation.item.truncate request",
+        |request| request.body_json()["type"].as_str() == Some("conversation.item.truncate"),
+    )
+    .await;
+    assert_eq!(
+        truncate_request.body_json(),
+        json!({
+            "type": "conversation.item.truncate",
+            "item_id": "item_audio_1",
+            "content_index": 0,
+            "audio_end_ms": 320
+        })
+    );
 
     server.shutdown().await;
     Ok(())
@@ -524,7 +590,7 @@ async fn conversation_second_start_replaces_runtime() -> Result<()> {
     let _ = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
             payload: RealtimeEvent::AudioOut(frame),
-        }) if frame.data == "AQID" => Some(()),
+        }) if frame.frame.data == "AQID" => Some(()),
         _ => None,
     })
     .await;
@@ -1269,7 +1335,7 @@ fn realtime_handoff_requested_event(handoff_id: &str, item_id: &str, prompt: &st
                     "type": "function_call",
                     "name": "codex",
                     "call_id": handoff_id,
-                    "arguments": json!({ "prompt": prompt }).to_string(),
+                    "arguments": json!({ "prompt": prompt, "send_immediately": true }).to_string(),
                 }
             ]
         }
@@ -1629,7 +1695,7 @@ async fn inbound_conversation_item_does_not_start_turn_and_still_forwards_audio(
     )
     .await
     .expect("timed out waiting for realtime audio after conversation item");
-    assert_eq!(audio_out.data, "AQID");
+    assert_eq!(audio_out.frame.data, "AQID");
 
     let unexpected_turn_started = tokio::time::timeout(
         Duration::from_millis(200),
@@ -1782,11 +1848,11 @@ async fn delegated_turn_user_role_echo_does_not_redelegate_and_still_forwards_au
     eprintln!(
         "[realtime test +{}ms] saw audio out data={} sample_rate={} num_channels={}",
         start.elapsed().as_millis(),
-        audio_out.data,
-        audio_out.sample_rate,
-        audio_out.num_channels
+        audio_out.frame.data,
+        audio_out.frame.sample_rate,
+        audio_out.frame.num_channels
     );
-    assert_eq!(audio_out.data, "AQID");
+    assert_eq!(audio_out.frame.data, "AQID");
 
     let completion = completions
         .into_iter()
@@ -1895,7 +1961,7 @@ async fn inbound_handoff_request_does_not_block_realtime_event_forwarding() -> R
     )
     .await
     .expect("timed out waiting for realtime audio while delegated turn was still pending");
-    assert_eq!(audio_out.data, "AQID");
+    assert_eq!(audio_out.frame.data, "AQID");
 
     let completion = completions
         .into_iter()
@@ -2152,7 +2218,7 @@ async fn inbound_handoff_request_starts_turn_and_does_not_block_realtime_audio()
     )
     .await
     .expect("timed out waiting for realtime audio after handoff request");
-    assert_eq!(audio_out.data, "AQID");
+    assert_eq!(audio_out.frame.data, "AQID");
 
     let completion = completions
         .into_iter()

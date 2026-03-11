@@ -82,6 +82,9 @@ use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::PatchApplyEndEvent;
 use codex_protocol::protocol::PatchApplyStatus as CorePatchApplyStatus;
 use codex_protocol::protocol::RateLimitWindow;
+use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
+use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeHandoffRequested;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionSource;
@@ -1911,6 +1914,19 @@ fn next_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
             Ok(_) => continue,
             Err(TryRecvError::Empty) => panic!("expected a submit op but queue was empty"),
             Err(TryRecvError::Disconnected) => panic!("expected submit op but channel closed"),
+        }
+    }
+}
+
+fn next_realtime_text(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> String {
+    loop {
+        match op_rx.try_recv() {
+            Ok(Op::RealtimeConversationText(params)) => return params.text,
+            Ok(_) => continue,
+            Err(TryRecvError::Empty) => panic!("expected realtime text op but queue was empty"),
+            Err(TryRecvError::Disconnected) => {
+                panic!("expected realtime text op but channel closed")
+            }
         }
     }
 }
@@ -10332,6 +10348,117 @@ async fn enter_queues_user_messages_while_review_is_running() {
     assert!(chat.pending_steers.is_empty());
     assert_no_submit_op(&mut op_rx);
     assert!(drain_insert_history(&mut rx).is_empty());
+}
+
+#[tokio::test]
+async fn enter_submits_typed_text_while_realtime_mode_is_live() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.realtime_conversation
+        .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
+
+    chat.bottom_pane
+        .set_composer_text("typed via realtime".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(next_realtime_text(&mut op_rx), "typed via realtime");
+
+    let inserted = drain_insert_history(&mut rx);
+    assert_eq!(inserted.len(), 1);
+    assert_snapshot!(
+        "realtime_typed_text_submission",
+        lines_to_single_string(&inserted[0])
+    );
+}
+
+#[tokio::test]
+async fn queue_shortcut_submits_realtime_text_while_realtime_mode_is_live() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.realtime_conversation
+        .set_phase_for_test(super::realtime::RealtimeConversationPhase::Active);
+    chat.on_task_started();
+
+    chat.bottom_pane
+        .set_composer_text("queued via realtime".to_string(), Vec::new(), Vec::new());
+    chat.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+    assert_eq!(chat.bottom_pane.composer_text(), "");
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(next_realtime_text(&mut op_rx), "queued via realtime");
+
+    let inserted = drain_insert_history(&mut rx);
+    let rendered = inserted
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .find(|text| text.contains("queued via realtime"))
+        .expect("expected rendered realtime text prompt");
+    assert!(rendered.contains("queued via realtime"));
+}
+
+#[tokio::test]
+async fn realtime_handoff_queues_message_while_turn_is_running_by_default() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+
+    chat.handle_codex_event(Event {
+        id: "rt-1".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
+                handoff_id: "handoff-1".to_string(),
+                item_id: "item-1".to_string(),
+                input_transcript: "queued via realtime".to_string(),
+                send_immediately: false,
+                active_transcript: Vec::new(),
+            }),
+        }),
+    });
+
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "queued via realtime"
+    );
+    assert!(chat.pending_steers.is_empty());
+    assert_no_submit_op(&mut op_rx);
+}
+
+#[tokio::test]
+async fn realtime_handoff_can_send_immediately_while_turn_is_running() {
+    let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
+    chat.thread_id = Some(ThreadId::new());
+    chat.on_task_started();
+
+    chat.handle_codex_event(Event {
+        id: "rt-2".into(),
+        msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
+                handoff_id: "handoff-2".to_string(),
+                item_id: "item-2".to_string(),
+                input_transcript: "send via realtime".to_string(),
+                send_immediately: true,
+                active_transcript: Vec::new(),
+            }),
+        }),
+    });
+
+    assert!(chat.queued_user_messages.is_empty());
+    assert_eq!(chat.pending_steers.len(), 1);
+    assert_eq!(
+        chat.pending_steers.front().unwrap().user_message.text,
+        "send via realtime"
+    );
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => {
+            assert_matches!(
+                items.as_slice(),
+                [UserInput::Text { text, .. }] if text == "send via realtime"
+            );
+        }
+        other => panic!("unexpected op: {other:?}"),
+    }
 }
 
 #[tokio::test]

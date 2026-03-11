@@ -275,12 +275,13 @@ pub(crate) async fn apply_bespoke_event_handling(
             if let ApiVersion::V2 = api_version {
                 match event.payload {
                     RealtimeEvent::SessionUpdated { .. } => {}
+                    RealtimeEvent::InputAudioSpeechStarted(_) => {}
                     RealtimeEvent::InputTranscriptDelta(_) => {}
                     RealtimeEvent::OutputTranscriptDelta(_) => {}
                     RealtimeEvent::AudioOut(audio) => {
                         let notification = ThreadRealtimeOutputAudioDeltaNotification {
                             thread_id: conversation_id.to_string(),
-                            audio: audio.into(),
+                            audio: audio.frame.into(),
                         };
                         outgoing
                             .send_server_notification(
@@ -288,6 +289,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                             )
                             .await;
                     }
+                    RealtimeEvent::ResponseCancelled(_) => {}
                     RealtimeEvent::ConversationItemAdded(item) => {
                         let notification = ThreadRealtimeItemAddedNotification {
                             thread_id: conversation_id.to_string(),
@@ -317,6 +319,21 @@ pub(crate) async fn apply_bespoke_event_handling(
                             ))
                             .await;
                     }
+                    RealtimeEvent::InterruptRequested(interrupt) => {
+                        let notification = ThreadRealtimeItemAddedNotification {
+                            thread_id: conversation_id.to_string(),
+                            item: serde_json::json!({
+                                "type": "interrupt_request",
+                                "call_id": interrupt.call_id,
+                            }),
+                        };
+                        outgoing
+                            .send_server_notification(ServerNotification::ThreadRealtimeItemAdded(
+                                notification,
+                            ))
+                            .await;
+                    }
+                    RealtimeEvent::CloseRequested(_) => {}
                     RealtimeEvent::Error(message) => {
                         let notification = ThreadRealtimeErrorNotification {
                             thread_id: conversation_id.to_string(),

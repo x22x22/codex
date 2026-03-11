@@ -8,6 +8,7 @@ use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeWebsocketClient;
 use codex_api::provider::Provider;
 use codex_api::provider::RetryConfig;
+use codex_protocol::protocol::RealtimeOutputAudioDelta;
 use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
@@ -96,6 +97,10 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
             Value::from(24_000)
         );
         assert_eq!(
+            first_json["session"]["audio"]["input"]["noise_reduction"]["type"],
+            Value::String("near_field".to_string())
+        );
+        assert_eq!(
             first_json["session"]["audio"]["input"]["turn_detection"]["type"],
             Value::String("server_vad".to_string())
         );
@@ -130,6 +135,31 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
         assert_eq!(
             first_json["session"]["tools"][0]["name"],
             Value::String("codex".to_string())
+        );
+        assert_eq!(
+            first_json["session"]["tools"][0]["parameters"]["properties"]["send_immediately"]
+                ["type"],
+            Value::String("boolean".to_string())
+        );
+        assert_eq!(
+            first_json["session"]["tools"][1]["type"],
+            Value::String("function".to_string())
+        );
+        assert_eq!(
+            first_json["session"]["tools"][1]["name"],
+            Value::String("cancel_current_operation".to_string())
+        );
+        assert_eq!(
+            first_json["session"]["tools"][1]["parameters"]["type"],
+            Value::String("object".to_string())
+        );
+        assert_eq!(
+            first_json["session"]["tools"][1]["parameters"]["required"],
+            Value::Array(Vec::new())
+        );
+        assert_eq!(
+            first_json["session"]["tools"][1]["parameters"]["properties"],
+            json!({})
         );
 
         ws.send(Message::Text(
@@ -212,11 +242,14 @@ async fn realtime_ws_e2e_session_create_and_event_flow() {
         .expect("event");
     assert_eq!(
         audio_event,
-        RealtimeEvent::AudioOut(RealtimeAudioFrame {
-            data: "AQID".to_string(),
-            sample_rate: 48000,
-            num_channels: 1,
-            samples_per_channel: None,
+        RealtimeEvent::AudioOut(RealtimeOutputAudioDelta {
+            frame: RealtimeAudioFrame {
+                data: "AQID".to_string(),
+                sample_rate: 48000,
+                num_channels: 1,
+                samples_per_channel: None,
+            },
+            item_id: None,
         })
     );
 

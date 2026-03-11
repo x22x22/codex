@@ -1,11 +1,17 @@
 pub use codex_protocol::protocol::RealtimeAudioFrame;
+pub use codex_protocol::protocol::RealtimeCloseRequested;
 pub use codex_protocol::protocol::RealtimeEvent;
 pub use codex_protocol::protocol::RealtimeHandoffRequested;
+pub use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
+pub use codex_protocol::protocol::RealtimeInterruptRequested;
+pub use codex_protocol::protocol::RealtimeOutputAudioDelta;
+pub use codex_protocol::protocol::RealtimeResponseCancelled;
 pub use codex_protocol::protocol::RealtimeTranscriptDelta;
 pub use codex_protocol::protocol::RealtimeTranscriptEntry;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::string::ToString;
 use tracing::debug;
 
@@ -23,6 +29,12 @@ pub(super) enum RealtimeOutboundMessage {
     InputAudioBufferAppend { audio: String },
     #[serde(rename = "response.create")]
     ResponseCreate,
+    #[serde(rename = "conversation.item.truncate")]
+    ConversationItemTruncate {
+        item_id: String,
+        content_index: u32,
+        audio_end_ms: u32,
+    },
     #[serde(rename = "session.update")]
     SessionUpdate { session: SessionUpdateSession },
     #[serde(rename = "conversation.item.create")]
@@ -49,6 +61,7 @@ pub(super) struct SessionAudio {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct SessionAudioInput {
     pub(super) format: SessionAudioFormat,
+    pub(super) noise_reduction: SessionNoiseReduction,
     pub(super) turn_detection: SessionTurnDetection,
 }
 
@@ -57,6 +70,12 @@ pub(super) struct SessionAudioFormat {
     #[serde(rename = "type")]
     pub(super) kind: String,
     pub(super) rate: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct SessionNoiseReduction {
+    #[serde(rename = "type")]
+    pub(super) kind: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -93,13 +112,8 @@ pub(super) struct SessionTool {
 pub(super) struct SessionToolParameters {
     #[serde(rename = "type")]
     pub(super) kind: String,
-    pub(super) properties: SessionToolProperties,
+    pub(super) properties: BTreeMap<String, SessionToolProperty>,
     pub(super) required: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionToolProperties {
-    pub(super) prompt: SessionToolProperty,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -163,7 +177,10 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
                 instructions,
             })
         }
-        "conversation.output_audio.delta" | "response.output_audio.delta" => {
+
+        "conversation.output_audio.delta"
+        | "response.output_audio.delta"
+        | "response.audio.delta" => {
             let data = parsed
                 .get("delta")
                 .and_then(Value::as_str)
@@ -180,16 +197,30 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
                 .and_then(Value::as_u64)
                 .and_then(|v| u16::try_from(v).ok())
                 .unwrap_or(1);
-            Some(RealtimeEvent::AudioOut(RealtimeAudioFrame {
-                data,
-                sample_rate,
-                num_channels,
-                samples_per_channel: parsed
-                    .get("samples_per_channel")
-                    .and_then(Value::as_u64)
-                    .and_then(|v| u32::try_from(v).ok()),
+            Some(RealtimeEvent::AudioOut(RealtimeOutputAudioDelta {
+                frame: RealtimeAudioFrame {
+                    data,
+                    sample_rate,
+                    num_channels,
+                    samples_per_channel: parsed
+                        .get("samples_per_channel")
+                        .and_then(Value::as_u64)
+                        .and_then(|v| u32::try_from(v).ok()),
+                },
+                item_id: parsed
+                    .get("item_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
             }))
         }
+        "input_audio_buffer.speech_started" => Some(RealtimeEvent::InputAudioSpeechStarted(
+            RealtimeInputAudioSpeechStarted {
+                item_id: parsed
+                    .get("item_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            },
+        )),
         "conversation.input_transcript.delta" => parsed
             .get("delta")
             .and_then(Value::as_str)
@@ -228,6 +259,7 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
                 handoff_id,
                 item_id,
                 input_transcript,
+                send_immediately: false,
                 active_transcript: Vec::new(),
             }))
         }
@@ -235,8 +267,33 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
             if let Some(handoff) = parse_handoff_requested(&parsed) {
                 return Some(RealtimeEvent::HandoffRequested(handoff));
             }
+            if let Some(interrupt) = parse_interrupt_requested(&parsed) {
+                return Some(RealtimeEvent::InterruptRequested(interrupt));
+            }
+            if let Some(close) = parse_close_requested(&parsed) {
+                return Some(RealtimeEvent::CloseRequested(close));
+            }
+            if let Some(cancelled) = parse_response_cancelled(&parsed) {
+                return Some(RealtimeEvent::ResponseCancelled(cancelled));
+            }
             Some(RealtimeEvent::ConversationItemAdded(parsed))
         }
+        "response.cancelled" => Some(RealtimeEvent::ResponseCancelled(
+            RealtimeResponseCancelled {
+                response_id: parsed
+                    .get("response")
+                    .and_then(Value::as_object)
+                    .and_then(|response| response.get("id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        parsed
+                            .get("response_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    }),
+            },
+        )),
         "error" => parsed
             .get("message")
             .and_then(Value::as_str)
@@ -256,15 +313,7 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
 }
 
 fn parse_handoff_requested(parsed: &Value) -> Option<RealtimeHandoffRequested> {
-    let outputs = parsed
-        .get("response")
-        .and_then(Value::as_object)
-        .and_then(|response| response.get("output"))
-        .and_then(Value::as_array)?;
-    let function_call = outputs.iter().find(|item| {
-        item.get("type").and_then(Value::as_str) == Some("function_call")
-            && item.get("name").and_then(Value::as_str) == Some("codex")
-    })?;
+    let function_call = find_function_call(parsed, "codex")?;
     let handoff_id = function_call
         .get("call_id")
         .and_then(Value::as_str)
@@ -278,15 +327,70 @@ fn parse_handoff_requested(parsed: &Value) -> Option<RealtimeHandoffRequested> {
         .get("arguments")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let parsed_arguments = parse_handoff_arguments(arguments);
     Some(RealtimeHandoffRequested {
         handoff_id,
         item_id,
-        input_transcript: parse_handoff_arguments(arguments),
+        input_transcript: parsed_arguments.input_transcript,
+        send_immediately: parsed_arguments.send_immediately,
         active_transcript: Vec::new(),
     })
 }
 
-fn parse_handoff_arguments(arguments: &str) -> String {
+fn parse_interrupt_requested(parsed: &Value) -> Option<RealtimeInterruptRequested> {
+    let function_call = find_function_call(parsed, "cancel_current_operation")?;
+    Some(RealtimeInterruptRequested {
+        call_id: function_call
+            .get("call_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)?,
+    })
+}
+
+fn parse_close_requested(parsed: &Value) -> Option<RealtimeCloseRequested> {
+    let function_call = find_function_call(parsed, "turn_off_realtime_mode")?;
+    Some(RealtimeCloseRequested {
+        call_id: function_call
+            .get("call_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)?,
+    })
+}
+
+fn parse_response_cancelled(parsed: &Value) -> Option<RealtimeResponseCancelled> {
+    let response = parsed.get("response")?.as_object()?;
+    let status = response.get("status").and_then(Value::as_str)?;
+    if status != "cancelled" {
+        return None;
+    }
+
+    Some(RealtimeResponseCancelled {
+        response_id: response
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+fn find_function_call<'a>(parsed: &'a Value, name: &str) -> Option<&'a Value> {
+    parsed
+        .get("response")
+        .and_then(Value::as_object)
+        .and_then(|response| response.get("output"))
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("function_call")
+                && item.get("name").and_then(Value::as_str) == Some(name)
+        })
+}
+
+struct ParsedHandoffArguments {
+    input_transcript: String,
+    send_immediately: bool,
+}
+
+fn parse_handoff_arguments(arguments: &str) -> ParsedHandoffArguments {
     #[derive(Debug, Deserialize)]
     struct HandoffArguments {
         #[serde(default)]
@@ -300,11 +404,16 @@ fn parse_handoff_arguments(arguments: &str) -> String {
         #[serde(default)]
         input_transcript: Option<String>,
         #[serde(default)]
+        send_immediately: bool,
+        #[serde(default)]
         messages: Vec<RealtimeTranscriptEntry>,
     }
 
     let Some(parsed) = serde_json::from_str::<HandoffArguments>(arguments).ok() else {
-        return arguments.to_string();
+        return ParsedHandoffArguments {
+            input_transcript: arguments.to_string(),
+            send_immediately: false,
+        };
     };
 
     for value in [
@@ -318,7 +427,10 @@ fn parse_handoff_arguments(arguments: &str) -> String {
     .flatten()
     {
         if !value.is_empty() {
-            return value;
+            return ParsedHandoffArguments {
+                input_transcript: value,
+                send_immediately: parsed.send_immediately,
+            };
         }
     }
 
@@ -327,8 +439,14 @@ fn parse_handoff_arguments(arguments: &str) -> String {
         .into_iter()
         .find(|message| message.role == "user" && !message.text.is_empty())
     {
-        return message.text;
+        return ParsedHandoffArguments {
+            input_transcript: message.text,
+            send_immediately: parsed.send_immediately,
+        };
     }
 
-    String::new()
+    ParsedHandoffArguments {
+        input_transcript: String::new(),
+        send_immediately: parsed.send_immediately,
+    }
 }

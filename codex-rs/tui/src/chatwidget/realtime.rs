@@ -1,12 +1,29 @@
 use super::*;
+use codex_protocol::protocol::ConversationAudioTruncateParams;
 use codex_protocol::protocol::ConversationStartParams;
-use codex_protocol::protocol::RealtimeAudioFrame;
+use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeOutputAudioDelta;
 
-const REALTIME_CONVERSATION_PROMPT: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
+const REALTIME_CONVERSATION_PROMPT: &str = concat!(
+    "You are in a realtime voice conversation in the Codex TUI. ",
+    "You can call the codex function to delegate work to Codex, this should be your default action. Don't verbalize anything before calling codex. ",
+    "The codex function queues requests by default when Codex is already busy. Set send_immediately=true only when you need to steer the current Codex turn right away. ",
+    "If the user asks to stop, cancel, or abort ongoing Codex work, call cancel_current_operation before speaking. ",
+    "If the user asks to stop voice mode, exit realtime mode, or turn off live voice, call turn_off_realtime_mode and do not speak afterward. ",
+    "Codex can inspect the repository, read and edit files, run commands, and produce detailed ",
+    "text output that the user can read in the TUI. ",
+    "Use codex whenever the user asks for codebase-specific facts, debugging, file changes, ",
+    "command output, or anything that benefits from tools. ",
+    "When you speak to the user directly, be extremely concise. ",
+    "Prefer short spoken answers because the user can see the detailed text output themselves. ",
+    "Do not read long code snippets, long file paths, diffs, or command output aloud unless the ",
+    "user explicitly asks for that."
+);
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum RealtimeConversationPhase {
@@ -22,7 +39,7 @@ pub(super) struct RealtimeConversationUiState {
     phase: RealtimeConversationPhase,
     requested_close: bool,
     session_id: Option<String>,
-    warned_audio_only_submission: bool,
+    warned_unsupported_composer_submission: bool,
     meter_placeholder_id: Option<String>,
     #[cfg(not(target_os = "linux"))]
     capture_stop_flag: Option<Arc<AtomicBool>>,
@@ -44,6 +61,13 @@ impl RealtimeConversationUiState {
 
     pub(super) fn is_active(&self) -> bool {
         matches!(self.phase, RealtimeConversationPhase::Active)
+    }
+}
+
+#[cfg(test)]
+impl RealtimeConversationUiState {
+    pub(super) fn set_phase_for_test(&mut self, phase: RealtimeConversationPhase) {
+        self.phase = phase;
     }
 }
 
@@ -170,7 +194,7 @@ impl ChatWidget {
         self.last_rendered_user_message_event.as_ref() != Some(&key)
     }
 
-    pub(super) fn maybe_defer_user_message_for_realtime(
+    pub(super) fn maybe_submit_user_message_for_realtime(
         &mut self,
         user_message: UserMessage,
     ) -> Option<UserMessage> {
@@ -178,16 +202,71 @@ impl ChatWidget {
             return Some(user_message);
         }
 
-        self.restore_user_message_to_composer(user_message);
-        if !self.realtime_conversation.warned_audio_only_submission {
-            self.realtime_conversation.warned_audio_only_submission = true;
-            self.add_info_message(
-                "Realtime voice mode is audio-only. Use /realtime to stop.".to_string(),
-                None,
-            );
-        } else {
-            self.request_redraw();
+        let UserMessage {
+            text,
+            local_images,
+            remote_image_urls,
+            text_elements,
+            mention_bindings,
+        } = user_message;
+
+        if !local_images.is_empty() || !remote_image_urls.is_empty() {
+            self.restore_user_message_to_composer(UserMessage {
+                text,
+                local_images,
+                remote_image_urls,
+                text_elements,
+                mention_bindings,
+            });
+            if !self
+                .realtime_conversation
+                .warned_unsupported_composer_submission
+            {
+                self.realtime_conversation
+                    .warned_unsupported_composer_submission = true;
+                self.add_info_message(
+                    "Realtime voice mode accepts typed text, but not image attachments. Remove attachments or use /realtime to stop."
+                        .to_string(),
+                    None,
+                );
+            } else {
+                self.request_redraw();
+            }
+            return None;
         }
+
+        self.realtime_conversation
+            .warned_unsupported_composer_submission = false;
+
+        if !self.submit_op(Op::RealtimeConversationText(ConversationTextParams {
+            text: text.clone(),
+        })) {
+            return None;
+        }
+
+        if !text.is_empty() {
+            let encoded_mentions = mention_bindings
+                .iter()
+                .map(|binding| LinkedMention {
+                    mention: binding.mention.clone(),
+                    path: binding.path.clone(),
+                })
+                .collect::<Vec<_>>();
+            let history_text = encode_history_mentions(&text, &encoded_mentions);
+            self.codex_op_tx
+                .send(Op::AddToHistory { text: history_text })
+                .unwrap_or_else(|e| {
+                    tracing::error!("failed to send AddHistory op: {e}");
+                });
+        }
+
+        self.on_user_message_event(UserMessageEvent {
+            message: text,
+            images: None,
+            local_images: Vec::new(),
+            text_elements,
+        });
+        self.request_redraw();
 
         None
     }
@@ -200,7 +279,8 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Starting;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
-        self.realtime_conversation.warned_audio_only_submission = false;
+        self.realtime_conversation
+            .warned_unsupported_composer_submission = false;
         self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
         self.submit_op(Op::RealtimeConversationStart(ConversationStartParams {
             prompt: REALTIME_CONVERSATION_PROMPT.to_string(),
@@ -236,7 +316,8 @@ impl ChatWidget {
         self.realtime_conversation.phase = RealtimeConversationPhase::Inactive;
         self.realtime_conversation.requested_close = false;
         self.realtime_conversation.session_id = None;
-        self.realtime_conversation.warned_audio_only_submission = false;
+        self.realtime_conversation
+            .warned_unsupported_composer_submission = false;
     }
 
     pub(super) fn on_realtime_conversation_started(
@@ -250,7 +331,8 @@ impl ChatWidget {
         }
         self.realtime_conversation.phase = RealtimeConversationPhase::Active;
         self.realtime_conversation.session_id = ev.session_id;
-        self.realtime_conversation.warned_audio_only_submission = false;
+        self.realtime_conversation
+            .warned_unsupported_composer_submission = false;
         self.set_footer_hint_override(Some(Self::realtime_footer_hint_items()));
         self.start_realtime_local_audio();
         self.request_redraw();
@@ -264,12 +346,26 @@ impl ChatWidget {
             RealtimeEvent::SessionUpdated { session_id, .. } => {
                 self.realtime_conversation.session_id = Some(session_id);
             }
+            RealtimeEvent::InputAudioSpeechStarted(_) => {
+                self.interrupt_realtime_audio_playback();
+            }
             RealtimeEvent::InputTranscriptDelta(_) => {}
             RealtimeEvent::OutputTranscriptDelta(_) => {}
             RealtimeEvent::AudioOut(frame) => self.enqueue_realtime_audio_out(&frame),
+            RealtimeEvent::ResponseCancelled(_) => {
+                self.interrupt_realtime_audio_playback();
+            }
             RealtimeEvent::ConversationItemAdded(_item) => {}
             RealtimeEvent::ConversationItemDone { .. } => {}
-            RealtimeEvent::HandoffRequested(_) => {}
+            RealtimeEvent::HandoffRequested(handoff) => {
+                self.on_realtime_handoff_requested(handoff);
+            }
+            RealtimeEvent::InterruptRequested(_) => {}
+            RealtimeEvent::CloseRequested(_) => {
+                self.request_realtime_conversation_close(Some(
+                    "Realtime voice mode turned off.".to_string(),
+                ));
+            }
             RealtimeEvent::Error(message) => {
                 self.add_error_message(format!("Realtime voice error: {message}"));
                 self.reset_realtime_conversation_state();
@@ -287,7 +383,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn enqueue_realtime_audio_out(&mut self, frame: &RealtimeAudioFrame) {
+    fn enqueue_realtime_audio_out(&mut self, frame: &RealtimeOutputAudioDelta) {
         #[cfg(not(target_os = "linux"))]
         {
             if self.realtime_conversation.audio_player.is_none() {
@@ -303,6 +399,48 @@ impl ChatWidget {
         #[cfg(target_os = "linux")]
         {
             let _ = frame;
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn interrupt_realtime_audio_playback(&mut self) {
+        let Some(player) = &self.realtime_conversation.audio_player else {
+            return;
+        };
+
+        let Some(position) = player.interrupt() else {
+            return;
+        };
+
+        self.submit_op(Op::RealtimeConversationAudioTruncate(
+            ConversationAudioTruncateParams {
+                item_id: position.item_id,
+                content_index: 0,
+                audio_end_ms: position.audio_end_ms,
+            },
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn interrupt_realtime_audio_playback(&mut self) {}
+
+    fn on_realtime_handoff_requested(&mut self, handoff: RealtimeHandoffRequested) {
+        let Some(text) = realtime_text_from_handoff_request(&handoff) else {
+            return;
+        };
+
+        let user_message = UserMessage {
+            text,
+            local_images: Vec::new(),
+            remote_image_urls: Vec::new(),
+            text_elements: Vec::new(),
+            mention_bindings: Vec::new(),
+        };
+
+        if handoff.send_immediately {
+            self.submit_user_message(user_message);
+        } else {
+            self.queue_user_message(user_message);
         }
     }
 
@@ -427,4 +565,18 @@ impl ChatWidget {
             player.clear();
         }
     }
+}
+
+fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Option<String> {
+    let active_transcript = handoff
+        .active_transcript
+        .iter()
+        .map(|entry| format!("{}: {}", entry.role, entry.text))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!active_transcript.is_empty())
+        .then_some(active_transcript)
+        .or_else(|| {
+            (!handoff.input_transcript.is_empty()).then(|| handoff.input_transcript.clone())
+        })
 }

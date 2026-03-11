@@ -18,6 +18,7 @@ use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::ConversationAudioTruncateParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
@@ -46,6 +47,8 @@ const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_000;
 const DEFAULT_REALTIME_MODEL: &str = "gpt-realtime-1.5";
+const INTERRUPT_TOOL_OUTPUT_CANCELLED: &str = "Cancelled the current Codex operation.";
+const INTERRUPT_TOOL_OUTPUT_IDLE: &str = "No active Codex operation was running.";
 
 pub(crate) struct RealtimeConversationManager {
     state: Mutex<Option<ConversationState>>,
@@ -111,12 +114,24 @@ impl RealtimeHandoffState {
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         Ok(())
     }
+
+    async fn send_tool_call_output(&self, call_id: String, output_text: String) -> CodexResult<()> {
+        self.output_tx
+            .send(HandoffOutput::FinalToolCall {
+                call_id,
+                output_text,
+            })
+            .await
+            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]
 struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
     user_text_tx: Sender<String>,
+    writer: RealtimeWebsocketWriter,
     handoff: RealtimeHandoffState,
     task: JoinHandle<()>,
     realtime_active: Arc<AtomicBool>,
@@ -184,7 +199,7 @@ impl RealtimeConversationManager {
         let realtime_active = Arc::new(AtomicBool::new(true));
         let handoff = RealtimeHandoffState::new(handoff_output_tx);
         let task = spawn_realtime_input_task(
-            writer,
+            writer.clone(),
             events,
             user_text_rx,
             handoff_output_rx,
@@ -197,6 +212,7 @@ impl RealtimeConversationManager {
         *guard = Some(ConversationState {
             audio_tx,
             user_text_tx,
+            writer,
             handoff,
             task,
             realtime_active: Arc::clone(&realtime_active),
@@ -247,6 +263,32 @@ impl RealtimeConversationManager {
         Ok(())
     }
 
+    pub(crate) async fn audio_truncate(
+        &self,
+        params: ConversationAudioTruncateParams,
+    ) -> CodexResult<()> {
+        let writer = {
+            let guard = self.state.lock().await;
+            guard.as_ref().map(|state| state.writer.clone())
+        };
+
+        let Some(writer) = writer else {
+            return Err(CodexErr::InvalidRequest(
+                "conversation is not running".to_string(),
+            ));
+        };
+
+        writer
+            .send_conversation_item_truncate(
+                params.item_id,
+                params.content_index,
+                params.audio_end_ms,
+            )
+            .await
+            .map_err(map_api_error)?;
+        Ok(())
+    }
+
     pub(crate) async fn handoff_out(&self, output_text: String) -> CodexResult<()> {
         let handoff = {
             let guard = self.state.lock().await;
@@ -270,6 +312,21 @@ impl RealtimeConversationManager {
             return Ok(());
         };
         handoff.send_final_output().await
+    }
+
+    pub(crate) async fn tool_call_complete(
+        &self,
+        call_id: String,
+        output_text: String,
+    ) -> CodexResult<()> {
+        let handoff = {
+            let guard = self.state.lock().await;
+            guard.as_ref().map(|state| state.handoff.clone())
+        };
+        let Some(handoff) = handoff else {
+            return Ok(());
+        };
+        handoff.send_tool_call_output(call_id, output_text).await
     }
 
     pub(crate) async fn active_handoff_id(&self) -> Option<String> {
@@ -388,7 +445,7 @@ pub(crate) async fn handle_start(
                 );
             }
             let maybe_routed_text = match &event {
-                RealtimeEvent::HandoffRequested(handoff) => {
+                RealtimeEvent::HandoffRequested(handoff) if handoff.send_immediately => {
                     realtime_text_from_handoff_request(handoff)
                 }
                 _ => None,
@@ -397,6 +454,21 @@ pub(crate) async fn handle_start(
                 debug!(text = %text, "[realtime-text] realtime conversation text output");
                 let sess_for_routed_text = Arc::clone(&sess_clone);
                 sess_for_routed_text.route_realtime_text_input(text).await;
+            }
+            if let RealtimeEvent::InterruptRequested(interrupt) = &event {
+                let output_text = if sess_clone.has_active_turn().await {
+                    INTERRUPT_TOOL_OUTPUT_CANCELLED.to_string()
+                } else {
+                    INTERRUPT_TOOL_OUTPUT_IDLE.to_string()
+                };
+                sess_clone.interrupt_task().await;
+                if let Err(err) = sess_clone
+                    .conversation
+                    .tool_call_complete(interrupt.call_id.clone(), output_text)
+                    .await
+                {
+                    debug!("failed to send realtime interrupt tool output: {err}");
+                }
             }
             sess_clone
                 .send_event_raw(ev(EventMsg::RealtimeConversationRealtime(
@@ -428,6 +500,17 @@ pub(crate) async fn handle_audio(
 ) {
     if let Err(err) = sess.conversation.audio_in(params.frame).await {
         error!("failed to append realtime audio: {err}");
+        send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
+    }
+}
+
+pub(crate) async fn handle_audio_truncate(
+    sess: &Arc<Session>,
+    sub_id: String,
+    params: ConversationAudioTruncateParams,
+) {
+    if let Err(err) = sess.conversation.audio_truncate(params).await {
+        error!("failed to truncate realtime audio: {err}");
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
     }
 }
@@ -666,6 +749,7 @@ async fn send_conversation_error(
 #[cfg(test)]
 mod tests {
     use super::HandoffOutput;
+    use super::INTERRUPT_TOOL_OUTPUT_CANCELLED;
     use super::RealtimeHandoffState;
     use super::realtime_text_from_handoff_request;
     use async_channel::bounded;
@@ -679,6 +763,7 @@ mod tests {
             handoff_id: "handoff_1".to_string(),
             item_id: "item_1".to_string(),
             input_transcript: "ignored".to_string(),
+            send_immediately: false,
             active_transcript: vec![
                 RealtimeTranscriptEntry {
                     role: "user".to_string(),
@@ -702,6 +787,7 @@ mod tests {
             handoff_id: "handoff_1".to_string(),
             item_id: "item_1".to_string(),
             input_transcript: "ignored".to_string(),
+            send_immediately: false,
             active_transcript: vec![],
         };
         assert_eq!(
@@ -716,6 +802,7 @@ mod tests {
             handoff_id: "handoff_1".to_string(),
             item_id: "item_1".to_string(),
             input_transcript: String::new(),
+            send_immediately: false,
             active_transcript: vec![],
         };
         assert_eq!(realtime_text_from_handoff_request(&handoff), None);
@@ -799,6 +886,29 @@ mod tests {
             HandoffOutput::FinalToolCall {
                 call_id: "handoff_2".to_string(),
                 output_text: "final text".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn sends_explicit_tool_call_output() {
+        let (tx, rx) = bounded(1);
+        let state = RealtimeHandoffState::new(tx);
+
+        state
+            .send_tool_call_output(
+                "cancel_1".to_string(),
+                INTERRUPT_TOOL_OUTPUT_CANCELLED.to_string(),
+            )
+            .await
+            .expect("send tool output");
+
+        let output = rx.recv().await.expect("recv");
+        assert_eq!(
+            output,
+            HandoffOutput::FinalToolCall {
+                call_id: "cancel_1".to_string(),
+                output_text: INTERRUPT_TOOL_OUTPUT_CANCELLED.to_string(),
             }
         );
     }

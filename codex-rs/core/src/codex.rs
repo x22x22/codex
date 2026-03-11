@@ -36,6 +36,7 @@ use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
+use crate::realtime_conversation::handle_audio_truncate as handle_realtime_conversation_audio_truncate;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
@@ -2541,13 +2542,14 @@ impl Session {
     }
 
     async fn maybe_clear_realtime_handoff_for_event(&self, msg: &EventMsg) {
-        if !matches!(msg, EventMsg::TurnComplete(_)) {
-            return;
-        }
-        if let Err(err) = self.conversation.handoff_complete().await {
+        if matches!(msg, EventMsg::TurnComplete(_))
+            && let Err(err) = self.conversation.handoff_complete().await
+        {
             debug!("failed to send final realtime handoff tool output: {err}");
         }
-        self.conversation.clear_active_handoff().await;
+        if matches!(msg, EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_)) {
+            self.conversation.clear_active_handoff().await;
+        }
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
@@ -2638,6 +2640,10 @@ impl Session {
             .as_ref()
             .and_then(|turn| turn.tasks.get(sub_id))
             .map(|task| Arc::clone(&task.turn_context))
+    }
+
+    pub(crate) async fn has_active_turn(&self) -> bool {
+        self.active_turn.lock().await.is_some()
     }
 
     async fn active_turn_context_and_cancellation_token(
@@ -4053,6 +4059,11 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handle_realtime_conversation_audio(&sess, sub.id.clone(), params).await;
                     false
                 }
+                Op::RealtimeConversationAudioTruncate(params) => {
+                    handle_realtime_conversation_audio_truncate(&sess, sub.id.clone(), params)
+                        .await;
+                    false
+                }
                 Op::RealtimeConversationText(params) => {
                     handle_realtime_conversation_text(&sess, sub.id.clone(), params).await;
                     false
@@ -4250,7 +4261,7 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
 
 fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
     let dispatch_span = match &sub.op {
-        Op::RealtimeConversationAudio(_) => {
+        Op::RealtimeConversationAudio(_) | Op::RealtimeConversationAudioTruncate(_) => {
             debug_span!("submission_dispatch", submission.id = sub.id.as_str())
         }
         _ => info_span!("submission_dispatch", submission.id = sub.id.as_str()),

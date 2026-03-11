@@ -3816,7 +3816,7 @@ impl ChatWidget {
                         return;
                     }
                     let Some(user_message) =
-                        self.maybe_defer_user_message_for_realtime(user_message)
+                        self.maybe_submit_user_message_for_realtime(user_message)
                     else {
                         return;
                     };
@@ -3851,7 +3851,7 @@ impl ChatWidget {
                             .take_recent_submission_mention_bindings(),
                     };
                     let Some(user_message) =
-                        self.maybe_defer_user_message_for_realtime(user_message)
+                        self.maybe_submit_user_message_for_realtime(user_message)
                     else {
                         return;
                     };

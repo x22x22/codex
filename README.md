@@ -16,6 +16,7 @@ If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="http
 
 Install globally with your preferred package manager:
 
+
 ```shell
 # Install using npm
 npm install -g @openai/codex
@@ -32,6 +33,7 @@ Then simply run `codex` to get started.
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
 
 Each GitHub Release contains many executables, but in practice, you likely want one of these:
+
 
 - macOS
   - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`

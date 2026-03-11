@@ -132,6 +132,13 @@ pub struct RealtimeAudioFrame {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeOutputAudioDelta {
+    pub frame: RealtimeAudioFrame,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct RealtimeTranscriptDelta {
     pub delta: String,
 }
@@ -147,7 +154,31 @@ pub struct RealtimeHandoffRequested {
     pub handoff_id: String,
     pub item_id: String,
     pub input_transcript: String,
+    #[serde(default)]
+    pub send_immediately: bool,
     pub active_transcript: Vec<RealtimeTranscriptEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeInterruptRequested {
+    pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeCloseRequested {
+    pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeInputAudioSpeechStarted {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeResponseCancelled {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -158,18 +189,29 @@ pub enum RealtimeEvent {
     },
     InputTranscriptDelta(RealtimeTranscriptDelta),
     OutputTranscriptDelta(RealtimeTranscriptDelta),
-    AudioOut(RealtimeAudioFrame),
+    AudioOut(RealtimeOutputAudioDelta),
+    InputAudioSpeechStarted(RealtimeInputAudioSpeechStarted),
+    ResponseCancelled(RealtimeResponseCancelled),
     ConversationItemAdded(Value),
     ConversationItemDone {
         item_id: String,
     },
     HandoffRequested(RealtimeHandoffRequested),
+    InterruptRequested(RealtimeInterruptRequested),
+    CloseRequested(RealtimeCloseRequested),
     Error(String),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ConversationAudioParams {
     pub frame: RealtimeAudioFrame,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ConversationAudioTruncateParams {
+    pub item_id: String,
+    pub content_index: u32,
+    pub audio_end_ms: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -195,6 +237,9 @@ pub enum Op {
 
     /// Send audio input to the running realtime conversation stream.
     RealtimeConversationAudio(ConversationAudioParams),
+
+    /// Truncate the current assistant audio item in the running realtime conversation stream.
+    RealtimeConversationAudioTruncate(ConversationAudioTruncateParams),
 
     /// Send text input to the running realtime conversation stream.
     RealtimeConversationText(ConversationTextParams),
@@ -3957,6 +4002,11 @@ mod tests {
                 samples_per_channel: Some(480),
             },
         });
+        let truncate = Op::RealtimeConversationAudioTruncate(ConversationAudioTruncateParams {
+            item_id: "item_1".to_string(),
+            content_index: 0,
+            audio_end_ms: 320,
+        });
         let start = Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "be helpful".to_string(),
             session_id: Some("conv_1".to_string()),
@@ -3985,6 +4035,19 @@ mod tests {
                     "samples_per_channel": 480
                 }
             })
+        );
+        assert_eq!(
+            serde_json::to_value(&truncate).unwrap(),
+            json!({
+                "type": "realtime_conversation_audio_truncate",
+                "item_id": "item_1",
+                "content_index": 0,
+                "audio_end_ms": 320
+            })
+        );
+        assert_eq!(
+            serde_json::from_value::<Op>(serde_json::to_value(&truncate).unwrap()).unwrap(),
+            truncate
         );
         assert_eq!(
             serde_json::from_value::<Op>(serde_json::to_value(&text).unwrap()).unwrap(),
