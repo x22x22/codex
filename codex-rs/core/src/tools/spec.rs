@@ -20,7 +20,9 @@ use crate::tools::handlers::multi_agents::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
+use crate::tools::registry::BuiltinToolKey;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::tools::registry::builtin_tool_invocation_names;
 use codex_protocol::config_types::WebSearchConfig;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
@@ -273,41 +275,10 @@ impl ToolsConfig {
     }
 }
 
-fn builtin_tool_names() -> BTreeSet<&'static str> {
-    BTreeSet::from([
-        "apply_patch",
-        "artifacts",
-        "close_agent",
-        "code_mode",
-        "container.exec",
-        "exec_command",
-        "grep_files",
-        "image_generation",
-        "js_repl",
-        "js_repl_reset",
-        "list_dir",
-        "list_mcp_resource_templates",
-        "list_mcp_resources",
-        "local_shell",
-        "read_file",
-        "read_mcp_resource",
-        "report_agent_job_result",
-        "request_permissions",
-        "request_user_input",
-        "resume_agent",
-        "search_tool_bm25",
-        "send_input",
-        "shell",
-        "shell_command",
-        "spawn_agent",
-        "spawn_agents_on_csv",
-        "test_sync_tool",
-        "update_plan",
-        "view_image",
-        "wait",
-        "web_search",
-        "write_stdin",
-    ])
+fn builtin_tool_names() -> BTreeSet<String> {
+    builtin_tool_invocation_names()
+        .map(str::to_string)
+        .collect()
 }
 
 pub fn validate_builtin_tools_request(requested_builtin_tools: &[String]) -> Result<(), String> {
@@ -2224,10 +2195,16 @@ pub(crate) fn build_specs(
 
     if config.shell_type != ConfigShellToolType::Disabled {
         // Always register shell aliases so older prompts remain compatible.
-        builder.register_handler("shell", shell_handler.clone());
-        builder.register_handler("container.exec", shell_handler.clone());
-        builder.register_handler("local_shell", shell_handler);
-        builder.register_handler("shell_command", shell_command_handler);
+        builder.register_builtin_handler_for_names(
+            BuiltinToolKey::ExecCommand,
+            &["shell", "container.exec", "local_shell"],
+            shell_handler,
+        );
+        builder.register_builtin_handler_for_names(
+            BuiltinToolKey::ExecCommand,
+            &["shell_command"],
+            shell_command_handler,
+        );
     }
 
     if mcp_tools.is_some() {
@@ -2331,7 +2308,7 @@ pub(crate) fn build_specs(
                 );
             }
         }
-        builder.register_handler("apply_patch", apply_patch_handler);
+        builder.register_builtin_handler(BuiltinToolKey::ApplyPatch, apply_patch_handler);
     }
 
     if config
