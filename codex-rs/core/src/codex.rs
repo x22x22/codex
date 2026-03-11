@@ -41,7 +41,6 @@ use crate::realtime_conversation::handle_start as handle_realtime_conversation_s
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
 use crate::stream_events_utils::HandleOutputCtx;
-use crate::stream_events_utils::ServerSideCompaction;
 use crate::stream_events_utils::handle_non_tool_response_item;
 use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
@@ -81,6 +80,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -3543,7 +3543,7 @@ impl Session {
     pub(crate) async fn record_context_updates_and_set_reference_context_item(
         &self,
         turn_context: &TurnContext,
-    ) -> Vec<ResponseItem> {
+    ) {
         let reference_context_item = {
             let state = self.state.lock().await;
             state.reference_context_item()
@@ -3570,7 +3570,6 @@ impl Session {
         // context items. This keeps later runtime diffing aligned with the current turn state.
         let mut state = self.state.lock().await;
         state.set_reference_context_item(Some(turn_context_item));
-        context_items
     }
 
     pub(crate) async fn update_token_usage_info(
@@ -5537,12 +5536,8 @@ pub(crate) async fn run_turn(
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    sess.record_user_prompt_and_emit_turn_item(
-        turn_context.as_ref(),
-        &input,
-        response_item.clone(),
-    )
-    .await;
+    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+        .await;
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
     // model/realtime injections.
@@ -5691,22 +5686,9 @@ pub(crate) async fn run_turn(
         .await
         {
             Ok(sampling_request_output) => {
-                if inline_server_side_compaction_threshold(&sess, &turn_context).is_some() {
-                    let result = if sampling_request_output.observed_server_side_compaction {
-                        "applied"
-                    } else {
-                        "skipped"
-                    };
-                    sess.services.session_telemetry.counter(
-                        "codex.inline_compaction",
-                        1,
-                        &[("result", result)],
-                    );
-                }
                 let SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message: sampling_request_last_agent_message,
-                    observed_server_side_compaction: _,
                 } = sampling_request_output;
                 let total_usage_tokens = sess.get_total_token_usage().await;
                 let token_limit_reached = total_usage_tokens >= auto_compact_limit;
@@ -5725,19 +5707,18 @@ pub(crate) async fn run_turn(
                 );
 
                 // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
-                if token_limit_reached && needs_follow_up {
-                    if inline_server_side_compaction_threshold(&sess, &turn_context).is_some() {
-                    } else if run_auto_compact(
+                if token_limit_reached
+                    && needs_follow_up
+                    && inline_server_side_compaction_threshold(&sess, &turn_context).is_none()
+                    && run_auto_compact(
                         &sess,
                         &turn_context,
                         InitialContextInjection::BeforeLastUserMessage,
                     )
                     .await
                     .is_err()
-                    {
-                        return None;
-                    }
-                    continue;
+                {
+                    return None;
                 }
 
                 if !needs_follow_up {
@@ -5898,9 +5879,8 @@ fn inline_server_side_compaction_threshold(
     if !should_use_remote_compact_task(&turn_context.provider) {
         return None;
     }
-    // OpenAI inline auto-compaction uses Responses `context_management`, which has no
-    // compaction-prompt field. Auto-compaction therefore ignores `compact_prompt`, while manual
-    // `/compact` still uses the point-in-time compact endpoint.
+    // Inline Responses compaction has no prompt override; manual `/compact` still uses the
+    // point-in-time compact endpoint.
     turn_context.model_info.auto_compact_token_limit()
 }
 
@@ -6392,7 +6372,6 @@ pub(crate) async fn built_tools(
 struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
-    observed_server_side_compaction: bool,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
@@ -6982,7 +6961,6 @@ async fn try_run_sampling_request(
         FuturesOrdered::new();
     let mut needs_follow_up = false;
     let mut last_agent_message: Option<String> = None;
-    let mut observed_server_side_compaction = false;
     let mut active_item: Option<TurnItem> = None;
     let mut should_emit_turn_diff = false;
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
@@ -7026,7 +7004,6 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                let saw_server_side_compaction = matches!(item, ResponseItem::Compaction { .. });
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
                     && matches!(previous, TurnItem::AgentMessage(_))
@@ -7055,6 +7032,28 @@ async fn try_run_sampling_request(
                     continue;
                 }
 
+                if matches!(item, ResponseItem::Compaction { .. }) {
+                    let turn_item = TurnItem::ContextCompaction(match previously_active_item {
+                        Some(TurnItem::ContextCompaction(item)) => item,
+                        _ => ContextCompactionItem::new(),
+                    });
+                    debug!(
+                        turn_id = %turn_context.sub_id,
+                        "emitting streamed server-side raw compaction item for immediate local checkpoint apply"
+                    );
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::RawResponseItem(RawResponseItemEvent { item: item.clone() }),
+                    )
+                    .await;
+                    sess.apply_server_side_compaction(turn_context.as_ref(), item)
+                        .await;
+                    sess.emit_turn_item_started(&turn_context, &turn_item).await;
+                    sess.emit_turn_item_completed(&turn_context, turn_item)
+                        .await;
+                    continue;
+                }
+
                 let mut ctx = HandleOutputCtx {
                     sess: sess.clone(),
                     turn_context: turn_context.clone(),
@@ -7065,16 +7064,6 @@ async fn try_run_sampling_request(
                 let output_result = handle_output_item_done(&mut ctx, item, previously_active_item)
                     .instrument(handle_responses)
                     .await?;
-                observed_server_side_compaction |= saw_server_side_compaction;
-                if let Some(ServerSideCompaction { item, turn_item }) =
-                    output_result.server_side_compaction
-                {
-                    sess.apply_server_side_compaction(turn_context.as_ref(), item)
-                        .await;
-                    sess.emit_turn_item_started(&turn_context, &turn_item).await;
-                    sess.emit_turn_item_completed(&turn_context, turn_item)
-                        .await;
-                }
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
                 }
@@ -7084,6 +7073,9 @@ async fn try_run_sampling_request(
                 needs_follow_up |= output_result.needs_follow_up;
             }
             ResponseEvent::OutputItemAdded(item) => {
+                if matches!(item, ResponseItem::Compaction { .. }) {
+                    continue;
+                }
                 if let Some(turn_item) = handle_non_tool_response_item(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -7093,10 +7085,6 @@ async fn try_run_sampling_request(
                 .await
                 {
                     let mut turn_item = turn_item;
-                    if matches!(turn_item, TurnItem::ContextCompaction(_)) {
-                        active_item = Some(turn_item);
-                        continue;
-                    }
                     let mut seeded_parsed: Option<ParsedAssistantTextDelta> = None;
                     let mut seeded_item_id: Option<String> = None;
                     if matches!(turn_item, TurnItem::AgentMessage(_))
@@ -7186,7 +7174,6 @@ async fn try_run_sampling_request(
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
-                    observed_server_side_compaction,
                 });
             }
             ResponseEvent::OutputTextDelta(delta) => {

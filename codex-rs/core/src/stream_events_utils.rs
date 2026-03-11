@@ -5,7 +5,6 @@ use std::sync::Arc;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_protocol::config_types::ModeKind;
-use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
 use tokio_util::sync::CancellationToken;
@@ -25,8 +24,6 @@ use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::RawResponseItemEvent;
 use codex_utils_stream_parser::strip_proposed_plan_blocks;
 use futures::Future;
 use tracing::debug;
@@ -147,13 +144,7 @@ pub(crate) type InFlightFuture<'f> =
 pub(crate) struct OutputItemResult {
     pub last_agent_message: Option<String>,
     pub needs_follow_up: bool,
-    pub server_side_compaction: Option<ServerSideCompaction>,
     pub tool_future: Option<InFlightFuture<'static>>,
-}
-
-pub(crate) struct ServerSideCompaction {
-    pub item: ResponseItem,
-    pub turn_item: TurnItem,
 }
 
 pub(crate) struct HandleOutputCtx {
@@ -171,27 +162,10 @@ pub(crate) async fn handle_output_item_done(
 ) -> Result<OutputItemResult> {
     let mut output = OutputItemResult::default();
     let plan_mode = ctx.turn_context.collaboration_mode.mode == ModeKind::Plan;
-
-    if matches!(item, ResponseItem::Compaction { .. }) {
-        let turn_item = TurnItem::ContextCompaction(match previously_active_item {
-            Some(TurnItem::ContextCompaction(item)) => item,
-            _ => ContextCompactionItem::new(),
-        });
-        // Preserve the raw wire event immediately; the caller rewrites local history inline and
-        // then continues appending later same-turn output after the compaction item.
-        debug!(
-            turn_id = %ctx.turn_context.sub_id,
-            "emitting streamed server-side raw compaction item for immediate local checkpoint apply"
-        );
-        ctx.sess
-            .send_event(
-                &ctx.turn_context,
-                EventMsg::RawResponseItem(RawResponseItemEvent { item: item.clone() }),
-            )
-            .await;
-        output.server_side_compaction = Some(ServerSideCompaction { item, turn_item });
-        return Ok(output);
-    }
+    debug_assert!(
+        !matches!(item, ResponseItem::Compaction { .. }),
+        "compaction items should be handled before handle_output_item_done"
+    );
 
     match ToolRouter::build_tool_call(ctx.sess.as_ref(), item.clone()).await {
         // The model emitted a tool call; log it, persist the item immediately, and queue the tool execution.
@@ -364,9 +338,6 @@ pub(crate) async fn handle_non_tool_response_item(
                 }
             }
             Some(turn_item)
-        }
-        ResponseItem::Compaction { .. } => {
-            Some(TurnItem::ContextCompaction(ContextCompactionItem::new()))
         }
         ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. } => {
             debug!("unexpected tool output from stream");
