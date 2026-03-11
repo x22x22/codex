@@ -1021,6 +1021,7 @@ impl From<AdditionalFileSystemPermissions> for CoreFileSystemPermissions {
 pub struct AdditionalMacOsPermissions {
     pub preferences: CoreMacOsPreferencesPermission,
     pub automations: CoreMacOsAutomationPermission,
+    pub mach_services: Vec<String>,
     pub launch_services: bool,
     pub accessibility: bool,
     pub calendar: bool,
@@ -1033,6 +1034,7 @@ impl From<CoreMacOsSeatbeltProfileExtensions> for AdditionalMacOsPermissions {
         Self {
             preferences: value.macos_preferences,
             automations: value.macos_automation,
+            mach_services: value.macos_mach_services,
             launch_services: value.macos_launch_services,
             accessibility: value.macos_accessibility,
             calendar: value.macos_calendar,
@@ -1047,6 +1049,7 @@ impl From<AdditionalMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
         Self {
             macos_preferences: value.preferences,
             macos_automation: value.automations,
+            macos_mach_services: value.mach_services,
             macos_launch_services: value.launch_services,
             macos_accessibility: value.accessibility,
             macos_calendar: value.calendar,
@@ -1120,6 +1123,9 @@ pub struct GrantedMacOsPermissions {
     pub automations: Option<CoreMacOsAutomationPermission>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    pub mach_services: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub launch_services: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -1144,6 +1150,7 @@ impl From<GrantedMacOsPermissions> for CoreMacOsSeatbeltProfileExtensions {
             macos_automation: value
                 .automations
                 .unwrap_or(CoreMacOsAutomationPermission::None),
+            macos_mach_services: value.mach_services.unwrap_or_default(),
             macos_launch_services: value.launch_services.unwrap_or(false),
             macos_accessibility: value.accessibility.unwrap_or(false),
             macos_calendar: value.calendar.unwrap_or(false),
@@ -1173,6 +1180,7 @@ impl From<GrantedPermissionProfile> for CorePermissionProfile {
         let macos = value.macos.and_then(|macos| {
             if macos.preferences.is_none()
                 && macos.automations.is_none()
+                && macos.mach_services.as_ref().is_none_or(Vec::is_empty)
                 && macos.launch_services.is_none()
                 && macos.accessibility.is_none()
                 && macos.calendar.is_none()
@@ -5900,6 +5908,7 @@ mod tests {
                     "automations": {
                         "bundle_ids": ["com.apple.Notes"]
                     },
+                    "machServices": ["2BUA8C4S2C.com.1password.browser-helper"],
                     "launchServices": false,
                     "accessibility": false,
                     "calendar": false,
@@ -5918,9 +5927,17 @@ mod tests {
             params
                 .additional_permissions
                 .and_then(|permissions| permissions.macos)
-                .map(|macos| (macos.automations, macos.launch_services, macos.contacts)),
+                .map(|macos| {
+                    (
+                        macos.automations,
+                        macos.mach_services,
+                        macos.launch_services,
+                        macos.contacts,
+                    )
+                }),
             Some((
                 CoreMacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string(),]),
+                vec!["2BUA8C4S2C.com.1password.browser-helper".to_string()],
                 false,
                 CoreMacOsContactsPermission::ReadOnly,
             ))
@@ -5944,6 +5961,7 @@ mod tests {
                 "macos": {
                     "preferences": "read_only",
                     "automations": "none",
+                    "machServices": [],
                     "launchServices": false,
                     "accessibility": false,
                     "calendar": false,
@@ -6011,6 +6029,7 @@ mod tests {
                 Some(CoreMacOsSeatbeltProfileExtensions {
                     macos_preferences: CoreMacOsPreferencesPermission::ReadOnly,
                     macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_mach_services: Vec::new(),
                     macos_launch_services: false,
                     macos_accessibility: false,
                     macos_calendar: false,
@@ -6035,6 +6054,30 @@ mod tests {
                     macos_automation: CoreMacOsAutomationPermission::BundleIds(vec![
                         "com.apple.Notes".to_string(),
                     ]),
+                    macos_mach_services: Vec::new(),
+                    macos_launch_services: false,
+                    macos_accessibility: false,
+                    macos_calendar: false,
+                    macos_reminders: false,
+                    macos_contacts: CoreMacOsContactsPermission::None,
+                }),
+            ),
+            (
+                json!({
+                    "machServices": ["2BUA8C4S2C.com.1password.browser-helper"],
+                }),
+                Some(GrantedMacOsPermissions {
+                    mach_services: Some(vec![
+                        "2BUA8C4S2C.com.1password.browser-helper".to_string(),
+                    ]),
+                    ..Default::default()
+                }),
+                Some(CoreMacOsSeatbeltProfileExtensions {
+                    macos_preferences: CoreMacOsPreferencesPermission::None,
+                    macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_mach_services: vec![
+                        "2BUA8C4S2C.com.1password.browser-helper".to_string(),
+                    ],
                     macos_launch_services: false,
                     macos_accessibility: false,
                     macos_calendar: false,
@@ -6053,6 +6096,7 @@ mod tests {
                 Some(CoreMacOsSeatbeltProfileExtensions {
                     macos_preferences: CoreMacOsPreferencesPermission::None,
                     macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_mach_services: Vec::new(),
                     macos_launch_services: true,
                     macos_accessibility: false,
                     macos_calendar: false,
@@ -6071,6 +6115,7 @@ mod tests {
                 Some(CoreMacOsSeatbeltProfileExtensions {
                     macos_preferences: CoreMacOsPreferencesPermission::None,
                     macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_mach_services: Vec::new(),
                     macos_launch_services: false,
                     macos_accessibility: true,
                     macos_calendar: false,
@@ -6089,6 +6134,7 @@ mod tests {
                 Some(CoreMacOsSeatbeltProfileExtensions {
                     macos_preferences: CoreMacOsPreferencesPermission::None,
                     macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_mach_services: Vec::new(),
                     macos_launch_services: false,
                     macos_accessibility: false,
                     macos_calendar: true,
@@ -6107,6 +6153,7 @@ mod tests {
                 Some(CoreMacOsSeatbeltProfileExtensions {
                     macos_preferences: CoreMacOsPreferencesPermission::None,
                     macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_mach_services: Vec::new(),
                     macos_launch_services: false,
                     macos_accessibility: false,
                     macos_calendar: false,
@@ -6125,6 +6172,7 @@ mod tests {
                 Some(CoreMacOsSeatbeltProfileExtensions {
                     macos_preferences: CoreMacOsPreferencesPermission::None,
                     macos_automation: CoreMacOsAutomationPermission::None,
+                    macos_mach_services: Vec::new(),
                     macos_launch_services: false,
                     macos_accessibility: false,
                     macos_calendar: false,
