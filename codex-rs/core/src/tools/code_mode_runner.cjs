@@ -21,11 +21,10 @@ function createProtocol() {
 
   let nextId = 0;
   const pending = new Map();
-  let initResolve;
-  let initReject;
-  const init = new Promise((resolve, reject) => {
-    initResolve = resolve;
-    initReject = reject;
+  const sessions = new Map();
+  let closedResolve;
+  const closed = new Promise((resolve) => {
+    closedResolve = resolve;
   });
 
   rl.on('line', (line) => {
@@ -37,35 +36,38 @@ function createProtocol() {
     try {
       message = JSON.parse(line);
     } catch (error) {
-      initReject(error);
+      process.stderr.write(`${formatErrorText(error)}\n`);
       return;
     }
 
-    if (message.type === 'init') {
-      initResolve(message);
+    if (message.type === 'start') {
+      const session = { id: String(message.session_id) };
+      sessions.set(session.id, session);
+      void processSession(protocol, sessions, session, message);
       return;
     }
 
     if (message.type === 'response') {
-      const entry = pending.get(message.id);
+      const entry = pending.get(`${message.session_id}:${message.id}`);
       if (!entry) {
         return;
       }
-      pending.delete(message.id);
+      pending.delete(`${message.session_id}:${message.id}`);
       entry.resolve(message.code_mode_result ?? '');
       return;
     }
 
-    initReject(new Error(`Unknown protocol message type: ${message.type}`));
+    process.stderr.write(`Unknown protocol message type: ${message.type}\n`);
   });
 
   rl.on('close', () => {
     const error = new Error('stdin closed');
-    initReject(error);
     for (const entry of pending.values()) {
       entry.reject(error);
     }
     pending.clear();
+    sessions.clear();
+    closedResolve();
   });
 
   function send(message) {
@@ -80,18 +82,20 @@ function createProtocol() {
     });
   }
 
-  function request(type, payload) {
+  function request(sessionId, type, payload) {
     const id = `msg-${++nextId}`;
+    const pendingKey = `${sessionId}:${id}`;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      void send({ type, id, ...payload }).catch((error) => {
-        pending.delete(id);
+      pending.set(pendingKey, { resolve, reject });
+      void send({ type, session_id: sessionId, id, ...payload }).catch((error) => {
+        pending.delete(pendingKey);
         reject(error);
       });
     });
   }
 
-  return { init, request, send };
+  const protocol = { closed, request, send };
+  return protocol;
 }
 
 function readContentItems(context) {
@@ -112,9 +116,9 @@ function cloneJsonValue(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function createToolCaller(protocol) {
+function createToolCaller(protocol, sessionId) {
   return (name, input) =>
-    protocol.request('tool_call', {
+    protocol.request(sessionId, 'tool_call', {
       name: String(name),
       input,
     });
@@ -348,14 +352,14 @@ function createModuleResolver(context, callTool, enabledTools, state) {
   };
 }
 
-async function runModule(context, request, state, callTool) {
+async function runModule(context, start, state, callTool) {
   const resolveModule = createModuleResolver(
     context,
     callTool,
-    request.enabled_tools ?? [],
+    start.enabled_tools ?? [],
     state
   );
-  const mainModule = new SourceTextModule(request.source, {
+  const mainModule = new SourceTextModule(start.source, {
     context,
     identifier: 'exec_main.mjs',
     importModuleDynamically: async (specifier) => resolveModule(specifier),
@@ -365,38 +369,43 @@ async function runModule(context, request, state, callTool) {
   await mainModule.evaluate();
 }
 
-async function main() {
-  const protocol = createProtocol();
-  const request = await protocol.init;
+async function processSession(protocol, sessions, session, start) {
   const state = {
     maxOutputTokensPerExecCall: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL,
-    storedValues: cloneJsonValue(request.stored_values ?? {}),
+    storedValues: cloneJsonValue(start.stored_values ?? {}),
   };
-  const callTool = createToolCaller(protocol);
+  const callTool = createToolCaller(protocol, session.id);
   const context = vm.createContext({
     __codexContentItems: [],
     __codex_tool_call: callTool,
   });
 
   try {
-    await runModule(context, request, state, callTool);
+    await runModule(context, start, state, callTool);
     await protocol.send({
       type: 'result',
+      session_id: session.id,
       content_items: readContentItems(context),
       stored_values: state.storedValues,
       max_output_tokens_per_exec_call: state.maxOutputTokensPerExecCall,
     });
-    process.exit(0);
   } catch (error) {
     await protocol.send({
       type: 'result',
+      session_id: session.id,
       content_items: readContentItems(context),
       stored_values: state.storedValues,
       error_text: formatErrorText(error),
       max_output_tokens_per_exec_call: state.maxOutputTokensPerExecCall,
     });
-    process.exit(1);
+  } finally {
+    sessions.delete(session.id);
   }
+}
+
+async function main() {
+  const protocol = createProtocol();
+  await protocol.closed;
 }
 
 void main().catch(async (error) => {

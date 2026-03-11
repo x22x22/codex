@@ -15,6 +15,7 @@ use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
+use crate::tools::code_mode::CodeModeProcess;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::sandboxing::ApprovalStore;
@@ -31,12 +32,14 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) struct CodeModeStoreService {
     stored_values: Mutex<HashMap<String, JsonValue>>,
+    process: Mutex<Option<CodeModeProcess>>,
 }
 
 impl Default for CodeModeStoreService {
     fn default() -> Self {
         Self {
             stored_values: Mutex::new(HashMap::new()),
+            process: Mutex::new(None),
         }
     }
 }
@@ -48,6 +51,14 @@ impl CodeModeStoreService {
 
     pub(crate) async fn replace_stored_values(&self, values: HashMap<String, JsonValue>) {
         *self.stored_values.lock().await = values;
+    }
+
+    pub(crate) async fn store_process(&self, process: CodeModeProcess) {
+        *self.process.lock().await = Some(process);
+    }
+
+    pub(crate) async fn take_process(&self) -> Option<CodeModeProcess> {
+        self.process.lock().await.take()
     }
 }
 
