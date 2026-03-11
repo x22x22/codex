@@ -447,6 +447,21 @@
       },
       "type": "object"
     },
+    "ItemMetadata": {
+      "properties": {
+        "user_message_type": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserMessageType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "McpToolCallError": {
       "properties": {
         "message": {
@@ -1008,6 +1023,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "userMessage"
@@ -1028,6 +1053,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "phase": {
               "anyOf": [
@@ -1065,6 +1100,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "text": {
               "type": "string"
             },
@@ -1095,6 +1140,16 @@
             },
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "summary": {
               "default": [],
@@ -1161,6 +1216,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "processId": {
               "description": "Identifier for the underlying PTY process (when available).",
               "type": [
@@ -1200,6 +1265,16 @@
             },
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "status": {
               "$ref": "#/definitions/PatchApplyStatus"
@@ -1244,6 +1319,16 @@
             },
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "result": {
               "anyOf": [
@@ -1306,6 +1391,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "status": {
               "$ref": "#/definitions/DynamicToolCallStatus"
             },
@@ -1348,6 +1443,16 @@
             "id": {
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "prompt": {
               "description": "Prompt text sent as part of the collab tool call, when available.",
@@ -1418,6 +1523,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "query": {
               "type": "string"
             },
@@ -1442,6 +1557,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "path": {
               "type": "string"
             },
@@ -1465,6 +1590,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "result": {
               "type": "string"
@@ -1500,6 +1635,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "review": {
               "type": "string"
             },
@@ -1524,6 +1669,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "review": {
               "type": "string"
             },
@@ -1547,6 +1702,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "type": {
               "enum": [
@@ -1830,6 +1995,18 @@
           "type": "object"
         }
       ]
+    },
+    "UserMessageType": {
+      "enum": [
+        "prompt",
+        "prompt_steering",
+        "prompt_queued",
+        "prompt_with_ide_context",
+        "agents_md_default",
+        "agents_md_custom",
+        "environment_context"
+      ],
+      "type": "string"
     },
     "WebSearchAction": {
       "oneOf": [

@@ -6405,6 +6405,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "UserMessage"
@@ -6432,6 +6442,16 @@
             },
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "phase": {
               "anyOf": [
@@ -6465,6 +6485,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "text": {
               "type": "string"
             },
@@ -6488,6 +6518,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "raw_content": {
               "default": [],
@@ -6526,6 +6566,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "query": {
               "type": "string"
             },
@@ -6550,6 +6600,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "result": {
               "type": "string"
@@ -6591,6 +6651,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "ContextCompaction"
@@ -6607,6 +6677,21 @@
           "type": "object"
         }
       ]
+    },
+    "TurnItemMetadata": {
+      "properties": {
+        "user_message_type": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserMessageType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "UserInput": {
       "description": "User input",
@@ -6732,6 +6817,18 @@
           "type": "object"
         }
       ]
+    },
+    "UserMessageType": {
+      "enum": [
+        "prompt",
+        "prompt_steering",
+        "prompt_queued",
+        "prompt_with_ide_context",
+        "agents_md_default",
+        "agents_md_custom",
+        "environment_context"
+      ],
+      "type": "string"
     }
   },
   "description": "Response event from the agent NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.",

@@ -7780,6 +7780,21 @@
       "title": "ItemCompletedNotification",
       "type": "object"
     },
+    "ItemMetadata": {
+      "properties": {
+        "user_message_type": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserMessageType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ItemStartedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
       "properties": {
@@ -13146,6 +13161,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "userMessage"
@@ -13166,6 +13191,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "phase": {
               "anyOf": [
@@ -13203,6 +13238,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "text": {
               "type": "string"
             },
@@ -13233,6 +13278,16 @@
             },
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "summary": {
               "default": [],
@@ -13299,6 +13354,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "processId": {
               "description": "Identifier for the underlying PTY process (when available).",
               "type": [
@@ -13338,6 +13403,16 @@
             },
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "status": {
               "$ref": "#/definitions/PatchApplyStatus"
@@ -13382,6 +13457,16 @@
             },
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "result": {
               "anyOf": [
@@ -13444,6 +13529,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "status": {
               "$ref": "#/definitions/DynamicToolCallStatus"
             },
@@ -13486,6 +13581,16 @@
             "id": {
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "prompt": {
               "description": "Prompt text sent as part of the collab tool call, when available.",
@@ -13556,6 +13661,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "query": {
               "type": "string"
             },
@@ -13580,6 +13695,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "path": {
               "type": "string"
             },
@@ -13603,6 +13728,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "result": {
               "type": "string"
@@ -13638,6 +13773,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "review": {
               "type": "string"
             },
@@ -13662,6 +13807,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "review": {
               "type": "string"
             },
@@ -13685,6 +13840,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "type": {
               "enum": [
@@ -14983,6 +15148,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "UserMessage"
@@ -15010,6 +15185,16 @@
             },
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "phase": {
               "anyOf": [
@@ -15043,6 +15228,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "text": {
               "type": "string"
             },
@@ -15066,6 +15261,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "raw_content": {
               "default": [],
@@ -15104,6 +15309,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "query": {
               "type": "string"
             },
@@ -15128,6 +15343,16 @@
           "properties": {
             "id": {
               "type": "string"
+            },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "result": {
               "type": "string"
@@ -15169,6 +15394,16 @@
             "id": {
               "type": "string"
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/TurnItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "enum": [
                 "ContextCompaction"
@@ -15185,6 +15420,21 @@
           "type": "object"
         }
       ]
+    },
+    "TurnItemMetadata": {
+      "properties": {
+        "user_message_type": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserMessageType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "TurnPlanStep": {
       "properties": {
@@ -15545,6 +15795,18 @@
           "type": "object"
         }
       ]
+    },
+    "UserMessageType": {
+      "enum": [
+        "prompt",
+        "prompt_steering",
+        "prompt_queued",
+        "prompt_with_ide_context",
+        "agents_md_default",
+        "agents_md_custom",
+        "environment_context"
+      ],
+      "type": "string"
     },
     "Verbosity": {
       "description": "Controls output length/detail on GPT-5 models via the Responses API. Serialized with lowercase values to match the OpenAI API.",
