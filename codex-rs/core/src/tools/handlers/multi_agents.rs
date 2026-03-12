@@ -745,25 +745,12 @@ pub mod close_agent {
     ) -> Result<FunctionToolOutput, FunctionCallError> {
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
-        let (
-            receiver_agent_nickname,
-            receiver_agent_role,
-            receiver_model,
-            receiver_reasoning_effort,
-        ) = session
+        let (receiver_agent_nickname, receiver_agent_role) = session
             .services
             .agent_control
-            .get_agent_metadata(agent_id)
+            .get_agent_nickname_and_role(agent_id)
             .await
-            .map(|metadata| {
-                (
-                    metadata.nickname,
-                    metadata.role,
-                    Some(metadata.model),
-                    metadata.reasoning_effort,
-                )
-            })
-            .unwrap_or((None, None, None, None));
+            .unwrap_or((None, None));
         session
             .send_event(
                 &turn,
@@ -793,8 +780,6 @@ pub mod close_agent {
                             receiver_thread_id: agent_id,
                             receiver_agent_nickname: receiver_agent_nickname.clone(),
                             receiver_agent_role: receiver_agent_role.clone(),
-                            model: receiver_model.clone(),
-                            reasoning_effort: receiver_reasoning_effort,
                             status,
                         }
                         .into(),
@@ -823,8 +808,6 @@ pub mod close_agent {
                     receiver_thread_id: agent_id,
                     receiver_agent_nickname,
                     receiver_agent_role,
-                    model: receiver_model,
-                    reasoning_effort: receiver_reasoning_effort,
                     status: status.clone(),
                 }
                 .into(),

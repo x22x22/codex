@@ -1078,8 +1078,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids: vec![receiver_id],
                 prompt: None,
-                model: end_event.model,
-                reasoning_effort: end_event.reasoning_effort,
+                model: None,
+                reasoning_effort: None,
                 agents_states,
             };
             let notification = ItemCompletedNotification {
