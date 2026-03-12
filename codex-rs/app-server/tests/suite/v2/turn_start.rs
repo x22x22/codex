@@ -1840,13 +1840,20 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         )])
     );
 
-    let turn_completed_notif = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_notification_message("turn/completed"),
-    )
+    let turn_completed = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let turn_completed_notif = mcp
+                .read_stream_until_notification_message("turn/completed")
+                .await?;
+            let turn_completed: TurnCompletedNotification = serde_json::from_value(
+                turn_completed_notif.params.expect("turn/completed params"),
+            )?;
+            if turn_completed.thread_id == thread.id && turn_completed.turn.id == turn.turn.id {
+                return Ok::<TurnCompletedNotification, anyhow::Error>(turn_completed);
+            }
+        }
+    })
     .await??;
-    let turn_completed: TurnCompletedNotification =
-        serde_json::from_value(turn_completed_notif.params.expect("turn/completed params"))?;
     assert_eq!(turn_completed.thread_id, thread.id);
     assert_eq!(turn_completed.turn.id, turn.turn.id);
 
