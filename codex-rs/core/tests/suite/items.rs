@@ -37,6 +37,9 @@ use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
+use tokio::time::Duration;
+use tokio::time::Instant;
+use tokio::time::sleep;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_message_item_is_emitted() -> anyhow::Result<()> {
@@ -116,6 +119,13 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     assert_eq!(legacy_message.message, "please inspect sample.txt");
     assert_eq!(legacy_message.text_elements, text_elements);
 
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while req.requests().is_empty() {
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for responses request capture");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
     let body: Value = req.single_request().body_json();
     let input = body
         .get("input")
