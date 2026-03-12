@@ -78,11 +78,6 @@ impl CodeModeProcess {
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct CodeModeYieldedSession {
-    pub(crate) session_id: i32,
-}
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum CodeModeToolKind {
@@ -176,7 +171,7 @@ enum CodeModeSessionProgress {
     Finished(FunctionToolOutput),
     Yielded {
         output: FunctionToolOutput,
-        yielded_session: CodeModeYieldedSession,
+        session_id: i32,
     },
 }
 
@@ -241,14 +236,26 @@ pub(crate) async fn execute(
         .code_mode_store
         .allocate_session_id()
         .await;
-    let process = ensure_shared_code_mode_process(&exec)
-        .await
-        .map_err(FunctionCallError::RespondToModel)?;
     let result = {
-        let mut process = process.lock().await;
+        let process_slot = exec.session.services.code_mode_store.process();
+        let mut process_slot = process_slot.lock().await;
+        let needs_spawn = match process_slot.as_mut() {
+            Some(process) => !matches!(process.has_exited(), Ok(false)),
+            None => true,
+        };
+        if needs_spawn {
+            *process_slot = Some(
+                spawn_code_mode_process(&exec)
+                    .await
+                    .map_err(FunctionCallError::RespondToModel)?,
+            );
+        }
+        let process = process_slot.as_mut().ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!("{PUBLIC_TOOL_NAME} runner failed to start"))
+        })?;
         drive_code_mode_session(
             &exec,
-            &mut process,
+            process,
             session_id,
             CodeModeSessionAction::Start {
                 enabled_tools,
@@ -258,14 +265,11 @@ pub(crate) async fn execute(
         )
         .await
     };
-    if let Ok(CodeModeSessionProgress::Yielded {
-        yielded_session, ..
-    }) = &result
-    {
+    if let Ok(CodeModeSessionProgress::Yielded { session_id, .. }) = &result {
         exec.session
             .services
             .code_mode_store
-            .store_yielded_session(yielded_session.clone())
+            .store_yielded_session(*session_id)
             .await;
     }
     match result {
@@ -289,7 +293,7 @@ pub(crate) async fn wait(
         turn,
         tracker,
     };
-    let yielded_session = exec
+    let yielded_session_id = exec
         .session
         .services
         .code_mode_store
@@ -301,13 +305,23 @@ pub(crate) async fn wait(
             ))
         })?;
 
-    let process = existing_shared_code_mode_process(&exec).await?;
     let result = {
-        let mut process = process.lock().await;
+        let process_slot = exec.session.services.code_mode_store.process();
+        let mut process_slot = process_slot.lock().await;
+        let process = process_slot.as_mut().ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "{PUBLIC_TOOL_NAME} runner is not available for {WAIT_TOOL_NAME}"
+            ))
+        })?;
+        if !matches!(process.has_exited(), Ok(false)) {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "{PUBLIC_TOOL_NAME} runner is not available for {WAIT_TOOL_NAME}"
+            )));
+        }
         drive_code_mode_session(
             &exec,
-            &mut process,
-            yielded_session.session_id,
+            process,
+            yielded_session_id,
             if terminate {
                 CodeModeSessionAction::Terminate { max_output_tokens }
             } else {
@@ -319,14 +333,11 @@ pub(crate) async fn wait(
         )
         .await
     };
-    if let Ok(CodeModeSessionProgress::Yielded {
-        yielded_session, ..
-    }) = &result
-    {
+    if let Ok(CodeModeSessionProgress::Yielded { session_id, .. }) = &result {
         exec.session
             .services
             .code_mode_store
-            .store_yielded_session(yielded_session.clone())
+            .store_yielded_session(*session_id)
             .await;
     }
 
@@ -382,57 +393,6 @@ async fn spawn_code_mode_process(exec: &ExecContext) -> Result<CodeModeProcess, 
         stderr_task: Some(stderr_task),
         pending_messages: HashMap::new(),
     })
-}
-
-async fn ensure_shared_code_mode_process(
-    exec: &ExecContext,
-) -> Result<Arc<tokio::sync::Mutex<CodeModeProcess>>, String> {
-    if let Some(process) = exec.session.services.code_mode_store.process().await {
-        let is_running = {
-            let mut process_guard = process.lock().await;
-            matches!(process_guard.has_exited(), Ok(false))
-        };
-        if is_running {
-            return Ok(process);
-        }
-    }
-
-    let process = Arc::new(tokio::sync::Mutex::new(
-        spawn_code_mode_process(exec).await?,
-    ));
-    exec.session
-        .services
-        .code_mode_store
-        .store_process(process.clone())
-        .await;
-    Ok(process)
-}
-
-async fn existing_shared_code_mode_process(
-    exec: &ExecContext,
-) -> Result<Arc<tokio::sync::Mutex<CodeModeProcess>>, FunctionCallError> {
-    let process = exec
-        .session
-        .services
-        .code_mode_store
-        .process()
-        .await
-        .ok_or_else(|| {
-            FunctionCallError::RespondToModel(format!(
-                "{PUBLIC_TOOL_NAME} runner is not available for {WAIT_TOOL_NAME}"
-            ))
-        })?;
-    let is_running = {
-        let mut process_guard = process.lock().await;
-        matches!(process_guard.has_exited(), Ok(false))
-    };
-    if is_running {
-        Ok(process)
-    } else {
-        Err(FunctionCallError::RespondToModel(format!(
-            "{PUBLIC_TOOL_NAME} runner is not available for {WAIT_TOOL_NAME}"
-        )))
-    }
 }
 
 async fn drive_code_mode_session(
@@ -639,7 +599,7 @@ async fn handle_node_message(
             );
             Ok(Some(CodeModeSessionProgress::Yielded {
                 output: FunctionToolOutput::from_content(delta_items, Some(true)),
-                yielded_session: CodeModeYieldedSession { session_id },
+                session_id,
             }))
         }
         NodeToHostMessage::Terminated {
