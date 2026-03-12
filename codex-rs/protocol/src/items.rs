@@ -157,10 +157,14 @@ impl Default for ContextCompactionItem {
 
 impl UserMessageItem {
     pub fn new(content: &[UserInput]) -> Self {
+        Self::new_with_metadata(content, None)
+    }
+
+    pub fn new_with_metadata(content: &[UserInput], metadata: Option<TurnItemMetadata>) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             content: content.to_vec(),
-            metadata: None,
+            metadata,
         }
     }
 

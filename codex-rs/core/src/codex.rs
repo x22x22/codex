@@ -83,7 +83,9 @@ use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::items::TurnItemMetadata;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::items::UserMessageType;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
@@ -3655,13 +3657,17 @@ impl Session {
         turn_context: &TurnContext,
         input: &[UserInput],
         response_item: ResponseItem,
+        user_message_type: Option<UserMessageType>,
     ) {
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
-        let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
+        let metadata = user_message_type.map(|kind| TurnItemMetadata {
+            user_message_type: Some(kind),
+        });
+        let turn_item = TurnItem::UserMessage(UserMessageItem::new_with_metadata(input, metadata));
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
         self.ensure_rollout_materialized().await;
@@ -3755,7 +3761,7 @@ impl Session {
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input.into());
+        turn_state.push_pending_input(input.into(), Some(UserMessageType::PromptSteering));
         Ok(active_turn_id.clone())
     }
 
@@ -3769,7 +3775,11 @@ impl Session {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
                 for item in input {
-                    ts.push_pending_input(item);
+                    let user_message_type = match &item {
+                        ResponseInputItem::Message { .. } => Some(UserMessageType::PromptQueued),
+                        _ => None,
+                    };
+                    ts.push_pending_input(item, user_message_type);
                 }
                 Ok(())
             }
@@ -3777,12 +3787,17 @@ impl Session {
         }
     }
 
-    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+    pub async fn get_pending_input_with_metadata(
+        &self,
+    ) -> Vec<(ResponseInputItem, Option<UserMessageType>)> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
-                ts.take_pending_input()
+                ts.take_pending_input_with_metadata()
+                    .into_iter()
+                    .map(|item| (item.input, item.user_message_type))
+                    .collect()
             }
             None => Vec::with_capacity(0),
         }
@@ -5504,8 +5519,13 @@ pub(crate) async fn run_turn(
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
-        .await;
+    sess.record_user_prompt_and_emit_turn_item(
+        turn_context.as_ref(),
+        &input,
+        response_item,
+        Some(UserMessageType::Prompt),
+    )
+    .await;
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
     // model/realtime injections.
@@ -5592,21 +5612,18 @@ pub(crate) async fn run_turn(
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_response_items = sess
-            .get_pending_input()
-            .await
-            .into_iter()
-            .map(ResponseItem::from)
-            .collect::<Vec<ResponseItem>>();
+        let pending_response_items = sess.get_pending_input_with_metadata().await;
 
         if !pending_response_items.is_empty() {
-            for response_item in pending_response_items {
+            for (pending_input, user_message_type) in pending_response_items {
+                let response_item = ResponseItem::from(pending_input);
                 if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
                     // todo(aibrahim): move pending input to be UserInput only to keep TextElements. context: https://github.com/openai/codex/pull/10656#discussion_r2765522480
                     sess.record_user_prompt_and_emit_turn_item(
                         turn_context.as_ref(),
                         &user_message.content,
                         response_item,
+                        user_message_type,
                     )
                     .await;
                 } else {

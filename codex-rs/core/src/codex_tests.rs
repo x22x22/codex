@@ -3737,12 +3737,19 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     assert!(matches!(
         second.msg,
         EventMsg::ItemStarted(ItemStartedEvent {
-            item: TurnItem::UserMessage(UserMessageItem { content, .. }),
+            item: TurnItem::UserMessage(UserMessageItem {
+                content,
+                metadata,
+                ..
+            }),
             ..
         }) if content == vec![UserInput::Text {
             text: "late pending input".to_string(),
             text_elements: Vec::new(),
-        }]
+        }] && metadata
+            .as_ref()
+            .and_then(|item_metadata| item_metadata.user_message_type.as_ref())
+            == Some(&codex_protocol::items::UserMessageType::PromptQueued)
     ));
 
     let third = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
@@ -3752,12 +3759,19 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
     assert!(matches!(
         third.msg,
         EventMsg::ItemCompleted(ItemCompletedEvent {
-            item: TurnItem::UserMessage(UserMessageItem { content, .. }),
+            item: TurnItem::UserMessage(UserMessageItem {
+                content,
+                metadata,
+                ..
+            }),
             ..
         }) if content == vec![UserInput::Text {
             text: "late pending input".to_string(),
             text_elements: Vec::new(),
-        }]
+        }] && metadata
+            .as_ref()
+            .and_then(|item_metadata| item_metadata.user_message_type.as_ref())
+            == Some(&codex_protocol::items::UserMessageType::PromptQueued)
     ));
 
     let fourth = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
@@ -3871,6 +3885,14 @@ async fn steer_input_returns_active_turn_id() {
 
     assert_eq!(turn_id, tc.sub_id);
     assert!(sess.has_pending_input().await);
+    let pending_input = sess.get_pending_input_with_metadata().await;
+    assert_eq!(pending_input.len(), 1);
+    assert_eq!(
+        pending_input
+            .first()
+            .and_then(|(_, user_message_type)| user_message_type.as_ref()),
+        Some(&codex_protocol::items::UserMessageType::PromptSteering)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -83,6 +83,20 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     assert_eq!(started_item.id, completed_item.id);
     assert_eq!(started_item.content, vec![expected_input.clone()]);
     assert_eq!(completed_item.content, vec![expected_input]);
+    assert_eq!(
+        started_item
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.user_message_type.as_ref()),
+        Some(&codex_protocol::items::UserMessageType::Prompt)
+    );
+    assert_eq!(
+        completed_item
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.user_message_type.as_ref()),
+        Some(&codex_protocol::items::UserMessageType::Prompt)
+    );
 
     let legacy_message = wait_for_event_match(&codex, |ev| match ev {
         EventMsg::UserMessage(event) => Some(event.clone()),
