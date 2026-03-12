@@ -554,8 +554,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: Vec::new(),
             prompt: Some(payload.prompt.clone()),
-            model: Some(payload.model.clone()),
-            reasoning_effort: Some(payload.reasoning_effort),
+            model: None,
+            reasoning_effort: None,
             agents_states: HashMap::new(),
         };
         self.upsert_item_in_current_turn(item);
@@ -729,8 +729,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id],
             prompt: None,
-            model: None,
-            reasoning_effort: None,
+            model: payload.model.clone(),
+            reasoning_effort: payload.reasoning_effort,
             agents_states,
         });
     }
@@ -775,8 +775,8 @@ impl ThreadHistoryBuilder {
             sender_thread_id: payload.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id],
             prompt: None,
-            model: None,
-            reasoning_effort: None,
+            model: payload.model.clone(),
+            reasoning_effort: payload.reasoning_effort,
             agents_states,
         });
     }
@@ -2325,6 +2325,8 @@ mod tests {
                     .expect("valid receiver thread id"),
                 receiver_agent_nickname: None,
                 receiver_agent_role: None,
+                model: Some("gpt-5.4-mini".into()),
+                reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
                 status: AgentStatus::Completed(None),
             }),
         ];
@@ -2345,8 +2347,8 @@ mod tests {
                 sender_thread_id: "00000000-0000-0000-0000-000000000001".into(),
                 receiver_thread_ids: vec!["00000000-0000-0000-0000-000000000002".into()],
                 prompt: None,
-                model: None,
-                reasoning_effort: None,
+                model: Some("gpt-5.4-mini".into()),
+                reasoning_effort: Some(codex_protocol::openai_models::ReasoningEffort::High),
                 agents_states: [(
                     "00000000-0000-0000-0000-000000000002".into(),
                     CollabAgentState {

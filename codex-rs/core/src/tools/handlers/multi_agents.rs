@@ -157,8 +157,6 @@ mod spawn {
                     call_id: call_id.clone(),
                     sender_thread_id: session.conversation_id,
                     prompt: prompt.clone(),
-                    model: args.model.clone().unwrap_or_default(),
-                    reasoning_effort: args.reasoning_effort.unwrap_or_default(),
                 }
                 .into(),
             )
@@ -178,6 +176,8 @@ mod spawn {
             .map_err(FunctionCallError::RespondToModel)?;
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
         apply_spawn_agent_overrides(&mut config, child_depth);
+        let configured_model = config.model.clone().unwrap_or_default();
+        let configured_reasoning_effort = config.model_reasoning_effort.unwrap_or_default();
 
         let result = session
             .services
@@ -203,15 +203,30 @@ mod spawn {
             ),
             Err(_) => (None, AgentStatus::NotFound),
         };
-        let (new_agent_nickname, new_agent_role) = match new_thread_id {
-            Some(thread_id) => session
-                .services
-                .agent_control
-                .get_agent_nickname_and_role(thread_id)
-                .await
-                .unwrap_or((None, None)),
-            None => (None, None),
+        let agent_metadata = match new_thread_id {
+            Some(thread_id) => {
+                session
+                    .services
+                    .agent_control
+                    .get_agent_metadata(thread_id)
+                    .await
+            }
+            None => None,
         };
+        let new_agent_nickname = agent_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.nickname.clone());
+        let new_agent_role = agent_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.role.clone());
+        let spawned_model = agent_metadata
+            .as_ref()
+            .map(|metadata| metadata.model.clone())
+            .unwrap_or(configured_model);
+        let spawned_reasoning_effort = agent_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.reasoning_effort)
+            .unwrap_or(configured_reasoning_effort);
         let nickname = new_agent_nickname.clone();
         session
             .send_event(
@@ -223,8 +238,8 @@ mod spawn {
                     new_agent_nickname,
                     new_agent_role,
                     prompt,
-                    model: args.model.clone().unwrap_or_default(),
-                    reasoning_effort: args.reasoning_effort.unwrap_or_default(),
+                    model: spawned_model,
+                    reasoning_effort: spawned_reasoning_effort,
                     status,
                 }
                 .into(),
@@ -360,12 +375,25 @@ mod resume_agent {
     ) -> Result<FunctionToolOutput, FunctionCallError> {
         let args: ResumeAgentArgs = parse_arguments(&arguments)?;
         let receiver_thread_id = agent_id(&args.id)?;
-        let (receiver_agent_nickname, receiver_agent_role) = session
+        let receiver_agent_metadata = session
             .services
             .agent_control
-            .get_agent_nickname_and_role(receiver_thread_id)
+            .get_agent_metadata(receiver_thread_id)
             .await
-            .unwrap_or((None, None));
+            .map(|metadata| {
+                let nickname = metadata.nickname;
+                let role = metadata.role;
+                let model = Some(metadata.model);
+                let reasoning_effort = metadata.reasoning_effort;
+                (nickname, role, model, reasoning_effort)
+            })
+            .unwrap_or((None, None, None, None));
+        let (
+            receiver_agent_nickname,
+            receiver_agent_role,
+            receiver_model,
+            receiver_reasoning_effort,
+        ) = receiver_agent_metadata;
         let child_depth = next_thread_spawn_depth(&turn.session_source);
         let max_depth = turn.config.agent_max_depth;
         if exceeds_thread_spawn_depth_limit(child_depth, max_depth) {
@@ -413,12 +441,30 @@ mod resume_agent {
             None
         };
 
-        let (receiver_agent_nickname, receiver_agent_role) = session
+        let (
+            receiver_agent_nickname,
+            receiver_agent_role,
+            receiver_model,
+            receiver_reasoning_effort,
+        ) = session
             .services
             .agent_control
-            .get_agent_nickname_and_role(receiver_thread_id)
+            .get_agent_metadata(receiver_thread_id)
             .await
-            .unwrap_or((receiver_agent_nickname, receiver_agent_role));
+            .map(|metadata| {
+                (
+                    metadata.nickname,
+                    metadata.role,
+                    Some(metadata.model),
+                    metadata.reasoning_effort,
+                )
+            })
+            .unwrap_or((
+                receiver_agent_nickname,
+                receiver_agent_role,
+                receiver_model,
+                receiver_reasoning_effort,
+            ));
         session
             .send_event(
                 &turn,
@@ -428,6 +474,8 @@ mod resume_agent {
                     receiver_thread_id,
                     receiver_agent_nickname,
                     receiver_agent_role,
+                    model: receiver_model,
+                    reasoning_effort: receiver_reasoning_effort,
                     status: status.clone(),
                 }
                 .into(),
@@ -697,12 +745,25 @@ pub mod close_agent {
     ) -> Result<FunctionToolOutput, FunctionCallError> {
         let args: CloseAgentArgs = parse_arguments(&arguments)?;
         let agent_id = agent_id(&args.id)?;
-        let (receiver_agent_nickname, receiver_agent_role) = session
+        let (
+            receiver_agent_nickname,
+            receiver_agent_role,
+            receiver_model,
+            receiver_reasoning_effort,
+        ) = session
             .services
             .agent_control
-            .get_agent_nickname_and_role(agent_id)
+            .get_agent_metadata(agent_id)
             .await
-            .unwrap_or((None, None));
+            .map(|metadata| {
+                (
+                    metadata.nickname,
+                    metadata.role,
+                    Some(metadata.model),
+                    metadata.reasoning_effort,
+                )
+            })
+            .unwrap_or((None, None, None, None));
         session
             .send_event(
                 &turn,
@@ -732,6 +793,8 @@ pub mod close_agent {
                             receiver_thread_id: agent_id,
                             receiver_agent_nickname: receiver_agent_nickname.clone(),
                             receiver_agent_role: receiver_agent_role.clone(),
+                            model: receiver_model.clone(),
+                            reasoning_effort: receiver_reasoning_effort,
                             status,
                         }
                         .into(),
@@ -760,6 +823,8 @@ pub mod close_agent {
                     receiver_thread_id: agent_id,
                     receiver_agent_nickname,
                     receiver_agent_role,
+                    model: receiver_model,
+                    reasoning_effort: receiver_reasoning_effort,
                     status: status.clone(),
                 }
                 .into(),
