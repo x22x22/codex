@@ -489,6 +489,7 @@ mod tests {
                     content: vec![ContentItem::InputText {
                         text: "first request".to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: None,
                 }],
@@ -514,6 +515,7 @@ mod tests {
                     content: vec![ContentItem::OutputText {
                         text: "commentary".to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: Some(MessagePhase::Commentary),
                 }],
@@ -528,6 +530,7 @@ mod tests {
                     content: vec![ContentItem::OutputText {
                         text: "final response".to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: Some(MessagePhase::FinalAnswer),
                 }],
@@ -542,6 +545,7 @@ mod tests {
                     content: vec![ContentItem::InputText {
                         text: "latest request".to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: None,
                 }],
@@ -695,6 +699,7 @@ mod tests {
                     content: vec![ContentItem::InputText {
                         text: "please run the tool".to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: None,
                 }],
@@ -774,6 +779,7 @@ mod tests {
                     content: vec![ContentItem::InputText {
                         text: "please run the tool".to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: None,
                 }],
@@ -843,6 +849,7 @@ mod tests {
                     content: vec![ContentItem::InputText {
                         text: "please run the tool".to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: None,
                 }],

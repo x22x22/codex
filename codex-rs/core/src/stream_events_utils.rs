@@ -405,6 +405,7 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
+            metadata: None,
             end_turn: Some(true),
             phase: None,
         }

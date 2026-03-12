@@ -243,6 +243,7 @@ pub(crate) fn rewrite_image_generation_calls_for_stateless_input(items: &mut Vec
                         },
                         ContentItem::InputImage { image_url },
                     ],
+                    metadata: None,
                     end_turn: None,
                     phase: None,
                 }

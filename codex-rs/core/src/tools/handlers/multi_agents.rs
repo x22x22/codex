@@ -1717,6 +1717,7 @@ mod tests {
                     content: vec![ContentItem::InputText {
                         text: "materialized".to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: None,
                 })]),

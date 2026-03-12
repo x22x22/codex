@@ -258,6 +258,7 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: "hello".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         }));
@@ -271,6 +272,7 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: String::new(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         }));

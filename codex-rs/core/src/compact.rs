@@ -367,6 +367,7 @@ fn build_compacted_history_with_limit(
             content: vec![ContentItem::InputText {
                 text: message.clone(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         });
@@ -382,6 +383,7 @@ fn build_compacted_history_with_limit(
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText { text: summary_text }],
+        metadata: None,
         end_turn: None,
         phase: None,
     });
@@ -501,6 +503,7 @@ mod tests {
                 content: vec![ContentItem::OutputText {
                     text: "ignored".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -510,6 +513,7 @@ mod tests {
                 content: vec![ContentItem::InputText {
                     text: "first".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -535,6 +539,7 @@ do things
 </INSTRUCTIONS>"#
                         .to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -544,6 +549,7 @@ do things
                 content: vec![ContentItem::InputText {
                     text: "<ENVIRONMENT_CONTEXT>cwd=/tmp</ENVIRONMENT_CONTEXT>".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -553,6 +559,7 @@ do things
                 content: vec![ContentItem::InputText {
                     text: "real user message".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -636,6 +643,7 @@ do things
                 content: vec![ContentItem::InputText {
                     text: "stale permissions".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -645,6 +653,7 @@ do things
                 content: vec![ContentItem::InputText {
                     text: "summary".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -654,6 +663,7 @@ do things
                 content: vec![ContentItem::InputText {
                     text: "stale personality".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -666,6 +676,7 @@ do things
             content: vec![ContentItem::InputText {
                 text: "summary".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         });
@@ -680,6 +691,7 @@ do things
             content: vec![ContentItem::InputText {
                 text: "summary".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         }];
@@ -691,6 +703,7 @@ do things
             content: vec![ContentItem::InputText {
                 text: "summary".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         });
@@ -711,6 +724,7 @@ keep me updated
 </INSTRUCTIONS>"#
                         .to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -724,6 +738,7 @@ keep me updated
 </environment_context>"#
                         .to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -737,6 +752,7 @@ keep me updated
 </turn_aborted>"#
                         .to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -746,6 +762,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: "summary".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -755,6 +772,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: "stale developer instructions".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -767,6 +785,7 @@ keep me updated
             content: vec![ContentItem::InputText {
                 text: "summary".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         });
@@ -782,6 +801,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: "older user".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -791,6 +811,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: format!("{SUMMARY_PREFIX}\nsummary text"),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -800,6 +821,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: "latest user".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -814,6 +836,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: "older user".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -823,6 +846,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: format!("{SUMMARY_PREFIX}\nsummary text"),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -834,6 +858,7 @@ keep me updated
             content: vec![ContentItem::InputText {
                 text: "latest user".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         });
@@ -848,6 +873,7 @@ keep me updated
             content: vec![ContentItem::InputText {
                 text: "summary".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         }];
@@ -878,6 +904,7 @@ keep me updated
             content: vec![ContentItem::InputText {
                 text: "summary".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         });
@@ -893,6 +920,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: "older user".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -902,6 +930,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: "latest user".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -911,6 +940,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: format!("{SUMMARY_PREFIX}\nsummary text"),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -921,6 +951,7 @@ keep me updated
             content: vec![ContentItem::InputText {
                 text: "fresh permissions".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         }];
@@ -936,6 +967,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: "older user".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -945,6 +977,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: "fresh permissions".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -954,6 +987,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: "latest user".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -963,6 +997,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: format!("{SUMMARY_PREFIX}\nsummary text"),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -981,6 +1016,7 @@ keep me updated
             content: vec![ContentItem::InputText {
                 text: "fresh permissions".to_string(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         }];
@@ -996,6 +1032,7 @@ keep me updated
                 content: vec![ContentItem::InputText {
                     text: "fresh permissions".to_string(),
                 }],
+                metadata: None,
                 end_turn: None,
                 phase: None,
             },

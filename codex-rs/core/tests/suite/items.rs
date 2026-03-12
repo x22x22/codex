@@ -1,6 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Ok;
+use codex_core::features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -35,6 +36,7 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
+use serde_json::Value;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_message_item_is_emitted() -> anyhow::Result<()> {
@@ -42,7 +44,15 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let TestCodex { codex, .. } = test_codex().build(&server).await?;
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UserMessageTypeMetadata)
+                .expect("feature flag should be enabled for this test");
+        })
+        .build(&server)
+        .await?;
 
     let first_response = sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]);
     mount_sse_once(&server, first_response).await;
@@ -105,6 +115,28 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     .await;
     assert_eq!(legacy_message.message, "please inspect sample.txt");
     assert_eq!(legacy_message.text_elements, text_elements);
+
+    let requests = server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 1);
+    let body: Value = requests[0].body_json().expect("valid JSON request body");
+    let input = body
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("request input array");
+    let user_message = input
+        .iter()
+        .find(|item| {
+            item.get("type").and_then(Value::as_str) == Some("message")
+                && item.get("role").and_then(Value::as_str) == Some("user")
+        })
+        .expect("user message input item");
+    assert_eq!(
+        user_message
+            .get("metadata")
+            .and_then(|metadata| metadata.get("user_message_type"))
+            .and_then(Value::as_str),
+        Some("prompt")
+    );
     Ok(())
 }
 

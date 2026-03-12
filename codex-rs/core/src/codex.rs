@@ -3240,6 +3240,7 @@ impl Session {
             content: vec![ContentItem::InputText {
                 text: format!("Warning: {}", message.into()),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         };
@@ -3659,6 +3660,38 @@ impl Session {
         response_item: ResponseItem,
         user_message_type: Option<UserMessageType>,
     ) {
+        let user_message_type = if self.enabled(Feature::UserMessageTypeMetadata) {
+            user_message_type
+        } else {
+            None
+        };
+
+        let response_item = match (response_item, user_message_type.clone()) {
+            (
+                ResponseItem::Message {
+                    id,
+                    role,
+                    content,
+                    metadata,
+                    end_turn,
+                    phase,
+                },
+                Some(kind),
+            ) if role == "user" => {
+                let mut metadata = metadata.unwrap_or_default();
+                metadata.user_message_type = Some(kind);
+                ResponseItem::Message {
+                    id,
+                    role,
+                    content,
+                    metadata: Some(metadata),
+                    end_turn,
+                    phase,
+                }
+            }
+            (response_item, _) => response_item,
+        };
+
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
