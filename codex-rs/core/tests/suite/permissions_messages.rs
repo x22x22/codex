@@ -66,6 +66,7 @@ async fn permissions_message_sent_once_on_start() -> Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -191,6 +192,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -217,6 +219,7 @@ async fn permissions_message_added_on_override_change() -> Result<()> {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -264,6 +267,7 @@ async fn permissions_message_not_added_when_no_change() -> Result<()> {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -275,6 +279,7 @@ async fn permissions_message_not_added_when_no_change() -> Result<()> {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -333,6 +338,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -361,6 +367,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -374,6 +381,7 @@ async fn resume_replays_permissions_messages() -> Result<()> {
                 text: "after resume".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -433,6 +441,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
                 text: "hello 1".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -461,6 +470,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
                 text: "hello 2".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -482,6 +492,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
                 text: "after resume".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -510,6 +521,7 @@ async fn resume_and_fork_append_permissions_messages() -> Result<()> {
                 text: "after fork".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -564,6 +576,7 @@ async fn permissions_message_includes_writable_roots() -> Result<()> {
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;

@@ -761,7 +761,11 @@ async fn resumed_history_injects_initial_context_on_first_context_update_only() 
     session
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
-    expected.extend(session.build_initial_context(&turn_context).await);
+    expected.extend(
+        session
+            .build_initial_context_without_reference_context_item(&turn_context)
+            .await,
+    );
     let history_after_seed = session.clone_history().await;
     assert_eq!(expected, history_after_seed.raw_items());
 
@@ -926,7 +930,7 @@ async fn record_initial_history_reconstructs_forked_transcript() {
     let reconstruction_turn = session.new_default_turn().await;
     expected.extend(
         session
-            .build_initial_context(reconstruction_turn.as_ref())
+            .build_initial_context_without_reference_context_item(reconstruction_turn.as_ref())
             .await,
     );
     let history = session.state.lock().await.clone_history();
@@ -3409,7 +3413,9 @@ async fn record_context_updates_and_set_reference_context_item_injects_full_cont
         .record_context_updates_and_set_reference_context_item(&turn_context)
         .await;
     let history = session.clone_history().await;
-    let initial_context = session.build_initial_context(&turn_context).await;
+    let initial_context = session
+        .build_initial_context_without_reference_context_item(&turn_context)
+        .await;
     assert_eq!(history.raw_items().to_vec(), initial_context);
 
     let current_context = session.reference_context_item().await;
@@ -3453,7 +3459,11 @@ async fn record_context_updates_and_set_reference_context_item_reinjects_full_co
 
     let history = session.clone_history().await;
     let mut expected_history = vec![compacted_summary];
-    expected_history.extend(session.build_initial_context(&turn_context).await);
+    expected_history.extend(
+        session
+            .build_initial_context_without_reference_context_item(&turn_context)
+            .await,
+    );
     assert_eq!(history.raw_items().to_vec(), expected_history);
 }
 

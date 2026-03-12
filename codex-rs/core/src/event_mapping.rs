@@ -19,13 +19,24 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::model_visible_fragments::is_contextual_user_fragment;
+use crate::model_visible_fragments::is_ephemeral_context_fragment;
 use crate::web_search::web_search_action_detail;
 
+fn strip_ephemeral_context_prefix(message: &[ContentItem]) -> &[ContentItem] {
+    let prefix_len = message
+        .iter()
+        .take_while(|content_item| is_ephemeral_context_fragment(content_item))
+        .count();
+    &message[prefix_len..]
+}
+
 pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
-    message.iter().any(is_contextual_user_fragment)
+    let stripped = strip_ephemeral_context_prefix(message);
+    stripped.is_empty() || stripped.iter().any(is_contextual_user_fragment)
 }
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
+    let message = strip_ephemeral_context_prefix(message);
     if is_contextual_user_message_content(message) {
         return None;
     }
