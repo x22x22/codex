@@ -61,7 +61,10 @@ fn extract_running_session_id(text: &str) -> i32 {
 fn wait_for_file_source(path: &Path) -> Result<String> {
     let quoted_path = shlex::try_join([path.to_string_lossy().as_ref()])?;
     let command = format!("if [ -f {quoted_path} ]; then printf ready; fi");
-    Ok(format!("await waitForFile({command:?});"))
+    Ok(format!(
+        r#"while ((await exec_command({{ cmd: {command:?} }})).output !== "ready") {{
+}}"#
+    ))
 }
 
 fn custom_tool_output_body_and_success(
@@ -334,11 +337,6 @@ async fn code_mode_can_yield_and_resume_with_exec_wait() -> Result<()> {
 import {{ output_text, set_yield_time }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
 
-const waitForFile = async (cmd) => {{
-  while ((await exec_command({{ cmd }})).output !== "ready") {{
-  }}
-}};
-
 output_text("phase 1");
 set_yield_time(10);
 {phase_2_wait}
@@ -488,11 +486,6 @@ async fn code_mode_can_run_multiple_yielded_sessions() -> Result<()> {
 import {{ output_text, set_yield_time }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
 
-const waitForFile = async (cmd) => {{
-  while ((await exec_command({{ cmd }})).output !== "ready") {{
-  }}
-}};
-
 output_text("session a start");
 set_yield_time(10);
 {session_a_wait}
@@ -503,11 +496,6 @@ output_text("session a done");
         r#"
 import {{ output_text, set_yield_time }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
-
-const waitForFile = async (cmd) => {{
-  while ((await exec_command({{ cmd }})).output !== "ready") {{
-  }}
-}};
 
 output_text("session b start");
 set_yield_time(10);
@@ -669,11 +657,6 @@ async fn code_mode_exec_wait_can_terminate_and_continue() -> Result<()> {
         r#"
 import {{ output_text, set_yield_time }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
-
-const waitForFile = async (cmd) => {{
-  while ((await exec_command({{ cmd }})).output !== "ready") {{
-  }}
-}};
 
 output_text("phase 1");
 set_yield_time(10);
@@ -870,11 +853,6 @@ async fn code_mode_exec_wait_terminate_returns_completed_session_if_it_finished_
 import {{ output_text, set_yield_time }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
 
-const waitForFile = async (cmd) => {{
-  while ((await exec_command({{ cmd }})).output !== "ready") {{
-  }}
-}};
-
 output_text("session a start");
 set_yield_time(10);
 {session_a_wait}
@@ -885,11 +863,6 @@ output_text("session a done");
         r#"
 import {{ output_text, set_yield_time }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
-
-const waitForFile = async (cmd) => {{
-  while ((await exec_command({{ cmd }})).output !== "ready") {{
-  }}
-}};
 
 output_text("session b start");
 set_yield_time(10);
@@ -1051,11 +1024,6 @@ async fn code_mode_exec_wait_uses_its_own_max_tokens_budget() -> Result<()> {
         r#"
 import {{ output_text, set_max_output_tokens_per_exec_call, set_yield_time }} from "@openai/code_mode";
 import {{ exec_command }} from "tools.js";
-
-const waitForFile = async (cmd) => {{
-  while ((await exec_command({{ cmd }})).output !== "ready") {{
-  }}
-}};
 
 output_text("phase 1");
 set_max_output_tokens_per_exec_call(100);
