@@ -154,15 +154,14 @@ impl<'a> Injector for HeaderMapInjector<'a> {
     }
 }
 
-pub fn inject_current_span_trace_headers(headers: &mut HeaderMap) {
-    global::get_text_map_propagator(|prop| {
-        prop.inject_context(&Span::current().context(), &mut HeaderMapInjector(headers));
-    });
-}
-
 fn trace_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
-    inject_current_span_trace_headers(&mut headers);
+    global::get_text_map_propagator(|prop| {
+        prop.inject_context(
+            &Span::current().context(),
+            &mut HeaderMapInjector(&mut headers),
+        );
+    });
     headers
 }
 
