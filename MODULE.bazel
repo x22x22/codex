@@ -1,5 +1,7 @@
 module(name = "codex")
 
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "llvm", version = "0.6.7")
 
@@ -173,6 +175,230 @@ crate.annotation(
 )
 
 inject_repo(crate, "alsa_lib")
+
+bazel_dep(name = "v8", version = "14.6.202.11")
+archive_override(
+    module_name = "v8",
+    integrity = "sha256-Ju45oFJMyCWyT/r+d+MDsCbCeoDBisGaj4+KZYIIYSU=",
+    patch_cmds = ["""
+python3 - <<'PY'
+from pathlib import Path
+
+module = Path("MODULE.bazel")
+text = module.read_text()
+start = text.index("# Define the local LLVM toolchain repository\\n")
+end = text.index('libcxx_repository(\\n    name = "libcxx",\\n)\\n') + len('libcxx_repository(\\n    name = "libcxx",\\n)\\n')
+text = text[:start] + text[end:]
+fast_float_build = '''load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "fast_float",
+    hdrs = glob(["include/fast_float/*.h"]),
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)
+'''
+simdutf_build = '''load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "simdutf",
+    srcs = ["simdutf.cpp"],
+    hdrs = ["simdutf.h"],
+    copts = ["-std=c++20"],
+    includes = ["."],
+    visibility = ["//visibility:public"],
+)
+'''
+dragonbox_build = '''load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "dragonbox",
+    hdrs = ["include/dragonbox/dragonbox.h"],
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)
+'''
+fp16_build = '''load("@rules_cc//cc:defs.bzl", "cc_library")
+
+cc_library(
+    name = "fp16",
+    hdrs = glob(["include/**/*.h"]),
+    includes = ["include"],
+    visibility = ["//visibility:public"],
+)
+'''
+highway_patch_cmd = '''python3 - <<'PY'
+from pathlib import Path
+
+build = Path("BUILD")
+text = build.read_text()
+text = text.replace(
+    'load("@rules_cc//cc:defs.bzl", "cc_test")',
+    'load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")',
+)
+build.write_text(text)
+PY'''
+module_insertion = f'''bazel_dep(name = "rules_license", version = "0.0.4")
+
+git_repository = use_repo_rule("@bazel_tools//tools/build_defs/repo:git.bzl", "git_repository")
+http_archive = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+
+http_archive(
+    name = "highway",
+    patch_cmds = [{highway_patch_cmd!r}],
+    sha256 = "7e0be78b8318e8bdbf6fa545d2ecb4c90f947df03f7aadc42c1967f019e63343",
+    strip_prefix = "highway-1.2.0",
+    urls = ["https://github.com/google/highway/archive/refs/tags/1.2.0.tar.gz"],
+)
+
+git_repository(
+    name = "icu",
+    build_file = "@v8//:bazel/BUILD.icu",
+    commit = "a86a32e67b8d1384b33f8fa48c83a6079b86f8cd",
+    patch_cmds = ["find source -name BUILD.bazel | xargs rm"],
+    patch_cmds_win = ["Get-ChildItem -Path source -File -Include BUILD.bazel -Recurse | Remove-Item"],
+    remote = "https://chromium.googlesource.com/chromium/deps/icu.git",
+)
+
+http_archive(
+    name = "fast_float",
+    build_file_content = {fast_float_build!r},
+    sha256 = "e14a33089712b681d74d94e2a11362643bd7d769ae8f7e7caefe955f57f7eacd",
+    strip_prefix = "fast_float-8.0.2",
+    urls = ["https://github.com/fastfloat/fast_float/archive/refs/tags/v8.0.2.tar.gz"],
+)
+
+git_repository(
+    name = "simdutf",
+    build_file_content = {simdutf_build!r},
+    commit = "93b35aec29256f705c97f675fe4623578bd7a395",
+    remote = "https://chromium.googlesource.com/chromium/src/third_party/simdutf",
+)
+
+git_repository(
+    name = "dragonbox",
+    build_file_content = {dragonbox_build!r},
+    commit = "beeeef91cf6fef89a4d4ba5e95d47ca64ccb3a44",
+    remote = "https://chromium.googlesource.com/external/github.com/jk-jeon/dragonbox.git",
+)
+
+git_repository(
+    name = "fp16",
+    build_file_content = {fp16_build!r},
+    commit = "3d2de1816307bac63c16a297e8c4dc501b4076df",
+    remote = "https://chromium.googlesource.com/external/github.com/Maratyszcza/FP16.git",
+)
+'''
+text = text.replace('bazel_dep(name = "highway", version = "1.2.0")\\n', module_insertion)
+module.write_text(text)
+
+defs = Path("bazel/defs.bzl")
+text = defs.read_text()
+text = text.replace('        deps = [":define_flags", "@libcxx//:libc++"],\\n', '        deps = [":define_flags"],\\n')
+defs.write_text(text)
+
+build = Path("BUILD.bazel")
+text = build.read_text()
+text = text.replace('    default = "none",\\n', '    default = "False",\\n', 1)
+text = text.replace("//external:icu", "@icu//:icu")
+text = text.replace("//third_party/fast_float/src:fast_float", "@fast_float//:fast_float")
+text = text.replace(
+    'alias(\\n    name = "core_lib_icu",\\n    actual = "icu/v8",\\n)\\n',
+    'alias(\\n    name = "core_lib_icu",\\n    actual = "icu/v8",\\n    visibility = ["//visibility:public"],\\n)\\n',
+)
+text = text.replace(
+    '    srcs = [\\n        "include/js_protocol.pdl",\\n        "src/inspector/inspector_protocol_config.json",\\n    ],\\n',
+    '    srcs = [\\n        "include/js_protocol.pdl",\\n        "src/inspector/inspector_protocol_config.json",\\n        "third_party/inspector_protocol/code_generator.py",\\n        "third_party/inspector_protocol/pdl.py",\\n        "third_party/inspector_protocol/lib/Forward_h.template",\\n        "third_party/inspector_protocol/lib/Object_cpp.template",\\n        "third_party/inspector_protocol/lib/Object_h.template",\\n        "third_party/inspector_protocol/lib/Protocol_cpp.template",\\n        "third_party/inspector_protocol/lib/ValueConversions_cpp.template",\\n        "third_party/inspector_protocol/lib/ValueConversions_h.template",\\n        "third_party/inspector_protocol/lib/Values_cpp.template",\\n        "third_party/inspector_protocol/lib/Values_h.template",\\n        "third_party/inspector_protocol/templates/Exported_h.template",\\n        "third_party/inspector_protocol/templates/Imported_h.template",\\n        "third_party/inspector_protocol/templates/TypeBuilder_cpp.template",\\n        "third_party/inspector_protocol/templates/TypeBuilder_h.template",\\n    ],\\n',
+    1,
+)
+text = text.replace(
+    '    cmd = "$(location :code_generator) --jinja_dir . \\\\\\n           --inspector_protocol_dir third_party/inspector_protocol \\\\\\n           --config $(location :src/inspector/inspector_protocol_config.json) \\\\\\n           --config_value protocol.path=$(location :include/js_protocol.pdl) \\\\\\n           --output_base $(@D)/src/inspector",\\n',
+    '    cmd = "INSPECTOR_PROTOCOL_DIR=$$(dirname $(execpath third_party/inspector_protocol/code_generator.py)); \\\\\\n           PYTHONPATH=$$INSPECTOR_PROTOCOL_DIR:external/rules_python++pip+v8_python_deps_311_jinja2/site-packages:external/rules_python++pip+v8_python_deps_311_markupsafe/site-packages:$${PYTHONPATH-} \\\\\\n           python3 $(execpath third_party/inspector_protocol/code_generator.py) --jinja_dir . \\\\\\n           --inspector_protocol_dir $$INSPECTOR_PROTOCOL_DIR \\\\\\n           --config $(location :src/inspector/inspector_protocol_config.json) \\\\\\n           --config_value protocol.path=$(location :include/js_protocol.pdl) \\\\\\n           --output_base $(@D)/src/inspector",\\n',
+    1,
+)
+text = text.replace(
+    '    tools = [\\n        ":code_generator",\\n    ],\\n',
+    '    tools = [\\n        requirement("jinja2"),\\n        requirement("markupsafe"),\\n    ],\\n',
+    1,
+)
+text = text.replace(
+    'cc_library(\\n  name = "simdutf",\\n  srcs = ["third_party/simdutf/simdutf.cpp"],\\n  hdrs = ["third_party/simdutf/simdutf.h"],\\n  copts = select({\\n        "@v8//bazel/config:is_clang": ["-std=c++20"],\\n        "@v8//bazel/config:is_gcc": ["-std=gnu++2a"],\\n        "@v8//bazel/config:is_windows": ["/std:c++20"],\\n        "//conditions:default": [],\\n    }),\\n)\\n',
+    'alias(\\n    name = "simdutf",\\n    actual = "@simdutf//:simdutf",\\n)\\n',
+    1,
+)
+text = text.replace(
+    'v8_library(\\n  name = "lib_dragonbox",\\n  srcs = ["third_party/dragonbox/src/include/dragonbox/dragonbox.h"],\\n  hdrs = [\\n    "third_party/dragonbox/src/include/dragonbox/dragonbox.h",\\n  ],\\n  includes = [\\n    "third_party/dragonbox/src/include",\\n  ],\\n)\\n',
+    'alias(\\n    name = "lib_dragonbox",\\n    actual = "@dragonbox//:dragonbox",\\n)\\n',
+    1,
+)
+text = text.replace(
+    'v8_library(\\n  name = "lib_fp16",\\n  srcs = ["third_party/fp16/src/include/fp16.h"],\\n  hdrs = [\\n    "third_party/fp16/src/include/fp16/fp16.h",\\n    "third_party/fp16/src/include/fp16/bitcasts.h",\\n    "third_party/fp16/src/include/fp16/macros.h",\\n  ],\\n  includes = [\\n    "third_party/fp16/src/include",\\n  ],\\n)\\n',
+    'alias(\\n    name = "lib_fp16",\\n    actual = "@fp16//:fp16",\\n)\\n',
+    1,
+)
+needle = 'filegroup(\\n    name = "d8_files",\\n'
+insert = 'cc_library(\\n    name = "rusty_v8_internal_headers",\\n    hdrs = [\\n        "src/libplatform/default-platform.h",\\n    ],\\n    strip_include_prefix = "",\\n    visibility = ["//visibility:public"],\\n)\\n\\n'
+if needle not in text:
+    raise SystemExit("could not find d8_files insertion point")
+build.write_text(text.replace(needle, insert + needle, 1))
+
+stack_trace = Path("src/base/debug/stack_trace_posix.cc")
+text = stack_trace.read_text()
+text = text.replace(
+    'bool dump_stack_in_signal_handler = true;\\n\\n// The prefix used for mangled symbols, per the Itanium C++ ABI:\\n// http://www.codesourcery.com/cxx-abi/abi.html#mangling\\nconst char kMangledSymbolPrefix[] = "_Z";\\n\\n// Characters that can be used for symbols, generated by Ruby:\\n// ((\\'a\\'..\\'z\\').to_a+(\\'A\\'..\\'Z\\').to_a+(\\'0\\'..\\'9\\').to_a + [\\'_\\']).join\\nconst char kSymbolCharacters[] =\\n    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";\\n\\n#if HAVE_EXECINFO_H\\n',
+    'bool dump_stack_in_signal_handler = true;\\n\\n#if HAVE_EXECINFO_H\\n// The prefix used for mangled symbols, per the Itanium C++ ABI:\\n// http://www.codesourcery.com/cxx-abi/abi.html#mangling\\nconst char kMangledSymbolPrefix[] = "_Z";\\n\\n// Characters that can be used for symbols, generated by Ruby:\\n// ((\\'a\\'..\\'z\\').to_a+(\\'A\\'..\\'Z\\').to_a+(\\'0\\'..\\'9\\').to_a + [\\'_\\']).join\\nconst char kSymbolCharacters[] =\\n    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";\\n\\n',
+    1,
+)
+stack_trace.write_text(text)
+
+thread_isolated_allocator = Path("src/libplatform/default-thread-isolated-allocator.cc")
+text = thread_isolated_allocator.read_text()
+text = text.replace(
+    "bool KernelHasPkruFix() {\\n",
+    "[[maybe_unused]] bool KernelHasPkruFix() {\\n",
+    1,
+)
+thread_isolated_allocator.write_text(text)
+
+for path in Path("src").rglob("*"):
+    if not path.is_file():
+        continue
+    text = path.read_text()
+    text = text.replace('"third_party/fp16/src/include/fp16.h"', '"fp16.h"')
+    text = text.replace('"third_party/simdutf/simdutf.h"', '"simdutf.h"')
+    text = text.replace(
+        '"third_party/fast_float/src/include/fast_float/fast_float.h"',
+        '"fast_float/fast_float.h"',
+    )
+    text = text.replace(
+        '"third_party/fast_float/src/include/fast_float/float_common.h"',
+        '"fast_float/float_common.h"',
+    )
+    text = text.replace(
+        '"third_party/dragonbox/src/include/dragonbox/dragonbox.h"',
+        '"dragonbox/dragonbox.h"',
+    )
+    path.write_text(text)
+
+icu_build = Path("bazel/BUILD.icu")
+text = icu_build.read_text()
+if 'load("@rules_cc//cc:defs.bzl", "cc_library")\\n\\n' not in text:
+    text = 'load("@rules_cc//cc:defs.bzl", "cc_library")\\n\\n' + text
+icu_build.write_text(text)
+PY
+"""],
+    strip_prefix = "v8-14.6.202.11",
+    urls = ["https://github.com/v8/v8/archive/refs/tags/14.6.202.11.tar.gz"],
+)
+
+http_archive(
+    name = "v8_crate_146_4_0",
+    build_file = "//third_party/v8:v8_crate.BUILD.bazel",
+    sha256 = "d97bcac5cdc5a195a4813f1855a6bc658f240452aac36caa12fd6c6f16026ab1",
+    strip_prefix = "v8-146.4.0",
+    type = "tar.gz",
+    urls = ["https://static.crates.io/crates/v8/v8-146.4.0.crate"],
+)
 
 use_repo(crate, "crates")
 
