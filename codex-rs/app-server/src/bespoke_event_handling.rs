@@ -865,6 +865,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids: Vec::new(),
                 prompt: Some(begin_event.prompt),
+                model: Some(begin_event.model),
+                reasoning_effort: Some(begin_event.reasoning_effort),
                 agents_states: HashMap::new(),
                 metadata: None,
             };
@@ -903,6 +905,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: Some(end_event.prompt),
+                model: Some(end_event.model),
+                reasoning_effort: Some(end_event.reasoning_effort),
                 agents_states,
                 metadata: None,
             };
@@ -924,6 +928,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: Some(begin_event.prompt),
+                model: None,
+                reasoning_effort: None,
                 agents_states: HashMap::new(),
                 metadata: None,
             };
@@ -951,6 +957,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids: vec![receiver_id.clone()],
                 prompt: Some(end_event.prompt),
+                model: None,
+                reasoning_effort: None,
                 agents_states: [(receiver_id, received_status)].into_iter().collect(),
                 metadata: None,
             };
@@ -976,6 +984,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states: HashMap::new(),
                 metadata: None,
             };
@@ -1013,6 +1023,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids,
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states,
                 metadata: None,
             };
@@ -1033,6 +1045,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: begin_event.sender_thread_id.to_string(),
                 receiver_thread_ids: vec![begin_event.receiver_thread_id.to_string()],
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states: HashMap::new(),
                 metadata: None,
             };
@@ -1074,6 +1088,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                 sender_thread_id: end_event.sender_thread_id.to_string(),
                 receiver_thread_ids: vec![receiver_id],
                 prompt: None,
+                model: None,
+                reasoning_effort: None,
                 agents_states,
                 metadata: None,
             };
@@ -2534,6 +2550,8 @@ fn collab_resume_begin_item(
         sender_thread_id: begin_event.sender_thread_id.to_string(),
         receiver_thread_ids: vec![begin_event.receiver_thread_id.to_string()],
         prompt: None,
+        model: None,
+        reasoning_effort: None,
         agents_states: HashMap::new(),
         metadata: None,
     }
@@ -2559,6 +2577,8 @@ fn collab_resume_end_item(end_event: codex_protocol::protocol::CollabResumeEndEv
         sender_thread_id: end_event.sender_thread_id.to_string(),
         receiver_thread_ids: vec![receiver_id],
         prompt: None,
+        model: None,
+        reasoning_effort: None,
         agents_states,
         metadata: None,
     }
@@ -2934,6 +2954,8 @@ mod tests {
             sender_thread_id: event.sender_thread_id.to_string(),
             receiver_thread_ids: vec![event.receiver_thread_id.to_string()],
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states: HashMap::new(),
             metadata: None,
         };
@@ -2960,6 +2982,8 @@ mod tests {
             sender_thread_id: event.sender_thread_id.to_string(),
             receiver_thread_ids: vec![receiver_id.clone()],
             prompt: None,
+            model: None,
+            reasoning_effort: None,
             agents_states: [(
                 receiver_id,
                 V2CollabAgentStatus::from(codex_protocol::protocol::AgentStatus::NotFound),
