@@ -1,7 +1,13 @@
 use crate::codex::TurnContext;
-use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
+use crate::model_visible_context::ContextualUserContextRole;
+use crate::model_visible_context::ContextualUserFragmentMarkers;
+use crate::model_visible_context::ModelVisibleContextFragment;
+use crate::model_visible_context::TaggedContextualUserFragment;
+use crate::model_visible_context::TurnContextDiffFragment;
+use crate::model_visible_context::TurnContextDiffParams;
 use crate::shell::Shell;
-use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use serde::Deserialize;
@@ -16,7 +22,6 @@ pub(crate) struct EnvironmentContext {
     pub current_date: Option<String>,
     pub timezone: Option<String>,
     pub network: Option<NetworkContext>,
-    pub subagents: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -26,13 +31,17 @@ pub(crate) struct NetworkContext {
 }
 
 impl EnvironmentContext {
+    const MARKERS: ContextualUserFragmentMarkers = ContextualUserFragmentMarkers::new(
+        ENVIRONMENT_CONTEXT_OPEN_TAG,
+        ENVIRONMENT_CONTEXT_CLOSE_TAG,
+    );
+
     pub fn new(
         cwd: Option<PathBuf>,
         shell: Shell,
         current_date: Option<String>,
         timezone: Option<String>,
         network: Option<NetworkContext>,
-        subagents: Option<String>,
     ) -> Self {
         Self {
             cwd,
@@ -40,7 +49,6 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
-            subagents,
         }
     }
 
@@ -53,65 +61,12 @@ impl EnvironmentContext {
             current_date,
             timezone,
             network,
-            subagents,
             shell: _,
         } = other;
         self.cwd == *cwd
             && self.current_date == *current_date
             && self.timezone == *timezone
             && self.network == *network
-            && self.subagents == *subagents
-    }
-
-    pub fn diff_from_turn_context_item(
-        before: &TurnContextItem,
-        after: &TurnContext,
-        shell: &Shell,
-    ) -> Self {
-        let before_network = Self::network_from_turn_context_item(before);
-        let after_network = Self::network_from_turn_context(after);
-        let cwd = if before.cwd != after.cwd {
-            Some(after.cwd.clone())
-        } else {
-            None
-        };
-        let current_date = after.current_date.clone();
-        let timezone = after.timezone.clone();
-        let network = if before_network != after_network {
-            after_network
-        } else {
-            before_network
-        };
-        EnvironmentContext::new(cwd, shell.clone(), current_date, timezone, network, None)
-    }
-
-    pub fn from_turn_context(turn_context: &TurnContext, shell: &Shell) -> Self {
-        Self::new(
-            Some(turn_context.cwd.clone()),
-            shell.clone(),
-            turn_context.current_date.clone(),
-            turn_context.timezone.clone(),
-            Self::network_from_turn_context(turn_context),
-            None,
-        )
-    }
-
-    pub fn from_turn_context_item(turn_context_item: &TurnContextItem, shell: &Shell) -> Self {
-        Self::new(
-            Some(turn_context_item.cwd.clone()),
-            shell.clone(),
-            turn_context_item.current_date.clone(),
-            turn_context_item.timezone.clone(),
-            Self::network_from_turn_context_item(turn_context_item),
-            None,
-        )
-    }
-
-    pub fn with_subagents(mut self, subagents: String) -> Self {
-        if !subagents.is_empty() {
-            self.subagents = Some(subagents);
-        }
-        self
     }
 
     fn network_from_turn_context(turn_context: &TurnContext) -> Option<NetworkContext> {
@@ -142,33 +97,25 @@ impl EnvironmentContext {
     }
 }
 
-impl EnvironmentContext {
-    /// Serializes the environment context to XML. Libraries like `quick-xml`
-    /// require custom macros to handle Enums with newtypes, so we just do it
-    /// manually, to keep things simple. Output looks like:
-    ///
-    /// ```xml
-    /// <environment_context>
-    ///   <cwd>...</cwd>
-    ///   <shell>...</shell>
-    /// </environment_context>
-    /// ```
-    pub fn serialize_to_xml(self) -> String {
+impl ModelVisibleContextFragment for EnvironmentContext {
+    type Role = ContextualUserContextRole;
+
+    fn render_text(&self) -> String {
         let mut lines = Vec::new();
-        if let Some(cwd) = self.cwd {
+        if let Some(cwd) = &self.cwd {
             lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
         }
 
         let shell_name = self.shell.name();
         lines.push(format!("  <shell>{shell_name}</shell>"));
-        if let Some(current_date) = self.current_date {
+        if let Some(current_date) = &self.current_date {
             lines.push(format!("  <current_date>{current_date}</current_date>"));
         }
-        if let Some(timezone) = self.timezone {
+        if let Some(timezone) = &self.timezone {
             lines.push(format!("  <timezone>{timezone}</timezone>"));
         }
-        match self.network {
-            Some(ref network) => {
+        match &self.network {
+            Some(network) => {
                 lines.push("  <network enabled=\"true\">".to_string());
                 for allowed in &network.allowed_domains {
                     lines.push(format!("    <allowed>{allowed}</allowed>"));
@@ -183,21 +130,269 @@ impl EnvironmentContext {
                 // lines.push("  <network enabled=\"false\" />".to_string());
             }
         }
-        if let Some(subagents) = self.subagents {
-            lines.push("  <subagents>".to_string());
-            lines.extend(subagents.lines().map(|line| format!("    {line}")));
-            lines.push("  </subagents>".to_string());
-        }
-        ENVIRONMENT_CONTEXT_FRAGMENT.wrap(lines.join("\n"))
+        Self::MARKERS.wrap_body(lines.join("\n"))
     }
 }
 
-impl From<EnvironmentContext> for ResponseItem {
-    fn from(ec: EnvironmentContext) -> Self {
-        ENVIRONMENT_CONTEXT_FRAGMENT.into_message(ec.serialize_to_xml())
+impl TaggedContextualUserFragment for EnvironmentContext {
+    const MARKERS: ContextualUserFragmentMarkers = Self::MARKERS;
+}
+
+impl TurnContextDiffFragment for EnvironmentContext {
+    fn build(
+        turn_context: &TurnContext,
+        reference_context_item: Option<&TurnContextItem>,
+        params: &TurnContextDiffParams<'_>,
+    ) -> Option<Self> {
+        let current_network = Self::network_from_turn_context(turn_context);
+        let current_context = Self::new(
+            Some(turn_context.cwd.clone()),
+            params.shell.clone(),
+            turn_context.current_date.clone(),
+            turn_context.timezone.clone(),
+            current_network.clone(),
+        );
+
+        let Some(previous) = reference_context_item else {
+            return Some(current_context);
+        };
+
+        let previous_network = Self::network_from_turn_context_item(previous);
+        let previous_context = Self::new(
+            Some(previous.cwd.clone()),
+            params.shell.clone(),
+            previous.current_date.clone(),
+            previous.timezone.clone(),
+            previous_network.clone(),
+        );
+
+        if previous_context.equals_except_shell(&current_context) {
+            return None;
+        }
+
+        let cwd = if previous.cwd != turn_context.cwd {
+            Some(turn_context.cwd.clone())
+        } else {
+            None
+        };
+        let network = if previous_network != current_network {
+            current_network
+        } else {
+            previous_network
+        };
+
+        Some(Self::new(
+            cwd,
+            params.shell.clone(),
+            turn_context.current_date.clone(),
+            turn_context.timezone.clone(),
+            network,
+        ))
     }
 }
 
 #[cfg(test)]
-#[path = "environment_context_tests.rs"]
-mod tests;
+mod tests {
+    use crate::shell::ShellType;
+
+    use super::*;
+    use core_test_support::test_path_buf;
+    use pretty_assertions::assert_eq;
+
+    fn fake_shell() -> Shell {
+        Shell {
+            shell_type: ShellType::Bash,
+            shell_path: PathBuf::from("/bin/bash"),
+            shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+        }
+    }
+
+    #[test]
+    fn serialize_workspace_write_environment_context() {
+        let cwd = test_path_buf("/repo");
+        let context = EnvironmentContext::new(
+            Some(cwd.clone()),
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+        );
+
+        let expected = format!(
+            r#"<environment_context>
+  <cwd>{cwd}</cwd>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+</environment_context>"#,
+            cwd = cwd.display(),
+        );
+
+        assert_eq!(context.render_text(), expected);
+    }
+
+    #[test]
+    fn serialize_environment_context_with_network() {
+        let network = NetworkContext {
+            allowed_domains: vec!["api.example.com".to_string(), "*.openai.com".to_string()],
+            denied_domains: vec!["blocked.example.com".to_string()],
+        };
+        let context = EnvironmentContext::new(
+            Some(test_path_buf("/repo")),
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            Some(network),
+        );
+
+        let expected = format!(
+            r#"<environment_context>
+  <cwd>{}</cwd>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+  <network enabled="true">
+    <allowed>api.example.com</allowed>
+    <allowed>*.openai.com</allowed>
+    <denied>blocked.example.com</denied>
+  </network>
+</environment_context>"#,
+            test_path_buf("/repo").display()
+        );
+
+        assert_eq!(context.render_text(), expected);
+    }
+
+    #[test]
+    fn serialize_read_only_environment_context() {
+        let context = EnvironmentContext::new(
+            None,
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+        );
+
+        let expected = r#"<environment_context>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+</environment_context>"#;
+
+        assert_eq!(context.render_text(), expected);
+    }
+
+    #[test]
+    fn serialize_external_sandbox_environment_context() {
+        let context = EnvironmentContext::new(
+            None,
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+        );
+
+        let expected = r#"<environment_context>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+</environment_context>"#;
+
+        assert_eq!(context.render_text(), expected);
+    }
+
+    #[test]
+    fn serialize_external_sandbox_with_restricted_network_environment_context() {
+        let context = EnvironmentContext::new(
+            None,
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+        );
+
+        let expected = r#"<environment_context>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+</environment_context>"#;
+
+        assert_eq!(context.render_text(), expected);
+    }
+
+    #[test]
+    fn serialize_full_access_environment_context() {
+        let context = EnvironmentContext::new(
+            None,
+            fake_shell(),
+            Some("2026-02-26".to_string()),
+            Some("America/Los_Angeles".to_string()),
+            None,
+        );
+
+        let expected = r#"<environment_context>
+  <shell>bash</shell>
+  <current_date>2026-02-26</current_date>
+  <timezone>America/Los_Angeles</timezone>
+</environment_context>"#;
+
+        assert_eq!(context.render_text(), expected);
+    }
+
+    #[test]
+    fn equals_except_shell_compares_cwd() {
+        let context1 =
+            EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, None, None);
+        let context2 =
+            EnvironmentContext::new(Some(PathBuf::from("/repo")), fake_shell(), None, None, None);
+        assert!(context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn equals_except_shell_compares_cwd_differences() {
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo1")),
+            fake_shell(),
+            None,
+            None,
+            None,
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo2")),
+            fake_shell(),
+            None,
+            None,
+            None,
+        );
+
+        assert!(!context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn equals_except_shell_ignores_shell() {
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Shell {
+                shell_type: ShellType::Bash,
+                shell_path: "/bin/bash".into(),
+                shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+            },
+            None,
+            None,
+            None,
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Shell {
+                shell_type: ShellType::Zsh,
+                shell_path: "/bin/zsh".into(),
+                shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
+            },
+            None,
+            None,
+            None,
+        );
+
+        assert!(context1.equals_except_shell(&context2));
+    }
+}

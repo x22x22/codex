@@ -169,7 +169,7 @@ pub(super) fn implicit_granted_permissions(
     additional_permissions: Option<&PermissionProfile>,
     effective_additional_permissions: &EffectiveAdditionalPermissions,
 ) -> Option<PermissionProfile> {
-    if !sandbox_permissions.uses_additional_permissions()
+    if !sandbox_permissions.requires_additional_permissions()
         && !matches!(sandbox_permissions, SandboxPermissions::RequireEscalated)
         && additional_permissions.is_none()
     {
@@ -214,12 +214,13 @@ pub(super) async fn apply_granted_turn_permissions(
         _ => false,
     };
 
-    let sandbox_permissions =
-        if effective_permissions.is_some() && !sandbox_permissions.uses_additional_permissions() {
-            SandboxPermissions::WithAdditionalPermissions
-        } else {
-            sandbox_permissions
-        };
+    let sandbox_permissions = if effective_permissions.is_some()
+        && !sandbox_permissions.requires_additional_permissions()
+    {
+        SandboxPermissions::WithAdditionalPermissions
+    } else {
+        sandbox_permissions
+    };
 
     EffectiveAdditionalPermissions {
         sandbox_permissions,

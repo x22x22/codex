@@ -36,6 +36,21 @@ In the codex-rs folder where the rust code lives:
   - When extracting code from a large module, move the related tests and module/type docs toward
     the new implementation so the invariants stay close to the code that owns them.
 
+### Model-visible context fragments
+
+- Model-visible prompt context should go through the shared fragment abstractions described in `docs/model-visible-context.md`.
+- Every new model-visible fragment should implement `ModelVisibleContextFragment` and set `type Role`.
+- Turn-state model-visible context assembly should produce exactly two envelopes (one developer message + one contextual-user message) via the shared envelope builders.
+- Contextual-user fragments should use the shared detection path in `model_visible_context`: implement `TaggedContextualUserFragment` when marker-based detection is sufficient, or implement `ContextualUserFragmentDetector` for custom matching (for example AGENTS.md dynamic tags).
+- Use the developer envelope for developer guidance. Custom override text (for example config/app-server `developer_instructions`) should use `CustomDeveloperInstructions`; system-generated developer context should use typed fragments plus the neutral `developer_*_text` helpers rather than reusing the custom override type.
+- Use the contextual-user envelope for user-role contextual state or runtime markers such as AGENTS instructions, plugin instructions, environment context, skills, and shell-command markers. Contextual-user fragments must provide stable markers so history parsing treats them as contextual state rather than user intent.
+- Use `<environment_context>` specifically for environment facts derived from `TurnContext` that may need turn-to-turn diffs (`cwd`, `shell`, optional `current_date`, optional `timezone`, optional network allow/deny domain summaries). Do not put policy text, plugin/skill listings, or other guidance into `<environment_context>`; those should use dedicated fragments.
+- Fragments derived from durable/current turn state that should update/reinject via diff across resume/fork/compaction/backtracking should implement `TurnContextDiffFragment` so current-state extraction, diffing, and rendering live together.
+- Runtime/session-prefix one-off fragments can implement only `ModelVisibleContextFragment` when they are not turn-state diffs.
+- Register new turn-state fragments by type in the single ordered registry used by both initial-context and turn-diff assembly (`REGISTERED_TURN_STATE_FRAGMENT_BUILDERS` in `context_manager/updates.rs`) via `build_registered_turn_state_fragment::<YourType>`.
+- Do not hand-construct model-visible `ResponseItem::Message` payloads in new code; use fragment conversion and shared envelope builders.
+- Do not inject raw strings directly into the initial-context or settings-update builders, and do not call fragment wrapping helpers ad hoc from new code.
+
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
 
 1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.
