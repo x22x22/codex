@@ -226,6 +226,58 @@ async fn wait_for_python_repl_ready_via_probe(
 }
 
 #[cfg(unix)]
+async fn wait_for_python_repl_ready_via_probe(
+    writer: &tokio::sync::mpsc::Sender<Vec<u8>>,
+    output_rx: &mut tokio::sync::broadcast::Receiver<Vec<u8>>,
+    timeout_ms: u64,
+    newline: &str,
+) -> anyhow::Result<Vec<u8>> {
+    let mut collected = Vec::new();
+    let marker = "__codex_pty_ready__";
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
+    let probe_window = tokio::time::Duration::from_millis(if cfg!(windows) { 750 } else { 250 });
+
+    while tokio::time::Instant::now() < deadline {
+        writer
+            .send(format!("print('{marker}'){newline}").into_bytes())
+            .await?;
+
+        let probe_deadline = tokio::time::Instant::now() + probe_window;
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline || now >= probe_deadline {
+                break;
+            }
+            let remaining = std::cmp::min(
+                deadline.saturating_duration_since(now),
+                probe_deadline.saturating_duration_since(now),
+            );
+            match tokio::time::timeout(remaining, output_rx.recv()).await {
+                Ok(Ok(chunk)) => {
+                    collected.extend_from_slice(&chunk);
+                    if String::from_utf8_lossy(&collected).contains(marker) {
+                        return Ok(collected);
+                    }
+                }
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => {
+                    anyhow::bail!(
+                        "PTY output closed while waiting for Python REPL readiness: {:?}",
+                        String::from_utf8_lossy(&collected)
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    anyhow::bail!(
+        "timed out waiting for Python REPL readiness in PTY: {:?}",
+        String::from_utf8_lossy(&collected)
+    );
+}
+
+#[cfg(unix)]
 fn process_exists(pid: i32) -> anyhow::Result<bool> {
     let result = unsafe { libc::kill(pid, 0) };
     if result == 0 {
