@@ -1824,44 +1824,9 @@ impl CodexMessageProcessor {
         params: ThreadStartParams,
         request_context: RequestContext,
     ) {
-        let ThreadStartParams {
-            model,
-            model_provider,
-            service_tier,
-            cwd,
-            approval_policy,
-            sandbox,
-            sandbox_policy,
-            config,
-            service_name,
-            base_instructions,
-            developer_instructions,
-            dynamic_tools,
-            mock_experimental_field: _mock_experimental_field,
-            experimental_raw_events,
-            personality,
-            ephemeral,
-            persist_extended_history,
-        } = params;
-        let sandbox_for_config = if sandbox_policy.is_some() {
-            None
-        } else {
-            sandbox
-        };
-        let mut typesafe_overrides = self.build_thread_config_overrides(
-            model,
-            model_provider,
-            service_tier,
-            cwd,
-            approval_policy,
-            sandbox_for_config,
-            base_instructions,
-            developer_instructions,
-            personality,
-        );
-        typesafe_overrides.ephemeral = ephemeral;
         let cli_overrides = self.cli_overrides.clone();
         let cloud_requirements = self.current_cloud_requirements();
+        let arg0_paths = self.arg0_paths.clone();
         let listener_task_context = ListenerTaskContext {
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
@@ -1877,13 +1842,8 @@ impl CodexMessageProcessor {
                 cli_overrides,
                 cloud_requirements,
                 request_id,
-                config,
-                typesafe_overrides,
-                sandbox_policy,
-                dynamic_tools,
-                persist_extended_history,
-                service_name,
-                experimental_raw_events,
+                arg0_paths,
+                params,
                 request_trace,
             )
             .await;
@@ -1939,15 +1899,54 @@ impl CodexMessageProcessor {
         cli_overrides: Vec<(String, TomlValue)>,
         cloud_requirements: CloudRequirementsLoader,
         request_id: ConnectionRequestId,
-        config_overrides: Option<HashMap<String, serde_json::Value>>,
-        typesafe_overrides: ConfigOverrides,
-        sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
-        dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
-        persist_extended_history: bool,
-        service_name: Option<String>,
-        experimental_raw_events: bool,
+        arg0_paths: Arg0DispatchPaths,
+        params: ThreadStartParams,
         request_trace: Option<W3cTraceContext>,
     ) {
+        let ThreadStartParams {
+            model,
+            model_provider,
+            service_tier,
+            cwd,
+            approval_policy,
+            sandbox,
+            sandbox_policy,
+            config: config_overrides,
+            service_name,
+            base_instructions,
+            developer_instructions,
+            dynamic_tools,
+            mock_experimental_field: _mock_experimental_field,
+            experimental_raw_events,
+            personality,
+            ephemeral,
+            persist_extended_history,
+        } = params;
+        let sandbox = if sandbox_policy.is_some() {
+            None
+        } else {
+            sandbox
+        };
+        let Arg0DispatchPaths {
+            codex_linux_sandbox_exe,
+            main_execve_wrapper_exe,
+        } = arg0_paths;
+        let mut typesafe_overrides = ConfigOverrides {
+            model,
+            model_provider,
+            service_tier,
+            cwd: cwd.map(PathBuf::from),
+            approval_policy: approval_policy
+                .map(codex_app_server_protocol::AskForApproval::to_core),
+            sandbox_mode: sandbox.map(SandboxMode::to_core),
+            codex_linux_sandbox_exe,
+            main_execve_wrapper_exe,
+            base_instructions,
+            developer_instructions,
+            personality,
+            ..Default::default()
+        };
+        typesafe_overrides.ephemeral = ephemeral;
         let config = match derive_config_from_params(
             &cli_overrides,
             config_overrides,
