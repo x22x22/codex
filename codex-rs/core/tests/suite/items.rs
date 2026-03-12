@@ -68,30 +68,6 @@ fn user_message_item_by_text<'a>(input: &'a [Value], text: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("submitted user message input item not found for text: {text}"))
 }
 
-fn user_message_item_containing<'a>(input: &'a [Value], needle: &str) -> &'a Value {
-    input
-        .iter()
-        .find(|item| {
-            if item.get("type").and_then(Value::as_str) != Some("message")
-                || item.get("role").and_then(Value::as_str) != Some("user")
-            {
-                return false;
-            }
-            item.get("content")
-                .and_then(Value::as_array)
-                .is_some_and(|content| {
-                    content.iter().any(|entry| {
-                        entry.get("type").and_then(Value::as_str) == Some("input_text")
-                            && entry
-                                .get("text")
-                                .and_then(Value::as_str)
-                                .is_some_and(|text| text.contains(needle))
-                    })
-                })
-        })
-        .unwrap_or_else(|| panic!("submitted user message input item not found containing: {needle}"))
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -458,20 +434,18 @@ async fn user_message_type_prompt_queued_metadata_is_emitted_when_feature_enable
     .await;
 
     let queued_text = "queued metadata check";
-    codex
-        .submit(Op::RunUserShellCommand {
-            command: format!("printf '{queued_text}'"),
-        })
-        .await?;
-    wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::ExecCommandEnd(event)
-            if event.source == codex_protocol::protocol::ExecCommandSource::UserShell =>
-        {
-            Some(())
-        }
-        _ => None,
-    })
-    .await;
+    assert!(
+        codex
+            .inject_response_items(vec![codex_protocol::models::ResponseInputItem::Message {
+                role: "user".into(),
+                content: vec![codex_protocol::models::ContentItem::InputText {
+                    text: queued_text.into(),
+                }],
+            }])
+            .await
+            .is_ok(),
+        "inject_response_items should succeed on active turn"
+    );
 
     std::fs::write(&unblock_path, "go")?;
 
@@ -498,7 +472,7 @@ async fn user_message_type_prompt_queued_metadata_is_emitted_when_feature_enable
         .get("input")
         .and_then(Value::as_array)
         .expect("request input array");
-    let queued_message = user_message_item_containing(input, queued_text);
+    let queued_message = user_message_item_by_text(input, queued_text);
     assert_eq!(
         queued_message
             .get("metadata")
