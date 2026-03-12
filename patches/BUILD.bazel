@@ -1,0 +1,5 @@
+exports_files([
+    "aws-lc-sys_memcmp_check.patch",
+    "toolchains_llvm_bootstrapped_resource_dir.patch",
+    "windows-link.patch",
+])

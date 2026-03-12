@@ -1,0 +1,98 @@
+name: rusty-v8-bazel-build
+
+on:
+  pull_request: {}
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}::${{ github.ref_name }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux_amd64_musl
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            platform: linux_aarch64_musl
+            target: aarch64-unknown-linux-musl
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bazel
+        uses: bazelbuild/setup-bazelisk@v3
+
+      - name: Build Bazel V8 musl artifacts
+        env:
+          BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(python3 .github/scripts/rusty_v8_bazel.py print-version)"
+          version_suffix="${version//./_}"
+          target_suffix="${TARGET//-/_}"
+          lib_target="//third_party/v8:v8_${version_suffix}_${target_suffix}"
+          binding_target="//third_party/v8:src_binding_release_${target_suffix}"
+
+          bazel_args=(
+            build
+            "--platforms=@llvm//platforms:${PLATFORM}"
+            "${lib_target}"
+            "${binding_target}"
+            --build_metadata=REPO_URL=https://github.com/${GITHUB_REPOSITORY}.git
+            --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
+            --build_metadata=ROLE=CI
+            --build_metadata=VISIBILITY=PUBLIC
+          )
+
+          if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
+            bazel \
+              --noexperimental_remote_repo_contents_cache \
+              --bazelrc=.github/workflows/ci.bazelrc \
+              "${bazel_args[@]}" \
+              "--remote_header=x-buildbuddy-api-key=${BUILDBUDDY_API_KEY}"
+          else
+            bazel \
+              --noexperimental_remote_repo_contents_cache \
+              "${bazel_args[@]}" \
+              --remote_cache= \
+              --remote_executor=
+          fi
+
+      - name: Stage rusty_v8 release assets
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          output_dir="dist/${TARGET}"
+          python3 .github/scripts/rusty_v8_bazel.py stage \
+            --platform "${PLATFORM}" \
+            --target "${TARGET}" \
+            --output-dir "${output_dir}"
+
+      - name: Upload staged artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: rusty-v8-${{ matrix.target }}
+          path: dist/${{ matrix.target }}/*
