@@ -174,6 +174,7 @@ export type { RequestUserInputQuestionOption } from "./RequestUserInputQuestionO
 export type { Resource } from "./Resource";
 export type { ResourceTemplate } from "./ResourceTemplate";
 export type { ResponseItem } from "./ResponseItem";
+export type { ResponseItemMetadata } from "./ResponseItemMetadata";
 export type { ReviewCodeLocation } from "./ReviewCodeLocation";
 export type { ReviewDecision } from "./ReviewDecision";
 export type { ReviewFinding } from "./ReviewFinding";

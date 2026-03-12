@@ -13771,6 +13771,16 @@
                 ],
                 "writeOnly": true
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "phase": {
                 "anyOf": [
                   {
@@ -14137,6 +14147,21 @@
             "type": "object"
           }
         ]
+      },
+      "ResponseItemMetadata": {
+        "properties": {
+          "user_message_type": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/UserMessageType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
       },
       "ResponsesApiWebSearchAction": {
         "oneOf": [
