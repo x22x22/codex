@@ -889,6 +889,9 @@ impl TurnContext {
             sandbox_policy: self.sandbox_policy.get(),
             windows_sandbox_level: self.windows_sandbox_level,
         })
+        .with_tool_capability_overrides(config.tool_capability_overrides.clone())
+        .with_legacy_view_image_override(config.legacy_view_image_override)
+        .with_execution_mode(config.tool_execution_mode)
         .with_unified_exec_shell_mode(self.tools_config.unified_exec_shell_mode.clone())
         .with_web_search_config(self.tools_config.web_search_config.clone())
         .with_allow_login_shell(self.tools_config.allow_login_shell)
@@ -1327,6 +1330,9 @@ impl Session {
             sandbox_policy: session_configuration.sandbox_policy.get(),
             windows_sandbox_level: session_configuration.windows_sandbox_level,
         })
+        .with_tool_capability_overrides(per_turn_config.tool_capability_overrides.clone())
+        .with_legacy_view_image_override(per_turn_config.legacy_view_image_override)
+        .with_execution_mode(per_turn_config.tool_execution_mode)
         .with_unified_exec_shell_mode_for_session(
             user_shell,
             shell_zsh_path,
@@ -5192,6 +5198,9 @@ async fn spawn_review_thread(
         sandbox_policy: parent_turn_context.sandbox_policy.get(),
         windows_sandbox_level: parent_turn_context.windows_sandbox_level,
     })
+    .with_tool_capability_overrides(config.tool_capability_overrides.clone())
+    .with_legacy_view_image_override(config.legacy_view_image_override)
+    .with_execution_mode(config.tool_execution_mode)
     .with_unified_exec_shell_mode_for_session(
         sess.services.user_shell.as_ref(),
         sess.services.shell_zsh_path.as_ref(),
