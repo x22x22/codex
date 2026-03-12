@@ -78,7 +78,7 @@ jobs:
         shell: bash
         run: ./scripts/check-module-bazel-lock.sh
 
-      # Restore bazel repository cache so we don't have to redownload all the external dependencies 
+      # Restore bazel repository cache so we don't have to redownload all the external dependencies
       # on every CI run.
       - name: Restore bazel repository cache
         id: cache_bazel_repository_restore
