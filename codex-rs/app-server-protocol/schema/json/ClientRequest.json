@@ -2829,6 +2829,17 @@
             }
           ]
         },
+        "sandboxPolicy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional full sandbox policy override for the new thread.\n\nUses the same shape as `turn/start.sandboxPolicy` and persists to subsequent turns. When both `sandboxPolicy` and `sandbox` are provided, `sandboxPolicy` takes precedence."
+        },
         "serviceName": {
           "type": [
             "string",

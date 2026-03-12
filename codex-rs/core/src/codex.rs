@@ -704,6 +704,18 @@ impl Codex {
             .await
     }
 
+    pub(crate) async fn set_sandbox_policy(
+        &self,
+        sandbox_policy: SandboxPolicy,
+    ) -> ConstraintResult<()> {
+        self.session
+            .update_settings(SessionSettingsUpdate {
+                sandbox_policy: Some(sandbox_policy),
+                ..Default::default()
+            })
+            .await
+    }
+
     pub(crate) async fn agent_status(&self) -> AgentStatus {
         self.agent_status.borrow().clone()
     }

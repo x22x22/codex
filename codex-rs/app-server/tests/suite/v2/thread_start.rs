@@ -238,6 +238,85 @@ async fn thread_start_accepts_metrics_service_name() -> Result<()> {
 }
 
 #[tokio::test]
+async fn thread_start_accepts_full_sandbox_policy_override() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let readable_root = TempDir::new()?;
+    let writable_root = TempDir::new()?;
+    let sandbox_policy = codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![writable_root.path().to_path_buf().try_into()?],
+        read_only_access: codex_app_server_protocol::ReadOnlyAccess::Restricted {
+            include_platform_defaults: true,
+            readable_roots: vec![readable_root.path().to_path_buf().try_into()?],
+        },
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            sandbox_policy: Some(sandbox_policy.clone()),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { sandbox, .. } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(sandbox, sandbox_policy);
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_start_prefers_full_sandbox_policy_over_legacy_sandbox() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let writable_root = TempDir::new()?;
+    let sandbox_policy = codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
+        writable_roots: vec![writable_root.path().to_path_buf().try_into()?],
+        read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
+        network_access: false,
+        exclude_tmpdir_env_var: false,
+        exclude_slash_tmp: false,
+    };
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let req_id = mcp
+        .send_thread_start_request(ThreadStartParams {
+            sandbox: Some(codex_app_server_protocol::SandboxMode::ReadOnly),
+            sandbox_policy: Some(sandbox_policy.clone()),
+            ..Default::default()
+        })
+        .await?;
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+    )
+    .await??;
+    let ThreadStartResponse { sandbox, .. } = to_response::<ThreadStartResponse>(resp)?;
+
+    assert_eq!(sandbox, sandbox_policy);
+    Ok(())
+}
+
+#[tokio::test]
 async fn thread_start_ephemeral_remains_pathless() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
     let codex_home = TempDir::new()?;

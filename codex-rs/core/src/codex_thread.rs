@@ -97,6 +97,10 @@ impl CodexThread {
             .await
     }
 
+    pub async fn set_sandbox_policy(&self, sandbox_policy: SandboxPolicy) -> ConstraintResult<()> {
+        self.codex.set_sandbox_policy(sandbox_policy).await
+    }
+
     /// Use sparingly: this is intended to be removed soon.
     pub async fn submit_with_id(&self, sub: Submission) -> CodexResult<()> {
         self.codex.submit_with_id(sub).await

@@ -2273,6 +2273,13 @@ pub struct ThreadStartParams {
     pub approval_policy: Option<AskForApproval>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
+    /// Optional full sandbox policy override for the new thread.
+    ///
+    /// Uses the same shape as `turn/start.sandboxPolicy` and persists to
+    /// subsequent turns. When both `sandboxPolicy` and `sandbox` are provided,
+    /// `sandboxPolicy` takes precedence.
+    #[ts(optional = nullable)]
+    pub sandbox_policy: Option<SandboxPolicy>,
     #[ts(optional = nullable)]
     pub config: Option<HashMap<String, JsonValue>>,
     #[ts(optional = nullable)]
@@ -2294,7 +2301,6 @@ pub struct ThreadStartParams {
     #[ts(optional = nullable)]
     pub mock_experimental_field: Option<String>,
     /// If true, opt into emitting raw Responses API items on the event stream.
-    /// This is for internal use only (e.g. Codex Cloud).
     #[experimental("thread/start.experimentalRawEvents")]
     #[serde(default)]
     pub experimental_raw_events: bool,

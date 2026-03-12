@@ -66,7 +66,7 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 ## Lifecycle Overview
 
 - Initialize once per connection: Immediately after opening a transport connection, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request on that connection before this handshake gets rejected.
-- Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history. Like `thread/start`, `thread/fork` also accepts `ephemeral: true` for an in-memory temporary thread.
+- Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history. `thread/start` accepts the legacy coarse `sandbox` override as well as the richer `sandboxPolicy` shape used by `turn/start`; when both are provided, `sandboxPolicy` takes precedence. Like `thread/start`, `thread/fork` also accepts `ephemeral: true` for an in-memory temporary thread.
   The returned `thread.ephemeral` flag tells you whether the session is intentionally in-memory only; when it is `true`, `thread.path` is `null`.
 - Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, etc. This immediately returns the new turn object. The app-server emits `turn/started` when that turn actually begins running.
 - Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
@@ -217,6 +217,8 @@ Start a fresh thread when you need a new Codex conversation.
 } }
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
+
+Legacy callers can continue sending `"sandbox": "readOnly" | "workspaceWrite" | "dangerFullAccess"` on `thread/start`. For the richer readable-root / writable-root shape, use `sandboxPolicy` with the same schema as `turn/start`. If both `sandbox` and `sandboxPolicy` are present, `sandboxPolicy` wins.
 
 Valid `personality` values are `"friendly"`, `"pragmatic"`, and `"none"`. When `"none"` is selected, the personality placeholder is replaced with an empty string.
 

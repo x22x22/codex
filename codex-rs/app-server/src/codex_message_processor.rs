@@ -1831,6 +1831,7 @@ impl CodexMessageProcessor {
             cwd,
             approval_policy,
             sandbox,
+            sandbox_policy,
             config,
             service_name,
             base_instructions,
@@ -1842,13 +1843,18 @@ impl CodexMessageProcessor {
             ephemeral,
             persist_extended_history,
         } = params;
+        let sandbox_for_config = if sandbox_policy.is_some() {
+            None
+        } else {
+            sandbox
+        };
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
             service_tier,
             cwd,
             approval_policy,
-            sandbox,
+            sandbox_for_config,
             base_instructions,
             developer_instructions,
             personality,
@@ -1873,6 +1879,7 @@ impl CodexMessageProcessor {
                 request_id,
                 config,
                 typesafe_overrides,
+                sandbox_policy,
                 dynamic_tools,
                 persist_extended_history,
                 service_name,
@@ -1934,6 +1941,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
+        sandbox_policy: Option<codex_app_server_protocol::SandboxPolicy>,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
         persist_extended_history: bool,
         service_name: Option<String>,
@@ -1961,6 +1969,25 @@ impl CodexMessageProcessor {
                     .await;
                 return;
             }
+        };
+        let requested_sandbox_policy = match sandbox_policy {
+            Some(policy) => {
+                let policy = policy.to_core();
+                if let Err(err) = config.permissions.sandbox_policy.can_set(&policy) {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!("invalid sandbox policy: {err}"),
+                        data: None,
+                    };
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
+                Some(policy)
+            }
+            None => None,
         };
 
         let dynamic_tools = dynamic_tools.unwrap_or_default();
@@ -2007,6 +2034,20 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = new_conv;
+                if let Some(policy) = requested_sandbox_policy
+                    && let Err(err) = thread.set_sandbox_policy(policy).await
+                {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("error applying sandbox policy: {err}"),
+                        data: None,
+                    };
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
                 let config_snapshot = thread.config_snapshot().await;
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
