@@ -8,12 +8,12 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::WebSearchAction;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::SandboxPolicy;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ItemCompletedEvent;
 use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::ByteRange;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
@@ -40,8 +40,8 @@ use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 use serde_json::Value;
+use serde_json::json;
 use tempfile::tempdir;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -250,9 +250,13 @@ async fn user_message_type_prompt_steering_metadata_is_emitted_when_feature_enab
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call(call_id, "shell", &serde_json::to_string(&json!({
-                    "command": ["/bin/sh", "-c", command],
-                }))?),
+                ev_function_call(
+                    call_id,
+                    "shell",
+                    &serde_json::to_string(&json!({
+                        "command": ["/bin/sh", "-c", command],
+                    }))?,
+                ),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
@@ -376,9 +380,13 @@ async fn user_message_type_prompt_queued_metadata_is_emitted_when_feature_enable
         vec![
             sse(vec![
                 ev_response_created("resp-1"),
-                ev_function_call(call_id, "shell", &serde_json::to_string(&json!({
-                    "command": ["/bin/sh", "-c", command],
-                }))?),
+                ev_function_call(
+                    call_id,
+                    "shell",
+                    &serde_json::to_string(&json!({
+                        "command": ["/bin/sh", "-c", command],
+                    }))?,
+                ),
                 ev_completed("resp-1"),
             ]),
             sse(vec![
