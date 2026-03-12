@@ -96,38 +96,15 @@ fn id_token_info_handles_missing_fields() {
 
 #[test]
 fn workspace_account_detection_matches_workspace_plans() {
-    #[derive(Serialize)]
-    struct Header {
-        alg: &'static str,
-        typ: &'static str,
-    }
-
-    fn id_token_info_with_plan(plan: &str) -> IdTokenInfo {
-        let header = Header {
-            alg: "none",
-            typ: "JWT",
-        };
-        let payload = serde_json::json!({
-            "https://api.openai.com/auth": {
-                "chatgpt_plan_type": plan
-            }
-        });
-
-        fn b64url_no_pad(bytes: &[u8]) -> String {
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-        }
-
-        let header_b64 = b64url_no_pad(&serde_json::to_vec(&header).unwrap());
-        let payload_b64 = b64url_no_pad(&serde_json::to_vec(&payload).unwrap());
-        let signature_b64 = b64url_no_pad(b"sig");
-        let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
-
-        parse_chatgpt_jwt_claims(&fake_jwt).expect("should parse")
-    }
-
-    let workspace = id_token_info_with_plan("business");
+    let workspace = IdTokenInfo {
+        chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Business)),
+        ..IdTokenInfo::default()
+    };
     assert_eq!(workspace.is_workspace_account(), true);
 
-    let personal = id_token_info_with_plan("pro");
+    let personal = IdTokenInfo {
+        chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+        ..IdTokenInfo::default()
+    };
     assert_eq!(personal.is_workspace_account(), false);
 }
