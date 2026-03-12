@@ -1781,6 +1781,7 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
             model: Some(REQUESTED_MODEL.to_string()),
             reasoning_effort: Some(REQUESTED_REASONING_EFFORT),
             agents_states: HashMap::new(),
+            metadata: None,
         }
     );
 
@@ -1809,6 +1810,7 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         model,
         reasoning_effort,
         agents_states,
+        metadata: _,
     } = spawn_completed
     else {
         unreachable!("loop ensures we break on collab agent tool call items");
