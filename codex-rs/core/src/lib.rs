@@ -69,6 +69,7 @@ mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;
 mod shell_detect;
+mod slack_channel_names;
 mod stream_events_utils;
 pub mod test_support;
 mod text_encoding;

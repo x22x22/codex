@@ -32,6 +32,9 @@ use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
+use crate::slack_channel_names::slack_channel_name_from_profile_result;
+use crate::slack_channel_names::slack_send_message_channel_id;
+use crate::slack_channel_names::translated_slack_send_message_tool_params;
 use crate::state_db;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::openai_models::InputModality;
@@ -170,6 +173,12 @@ pub(crate) async fn handle_mcp_tool_call(
                     tool_call_end_event.clone(),
                 )
                 .await;
+                maybe_record_slack_channel_name_from_tool_result(
+                    sess.as_ref(),
+                    metadata.as_ref(),
+                    &result,
+                )
+                .await;
                 maybe_track_codex_app_used(
                     sess.as_ref(),
                     turn_context.as_ref(),
@@ -257,6 +266,8 @@ pub(crate) async fn handle_mcp_tool_call(
         tool_call_end_event.clone(),
     )
     .await;
+    maybe_record_slack_channel_name_from_tool_result(sess.as_ref(), metadata.as_ref(), &result)
+        .await;
     maybe_track_codex_app_used(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
 
     let status = if result.is_ok() { "ok" } else { "error" };
@@ -516,17 +527,19 @@ async fn maybe_request_mcp_tool_approval(
         tool_call_mcp_elicitation_enabled,
     );
     let question_id = format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}");
+    let approval_tool_params =
+        build_mcp_tool_approval_tool_params(sess.as_ref(), invocation, metadata).await;
     let rendered_template = render_mcp_tool_approval_template(
         &invocation.server,
         metadata.and_then(|metadata| metadata.connector_id.as_deref()),
         metadata.and_then(|metadata| metadata.connector_name.as_deref()),
         metadata.and_then(|metadata| metadata.tool_title.as_deref()),
-        invocation.arguments.as_ref(),
+        approval_tool_params.as_ref(),
     );
     let tool_params_display = rendered_template
         .as_ref()
         .map(|rendered_template| rendered_template.tool_params_display.clone())
-        .or_else(|| build_mcp_tool_approval_display_params(invocation.arguments.as_ref()));
+        .or_else(|| build_mcp_tool_approval_display_params(approval_tool_params.as_ref()));
     let mut question = build_mcp_tool_approval_question(
         question_id.clone(),
         &invocation.server,
@@ -552,7 +565,7 @@ async fn maybe_request_mcp_tool_approval(
                 tool_params: rendered_template
                     .as_ref()
                     .and_then(|rendered_template| rendered_template.tool_params.as_ref())
-                    .or(invocation.arguments.as_ref()),
+                    .or(approval_tool_params.as_ref()),
                 tool_params_display: tool_params_display.as_deref(),
                 question,
                 message_override: rendered_template.as_ref().and_then(|rendered_template| {
@@ -674,6 +687,55 @@ fn build_guardian_mcp_tool_review_request(
                 read_only_hint: annotations.read_only_hint,
             }),
     }
+}
+
+async fn build_mcp_tool_approval_tool_params(
+    sess: &Session,
+    invocation: &McpInvocation,
+    metadata: Option<&McpToolApprovalMetadata>,
+) -> Option<serde_json::Value> {
+    let connector_name = metadata.and_then(|metadata| metadata.connector_name.as_deref());
+    let tool_title = metadata.and_then(|metadata| metadata.tool_title.as_deref());
+    let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
+    let channel_name = match slack_send_message_channel_id(
+        connector_name,
+        tool_title,
+        invocation.arguments.as_ref(),
+    ) {
+        Some(channel_id) => sess.slack_channel_name(connector_id, channel_id).await,
+        None => None,
+    };
+
+    translated_slack_send_message_tool_params(
+        connector_name,
+        tool_title,
+        invocation.arguments.as_ref(),
+        channel_name.as_deref(),
+    )
+}
+
+async fn maybe_record_slack_channel_name_from_tool_result(
+    sess: &Session,
+    metadata: Option<&McpToolApprovalMetadata>,
+    result: &Result<CallToolResult, String>,
+) {
+    let Ok(result) = result else {
+        return;
+    };
+    let Some(channel_name) = slack_channel_name_from_profile_result(
+        metadata.and_then(|metadata| metadata.connector_name.as_deref()),
+        metadata.and_then(|metadata| metadata.tool_title.as_deref()),
+        result,
+    ) else {
+        return;
+    };
+
+    sess.record_slack_channel_name(
+        metadata.and_then(|metadata| metadata.connector_id.as_deref()),
+        channel_name.channel_id,
+        channel_name.channel_name,
+    )
+    .await;
 }
 
 fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpToolApprovalDecision {
@@ -1405,6 +1467,84 @@ mod tests {
                     },
                 },
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn slack_profile_tool_result_records_channel_name_with_global_fallback() {
+        let (session, _turn_context) = make_session_and_context().await;
+        let metadata = approval_metadata(
+            Some("connector_slack_profile"),
+            Some("Slack Codex App"),
+            None,
+            Some("get_profile"),
+            None,
+        );
+        let result = Ok(CallToolResult {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "result": {
+                    "id": "U123",
+                    "name": "Mason Zeng",
+                    "nickname": "mzeng",
+                }
+            })),
+            is_error: Some(false),
+            meta: None,
+        });
+
+        maybe_record_slack_channel_name_from_tool_result(&session, Some(&metadata), &result).await;
+
+        assert_eq!(
+            session
+                .slack_channel_name(Some("connector_slack_profile"), "U123")
+                .await,
+            Some("@mzeng".to_string())
+        );
+        assert_eq!(
+            session
+                .slack_channel_name(Some("connector_slack_send"), "U123")
+                .await,
+            Some("@mzeng".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn slack_send_message_approval_tool_params_include_translated_to_field() {
+        let (session, _turn_context) = make_session_and_context().await;
+        session
+            .record_slack_channel_name(
+                Some("connector_slack_profile"),
+                "U123".to_string(),
+                "@mzeng".to_string(),
+            )
+            .await;
+        let invocation = McpInvocation {
+            server: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool: "slack_slack_send_message".to_string(),
+            arguments: Some(serde_json::json!({
+                "channel_id": "U123",
+                "message": "hi",
+            })),
+        };
+        let metadata = approval_metadata(
+            Some("connector_slack_send"),
+            Some("Slack"),
+            None,
+            Some("slack_send_message"),
+            None,
+        );
+
+        let tool_params =
+            build_mcp_tool_approval_tool_params(&session, &invocation, Some(&metadata)).await;
+
+        assert_eq!(
+            tool_params,
+            Some(serde_json::json!({
+                "channel_id": "U123",
+                "message": "hi",
+                "to": "@mzeng",
+            }))
         );
     }
 

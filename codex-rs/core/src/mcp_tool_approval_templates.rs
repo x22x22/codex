@@ -311,6 +311,48 @@ mod tests {
     }
 
     #[test]
+    fn bundled_slack_send_message_template_renders_to_before_conversation() {
+        let rendered = render_mcp_tool_approval_template(
+            "codex_apps",
+            Some("asdk_app_69a1d78e929881919bba0dbda1f6436d"),
+            Some("Slack"),
+            Some("slack_send_message"),
+            Some(&json!({
+                "channel_id": "U123",
+                "message": "hello",
+                "to": "@mzeng",
+            })),
+        );
+
+        assert_eq!(
+            rendered,
+            Some(RenderedMcpToolApprovalTemplate {
+                question: "Allow Slack to send a message?".to_string(),
+                elicitation_message: "Allow Slack to send a message?".to_string(),
+                tool_params: Some(json!({
+                    "To": "@mzeng",
+                    "Conversation": "U123",
+                    "Message": "hello",
+                })),
+                tool_params_display: vec![
+                    RenderedMcpToolApprovalParam {
+                        name: "To".to_string(),
+                        value: json!("@mzeng"),
+                    },
+                    RenderedMcpToolApprovalParam {
+                        name: "Conversation".to_string(),
+                        value: json!("U123"),
+                    },
+                    RenderedMcpToolApprovalParam {
+                        name: "Message".to_string(),
+                        value: json!("hello"),
+                    },
+                ],
+            })
+        );
+    }
+
+    #[test]
     fn renders_literal_template_without_connector_substitution() {
         let templates = vec![ConsequentialToolMessageTemplate {
             connector_id: "github".to_string(),

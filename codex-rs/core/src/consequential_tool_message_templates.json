@@ -592,6 +592,10 @@
       "tool_title": "slack_send_message",
       "template_params": [
         {
+          "name": "to",
+          "label": "To"
+        },
+        {
           "name": "channel_id",
           "label": "Conversation"
         },

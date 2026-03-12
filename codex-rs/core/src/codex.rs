@@ -1986,6 +1986,25 @@ impl Session {
         state.clear_connector_selection();
     }
 
+    pub(crate) async fn record_slack_channel_name(
+        &self,
+        connector_id: Option<&str>,
+        channel_id: String,
+        channel_name: String,
+    ) {
+        let mut state = self.state.lock().await;
+        state.record_slack_channel_name(connector_id, channel_id, channel_name);
+    }
+
+    pub(crate) async fn slack_channel_name(
+        &self,
+        connector_id: Option<&str>,
+        channel_id: &str,
+    ) -> Option<String> {
+        let state = self.state.lock().await;
+        state.slack_channel_name(connector_id, channel_id)
+    }
+
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
         let turn_context = self.new_default_turn().await;
         let is_subagent = {

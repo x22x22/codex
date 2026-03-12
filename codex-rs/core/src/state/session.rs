@@ -33,6 +33,8 @@ pub(crate) struct SessionState {
     /// Startup regular task pre-created during session initialization.
     pub(crate) startup_regular_task: Option<JoinHandle<CodexResult<RegularTask>>>,
     pub(crate) active_connector_selection: HashSet<String>,
+    slack_channel_names: HashMap<String, String>,
+    slack_channel_names_by_connector_id: HashMap<String, HashMap<String, String>>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
     granted_permissions: Option<PermissionProfile>,
 }
@@ -51,6 +53,8 @@ impl SessionState {
             previous_turn_settings: None,
             startup_regular_task: None,
             active_connector_selection: HashSet::new(),
+            slack_channel_names: HashMap::new(),
+            slack_channel_names_by_connector_id: HashMap::new(),
             pending_session_start_source: None,
             granted_permissions: None,
         }
@@ -194,6 +198,44 @@ impl SessionState {
         self.active_connector_selection.clear();
     }
 
+    pub(crate) fn record_slack_channel_name(
+        &mut self,
+        connector_id: Option<&str>,
+        channel_id: String,
+        channel_name: String,
+    ) {
+        self.slack_channel_names
+            .insert(channel_id.clone(), channel_name.clone());
+        if let Some(connector_id) = connector_id.map(str::trim).filter(|id| !id.is_empty()) {
+            self.slack_channel_names_by_connector_id
+                .entry(connector_id.to_string())
+                .or_default()
+                .insert(channel_id, channel_name);
+        }
+    }
+
+    pub(crate) fn slack_channel_name(
+        &self,
+        connector_id: Option<&str>,
+        channel_id: &str,
+    ) -> Option<String> {
+        let channel_id = channel_id.trim();
+        if channel_id.is_empty() {
+            return None;
+        }
+
+        connector_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .and_then(|connector_id| {
+                self.slack_channel_names_by_connector_id
+                    .get(connector_id)?
+                    .get(channel_id)
+                    .cloned()
+            })
+            .or_else(|| self.slack_channel_names.get(channel_id).cloned())
+    }
+
     pub(crate) fn set_pending_session_start_source(
         &mut self,
         value: Option<codex_hooks::SessionStartSource>,
@@ -270,6 +312,41 @@ mod tests {
         state.clear_connector_selection();
 
         assert_eq!(state.get_connector_selection(), HashSet::new());
+    }
+
+    #[tokio::test]
+    async fn slack_channel_lookup_prefers_connector_match_and_falls_back_to_global() {
+        let session_configuration = make_session_configuration_for_tests().await;
+        let mut state = SessionState::new(session_configuration);
+        state.record_slack_channel_name(
+            Some("connector_a"),
+            "U123".to_string(),
+            "@alice".to_string(),
+        );
+
+        assert_eq!(
+            state.slack_channel_name(Some("connector_a"), "U123"),
+            Some("@alice".to_string())
+        );
+        assert_eq!(
+            state.slack_channel_name(Some("connector_b"), "U123"),
+            Some("@alice".to_string())
+        );
+
+        state.record_slack_channel_name(
+            Some("connector_b"),
+            "U123".to_string(),
+            "@ally".to_string(),
+        );
+
+        assert_eq!(
+            state.slack_channel_name(Some("connector_a"), "U123"),
+            Some("@alice".to_string())
+        );
+        assert_eq!(
+            state.slack_channel_name(Some("connector_b"), "U123"),
+            Some("@ally".to_string())
+        );
     }
 
     #[tokio::test]
