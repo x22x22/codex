@@ -55,7 +55,7 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
         .await?;
 
     let first_response = sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]);
-    mount_sse_once(&server, first_response).await;
+    let req = mount_sse_once(&server, first_response).await;
 
     let text_elements = vec![TextElement::new(
         ByteRange { start: 0, end: 6 },
@@ -116,9 +116,7 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     assert_eq!(legacy_message.message, "please inspect sample.txt");
     assert_eq!(legacy_message.text_elements, text_elements);
 
-    let requests = server.received_requests().await.unwrap_or_default();
-    assert_eq!(requests.len(), 1);
-    let body: Value = requests[0].body_json().expect("valid JSON request body");
+    let body: Value = req.single_request().body_json();
     let input = body
         .get("input")
         .and_then(Value::as_array)
