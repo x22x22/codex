@@ -10,6 +10,7 @@ use crate::sse::responses::ResponsesStreamEvent;
 use crate::sse::responses::process_responses_event;
 use crate::telemetry::WebsocketTelemetry;
 use codex_client::TransportError;
+use codex_client::inject_current_span_trace_headers;
 use codex_utils_rustls_provider::ensure_rustls_crypto_provider;
 use futures::SinkExt;
 use futures::StreamExt;
@@ -33,9 +34,12 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tracing::Instrument;
+use tracing::Span;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::instrument;
 use tracing::trace;
 use tungstenite::extensions::ExtensionsConfig;
 use tungstenite::extensions::compression::deflate::DeflateConfig;
@@ -200,6 +204,12 @@ impl ResponsesWebsocketConnection {
         self.stream.lock().await.is_none()
     }
 
+    #[instrument(
+        name = "responses_websocket.stream_request",
+        level = "info",
+        skip_all,
+        fields(transport = "responses_websocket", api.path = "responses")
+    )]
     pub async fn stream_request(
         &self,
         request: ResponsesWsRequest,
@@ -216,48 +226,52 @@ impl ResponsesWebsocketConnection {
             ApiError::Stream(format!("failed to encode websocket request: {err}"))
         })?;
 
-        tokio::spawn(async move {
-            if let Some(model) = server_model {
-                let _ = tx_event.send(Ok(ResponseEvent::ServerModel(model))).await;
-            }
-            if let Some(etag) = models_etag {
-                let _ = tx_event.send(Ok(ResponseEvent::ModelsEtag(etag))).await;
-            }
-            if server_reasoning_included {
-                let _ = tx_event
-                    .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
-                    .await;
-            }
-            let mut guard = stream.lock().await;
-            let result = {
-                let Some(ws_stream) = guard.as_mut() else {
+        let current_span = Span::current();
+        tokio::spawn(
+            async move {
+                if let Some(model) = server_model {
+                    let _ = tx_event.send(Ok(ResponseEvent::ServerModel(model))).await;
+                }
+                if let Some(etag) = models_etag {
+                    let _ = tx_event.send(Ok(ResponseEvent::ModelsEtag(etag))).await;
+                }
+                if server_reasoning_included {
                     let _ = tx_event
-                        .send(Err(ApiError::Stream(
-                            "websocket connection is closed".to_string(),
-                        )))
+                        .send(Ok(ResponseEvent::ServerReasoningIncluded(true)))
                         .await;
-                    return;
+                }
+                let mut guard = stream.lock().await;
+                let result = {
+                    let Some(ws_stream) = guard.as_mut() else {
+                        let _ = tx_event
+                            .send(Err(ApiError::Stream(
+                                "websocket connection is closed".to_string(),
+                            )))
+                            .await;
+                        return;
+                    };
+
+                    run_websocket_response_stream(
+                        ws_stream,
+                        tx_event.clone(),
+                        request_body,
+                        idle_timeout,
+                        telemetry,
+                    )
+                    .await
                 };
 
-                run_websocket_response_stream(
-                    ws_stream,
-                    tx_event.clone(),
-                    request_body,
-                    idle_timeout,
-                    telemetry,
-                )
-                .await
-            };
-
-            if let Err(err) = result {
-                // A terminal stream error should reach the caller immediately. Waiting for a
-                // graceful close handshake here can stall indefinitely and mask the error.
-                let failed_stream = guard.take();
-                drop(guard);
-                drop(failed_stream);
-                let _ = tx_event.send(Err(err)).await;
+                if let Err(err) = result {
+                    // A terminal stream error should reach the caller immediately. Waiting for a
+                    // graceful close handshake here can stall indefinitely and mask the error.
+                    let failed_stream = guard.take();
+                    drop(guard);
+                    drop(failed_stream);
+                    let _ = tx_event.send(Err(err)).await;
+                }
             }
-        });
+            .instrument(current_span),
+        );
 
         Ok(ResponseStream { rx_event })
     }
@@ -273,6 +287,12 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         Self { provider, auth }
     }
 
+    #[instrument(
+        name = "responses_websocket.connect",
+        level = "info",
+        skip_all,
+        fields(transport = "responses_websocket", api.path = "responses")
+    )]
     pub async fn connect(
         &self,
         extra_headers: HeaderMap,
@@ -288,6 +308,7 @@ impl<A: AuthProvider> ResponsesWebsocketClient<A> {
         let mut headers =
             merge_request_headers(&self.provider.headers, extra_headers, default_headers);
         add_auth_headers_to_header_map(&self.auth, &mut headers);
+        inject_current_span_trace_headers(&mut headers);
 
         let (stream, server_reasoning_included, models_etag, server_model) =
             connect_websocket(ws_url, headers, turn_state.clone()).await?;

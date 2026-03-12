@@ -8,6 +8,7 @@ mod transport;
 
 pub use crate::default_client::CodexHttpClient;
 pub use crate::default_client::CodexRequestBuilder;
+pub use crate::default_client::inject_current_span_trace_headers;
 pub use crate::error::StreamError;
 pub use crate::error::TransportError;
 pub use crate::request::Request;

@@ -11,6 +11,7 @@ use codex_core::features::Feature;
 use codex_core::ws_version_from_features;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
+use codex_otel::current_span_w3c_trace_context;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_protocol::ThreadId;
@@ -38,12 +39,20 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
 use futures::StreamExt;
+use opentelemetry::global;
+use opentelemetry::trace::TracerProvider;
 use opentelemetry_sdk::metrics::InMemoryMetricExporter;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use serial_test::serial;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
+use tracing::Instrument;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use tracing_test::traced_test;
 
 const MODEL: &str = "gpt-5.2-codex";
@@ -93,6 +102,58 @@ async fn responses_websocket_streams_request() {
     assert_eq!(
         handshake.header(X_CLIENT_REQUEST_ID_HEADER),
         Some(harness.conversation_id.to_string())
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial]
+async fn responses_websocket_propagates_current_span_trace_headers() {
+    skip_if_no_network!();
+
+    global::set_text_map_propagator(TraceContextPropagator::new());
+
+    let provider = SdkTracerProvider::builder().build();
+    let tracer = provider.tracer("client-websocket-test");
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_opentelemetry::layer().with_tracer(tracer));
+    let _guard = subscriber.set_default();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    let expected_trace = async {
+        let expected_trace =
+            current_span_w3c_trace_context().expect("current span should have trace context");
+        stream_until_complete(&mut client_session, &harness, &prompt).await;
+        expected_trace
+    }
+    .instrument(tracing::info_span!("client.websocket.request"))
+    .await;
+
+    let handshake = server.single_handshake();
+    let handshake_traceparent = handshake
+        .header("traceparent")
+        .expect("missing traceparent header");
+    let expected_traceparent = expected_trace
+        .traceparent
+        .clone()
+        .expect("missing expected traceparent");
+    assert_eq!(
+        handshake_traceparent.split('-').nth(1),
+        expected_traceparent.split('-').nth(1)
+    );
+    assert_eq!(
+        handshake.header("tracestate"),
+        expected_trace.tracestate.clone()
     );
 
     server.shutdown().await;

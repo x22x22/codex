@@ -1998,6 +1998,12 @@ impl CodexMessageProcessor {
                 service_name,
                 request_trace,
             )
+            .instrument(tracing::info_span!(
+                "app_server.thread_start.create_thread",
+                otel.name = "app_server.thread_start.create_thread",
+                thread_start.dynamic_tool_count = core_dynamic_tool_count,
+                thread_start.persist_extended_history = persist_extended_history,
+            ))
             .await
         {
             Ok(new_conv) => {
@@ -2007,7 +2013,13 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = new_conv;
-                let config_snapshot = thread.config_snapshot().await;
+                let config_snapshot = thread
+                    .config_snapshot()
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.config_snapshot",
+                        otel.name = "app_server.thread_start.config_snapshot",
+                    ))
+                    .await;
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     &config_snapshot,
@@ -2023,6 +2035,11 @@ impl CodexMessageProcessor {
                         experimental_raw_events,
                         ApiVersion::V2,
                     )
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.attach_listener",
+                        otel.name = "app_server.thread_start.attach_listener",
+                        thread_start.experimental_raw_events = experimental_raw_events,
+                    ))
                     .await,
                     thread_id,
                     request_id.connection_id,
@@ -2032,12 +2049,20 @@ impl CodexMessageProcessor {
                 listener_task_context
                     .thread_watch_manager
                     .upsert_thread_silently(thread.clone())
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.upsert_thread",
+                        otel.name = "app_server.thread_start.upsert_thread",
+                    ))
                     .await;
 
                 thread.status = resolve_thread_status(
                     listener_task_context
                         .thread_watch_manager
                         .loaded_status_for_thread(&thread.id)
+                        .instrument(tracing::info_span!(
+                            "app_server.thread_start.resolve_status",
+                            otel.name = "app_server.thread_start.resolve_status",
+                        ))
                         .await,
                     false,
                 );
@@ -2056,12 +2081,20 @@ impl CodexMessageProcessor {
                 listener_task_context
                     .outgoing
                     .send_response(request_id, response)
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.send_response",
+                        otel.name = "app_server.thread_start.send_response",
+                    ))
                     .await;
 
                 let notif = ThreadStartedNotification { thread };
                 listener_task_context
                     .outgoing
                     .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.notify_started",
+                        otel.name = "app_server.thread_start.notify_started",
+                    ))
                     .await;
             }
             Err(err) => {

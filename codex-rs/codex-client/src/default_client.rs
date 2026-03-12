@@ -1,12 +1,12 @@
 use http::Error as HttpError;
+use http::HeaderMap;
+use http::HeaderName;
+use http::HeaderValue;
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use reqwest::IntoUrl;
 use reqwest::Method;
 use reqwest::Response;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
 use serde::Serialize;
 use std::fmt::Display;
 use std::time::Duration;
@@ -154,14 +154,15 @@ impl<'a> Injector for HeaderMapInjector<'a> {
     }
 }
 
+pub fn inject_current_span_trace_headers(headers: &mut HeaderMap) {
+    global::get_text_map_propagator(|prop| {
+        prop.inject_context(&Span::current().context(), &mut HeaderMapInjector(headers));
+    });
+}
+
 fn trace_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
-    global::get_text_map_propagator(|prop| {
-        prop.inject_context(
-            &Span::current().context(),
-            &mut HeaderMapInjector(&mut headers),
-        );
-    });
+    inject_current_span_trace_headers(&mut headers);
     headers
 }
 
