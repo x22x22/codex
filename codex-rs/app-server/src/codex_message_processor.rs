@@ -1723,7 +1723,7 @@ impl CodexMessageProcessor {
         let outgoing = self.outgoing.clone();
         let request_for_task = request.clone();
         let started_network_proxy_for_task = started_network_proxy;
-        let use_linux_sandbox_bwrap = self.config.features.enabled(Feature::UseLinuxSandboxBwrap);
+        let use_legacy_landlock = self.config.features.use_legacy_landlock();
         let size = match size.map(crate::command_exec::terminal_size_from_protocol) {
             Some(Ok(size)) => Some(size),
             Some(Err(error)) => {
@@ -1740,7 +1740,7 @@ impl CodexMessageProcessor {
             effective_network_sandbox_policy,
             sandbox_cwd.as_path(),
             &codex_linux_sandbox_exe,
-            use_linux_sandbox_bwrap,
+            use_legacy_landlock,
         ) {
             Ok(exec_request) => {
                 if let Err(error) = self
@@ -5465,8 +5465,8 @@ impl CodexMessageProcessor {
                                         PluginSource::Local { path }
                                     }
                                 },
-                                install_policy: plugin.install_policy.map(Into::into),
-                                auth_policy: plugin.auth_policy.map(Into::into),
+                                install_policy: plugin.install_policy.into(),
+                                auth_policy: plugin.auth_policy.into(),
                                 interface: plugin.interface.map(|interface| PluginInterface {
                                     display_name: interface.display_name,
                                     short_description: interface.short_description,
@@ -5719,7 +5719,7 @@ impl CodexMessageProcessor {
                     .send_response(
                         request_id,
                         PluginInstallResponse {
-                            auth_policy: result.auth_policy.map(Into::into),
+                            auth_policy: result.auth_policy.into(),
                             apps_needing_auth,
                         },
                     )
