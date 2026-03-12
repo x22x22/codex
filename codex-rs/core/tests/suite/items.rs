@@ -47,18 +47,10 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
 
     let server = start_mock_server().await;
 
-    let TestCodex { codex, .. } = test_codex()
-        .with_config(|config| {
-            config
-                .features
-                .enable(Feature::UserMessageTypeMetadata)
-                .expect("feature flag should be enabled for this test");
-        })
-        .build(&server)
-        .await?;
+    let TestCodex { codex, .. } = test_codex().build(&server).await?;
 
     let first_response = sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]);
-    let req = mount_sse_once(&server, first_response).await;
+    mount_sse_once(&server, first_response).await;
 
     let text_elements = vec![TextElement::new(
         ByteRange { start: 0, end: 6 },
@@ -96,6 +88,66 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     assert_eq!(started_item.id, completed_item.id);
     assert_eq!(started_item.content, vec![expected_input.clone()]);
     assert_eq!(completed_item.content, vec![expected_input]);
+
+    let legacy_message = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::UserMessage(event) => Some(event.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(legacy_message.message, "please inspect sample.txt");
+    assert_eq!(legacy_message.text_elements, text_elements);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_message_type_metadata_is_emitted_when_feature_enabled() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UserMessageTypeMetadata)
+                .expect("feature flag should be enabled for this test");
+        })
+        .build(&server)
+        .await?;
+
+    let first_response = sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]);
+    let req = mount_sse_once(&server, first_response).await;
+
+    let expected_input = UserInput::Text {
+        text: "please inspect sample.txt".into(),
+        text_elements: Vec::new(),
+    };
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![expected_input],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let started_item = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemStarted(ItemStartedEvent {
+            item: TurnItem::UserMessage(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+    let completed_item = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ItemCompleted(ItemCompletedEvent {
+            item: TurnItem::UserMessage(item),
+            ..
+        }) => Some(item.clone()),
+        _ => None,
+    })
+    .await;
+
+    assert_eq!(started_item.id, completed_item.id);
     assert_eq!(
         started_item
             .metadata
@@ -110,14 +162,6 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
             .and_then(|metadata| metadata.user_message_type.as_ref()),
         Some(&codex_protocol::items::UserMessageType::Prompt)
     );
-
-    let legacy_message = wait_for_event_match(&codex, |ev| match ev {
-        EventMsg::UserMessage(event) => Some(event.clone()),
-        _ => None,
-    })
-    .await;
-    assert_eq!(legacy_message.message, "please inspect sample.txt");
-    assert_eq!(legacy_message.text_elements, text_elements);
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while req.requests().is_empty() {
@@ -134,10 +178,22 @@ async fn user_message_item_is_emitted() -> anyhow::Result<()> {
     let user_message = input
         .iter()
         .find(|item| {
-            item.get("type").and_then(Value::as_str) == Some("message")
-                && item.get("role").and_then(Value::as_str) == Some("user")
+            if item.get("type").and_then(Value::as_str) != Some("message")
+                || item.get("role").and_then(Value::as_str) != Some("user")
+            {
+                return false;
+            }
+            item.get("content")
+                .and_then(Value::as_array)
+                .is_some_and(|content| {
+                    content.iter().any(|entry| {
+                        entry.get("type").and_then(Value::as_str) == Some("input_text")
+                            && entry.get("text").and_then(Value::as_str)
+                                == Some("please inspect sample.txt")
+                    })
+                })
         })
-        .expect("user message input item");
+        .expect("submitted user message input item");
     assert_eq!(
         user_message
             .get("metadata")
