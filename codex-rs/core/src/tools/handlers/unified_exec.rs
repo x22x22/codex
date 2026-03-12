@@ -187,7 +187,7 @@ impl ToolHandler for UnifiedExecHandler {
                 // continue through the normal exec approval flow for the command.
                 if effective_additional_permissions
                     .sandbox_permissions
-                    .requires_escalated_permissions()
+                    .requests_sandbox_override()
                     && !effective_additional_permissions.permissions_preapproved
                     && !matches!(
                         context.turn.approval_policy.value(),
