@@ -181,8 +181,6 @@ impl ToolsConfig {
 
         let shell_type = if !features.enabled(Feature::ShellTool) {
             ConfigShellToolType::Disabled
-        } else if features.enabled(Feature::ShellZshFork) {
-            ConfigShellToolType::ShellCommand
         } else if features.enabled(Feature::UnifiedExec) {
             // If ConPTY not supported (for old Windows versions), fallback on ShellCommand.
             if codex_utils_pty::conpty_supported() {
@@ -190,6 +188,8 @@ impl ToolsConfig {
             } else {
                 ConfigShellToolType::ShellCommand
             }
+        } else if features.enabled(Feature::ShellZshFork) {
+            ConfigShellToolType::ShellCommand
         } else {
             model_info.shell_type
         };
@@ -464,7 +464,11 @@ fn create_approval_parameters(request_permission_enabled: bool) -> BTreeMap<Stri
     properties
 }
 
-fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled: bool) -> ToolSpec {
+fn create_exec_command_tool(
+    allow_login_shell: bool,
+    request_permission_enabled: bool,
+    unified_exec_backend: UnifiedExecBackendConfig,
+) -> ToolSpec {
     let mut properties = BTreeMap::from([
         (
             "cmd".to_string(),
@@ -479,12 +483,6 @@ fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled:
                     "Optional working directory to run the command in; defaults to the turn cwd."
                         .to_string(),
                 ),
-            },
-        ),
-        (
-            "shell".to_string(),
-            JsonSchema::String {
-                description: Some("Shell binary to launch. Defaults to the user's default shell.".to_string()),
             },
         ),
         (
@@ -514,6 +512,16 @@ fn create_exec_command_tool(allow_login_shell: bool, request_permission_enabled:
             },
         ),
     ]);
+    if unified_exec_backend != UnifiedExecBackendConfig::ZshFork {
+        properties.insert(
+            "shell".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Shell binary to launch. Defaults to the user's default shell.".to_string(),
+                ),
+            },
+        );
+    }
     if allow_login_shell {
         properties.insert(
             "login".to_string(),
@@ -2395,7 +2403,11 @@ pub(crate) fn build_specs_with_discoverable_tools(
         ConfigShellToolType::UnifiedExec => {
             push_tool_spec(
                 &mut builder,
-                create_exec_command_tool(config.allow_login_shell, request_permission_enabled),
+                create_exec_command_tool(
+                    config.allow_login_shell,
+                    request_permission_enabled,
+                    config.unified_exec_backend,
+                ),
                 true,
                 config.code_mode_enabled,
             );

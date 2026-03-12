@@ -18,6 +18,7 @@ use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::spec::UnifiedExecBackendConfig;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
@@ -107,6 +108,7 @@ impl ToolHandler for UnifiedExecHandler {
             &params,
             invocation.session.user_shell(),
             invocation.turn.tools_config.allow_login_shell,
+            invocation.turn.tools_config.unified_exec_backend,
         ) {
             Ok(command) => command,
             Err(_) => return true,
@@ -154,6 +156,7 @@ impl ToolHandler for UnifiedExecHandler {
                     &args,
                     session.user_shell(),
                     turn.tools_config.allow_login_shell,
+                    turn.tools_config.unified_exec_backend,
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
 
@@ -307,12 +310,17 @@ pub(crate) fn get_command(
     args: &ExecCommandArgs,
     session_shell: Arc<Shell>,
     allow_login_shell: bool,
+    unified_exec_backend: UnifiedExecBackendConfig,
 ) -> Result<Vec<String>, String> {
-    let model_shell = args.shell.as_ref().map(|shell_str| {
-        let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
-        shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
-        shell
-    });
+    let model_shell = if unified_exec_backend == UnifiedExecBackendConfig::ZshFork {
+        None
+    } else {
+        args.shell.as_ref().map(|shell_str| {
+            let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
+            shell.shell_snapshot = crate::shell::empty_shell_snapshot_receiver();
+            shell
+        })
+    };
 
     let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
     let use_login_shell = match args.login {
