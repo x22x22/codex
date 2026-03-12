@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,6 +36,8 @@ use tokio::task::JoinHandle;
 const CODE_MODE_RUNNER_SOURCE: &str = include_str!("code_mode_runner.cjs");
 const CODE_MODE_BRIDGE_SOURCE: &str = include_str!("code_mode_bridge.js");
 pub(crate) const PUBLIC_TOOL_NAME: &str = "exec";
+pub(crate) const WAIT_TOOL_NAME: &str = "exec_wait";
+pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = 10_000;
 
 #[derive(Clone)]
 struct ExecContext {
@@ -48,6 +51,7 @@ pub(crate) struct CodeModeProcess {
     stdin: tokio::process::ChildStdin,
     stdout_lines: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     stderr_task: Option<JoinHandle<String>>,
+    pending_messages: HashMap<i32, VecDeque<NodeToHostMessage>>,
 }
 
 impl CodeModeProcess {
@@ -74,6 +78,11 @@ impl CodeModeProcess {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct CodeModeYieldedSession {
+    pub(crate) session_id: i32,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum CodeModeToolKind {
@@ -96,13 +105,20 @@ struct EnabledTool {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum HostToNodeMessage {
     Start {
-        session_id: String,
+        session_id: i32,
         enabled_tools: Vec<EnabledTool>,
         stored_values: HashMap<String, JsonValue>,
         source: String,
     },
+    Poll {
+        session_id: i32,
+        yield_time_ms: u64,
+    },
+    Terminate {
+        session_id: i32,
+    },
     Response {
-        session_id: String,
+        session_id: i32,
         id: String,
         code_mode_result: JsonValue,
     },
@@ -112,14 +128,26 @@ enum HostToNodeMessage {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum NodeToHostMessage {
     ToolCall {
-        session_id: String,
+        session_id: i32,
         id: String,
         name: String,
         #[serde(default)]
         input: Option<JsonValue>,
     },
+    Yielded {
+        session_id: i32,
+        content_items: Vec<JsonValue>,
+        #[serde(default)]
+        max_output_tokens_per_exec_call: Option<usize>,
+    },
+    Terminated {
+        session_id: i32,
+        content_items: Vec<JsonValue>,
+        #[serde(default)]
+        max_output_tokens_per_exec_call: Option<usize>,
+    },
     Result {
-        session_id: String,
+        session_id: i32,
         content_items: Vec<JsonValue>,
         stored_values: HashMap<String, JsonValue>,
         #[serde(default)]
@@ -127,6 +155,36 @@ enum NodeToHostMessage {
         #[serde(default)]
         max_output_tokens_per_exec_call: Option<usize>,
     },
+}
+
+enum CodeModeSessionAction {
+    Start {
+        enabled_tools: Vec<EnabledTool>,
+        stored_values: HashMap<String, JsonValue>,
+        source: String,
+    },
+    Poll {
+        yield_time_ms: u64,
+        max_output_tokens: Option<usize>,
+    },
+    Terminate {
+        max_output_tokens: Option<usize>,
+    },
+}
+
+enum CodeModeSessionProgress {
+    Finished(FunctionToolOutput),
+    Yielded {
+        output: FunctionToolOutput,
+        yielded_session: CodeModeYieldedSession,
+    },
+}
+
+enum CodeModeExecutionStatus {
+    Completed,
+    Failed,
+    Running(i32),
+    Terminated,
 }
 
 pub(crate) fn instructions(config: &Config) -> Option<String> {
@@ -149,7 +207,10 @@ pub(crate) fn instructions(config: &Config) -> Option<String> {
     ));
     section.push_str("- Import nested tools from `tools.js`, for example `import { exec_command } from \"tools.js\"` or `import { ALL_TOOLS } from \"tools.js\"` to inspect the available `{ module, name, description }` entries. Namespaced tools are also available from `tools/<namespace...>.js`; MCP tools use `tools/mcp/<server>.js`, for example `import { append_notebook_logs_chart } from \"tools/mcp/ologs.js\"`. Nested tool calls resolve to their code-mode result values.\n");
     section.push_str(&format!(
-        "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate the final Rust-side result of the current `{PUBLIC_TOOL_NAME}` execution; the default is `10000`. This guards the overall `{PUBLIC_TOOL_NAME}` output, not individual nested tool invocations. The returned content starts with a separate `Script completed` or `Script failed` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker.\n",
+        "- Import `{{ output_text, output_image, set_max_output_tokens_per_exec_call, set_yield_time, store, load }}` from `@openai/code_mode` (or `\"openai/code_mode\"`). `output_text(value)` surfaces text back to the model and stringifies non-string objects with `JSON.stringify(...)` when possible. `output_image(imageUrl)` appends an `input_image` content item for `http(s)` or `data:` URLs. `store(key, value)` persists JSON-serializable values across `{PUBLIC_TOOL_NAME}` calls in the current session, and `load(key)` returns a cloned stored value or `undefined`. `set_max_output_tokens_per_exec_call(value)` sets the token budget used to truncate direct `{PUBLIC_TOOL_NAME}` returns; `{WAIT_TOOL_NAME}` uses its own `max_tokens` argument instead and defaults to `10000`. `set_yield_time(value)` asks `{PUBLIC_TOOL_NAME}` to return early if the script is still running after that many milliseconds so `{WAIT_TOOL_NAME}` can resume it later. The returned content starts with a separate `Script completed`, `Script failed`, or `Script running with session ID …` text item that includes wall time. When truncation happens, the final text may include `Total output lines:` and the usual `…N tokens truncated…` marker.\n",
+    ));
+    section.push_str(&format!(
+        "- If `{PUBLIC_TOOL_NAME}` returns `Script running with session ID …`, call `{WAIT_TOOL_NAME}` with that `session_id` to keep waiting for more output, completion, or termination.\n",
     ));
     section.push_str(
         "- Function tools require JSON object arguments. Freeform tools require raw strings.\n",
@@ -174,29 +235,106 @@ pub(crate) async fn execute(
     let enabled_tools = build_enabled_tools(&exec).await;
     let stored_values = exec.session.services.code_mode_store.stored_values().await;
     let source = build_source(&code, &enabled_tools).map_err(FunctionCallError::RespondToModel)?;
-    let mut process = match exec.session.services.code_mode_store.take_process().await {
-        Some(mut process) => {
-            if matches!(process.has_exited(), Ok(false)) {
-                process
-            } else {
-                spawn_code_mode_process(&exec)
-                    .await
-                    .map_err(FunctionCallError::RespondToModel)?
-            }
-        }
-        None => spawn_code_mode_process(&exec)
-            .await
-            .map_err(FunctionCallError::RespondToModel)?,
+    let session_id = exec
+        .session
+        .services
+        .code_mode_store
+        .allocate_session_id()
+        .await;
+    let process = ensure_shared_code_mode_process(&exec)
+        .await
+        .map_err(FunctionCallError::RespondToModel)?;
+    let result = {
+        let mut process = process.lock().await;
+        drive_code_mode_session(
+            &exec,
+            &mut process,
+            session_id,
+            CodeModeSessionAction::Start {
+                enabled_tools,
+                stored_values,
+                source,
+            },
+        )
+        .await
     };
-    let result = execute_node(&exec, &mut process, source, enabled_tools, stored_values).await;
-    if result.is_ok() && matches!(process.has_exited(), Ok(false)) {
+    if let Ok(CodeModeSessionProgress::Yielded {
+        yielded_session, ..
+    }) = &result
+    {
         exec.session
             .services
             .code_mode_store
-            .store_process(process)
+            .store_yielded_session(yielded_session.clone())
             .await;
     }
-    result.map_err(FunctionCallError::RespondToModel)
+    match result {
+        Ok(CodeModeSessionProgress::Finished(output))
+        | Ok(CodeModeSessionProgress::Yielded { output, .. }) => Ok(output),
+        Err(error) => Err(FunctionCallError::RespondToModel(error)),
+    }
+}
+
+pub(crate) async fn wait(
+    session: Arc<Session>,
+    turn: Arc<TurnContext>,
+    tracker: SharedTurnDiffTracker,
+    session_id: i32,
+    yield_time_ms: u64,
+    max_output_tokens: Option<usize>,
+    terminate: bool,
+) -> Result<FunctionToolOutput, FunctionCallError> {
+    let exec = ExecContext {
+        session,
+        turn,
+        tracker,
+    };
+    let yielded_session = exec
+        .session
+        .services
+        .code_mode_store
+        .take_yielded_session(session_id)
+        .await
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "{WAIT_TOOL_NAME} session_id {session_id} is not waiting on {WAIT_TOOL_NAME}"
+            ))
+        })?;
+
+    let process = existing_shared_code_mode_process(&exec).await?;
+    let result = {
+        let mut process = process.lock().await;
+        drive_code_mode_session(
+            &exec,
+            &mut process,
+            yielded_session.session_id,
+            if terminate {
+                CodeModeSessionAction::Terminate { max_output_tokens }
+            } else {
+                CodeModeSessionAction::Poll {
+                    yield_time_ms,
+                    max_output_tokens,
+                }
+            },
+        )
+        .await
+    };
+    if let Ok(CodeModeSessionProgress::Yielded {
+        yielded_session, ..
+    }) = &result
+    {
+        exec.session
+            .services
+            .code_mode_store
+            .store_yielded_session(yielded_session.clone())
+            .await;
+    }
+
+    match result {
+        Ok(CodeModeSessionProgress::Finished(output))
+        | Ok(CodeModeSessionProgress::Yielded { output, .. }) => Ok(output),
+        Err(error) => Err(FunctionCallError::RespondToModel(error)),
+    }
 }
 
 async fn spawn_code_mode_process(exec: &ExecContext) -> Result<CodeModeProcess, String> {
@@ -242,31 +380,125 @@ async fn spawn_code_mode_process(exec: &ExecContext) -> Result<CodeModeProcess, 
         stdin,
         stdout_lines: BufReader::new(stdout).lines(),
         stderr_task: Some(stderr_task),
+        pending_messages: HashMap::new(),
     })
 }
 
-async fn execute_node(
+async fn ensure_shared_code_mode_process(
+    exec: &ExecContext,
+) -> Result<Arc<tokio::sync::Mutex<CodeModeProcess>>, String> {
+    if let Some(process) = exec.session.services.code_mode_store.process().await {
+        let is_running = {
+            let mut process_guard = process.lock().await;
+            matches!(process_guard.has_exited(), Ok(false))
+        };
+        if is_running {
+            return Ok(process);
+        }
+    }
+
+    let process = Arc::new(tokio::sync::Mutex::new(
+        spawn_code_mode_process(exec).await?,
+    ));
+    exec.session
+        .services
+        .code_mode_store
+        .store_process(process.clone())
+        .await;
+    Ok(process)
+}
+
+async fn existing_shared_code_mode_process(
+    exec: &ExecContext,
+) -> Result<Arc<tokio::sync::Mutex<CodeModeProcess>>, FunctionCallError> {
+    let process = exec
+        .session
+        .services
+        .code_mode_store
+        .process()
+        .await
+        .ok_or_else(|| {
+            FunctionCallError::RespondToModel(format!(
+                "{PUBLIC_TOOL_NAME} runner is not available for {WAIT_TOOL_NAME}"
+            ))
+        })?;
+    let is_running = {
+        let mut process_guard = process.lock().await;
+        matches!(process_guard.has_exited(), Ok(false))
+    };
+    if is_running {
+        Ok(process)
+    } else {
+        Err(FunctionCallError::RespondToModel(format!(
+            "{PUBLIC_TOOL_NAME} runner is not available for {WAIT_TOOL_NAME}"
+        )))
+    }
+}
+
+async fn drive_code_mode_session(
     exec: &ExecContext,
     process: &mut CodeModeProcess,
-    source: String,
-    enabled_tools: Vec<EnabledTool>,
-    stored_values: HashMap<String, JsonValue>,
-) -> Result<FunctionToolOutput, String> {
+    session_id: i32,
+    action: CodeModeSessionAction,
+) -> Result<CodeModeSessionProgress, String> {
     let started_at = std::time::Instant::now();
-    let session_id = uuid::Uuid::new_v4().to_string();
-
-    write_message(
-        &mut process.stdin,
-        &HostToNodeMessage::Start {
-            session_id: session_id.clone(),
+    let is_terminate = matches!(action, CodeModeSessionAction::Terminate { .. });
+    let (message, poll_max_output_tokens) = match action {
+        CodeModeSessionAction::Start {
             enabled_tools,
             stored_values,
             source,
-        },
+        } => (
+            HostToNodeMessage::Start {
+                session_id,
+                enabled_tools,
+                stored_values,
+                source,
+            },
+            None,
+        ),
+        CodeModeSessionAction::Poll {
+            yield_time_ms,
+            max_output_tokens,
+        } => (
+            HostToNodeMessage::Poll {
+                session_id,
+                yield_time_ms,
+            },
+            Some(max_output_tokens),
+        ),
+        CodeModeSessionAction::Terminate { max_output_tokens } => (
+            HostToNodeMessage::Terminate { session_id },
+            Some(max_output_tokens),
+        ),
+    };
+    if let Some(progress) = process_pending_messages(
+        exec,
+        process,
+        session_id,
+        poll_max_output_tokens,
+        started_at,
+        is_terminate,
     )
-    .await?;
+    .await?
+    {
+        return Ok(progress);
+    }
+    write_message(&mut process.stdin, &message).await?;
 
-    let mut pending_result = None;
+    if let Some(progress) = process_pending_messages(
+        exec,
+        process,
+        session_id,
+        poll_max_output_tokens,
+        started_at,
+        is_terminate,
+    )
+    .await?
+    {
+        return Ok(progress);
+    }
+
     while let Some(line) = process
         .stdout_lines
         .next_line()
@@ -279,79 +511,203 @@ async fn execute_node(
         let message: NodeToHostMessage = serde_json::from_str(&line).map_err(|err| {
             format!("invalid {PUBLIC_TOOL_NAME} runner message: {err}; line={line}")
         })?;
-        match message {
-            NodeToHostMessage::ToolCall {
+        let message_session_id = message_session_id(&message);
+        if message_session_id != session_id {
+            if let NodeToHostMessage::ToolCall {
                 session_id: message_session_id,
                 id,
                 name,
                 input,
-            } => {
-                if message_session_id != session_id {
-                    return Err(format!(
-                        "unexpected {PUBLIC_TOOL_NAME} runner tool call session id: {message_session_id}"
-                    ));
-                }
+            } = message
+            {
                 let response = HostToNodeMessage::Response {
                     session_id: message_session_id,
                     id,
                     code_mode_result: call_nested_tool(exec.clone(), name, input).await,
                 };
                 write_message(&mut process.stdin, &response).await?;
+            } else {
+                process
+                    .pending_messages
+                    .entry(message_session_id)
+                    .or_default()
+                    .push_back(message);
             }
-            NodeToHostMessage::Result {
-                session_id: message_session_id,
-                content_items,
-                stored_values,
-                error_text,
-                max_output_tokens_per_exec_call,
-            } => {
-                if message_session_id != session_id {
-                    return Err(format!(
-                        "unexpected {PUBLIC_TOOL_NAME} runner result session id: {message_session_id}"
-                    ));
-                }
-                exec.session
-                    .services
-                    .code_mode_store
-                    .replace_stored_values(stored_values)
-                    .await;
-                pending_result = Some((
-                    output_content_items_from_json_values(content_items)?,
-                    error_text,
-                    max_output_tokens_per_exec_call,
-                ));
-                break;
-            }
+            continue;
+        }
+        if let Some(progress) = handle_node_message(
+            exec,
+            process,
+            session_id,
+            message,
+            poll_max_output_tokens,
+            started_at,
+            is_terminate,
+        )
+        .await?
+        {
+            return Ok(progress);
         }
     }
 
-    let wall_time = started_at.elapsed();
-    let Some((mut content_items, error_text, max_output_tokens_per_exec_call)) = pending_result
-    else {
-        let status = process.wait_for_exit().await?;
-        let stderr = process.stderr().await?;
-        let message = if stderr.is_empty() {
-            format!("{PUBLIC_TOOL_NAME} runner exited without returning a result (status {status})")
-        } else {
-            stderr
-        };
-        return Err(message);
+    let status = process.wait_for_exit().await?;
+    let stderr = process.stderr().await?;
+    let message = if stderr.is_empty() {
+        format!("{PUBLIC_TOOL_NAME} runner exited without returning a result (status {status})")
+    } else {
+        stderr
     };
+    Err(message)
+}
 
-    let success = error_text.is_none();
-    if let Some(error_text) = error_text {
-        content_items.push(FunctionCallOutputContentItem::InputText {
-            text: format!("Script error:\n{error_text}"),
-        });
+async fn process_pending_messages(
+    exec: &ExecContext,
+    process: &mut CodeModeProcess,
+    session_id: i32,
+    poll_max_output_tokens: Option<Option<usize>>,
+    started_at: std::time::Instant,
+    is_terminate: bool,
+) -> Result<Option<CodeModeSessionProgress>, String> {
+    loop {
+        let Some(message) = process
+            .pending_messages
+            .get_mut(&session_id)
+            .and_then(VecDeque::pop_front)
+        else {
+            return Ok(None);
+        };
+        if let Some(progress) = handle_node_message(
+            exec,
+            process,
+            session_id,
+            message,
+            poll_max_output_tokens,
+            started_at,
+            is_terminate,
+        )
+        .await?
+        {
+            return Ok(Some(progress));
+        }
     }
+}
 
-    let mut content_items =
-        truncate_code_mode_result(content_items, max_output_tokens_per_exec_call);
-    prepend_script_status(&mut content_items, success, wall_time);
-    Ok(FunctionToolOutput::from_content(
-        content_items,
-        Some(success),
-    ))
+async fn handle_node_message(
+    exec: &ExecContext,
+    process: &mut CodeModeProcess,
+    session_id: i32,
+    message: NodeToHostMessage,
+    poll_max_output_tokens: Option<Option<usize>>,
+    started_at: std::time::Instant,
+    is_terminate: bool,
+) -> Result<Option<CodeModeSessionProgress>, String> {
+    match message {
+        NodeToHostMessage::ToolCall {
+            session_id: message_session_id,
+            id,
+            name,
+            input,
+        } => {
+            if is_terminate {
+                return Ok(None);
+            }
+            let response = HostToNodeMessage::Response {
+                session_id: message_session_id,
+                id,
+                code_mode_result: call_nested_tool(exec.clone(), name, input).await,
+            };
+            write_message(&mut process.stdin, &response).await?;
+            Ok(None)
+        }
+        NodeToHostMessage::Yielded {
+            content_items,
+            max_output_tokens_per_exec_call,
+            ..
+        } => {
+            if is_terminate {
+                return Ok(None);
+            }
+            let mut delta_items = output_content_items_from_json_values(content_items)?;
+            delta_items = truncate_code_mode_result(
+                delta_items,
+                poll_max_output_tokens.unwrap_or(max_output_tokens_per_exec_call),
+            );
+            prepend_script_status(
+                &mut delta_items,
+                CodeModeExecutionStatus::Running(session_id),
+                started_at.elapsed(),
+            );
+            Ok(Some(CodeModeSessionProgress::Yielded {
+                output: FunctionToolOutput::from_content(delta_items, Some(true)),
+                yielded_session: CodeModeYieldedSession { session_id },
+            }))
+        }
+        NodeToHostMessage::Terminated {
+            content_items,
+            max_output_tokens_per_exec_call,
+            ..
+        } => {
+            let mut delta_items = output_content_items_from_json_values(content_items)?;
+            delta_items = truncate_code_mode_result(
+                delta_items,
+                poll_max_output_tokens.unwrap_or(max_output_tokens_per_exec_call),
+            );
+            prepend_script_status(
+                &mut delta_items,
+                CodeModeExecutionStatus::Terminated,
+                started_at.elapsed(),
+            );
+            Ok(Some(CodeModeSessionProgress::Finished(
+                FunctionToolOutput::from_content(delta_items, Some(true)),
+            )))
+        }
+        NodeToHostMessage::Result {
+            content_items,
+            stored_values,
+            error_text,
+            max_output_tokens_per_exec_call,
+            ..
+        } => {
+            exec.session
+                .services
+                .code_mode_store
+                .replace_stored_values(stored_values)
+                .await;
+            let mut delta_items = output_content_items_from_json_values(content_items)?;
+            let success = error_text.is_none();
+            if let Some(error_text) = error_text {
+                delta_items.push(FunctionCallOutputContentItem::InputText {
+                    text: format!("Script error:\n{error_text}"),
+                });
+            }
+
+            let mut delta_items = truncate_code_mode_result(
+                delta_items,
+                poll_max_output_tokens.unwrap_or(max_output_tokens_per_exec_call),
+            );
+            prepend_script_status(
+                &mut delta_items,
+                if success {
+                    CodeModeExecutionStatus::Completed
+                } else {
+                    CodeModeExecutionStatus::Failed
+                },
+                started_at.elapsed(),
+            );
+            Ok(Some(CodeModeSessionProgress::Finished(
+                FunctionToolOutput::from_content(delta_items, Some(success)),
+            )))
+        }
+    }
+}
+
+fn message_session_id(message: &NodeToHostMessage) -> i32 {
+    match message {
+        NodeToHostMessage::ToolCall { session_id, .. }
+        | NodeToHostMessage::Yielded { session_id, .. }
+        | NodeToHostMessage::Terminated { session_id, .. }
+        | NodeToHostMessage::Result { session_id, .. } => *session_id,
+    }
 }
 
 async fn write_message(
@@ -376,16 +732,19 @@ async fn write_message(
 
 fn prepend_script_status(
     content_items: &mut Vec<FunctionCallOutputContentItem>,
-    success: bool,
+    status: CodeModeExecutionStatus,
     wall_time: Duration,
 ) {
     let wall_time_seconds = ((wall_time.as_secs_f32()) * 10.0).round() / 10.0;
     let header = format!(
         "{}\nWall time {wall_time_seconds:.1} seconds\nOutput:\n",
-        if success {
-            "Script completed"
-        } else {
-            "Script failed"
+        match status {
+            CodeModeExecutionStatus::Completed => "Script completed".to_string(),
+            CodeModeExecutionStatus::Failed => "Script failed".to_string(),
+            CodeModeExecutionStatus::Running(session_id) => {
+                format!("Script running with session ID {session_id}")
+            }
+            CodeModeExecutionStatus::Terminated => "Script terminated".to_string(),
         }
     );
     content_items.insert(0, FunctionCallOutputContentItem::InputText { text: header });
@@ -435,7 +794,7 @@ async fn build_enabled_tools(exec: &ExecContext) -> Vec<EnabledTool> {
 
 fn enabled_tool_from_spec(spec: ToolSpec) -> Option<EnabledTool> {
     let tool_name = spec.name().to_string();
-    if tool_name == PUBLIC_TOOL_NAME {
+    if tool_name == PUBLIC_TOOL_NAME || tool_name == WAIT_TOOL_NAME {
         return None;
     }
 

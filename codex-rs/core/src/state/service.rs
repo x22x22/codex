@@ -16,6 +16,7 @@ use crate::plugins::PluginsManager;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
 use crate::tools::code_mode::CodeModeProcess;
+use crate::tools::code_mode::CodeModeYieldedSession;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::sandboxing::ApprovalStore;
@@ -32,7 +33,9 @@ use tokio_util::sync::CancellationToken;
 
 pub(crate) struct CodeModeStoreService {
     stored_values: Mutex<HashMap<String, JsonValue>>,
-    process: Mutex<Option<CodeModeProcess>>,
+    process: Mutex<Option<Arc<Mutex<CodeModeProcess>>>>,
+    yielded_sessions: Mutex<HashMap<i32, CodeModeYieldedSession>>,
+    next_session_id: Mutex<i32>,
 }
 
 impl Default for CodeModeStoreService {
@@ -40,6 +43,8 @@ impl Default for CodeModeStoreService {
         Self {
             stored_values: Mutex::new(HashMap::new()),
             process: Mutex::new(None),
+            yielded_sessions: Mutex::new(HashMap::new()),
+            next_session_id: Mutex::new(1),
         }
     }
 }
@@ -53,12 +58,33 @@ impl CodeModeStoreService {
         *self.stored_values.lock().await = values;
     }
 
-    pub(crate) async fn store_process(&self, process: CodeModeProcess) {
+    pub(crate) async fn store_process(&self, process: Arc<Mutex<CodeModeProcess>>) {
         *self.process.lock().await = Some(process);
     }
 
-    pub(crate) async fn take_process(&self) -> Option<CodeModeProcess> {
-        self.process.lock().await.take()
+    pub(crate) async fn process(&self) -> Option<Arc<Mutex<CodeModeProcess>>> {
+        self.process.lock().await.clone()
+    }
+
+    pub(crate) async fn allocate_session_id(&self) -> i32 {
+        let mut next_session_id = self.next_session_id.lock().await;
+        let session_id = *next_session_id;
+        *next_session_id = next_session_id.saturating_add(1);
+        session_id
+    }
+
+    pub(crate) async fn store_yielded_session(&self, yielded_session: CodeModeYieldedSession) {
+        self.yielded_sessions
+            .lock()
+            .await
+            .insert(yielded_session.session_id, yielded_session);
+    }
+
+    pub(crate) async fn take_yielded_session(
+        &self,
+        session_id: i32,
+    ) -> Option<CodeModeYieldedSession> {
+        self.yielded_sessions.lock().await.remove(&session_id)
     }
 }
 
