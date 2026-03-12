@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io;
@@ -40,42 +39,35 @@ impl NetworkSandboxPolicy {
 /// When two equally specific entries target the same path, we compare these by
 /// conflict precedence rather than by capability breadth: `none` beats
 /// `write`, and `write` beats `read`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Display, JsonSchema, TS)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    Display,
+    JsonSchema,
+    TS,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum FileSystemAccessMode {
-    None,
     Read,
     Write,
+    None,
 }
 
 impl FileSystemAccessMode {
-    fn precedence_rank(self) -> u8 {
-        match self {
-            FileSystemAccessMode::Read => 0,
-            FileSystemAccessMode::Write => 1,
-            FileSystemAccessMode::None => 2,
-        }
-    }
-
     pub fn can_read(self) -> bool {
         !matches!(self, FileSystemAccessMode::None)
     }
 
     pub fn can_write(self) -> bool {
         matches!(self, FileSystemAccessMode::Write)
-    }
-}
-
-impl PartialOrd for FileSystemAccessMode {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for FileSystemAccessMode {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.precedence_rank().cmp(&other.precedence_rank())
     }
 }
 

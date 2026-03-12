@@ -577,9 +577,9 @@
     "FileSystemAccessMode": {
       "description": "Access mode for a filesystem entry.\n\nWhen two equally specific entries target the same path, we compare these by conflict precedence rather than by capability breadth: `none` beats `write`, and `write` beats `read`.",
       "enum": [
-        "none",
         "read",
-        "write"
+        "write",
+        "none"
       ],
       "type": "string"
     },
