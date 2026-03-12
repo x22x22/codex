@@ -396,7 +396,7 @@ pub(crate) async fn wait(
 }
 
 async fn spawn_code_mode_process(node_path: &std::path::Path) -> Result<CodeModeProcess, String> {
-    let mut cmd = tokio::process::Command::new(&node_path);
+    let mut cmd = tokio::process::Command::new(node_path);
     cmd.arg("--experimental-vm-modules");
     cmd.arg("--eval");
     cmd.arg(CODE_MODE_RUNNER_SOURCE);
