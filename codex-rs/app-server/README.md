@@ -414,7 +414,7 @@ Turns attach user input (text or images) to a thread and trigger Codex generatio
 
 You can optionally specify config overrides on the new turn. If specified, these settings become the default for subsequent turns on the same thread. `outputSchema` applies only to the current turn.
 
-`ephemeralContext` is separate from `input`. Use it for additional model-visible context for this turn, such as IDE/editor state. This context is not re-injected automatically after compaction, so clients should send a fresh snapshot on each turn instead of expecting it to carry forward automatically.
+`ephemeralContext` is separate from `input`. Use it for additional model-visible context for this turn, such as IDE/editor state. If compaction happens while this turn is still in progress, the current turn's ephemeral context is preserved so the turn can continue. Ephemeral context from older turns is stripped during compaction, so clients should send a fresh snapshot on each turn instead of expecting it to persist automatically.
 
 ```json
 { "method": "turn/start", "id": 30, "params": {

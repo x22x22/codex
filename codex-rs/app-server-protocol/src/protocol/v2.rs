@@ -3633,9 +3633,11 @@ pub struct TurnStartParams {
     pub thread_id: String,
     pub input: Vec<UserInput>,
     /// Additional model-visible context for this turn, such as editor or IDE state.
-    /// This context is not re-injected automatically after compaction, so
+    /// If compaction happens while this turn is still in progress, the current
+    /// turn's ephemeral context is preserved so the turn can continue.
+    /// Ephemeral context from older turns is stripped during compaction, so
     /// clients should send a fresh snapshot on each turn instead of expecting
-    /// it to carry forward automatically.
+    /// it to persist automatically.
     #[ts(optional = nullable)]
     pub ephemeral_context: Option<Vec<EphemeralContext>>,
     /// Override the working directory for this turn and subsequent turns.
