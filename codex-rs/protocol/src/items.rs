@@ -36,10 +36,6 @@ pub enum UserMessageType {
     Prompt,
     PromptSteering,
     PromptQueued,
-    PromptWithIdeContext,
-    AgentsMdDefault,
-    AgentsMdCustom,
-    EnvironmentContext,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]

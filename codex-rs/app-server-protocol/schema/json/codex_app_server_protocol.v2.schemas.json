@@ -15800,11 +15800,7 @@
       "enum": [
         "prompt",
         "prompt_steering",
-        "prompt_queued",
-        "prompt_with_ide_context",
-        "agents_md_default",
-        "agents_md_custom",
-        "environment_context"
+        "prompt_queued"
       ],
       "type": "string"
     },

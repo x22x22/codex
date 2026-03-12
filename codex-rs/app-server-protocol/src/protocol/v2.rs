@@ -3803,10 +3803,6 @@ pub enum UserMessageType {
     Prompt,
     PromptSteering,
     PromptQueued,
-    PromptWithIdeContext,
-    AgentsMdDefault,
-    AgentsMdCustom,
-    EnvironmentContext,
 }
 
 impl From<CoreUserMessageType> for UserMessageType {
@@ -3815,10 +3811,6 @@ impl From<CoreUserMessageType> for UserMessageType {
             CoreUserMessageType::Prompt => UserMessageType::Prompt,
             CoreUserMessageType::PromptSteering => UserMessageType::PromptSteering,
             CoreUserMessageType::PromptQueued => UserMessageType::PromptQueued,
-            CoreUserMessageType::PromptWithIdeContext => UserMessageType::PromptWithIdeContext,
-            CoreUserMessageType::AgentsMdDefault => UserMessageType::AgentsMdDefault,
-            CoreUserMessageType::AgentsMdCustom => UserMessageType::AgentsMdCustom,
-            CoreUserMessageType::EnvironmentContext => UserMessageType::EnvironmentContext,
         }
     }
 }
