@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::AuthManager;
@@ -16,7 +15,7 @@ use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
 use crate::skills::SkillsManager;
 use crate::state_db::StateDbHandle;
-use crate::tools::code_mode::CodeModeProcess;
+use crate::tools::code_mode::CodeModeService;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::sandboxing::ApprovalStore;
@@ -24,63 +23,11 @@ use crate::unified_exec::UnifiedExecProcessManager;
 use codex_hooks::Hooks;
 use codex_otel::SessionTelemetry;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use serde_json::Value as JsonValue;
 use std::path::PathBuf;
 use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
-
-pub(crate) struct CodeModeStoreService {
-    stored_values: Mutex<HashMap<String, JsonValue>>,
-    process: Arc<Mutex<Option<CodeModeProcess>>>,
-    yielded_sessions: Mutex<HashSet<i32>>,
-    next_session_id: Mutex<i32>,
-}
-
-impl Default for CodeModeStoreService {
-    fn default() -> Self {
-        Self {
-            stored_values: Mutex::new(HashMap::new()),
-            process: Arc::new(Mutex::new(None)),
-            yielded_sessions: Mutex::new(HashSet::new()),
-            next_session_id: Mutex::new(1),
-        }
-    }
-}
-
-impl CodeModeStoreService {
-    pub(crate) async fn stored_values(&self) -> HashMap<String, JsonValue> {
-        self.stored_values.lock().await.clone()
-    }
-
-    pub(crate) async fn replace_stored_values(&self, values: HashMap<String, JsonValue>) {
-        *self.stored_values.lock().await = values;
-    }
-
-    pub(crate) fn process(&self) -> Arc<Mutex<Option<CodeModeProcess>>> {
-        self.process.clone()
-    }
-
-    pub(crate) async fn allocate_session_id(&self) -> i32 {
-        let mut next_session_id = self.next_session_id.lock().await;
-        let session_id = *next_session_id;
-        *next_session_id = next_session_id.saturating_add(1);
-        session_id
-    }
-
-    pub(crate) async fn store_yielded_session(&self, session_id: i32) {
-        self.yielded_sessions.lock().await.insert(session_id);
-    }
-
-    pub(crate) async fn take_yielded_session(&self, session_id: i32) -> Option<i32> {
-        self.yielded_sessions
-            .lock()
-            .await
-            .remove(&session_id)
-            .then_some(session_id)
-    }
-}
 
 pub(crate) struct SessionServices {
     pub(crate) mcp_connection_manager: Arc<RwLock<McpConnectionManager>>,
@@ -113,5 +60,5 @@ pub(crate) struct SessionServices {
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
-    pub(crate) code_mode_store: CodeModeStoreService,
+    pub(crate) code_mode_service: CodeModeService,
 }

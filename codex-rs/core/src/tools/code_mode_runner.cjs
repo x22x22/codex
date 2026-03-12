@@ -467,6 +467,15 @@ function createProtocol() {
       const session = sessions.get(message.session_id);
       if (session) {
         schedulePollYield(protocol, session, normalizeYieldTime(message.yield_time_ms ?? 0));
+      } else {
+        void protocol.send({
+          type: 'result',
+          session_id: message.session_id,
+          content_items: [],
+          stored_values: {},
+          error_text: `exec session ${message.session_id} not found`,
+          max_output_tokens_per_exec_call: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL,
+        });
       }
       return;
     }
@@ -475,6 +484,15 @@ function createProtocol() {
       const session = sessions.get(message.session_id);
       if (session) {
         void terminateSession(protocol, sessions, session);
+      } else {
+        void protocol.send({
+          type: 'result',
+          session_id: message.session_id,
+          content_items: [],
+          stored_values: {},
+          error_text: `exec session ${message.session_id} not found`,
+          max_output_tokens_per_exec_call: DEFAULT_MAX_OUTPUT_TOKENS_PER_EXEC_CALL,
+        });
       }
       return;
     }
@@ -662,7 +680,6 @@ async function sendYielded(protocol, session) {
     type: 'yielded',
     session_id: session.id,
     content_items: contentItems,
-    max_output_tokens_per_exec_call: session.max_output_tokens_per_exec_call,
   });
 }
 
@@ -726,7 +743,6 @@ async function terminateSession(protocol, sessions, session) {
     type: 'terminated',
     session_id: session.id,
     content_items: contentItems,
-    max_output_tokens_per_exec_call: session.max_output_tokens_per_exec_call,
   });
 }
 

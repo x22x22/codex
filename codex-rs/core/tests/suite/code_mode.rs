@@ -789,6 +789,66 @@ output_text("after terminate");
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_exec_wait_returns_error_for_unknown_session() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let mut builder = test_codex().with_config(move |config| {
+        let _ = config.features.enable(Feature::CodeMode);
+    });
+    let test = builder.build(&server).await?;
+
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            responses::ev_function_call(
+                "call-1",
+                "exec_wait",
+                &serde_json::to_string(&serde_json::json!({
+                    "session_id": 999_999,
+                    "yield_time_ms": 1_000,
+                }))?,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let completion = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    test.submit_turn("wait on an unknown exec session").await?;
+
+    let request = completion.single_request();
+    let (_, success) = request
+        .function_call_output_content_and_success("call-1")
+        .expect("function tool output should be present");
+    assert_ne!(success, Some(true));
+
+    let items = function_tool_output_items(&request, "call-1");
+    assert_eq!(items.len(), 2);
+    assert_regex_match(
+        concat!(
+            r"(?s)\A",
+            r"Script failed\nWall time \d+\.\d seconds\nOutput:\n\z"
+        ),
+        text_item(&items, 0),
+    );
+    assert_eq!(
+        text_item(&items, 1),
+        "Script error:\nexec session 999999 not found"
+    );
+
+    Ok(())
+}
+
 #[cfg_attr(windows, ignore = "no exec_command on Windows")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_exec_wait_terminate_returns_completed_session_if_it_finished_in_background()
@@ -962,15 +1022,14 @@ output_text("session b done");
 
     let fourth_request = fourth_completion.single_request();
     let fourth_items = function_tool_output_items(&fourth_request, "call-4");
-    assert_eq!(fourth_items.len(), 2);
+    assert_eq!(fourth_items.len(), 1);
     assert_regex_match(
         concat!(
             r"(?s)\A",
-            r"Script completed\nWall time \d+\.\d seconds\nOutput:\n\z"
+            r"Script terminated\nWall time \d+\.\d seconds\nOutput:\n\z"
         ),
         text_item(&fourth_items, 0),
     );
-    assert_eq!(text_item(&fourth_items, 1), "session a done");
 
     Ok(())
 }
