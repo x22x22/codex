@@ -88,17 +88,6 @@ impl CodexThread {
         self.codex.steer_input(input, expected_turn_id).await
     }
 
-    /// Use sparingly: inject response input into the active turn.
-    ///
-    /// Returns the input unchanged when there is no active turn.
-    #[doc(hidden)]
-    pub async fn inject_response_items(
-        &self,
-        input: Vec<ResponseInputItem>,
-    ) -> Result<(), Vec<ResponseInputItem>> {
-        self.codex.inject_response_items(input).await
-    }
-
     pub async fn set_app_server_client_name(
         &self,
         app_server_client_name: Option<String>,
