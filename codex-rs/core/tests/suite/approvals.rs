@@ -122,9 +122,11 @@ impl ActionKind {
             ActionKind::WriteFile { target, content } => {
                 let (path, _) = target.resolve_for_patch(test);
                 let _ = fs::remove_file(&path);
-                let command = format!("printf {content:?} > {path:?} && cat {path:?}");
+                // Keep this fixture on shell builtins only so approval-flow timing
+                // does not depend on launching an extra `cat` subprocess.
+                let command = format!("printf {content:?} > {path:?} && printf {content:?}");
                 let event =
-                    approval_matrix_shell_event(call_id, &command, 5_000, sandbox_permissions)?;
+                    approval_matrix_shell_event(call_id, &command, 1_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
             ActionKind::FetchUrl {
