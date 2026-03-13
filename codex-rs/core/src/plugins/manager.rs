@@ -505,7 +505,8 @@ impl PluginsManager {
         .await
         .map_err(PluginInstallError::join)??;
 
-        ConfigService::new_with_defaults(self.codex_home.clone())
+        let config_service = ConfigService::new_with_defaults(self.codex_home.clone());
+        config_service
             .write_value(ConfigValueWriteParams {
                 key_path: format!("plugins.{}", result.plugin_id.as_key()),
                 value: json!({
@@ -528,6 +529,24 @@ impl PluginsManager {
                 &result.plugin_id,
                 result.installed_path.as_path(),
             ));
+        }
+
+        for app in load_plugin_apps(result.installed_path.as_path()) {
+            let mut app_config = JsonMap::new();
+            app_config.insert("enabled".to_string(), JsonValue::Bool(true));
+            let mut apps_config = JsonMap::new();
+            apps_config.insert(app.0, JsonValue::Object(app_config));
+            config_service
+                .write_value(ConfigValueWriteParams {
+                    key_path: "apps".to_string(),
+                    value: JsonValue::Object(apps_config),
+                    merge_strategy: MergeStrategy::Upsert,
+                    file_path: None,
+                    expected_version: None,
+                })
+                .await
+                .map(|_| ())
+                .map_err(PluginInstallError::from)?;
         }
 
         Ok(PluginInstallOutcome {
