@@ -169,11 +169,11 @@ mod tests {
         codex_home: &Path,
         cwd: &Path,
     ) -> std::io::Result<Config> {
-        let cwd_display = cwd.display();
+        let cwd_display = cwd.display().to_string().replace('\'', "''");
         let config_contents = format!(
             r#"model_provider = "ollama"
 
-[projects."{cwd_display}"]
+[projects.'{cwd_display}']
 trust_level = "trusted"
 "#
         );
