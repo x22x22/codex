@@ -5,6 +5,7 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::create_mock_responses_server_sequence;
 use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::JSONRPCError;
@@ -16,7 +17,6 @@ use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
-use codex_app_server_protocol::ServerRequest;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
@@ -190,23 +190,37 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
         let message = timeout(remaining, mcp.read_next_message()).await??;
         match message {
             JSONRPCMessage::Request(request) => {
-                let server_req: ServerRequest = request.try_into()?;
-                let ServerRequest::CommandExecutionRequestApproval { request_id, params } =
-                    server_req
-                else {
+                eprintln!(
+                    "review approval probe saw request method: {}",
+                    request.method
+                );
+                if request.method != "item/commandExecution/requestApproval" {
                     continue;
-                };
+                }
+                let params: CommandExecutionRequestApprovalParams =
+                    serde_json::from_value(request.params.expect("params must be present"))?;
+                eprintln!(
+                    "review approval probe matched approval request: turn_id={}, item_id={}",
+                    params.turn_id, params.item_id
+                );
                 assert_eq!(params.item_id, "review-call-1");
                 assert_eq!(params.turn_id, turn_id);
-                approval_request = Some((request_id, params.item_id));
+                approval_request = Some((request.id, params.item_id));
             }
             JSONRPCMessage::Notification(notification) if notification.method == "item/started" => {
                 let started: ItemStartedNotification =
                     serde_json::from_value(notification.params.expect("params must be present"))?;
+                eprintln!(
+                    "review approval probe saw item/started for turn {}",
+                    started.turn_id
+                );
                 if started.turn_id != turn_id {
                     continue;
                 }
                 if let ThreadItem::CommandExecution { id, .. } = started.item {
+                    eprintln!(
+                        "review approval probe matched command execution item: turn_id={turn_id}, item_id={id}"
+                    );
                     command_item_id = Some(id);
                 }
             }
