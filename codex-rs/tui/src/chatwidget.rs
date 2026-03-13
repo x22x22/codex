@@ -4962,6 +4962,7 @@ impl ChatWidget {
                     .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                         cwd: None,
                         approval_policy: Some(preset.approval),
+                        approvals_reviewer: Some(ApprovalsReviewer::User),
                         sandbox_policy: Some(sandbox.clone()),
                         windows_sandbox_level: None,
                         model: None,
@@ -4975,6 +4976,8 @@ impl ChatWidget {
                     .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
                 self.app_event_tx
                     .send(AppEvent::UpdateSandboxPolicy(sandbox));
+                self.app_event_tx
+                    .send(AppEvent::UpdateApprovalsReviewer(ApprovalsReviewer::User));
                 self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
                     history_cell::new_info_event(format!("Permissions updated to {label}"), None),
                 )));
@@ -5250,6 +5253,7 @@ impl ChatWidget {
                     .send(AppEvent::CodexOp(Op::OverrideTurnContext {
                         cwd: None,
                         approval_policy: None,
+                        approvals_reviewer: None,
                         sandbox_policy: None,
                         model: None,
                         effort: None,
@@ -8486,6 +8490,7 @@ impl ChatWidget {
                 });
 
                 if guardian_approval_enabled {
+                    let guardian_preset = preset.clone();
                     items.push(SelectionItem {
                         name: "Guardian Approvals".to_string(),
                         description: Some(
@@ -8498,11 +8503,10 @@ impl ChatWidget {
                                 current_sandbox,
                                 &preset,
                             ),
-                        actions: Self::approval_preset_actions(
-                            preset.approval,
-                            preset.sandbox.clone(),
-                            "Guardian Approvals".to_string(),
+                        actions: Self::approval_preset_actions_for_reviewer(
+                            guardian_preset.id,
                             ApprovalsReviewer::GuardianSubagent,
+                            &[],
                         ),
                         dismiss_on_select: true,
                         disabled_reason: approval_disabled_reason
