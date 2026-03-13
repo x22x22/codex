@@ -128,6 +128,7 @@ pub(super) async fn try_run_zsh_fork(
         expiration: _sandbox_expiration,
         sandbox,
         windows_sandbox_level,
+        windows_sandbox_private_desktop: _windows_sandbox_private_desktop,
         sandbox_permissions,
         sandbox_policy,
         file_system_sandbox_policy,
@@ -1015,6 +1016,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 expiration: ExecExpiration::Cancellation(cancel_rx),
                 sandbox: self.sandbox,
                 windows_sandbox_level: self.windows_sandbox_level,
+                windows_sandbox_private_desktop: false,
                 sandbox_permissions: self.sandbox_permissions,
                 sandbox_policy: self.sandbox_policy.clone(),
                 file_system_sandbox_policy: self.file_system_sandbox_policy.clone(),
@@ -1198,6 +1200,7 @@ impl CoreShellCommandExecutor {
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_ref(),
                 use_legacy_landlock: self.use_legacy_landlock,
                 windows_sandbox_level: self.windows_sandbox_level,
+                windows_sandbox_private_desktop: false,
             })?;
         if let Some(network) = exec_request.network.as_ref() {
             network.apply_to_env(&mut exec_request.env);
