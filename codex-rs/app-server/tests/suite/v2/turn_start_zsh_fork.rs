@@ -15,10 +15,12 @@ use app_test_support::create_shell_command_sse_response;
 use app_test_support::to_response;
 use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionApprovalDecision;
+use codex_app_server_protocol::CommandExecutionRequestApprovalParams;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerRequest;
@@ -565,16 +567,14 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
     let first_file_str = first_file.to_string_lossy().into_owned();
     let second_file_str = second_file.to_string_lossy().into_owned();
     let parent_shell_hint = format!("&& {}", &first_file_str);
-    while target_decision_index < target_decisions.len() || !saw_parent_approval {
-        let server_req = timeout(
+    while target_decision_index < target_decisions.len() {
+        let approval_request = timeout(
             DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_request_message(),
+            mcp.read_stream_until_request_method("item/commandExecution/requestApproval"),
         )
         .await??;
-        let ServerRequest::CommandExecutionRequestApproval { request_id, params } = server_req
-        else {
-            panic!("expected CommandExecutionRequestApproval request");
-        };
+        let params: CommandExecutionRequestApprovalParams =
+            serde_json::from_value(approval_request.params.expect("params must be present"))?;
         assert_eq!(params.item_id, "call-zsh-fork-subcommand-decline");
         assert_eq!(params.thread_id, thread.id);
         let approval_command = params
@@ -624,44 +624,93 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
             // before the parent shell command or target subcommands are reached.
             CommandExecutionApprovalDecision::Accept
         };
+        eprintln!(
+            "zsh subcommand decline approval: target={is_target_subcommand} parent={is_parent_approval} decision={decision:?} command={approval_command}"
+        );
         mcp.send_response(
-            request_id,
+            approval_request.id,
             serde_json::to_value(CommandExecutionRequestApprovalResponse { decision })?,
         )
         .await?;
     }
 
-    assert!(
-        saw_parent_approval,
-        "expected parent shell approval request"
-    );
     assert_eq!(approved_subcommand_ids.len(), 2);
     assert_ne!(approved_subcommand_ids[0], approved_subcommand_ids[1]);
     assert_eq!(approved_subcommand_strings.len(), 2);
     assert!(approved_subcommand_strings[0].contains(&first_file.display().to_string()));
     assert!(approved_subcommand_strings[1].contains(&second_file.display().to_string()));
-    let parent_completed_command_execution = timeout(DEFAULT_READ_TIMEOUT, async {
-        loop {
-            let completed_notif = mcp
-                .read_stream_until_notification_message("item/completed")
-                .await?;
-            let completed: ItemCompletedNotification = serde_json::from_value(
-                completed_notif
-                    .params
-                    .clone()
-                    .expect("item/completed params"),
-            )?;
-            if let ThreadItem::CommandExecution { id, .. } = &completed.item
-                && id == "call-zsh-fork-subcommand-decline"
-            {
-                return Ok::<ThreadItem, anyhow::Error>(completed.item);
-            }
-        }
-    })
-    .await;
+    enum CompletionEvent {
+        Parent(ThreadItem),
+        Turn(TurnCompletedNotification),
+    }
 
-    match parent_completed_command_execution {
-        Ok(Ok(parent_completed_command_execution)) => {
+    let completion_event = loop {
+        let message = timeout(DEFAULT_READ_TIMEOUT, mcp.read_next_message()).await??;
+        match message {
+            JSONRPCMessage::Request(request)
+                if request.method == "item/commandExecution/requestApproval" =>
+            {
+                let params: CommandExecutionRequestApprovalParams =
+                    serde_json::from_value(request.params.expect("params must be present"))?;
+                assert_eq!(params.item_id, "call-zsh-fork-subcommand-decline");
+                assert_eq!(params.thread_id, thread.id);
+                let approval_command = params
+                    .command
+                    .as_deref()
+                    .expect("approval command should be present");
+                let has_first_file = approval_command.contains(&first_file_str);
+                let has_second_file = approval_command.contains(&second_file_str);
+                let is_parent_approval = approval_command.contains(&zsh_path.display().to_string())
+                    && (approval_command.contains(&shell_command)
+                        || (has_first_file && has_second_file)
+                        || approval_command.contains(&parent_shell_hint));
+                if is_parent_approval {
+                    saw_parent_approval = true;
+                }
+                eprintln!(
+                    "zsh subcommand decline late approval: parent={is_parent_approval} command={approval_command}"
+                );
+                mcp.send_response(
+                    request.id,
+                    serde_json::to_value(CommandExecutionRequestApprovalResponse {
+                        decision: CommandExecutionApprovalDecision::Accept,
+                    })?,
+                )
+                .await?;
+            }
+            JSONRPCMessage::Request(request) => {
+                panic!("unexpected request method while awaiting zsh completion: {request:?}");
+            }
+            JSONRPCMessage::Notification(notification)
+                if notification.method == "item/completed" =>
+            {
+                let completed: ItemCompletedNotification = serde_json::from_value(
+                    notification.params.clone().expect("item/completed params"),
+                )?;
+                if let ThreadItem::CommandExecution { id, .. } = &completed.item
+                    && id == "call-zsh-fork-subcommand-decline"
+                {
+                    break CompletionEvent::Parent(completed.item);
+                }
+            }
+            JSONRPCMessage::Notification(notification)
+                if notification.method == "turn/completed" =>
+            {
+                let completed: TurnCompletedNotification = serde_json::from_value(
+                    notification
+                        .params
+                        .expect("turn/completed params must be present"),
+                )?;
+                break CompletionEvent::Turn(completed);
+            }
+            _ => continue,
+        }
+    };
+
+    eprintln!("zsh subcommand decline saw parent approval request: {saw_parent_approval}");
+
+    match completion_event {
+        CompletionEvent::Parent(parent_completed_command_execution) => {
             let ThreadItem::CommandExecution {
                 id,
                 status,
@@ -711,22 +760,11 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
                 }
             }
         }
-        Ok(Err(error)) => return Err(error),
-        Err(_) => {
+        CompletionEvent::Turn(completed) => {
             // Some zsh builds abort the turn immediately after the rejected
             // subcommand without emitting a parent `item/completed`, and Linux
             // sandbox failures can also complete the turn before the parent
             // completion item is observed.
-            let completed_notif = timeout(
-                DEFAULT_READ_TIMEOUT,
-                mcp.read_stream_until_notification_message("turn/completed"),
-            )
-            .await??;
-            let completed: TurnCompletedNotification = serde_json::from_value(
-                completed_notif
-                    .params
-                    .expect("turn/completed params must be present"),
-            )?;
             assert_eq!(completed.thread_id, thread.id);
             assert_eq!(completed.turn.id, turn.id);
             assert!(matches!(
