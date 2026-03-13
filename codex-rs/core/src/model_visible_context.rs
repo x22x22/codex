@@ -3,19 +3,13 @@
 //! Use this path for any injected prompt context, whether it renders in the
 //! developer envelope or the contextual-user envelope.
 //!
-//! Contextual-user fragments must provide stable markers so history parsing can
-//! distinguish them from real user intent. Developer fragments do not need
-//! markers because they are already separable by role.
+//! Fragment registration and concrete fragment definitions live in
+//! `model_visible_fragments.rs`. This module keeps only the shared rendering,
+//! role, and turn-context parameter helpers that every fragment uses.
 
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
-use crate::environment_context::EnvironmentContext;
-use crate::instructions::AgentsMdInstructions;
-use crate::instructions::PluginInstructions;
-use crate::instructions::SkillInstructions;
 use crate::shell::Shell;
-use crate::tasks::TurnAbortedMarker;
-use crate::user_shell_command::UserShellCommandFragment;
 use codex_execpolicy::Policy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::CustomDeveloperInstructions;
@@ -57,23 +51,6 @@ impl ModelVisibleContextRole for ContextualUserContextRole {
 pub(crate) struct ContextualUserFragmentMarkers {
     start_marker: &'static str,
     end_marker: &'static str,
-}
-
-pub(crate) trait ContextualUserFragment {
-    fn markers() -> Option<ContextualUserFragmentMarkers> {
-        None
-    }
-
-    fn matches_contextual_user_text(text: &str) -> bool {
-        Self::markers().is_some_and(|markers| markers.matches_text(text))
-    }
-
-    fn wrap_contextual_user_body(body: String) -> String {
-        let Some(markers) = Self::markers() else {
-            panic!("contextual-user fragments using wrap_contextual_user_body must define markers");
-        };
-        markers.wrap_body(body)
-    }
 }
 
 impl ContextualUserFragmentMarkers {
@@ -124,79 +101,6 @@ pub(crate) fn model_visible_response_input_item<R: ModelVisibleContextRole>(
     }
 }
 
-/// Implement this for any model-visible prompt fragment, regardless of which
-/// envelope it renders into.
-pub(crate) trait ModelVisibleContextFragment {
-    type Role: ModelVisibleContextRole;
-
-    fn render_text(&self) -> String;
-
-    fn into_content_item(self) -> ContentItem
-    where
-        Self: Sized,
-    {
-        model_visible_content_item(self.render_text())
-    }
-
-    fn into_message(self) -> ResponseItem
-    where
-        Self: Sized,
-    {
-        model_visible_message::<Self::Role>(self.render_text())
-    }
-
-    fn into_response_input_item(self) -> ResponseInputItem
-    where
-        Self: Sized,
-    {
-        model_visible_response_input_item::<Self::Role>(self.render_text())
-    }
-}
-
-pub(crate) struct DeveloperTextFragment {
-    text: String,
-}
-
-impl DeveloperTextFragment {
-    pub(crate) fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into() }
-    }
-}
-
-pub(crate) struct ContextualUserTextFragment {
-    text: String,
-}
-
-impl ContextualUserTextFragment {
-    pub(crate) fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into() }
-    }
-}
-
-type ContextualUserTurnStateBuilder = fn(
-    Option<&TurnContextItem>,
-    &TurnContext,
-    &TurnContextDiffParams<'_>,
-) -> Option<ContextualUserTextFragment>;
-
-#[derive(Clone, Copy)]
-struct ContextualUserFragmentRegistration {
-    detect: fn(&str) -> bool,
-    turn_state_builder: Option<ContextualUserTurnStateBuilder>,
-}
-
-impl ContextualUserFragmentRegistration {
-    const fn new(
-        detect: fn(&str) -> bool,
-        turn_state_builder: Option<ContextualUserTurnStateBuilder>,
-    ) -> Self {
-        Self {
-            detect,
-            turn_state_builder,
-        }
-    }
-}
-
 pub(crate) struct TurnContextDiffParams<'a> {
     pub(crate) shell: &'a Shell,
     pub(crate) previous_turn_settings: Option<&'a PreviousTurnSettings>,
@@ -223,123 +127,75 @@ impl<'a> TurnContextDiffParams<'a> {
     }
 }
 
-/// Implement this for fragments that are built from current/persisted turn
-/// state rather than one-off runtime events.
-pub(crate) trait TurnContextDiffFragment: ModelVisibleContextFragment + Sized {
+/// Implement this for any model-visible prompt fragment, regardless of which
+/// envelope it renders into.
+pub(crate) trait ModelVisibleContextFragment: Sized {
+    type Role: ModelVisibleContextRole;
+
+    fn render_text(&self) -> String;
+
     /// Build the fragment from the current turn state and an optional baseline
-    /// context item.
+    /// context item that represents the turn state already reflected in
+    /// model-visible history.
     ///
-    /// `reference_context_item` is the last persisted turn-context snapshot whose
-    /// effects are already represented in model-visible history. Implementations
-    /// should diff `turn_context` against this baseline and return `None` when
-    /// there is no model-visible change to inject.
-    ///
-    /// `reference_context_item` is `None` for initial-context assembly and when
-    /// no baseline turn context can be recovered (for example after
-    /// compaction/backtracking/resume), so implementations should treat that as
-    /// "no known represented baseline" and decide whether to emit full current
-    /// state or nothing.
+    /// Implementations that are not turn-state fragments should leave the
+    /// default `None`.
     fn build(
-        turn_context: &TurnContext,
-        reference_context_item: Option<&TurnContextItem>,
-        params: &TurnContextDiffParams<'_>,
-    ) -> Option<Self>;
+        _turn_context: &TurnContext,
+        _reference_context_item: Option<&TurnContextItem>,
+        _params: &TurnContextDiffParams<'_>,
+    ) -> Option<Self> {
+        None
+    }
+
+    /// Stable markers used to recognize contextual-user fragments in persisted
+    /// history. Developer fragments should keep the default `None`.
+    fn contextual_user_markers() -> Option<ContextualUserFragmentMarkers> {
+        None
+    }
+
+    fn matches_contextual_user_text(text: &str) -> bool {
+        Self::contextual_user_markers().is_some_and(|markers| markers.matches_text(text))
+    }
+
+    fn wrap_contextual_user_body(body: String) -> String {
+        let Some(markers) = Self::contextual_user_markers() else {
+            panic!("contextual-user fragments using wrap_contextual_user_body must define markers");
+        };
+        markers.wrap_body(body)
+    }
+
+    fn into_content_item(self) -> ContentItem {
+        model_visible_content_item(self.render_text())
+    }
+
+    fn into_message(self) -> ResponseItem {
+        model_visible_message::<Self::Role>(self.render_text())
+    }
+
+    fn into_response_input_item(self) -> ResponseInputItem {
+        model_visible_response_input_item::<Self::Role>(self.render_text())
+    }
 }
 
-fn detect_contextual_user_fragment<F: ContextualUserFragment>(text: &str) -> bool {
-    F::matches_contextual_user_text(text)
+pub(crate) struct DeveloperTextFragment {
+    text: String,
 }
 
-fn build_contextual_user_turn_state_fragment<F>(
-    reference_context_item: Option<&TurnContextItem>,
-    turn_context: &TurnContext,
-    params: &TurnContextDiffParams<'_>,
-) -> Option<ContextualUserTextFragment>
-where
-    F: TurnContextDiffFragment<Role = ContextualUserContextRole> + ContextualUserFragment,
-{
-    let fragment = F::build(turn_context, reference_context_item, params)?;
-    Some(ContextualUserTextFragment::new(fragment.render_text()))
+impl DeveloperTextFragment {
+    pub(crate) fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
+    }
 }
 
-/// Canonical contextual-user fragment registry.
-///
-/// Add new contextual-user fragments by:
-/// 1. Defining a typed fragment struct.
-/// 2. Implementing `ModelVisibleContextFragment` with
-///    `Role = ContextualUserContextRole`.
-/// 3. Implementing `ContextualUserFragment` for detection. Prefer defining
-///    `markers()` so the default matcher/wrapper behavior applies; override
-///    `matches_contextual_user_text()` only for genuinely custom formats.
-/// 4. If the fragment is derived from turn state, implementing
-///    `TurnContextDiffFragment::build` and registering it with
-///    `Some(build_contextual_user_turn_state_fragment::<YourType>)`.
-/// 5. Otherwise registering it with `None` for diffing so it still participates
-///    in contextual-user history parsing.
-///
-/// Register new fragment types here so injected context is not mistaken for
-/// real user intent during event mapping/truncation, and to wire turn-state
-/// contextual-user diff fragments in one place.
-const REGISTERED_CONTEXTUAL_USER_FRAGMENTS: &[ContextualUserFragmentRegistration] = &[
-    ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<AgentsMdInstructions>,
-        Some(build_contextual_user_turn_state_fragment::<AgentsMdInstructions>),
-    ),
-    ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<EnvironmentContext>,
-        Some(build_contextual_user_turn_state_fragment::<EnvironmentContext>),
-    ),
-    ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<SkillInstructions>,
-        None,
-    ),
-    ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<PluginInstructions>,
-        None,
-    ),
-    ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<UserShellCommandFragment>,
-        None,
-    ),
-    ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<TurnAbortedMarker>,
-        None,
-    ),
-];
-
-fn is_legacy_contextual_user_fragment(text: &str) -> bool {
-    // TODO(ccunningham): Drop this once old user-role subagent notification
-    // history no longer needs resume/compaction compatibility.
-    ContextualUserFragmentMarkers::new(
-        SUBAGENT_NOTIFICATION_OPEN_TAG,
-        SUBAGENT_NOTIFICATION_CLOSE_TAG,
-    )
-    .matches_text(text)
+pub(crate) struct ContextualUserTextFragment {
+    text: String,
 }
 
-pub(crate) fn is_contextual_user_fragment(content_item: &ContentItem) -> bool {
-    let ContentItem::InputText { text } = content_item else {
-        return false;
-    };
-    REGISTERED_CONTEXTUAL_USER_FRAGMENTS
-        .iter()
-        .any(|registration| (registration.detect)(text))
-        || is_legacy_contextual_user_fragment(text)
-}
-
-pub(crate) fn build_contextual_user_turn_state_fragments(
-    reference_context_item: Option<&TurnContextItem>,
-    turn_context: &TurnContext,
-    params: &TurnContextDiffParams<'_>,
-) -> Vec<ContextualUserTextFragment> {
-    REGISTERED_CONTEXTUAL_USER_FRAGMENTS
-        .iter()
-        .filter_map(|registration| {
-            registration
-                .turn_state_builder
-                .and_then(|build| build(reference_context_item, turn_context, params))
-        })
-        .collect()
+impl ContextualUserTextFragment {
+    pub(crate) fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
+    }
 }
 
 impl ModelVisibleContextFragment for CustomDeveloperInstructions {
@@ -363,47 +219,5 @@ impl ModelVisibleContextFragment for ContextualUserTextFragment {
 
     fn render_text(&self) -> String {
         self.text.clone()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detects_environment_context_fragment() {
-        assert!(is_contextual_user_fragment(&ContentItem::InputText {
-            text: "<environment_context>\n<cwd>/tmp</cwd>\n</environment_context>".to_string(),
-        }));
-    }
-
-    #[test]
-    fn detects_agents_instructions_fragment() {
-        assert!(is_contextual_user_fragment(&ContentItem::InputText {
-            text: "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
-                .to_string(),
-        }));
-    }
-
-    #[test]
-    fn detects_legacy_subagent_notification_fragment() {
-        assert!(is_contextual_user_fragment(&ContentItem::InputText {
-            text: "<subagent_notification>\n{\"agent_id\":\"a\",\"status\":\"completed\"}\n</subagent_notification>"
-                .to_string(),
-        }));
-    }
-
-    #[test]
-    fn ignores_regular_user_text() {
-        assert!(!is_contextual_user_fragment(&ContentItem::InputText {
-            text: "hello".to_string(),
-        }));
-    }
-
-    #[test]
-    fn marker_matching_ignores_plain_text() {
-        assert!(
-            !<crate::instructions::SkillInstructions as ContextualUserFragment>::matches_contextual_user_text("plain text")
-        );
     }
 }

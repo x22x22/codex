@@ -23,12 +23,8 @@ use crate::AuthManager;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
-use crate::model_visible_context::ContextualUserContextRole;
-use crate::model_visible_context::ContextualUserFragment;
-use crate::model_visible_context::ContextualUserFragmentMarkers;
 use crate::model_visible_context::ModelVisibleContextFragment;
-use crate::model_visible_context::TURN_ABORTED_CLOSE_TAG;
-use crate::model_visible_context::TURN_ABORTED_OPEN_TAG;
+use crate::model_visible_fragments::TurnAbortedMarker;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TokenUsage;
@@ -60,28 +56,6 @@ pub(crate) use user_shell::UserShellCommandTask;
 pub(crate) use user_shell::execute_user_shell_command;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
-const TURN_ABORTED_INTERRUPTED_GUIDANCE: &str = "The user interrupted the previous turn on purpose. Any running unified exec processes were terminated. If any tools/commands were aborted, they may have partially executed; verify current state before retrying.";
-
-pub(crate) struct TurnAbortedMarker {
-    guidance: &'static str,
-}
-
-impl ModelVisibleContextFragment for TurnAbortedMarker {
-    type Role = ContextualUserContextRole;
-
-    fn render_text(&self) -> String {
-        <Self as ContextualUserFragment>::wrap_contextual_user_body(self.guidance.to_string())
-    }
-}
-
-impl ContextualUserFragment for TurnAbortedMarker {
-    fn markers() -> Option<ContextualUserFragmentMarkers> {
-        Some(ContextualUserFragmentMarkers::new(
-            TURN_ABORTED_OPEN_TAG,
-            TURN_ABORTED_CLOSE_TAG,
-        ))
-    }
-}
 
 fn emit_turn_network_proxy_metric(
     session_telemetry: &SessionTelemetry,
@@ -458,9 +432,7 @@ impl Session {
 
         if reason == TurnAbortReason::Interrupted {
             self.cleanup_after_interrupt(&task.turn_context).await;
-            let marker = TurnAbortedMarker {
-                guidance: TURN_ABORTED_INTERRUPTED_GUIDANCE,
-            };
+            let marker = TurnAbortedMarker::interrupted();
             let marker = marker.into_message();
             self.record_into_history(std::slice::from_ref(&marker), task.turn_context.as_ref())
                 .await;

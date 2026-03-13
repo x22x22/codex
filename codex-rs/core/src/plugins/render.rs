@@ -1,4 +1,4 @@
-use crate::instructions::PluginInstructions;
+use crate::model_visible_fragments::PluginInstructions;
 use crate::plugins::PluginCapabilitySummary;
 
 pub(crate) fn render_plugin_instructions(
