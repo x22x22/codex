@@ -185,7 +185,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
     let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
     let mut approval_request: Option<(RequestId, String)> = None;
     let mut command_item_id: Option<String> = None;
-    while approval_request.is_none() || command_item_id.is_none() {
+    while approval_request.is_none() {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let message = timeout(remaining, mcp.read_next_message()).await??;
         match message {
@@ -230,16 +230,43 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
 
     let (request_id, approval_item_id) =
         approval_request.expect("did not observe command execution approval request");
-    assert_eq!(
-        command_item_id.expect("did not observe command execution item"),
-        approval_item_id
-    );
-
     mcp.send_response(
         request_id,
         serde_json::json!({ "decision": codex_protocol::protocol::ReviewDecision::Approved }),
     )
     .await?;
+
+    while command_item_id.is_none() {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let message = timeout(remaining, mcp.read_next_message()).await??;
+        let JSONRPCMessage::Notification(notification) = message else {
+            continue;
+        };
+        if notification.method != "item/started" {
+            continue;
+        }
+
+        let started: ItemStartedNotification =
+            serde_json::from_value(notification.params.expect("params must be present"))?;
+        eprintln!(
+            "review approval probe saw item/started for turn {}",
+            started.turn_id
+        );
+        if started.turn_id != turn_id {
+            continue;
+        }
+        if let ThreadItem::CommandExecution { id, .. } = started.item {
+            eprintln!(
+                "review approval probe matched command execution item: turn_id={turn_id}, item_id={id}"
+            );
+            command_item_id = Some(id);
+        }
+    }
+
+    assert_eq!(
+        command_item_id.expect("did not observe command execution item"),
+        approval_item_id
+    );
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),
