@@ -32,14 +32,15 @@ fn strip_ephemeral_context_prefix(message: &[ContentItem]) -> &[ContentItem] {
 
 pub(crate) fn is_contextual_user_message_content(message: &[ContentItem]) -> bool {
     let stripped = strip_ephemeral_context_prefix(message);
-    stripped.is_empty() || stripped.iter().any(is_contextual_user_fragment)
+    (stripped.len() != message.len() && stripped.is_empty())
+        || stripped.iter().any(is_contextual_user_fragment)
 }
 
 fn parse_user_message(message: &[ContentItem]) -> Option<UserMessageItem> {
-    let message = strip_ephemeral_context_prefix(message);
     if is_contextual_user_message_content(message) {
         return None;
     }
+    let message = strip_ephemeral_context_prefix(message);
 
     let mut content: Vec<UserInput> = Vec::new();
 
