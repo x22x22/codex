@@ -47,6 +47,7 @@ mod imp {
     use super::*;
     use crate::tools::runtimes::shell::unix_escalation;
     use crate::unified_exec::SpawnLifecycle;
+    use codex_shell_escalation::ESCALATE_SOCKET_ENV_VAR;
     use codex_shell_escalation::EscalationSession;
 
     const ESCALATE_SOCKET_ENV_VAR: &str = "CODEX_ESCALATE_SOCKET";
