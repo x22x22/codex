@@ -26,13 +26,15 @@ use crate::guardian::guardian_approval_request_to_json;
 use crate::guardian::review_approval_request;
 use crate::guardian::routes_approval_to_guardian;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
+use crate::mcp_connection_manager::ToolInfo;
+use crate::mcp_connection_manager::normalize_codex_apps_tool_name;
 use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalParam;
 use crate::mcp_tool_approval_templates::render_mcp_tool_approval_template;
 use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
-use crate::slack_channel_names::slack_channel_name_from_profile_result;
+use crate::slack_channel_names::slack_channel_name_from_tool_result;
 use crate::slack_channel_names::slack_send_message_channel_id;
 use crate::slack_channel_names::translated_slack_send_message_tool_params;
 use crate::state_db;
@@ -694,11 +696,10 @@ async fn build_mcp_tool_approval_tool_params(
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> Option<serde_json::Value> {
-    let connector_name = metadata.and_then(|metadata| metadata.connector_name.as_deref());
     let tool_title = metadata.and_then(|metadata| metadata.tool_title.as_deref());
     let connector_id = metadata.and_then(|metadata| metadata.connector_id.as_deref());
     let channel_name = match slack_send_message_channel_id(
-        connector_name,
+        connector_id,
         tool_title,
         invocation.arguments.as_ref(),
     ) {
@@ -707,7 +708,7 @@ async fn build_mcp_tool_approval_tool_params(
     };
 
     translated_slack_send_message_tool_params(
-        connector_name,
+        connector_id,
         tool_title,
         invocation.arguments.as_ref(),
         channel_name.as_deref(),
@@ -722,8 +723,8 @@ async fn maybe_record_slack_channel_name_from_tool_result(
     let Ok(result) = result else {
         return;
     };
-    let Some(channel_name) = slack_channel_name_from_profile_result(
-        metadata.and_then(|metadata| metadata.connector_name.as_deref()),
+    let Some(channel_name) = slack_channel_name_from_tool_result(
+        metadata.and_then(|metadata| metadata.connector_id.as_deref()),
         metadata.and_then(|metadata| metadata.tool_title.as_deref()),
         result,
     ) else {
@@ -770,9 +771,7 @@ async fn lookup_mcp_tool_metadata(
         .list_all_tools()
         .await;
 
-    let tool_info = tools
-        .into_values()
-        .find(|tool_info| tool_info.server_name == server && tool_info.tool.name == tool_name)?;
+    let tool_info = find_mcp_tool_info(&tools, server, tool_name)?.clone();
     let connector_description = if server == CODEX_APPS_MCP_SERVER_NAME {
         let connectors = match connectors::list_cached_accessible_connectors_from_mcp_tools(
             turn_context.config.as_ref(),
@@ -820,15 +819,33 @@ async fn lookup_mcp_app_usage_metadata(
         .list_all_tools()
         .await;
 
-    tools.into_values().find_map(|tool_info| {
-        if tool_info.server_name == server && tool_info.tool.name == tool_name {
-            Some(McpAppUsageMetadata {
-                connector_id: tool_info.connector_id,
-                app_name: tool_info.connector_name,
-            })
-        } else {
-            None
+    let tool_info = find_mcp_tool_info(&tools, server, tool_name)?;
+
+    Some(McpAppUsageMetadata {
+        connector_id: tool_info.connector_id.clone(),
+        app_name: tool_info.connector_name.clone(),
+    })
+}
+
+fn find_mcp_tool_info<'a>(
+    tools: &'a std::collections::HashMap<String, ToolInfo>,
+    server: &str,
+    raw_tool_name: &str,
+) -> Option<&'a ToolInfo> {
+    tools.values().find(|tool_info| {
+        if tool_info.server_name != server {
+            return false;
         }
+
+        tool_info.tool.name == raw_tool_name
+            || tool_info.tool_name == raw_tool_name
+            || (server == CODEX_APPS_MCP_SERVER_NAME
+                && normalize_codex_apps_tool_name(
+                    server,
+                    raw_tool_name,
+                    tool_info.connector_id.as_deref(),
+                    tool_info.connector_name.as_deref(),
+                ) == tool_info.tool_name)
     })
 }
 
@@ -1304,6 +1321,7 @@ mod tests {
     use crate::config::types::AppToolConfig;
     use crate::config::types::AppToolsConfig;
     use crate::config::types::AppsConfigToml;
+    use crate::slack_channel_names::SLACK_CONNECTOR_ID;
     use codex_config::CONFIG_TOML_FILE;
     use pretty_assertions::assert_eq;
     use serde::Deserialize;
@@ -1340,6 +1358,39 @@ mod tests {
             tool_title: tool_title.map(str::to_string),
             tool_description: tool_description.map(str::to_string),
         }
+    }
+
+    fn test_codex_app_tool(
+        qualified_name: &str,
+        raw_tool_name: &str,
+        normalized_tool_name: &str,
+        tool_namespace: &str,
+        connector_id: &str,
+        connector_name: &str,
+    ) -> (String, ToolInfo) {
+        (
+            qualified_name.to_string(),
+            ToolInfo {
+                server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                tool_name: normalized_tool_name.to_string(),
+                tool_namespace: tool_namespace.to_string(),
+                tool: rmcp::model::Tool {
+                    name: raw_tool_name.to_string().into(),
+                    title: None,
+                    description: None,
+                    input_schema: Arc::new(rmcp::model::JsonObject::default()),
+                    output_schema: None,
+                    annotations: None,
+                    execution: None,
+                    icons: None,
+                    meta: None,
+                },
+                connector_id: Some(connector_id.to_string()),
+                connector_name: Some(connector_name.to_string()),
+                plugin_display_names: Vec::new(),
+                connector_description: None,
+            },
+        )
     }
 
     fn prompt_options(
@@ -1385,6 +1436,40 @@ mod tests {
                 AppToolApproval::Prompt,
             ),
             McpToolApprovalDecision::Accept
+        );
+    }
+
+    #[test]
+    fn find_mcp_tool_info_falls_back_to_connector_aware_tool_name_matching() {
+        let tools = HashMap::from([test_codex_app_tool(
+            "mcp__codex_apps__gmail-batch-read-email",
+            "gmail-batch-read-email",
+            "-batch-read-email",
+            "mcp__codex_apps__gmail",
+            "connector_gmail_456",
+            "Gmail",
+        )]);
+
+        let tool = find_mcp_tool_info(
+            &tools,
+            CODEX_APPS_MCP_SERVER_NAME,
+            "connector-gmail-456-batch-read-email",
+        )
+        .expect("tool");
+
+        assert_eq!(
+            (
+                tool.connector_id.as_deref(),
+                tool.connector_name.as_deref(),
+                tool.tool.name.as_ref(),
+                tool.tool_name.as_str(),
+            ),
+            (
+                Some("connector_gmail_456"),
+                Some("Gmail"),
+                "gmail-batch-read-email",
+                "-batch-read-email",
+            )
         );
     }
 
@@ -1474,7 +1559,7 @@ mod tests {
     async fn slack_profile_tool_result_records_channel_name_with_global_fallback() {
         let (session, _turn_context) = make_session_and_context().await;
         let metadata = approval_metadata(
-            Some("connector_slack_profile"),
+            Some(SLACK_CONNECTOR_ID),
             Some("Slack Codex App"),
             None,
             Some("get_profile"),
@@ -1497,15 +1582,44 @@ mod tests {
 
         assert_eq!(
             session
-                .slack_channel_name(Some("connector_slack_profile"), "U123")
+                .slack_channel_name(Some(SLACK_CONNECTOR_ID), "U123")
                 .await,
             Some("@mzeng".to_string())
         );
         assert_eq!(
             session
-                .slack_channel_name(Some("connector_slack_send"), "U123")
+                .slack_channel_name(Some("connector_other"), "U123")
                 .await,
             Some("@mzeng".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn slack_search_users_result_records_channel_name() {
+        let (session, _turn_context) = make_session_and_context().await;
+        let metadata = approval_metadata(
+            Some(SLACK_CONNECTOR_ID),
+            Some("Slack Codex App"),
+            None,
+            Some("slack_search_users"),
+            None,
+        );
+        let result = Ok(CallToolResult {
+            content: Vec::new(),
+            structured_content: Some(serde_json::json!({
+                "results": "# Search Results for: mzeng@openai.com\n\n## Users (1 results)\n### Result 1 of 1\nName: Matthew Zeng\nUser ID: U07B9LBRPST\nTitle: Codexing agent\nEmail: mzeng@openai.com",
+            })),
+            is_error: Some(false),
+            meta: None,
+        });
+
+        maybe_record_slack_channel_name_from_tool_result(&session, Some(&metadata), &result).await;
+
+        assert_eq!(
+            session
+                .slack_channel_name(Some("connector_other"), "U07B9LBRPST")
+                .await,
+            Some("Matthew Zeng".to_string())
         );
     }
 
@@ -1514,7 +1628,7 @@ mod tests {
         let (session, _turn_context) = make_session_and_context().await;
         session
             .record_slack_channel_name(
-                Some("connector_slack_profile"),
+                Some(SLACK_CONNECTOR_ID),
                 "U123".to_string(),
                 "@mzeng".to_string(),
             )
@@ -1528,7 +1642,7 @@ mod tests {
             })),
         };
         let metadata = approval_metadata(
-            Some("connector_slack_send"),
+            Some(SLACK_CONNECTOR_ID),
             Some("Slack"),
             None,
             Some("slack_send_message"),

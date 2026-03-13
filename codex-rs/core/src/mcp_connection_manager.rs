@@ -1220,7 +1220,7 @@ fn normalize_codex_apps_tool_title(
     value.to_string()
 }
 
-fn normalize_codex_apps_tool_name(
+pub(crate) fn normalize_codex_apps_tool_name(
     server_name: &str,
     tool_name: &str,
     connector_id: Option<&str>,

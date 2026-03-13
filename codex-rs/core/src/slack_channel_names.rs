@@ -7,10 +7,14 @@ const ID_FIELD_NAME: &str = "id";
 const NAME_FIELD_NAME: &str = "name";
 const NICKNAME_FIELD_NAME: &str = "nickname";
 const RESULT_FIELD_NAME: &str = "result";
+const RESULTS_FIELD_NAME: &str = "results";
 const TO_FIELD_NAME: &str = "to";
+
+pub(crate) const SLACK_CONNECTOR_ID: &str = "asdk_app_69a1d78e929881919bba0dbda1f6436d";
 
 const SLACK_GET_PROFILE_TOOL_TITLE: &str = "get_profile";
 const SLACK_READ_USER_PROFILE_TOOL_TITLE: &str = "slack_read_user_profile";
+const SLACK_SEARCH_USERS_TOOL_TITLE: &str = "slack_search_users";
 const SLACK_SEND_MESSAGE_TOOL_TITLE: &str = "slack_send_message";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,12 +23,12 @@ pub(crate) struct SlackChannelName {
     pub(crate) channel_name: String,
 }
 
-pub(crate) fn slack_channel_name_from_profile_result(
-    connector_name: Option<&str>,
+pub(crate) fn slack_channel_name_from_tool_result(
+    connector_id: Option<&str>,
     tool_title: Option<&str>,
     result: &CallToolResult,
 ) -> Option<SlackChannelName> {
-    if !is_slack_profile_tool(connector_name, tool_title) {
+    if !is_slack_channel_lookup_tool(connector_id, tool_title) {
         return None;
     }
 
@@ -49,11 +53,11 @@ pub(crate) fn slack_channel_name_from_profile_result(
 }
 
 pub(crate) fn slack_send_message_channel_id<'a>(
-    connector_name: Option<&str>,
+    connector_id: Option<&str>,
     tool_title: Option<&str>,
     tool_params: Option<&'a Value>,
 ) -> Option<&'a str> {
-    if !is_slack_send_message_tool(connector_name, tool_title) {
+    if !is_slack_send_message_tool(connector_id, tool_title) {
         return None;
     }
 
@@ -64,13 +68,13 @@ pub(crate) fn slack_send_message_channel_id<'a>(
 }
 
 pub(crate) fn translated_slack_send_message_tool_params(
-    connector_name: Option<&str>,
+    connector_id: Option<&str>,
     tool_title: Option<&str>,
     tool_params: Option<&Value>,
     channel_name: Option<&str>,
 ) -> Option<Value> {
     let tool_params = tool_params?;
-    if !is_slack_send_message_tool(connector_name, tool_title) {
+    if !is_slack_send_message_tool(connector_id, tool_title) {
         return Some(tool_params.clone());
     }
 
@@ -89,26 +93,28 @@ pub(crate) fn translated_slack_send_message_tool_params(
     Some(Value::Object(translated))
 }
 
-fn is_slack_profile_tool(connector_name: Option<&str>, tool_title: Option<&str>) -> bool {
-    is_slack_connector(connector_name)
+fn is_slack_channel_lookup_tool(connector_id: Option<&str>, tool_title: Option<&str>) -> bool {
+    is_slack_connector(connector_id)
         && matches!(
             tool_title.map(str::trim),
-            Some(SLACK_GET_PROFILE_TOOL_TITLE) | Some(SLACK_READ_USER_PROFILE_TOOL_TITLE)
+            Some(SLACK_GET_PROFILE_TOOL_TITLE)
+                | Some(SLACK_READ_USER_PROFILE_TOOL_TITLE)
+                | Some(SLACK_SEARCH_USERS_TOOL_TITLE)
         )
 }
 
-fn is_slack_send_message_tool(connector_name: Option<&str>, tool_title: Option<&str>) -> bool {
-    is_slack_connector(connector_name)
+fn is_slack_send_message_tool(connector_id: Option<&str>, tool_title: Option<&str>) -> bool {
+    is_slack_connector(connector_id)
         && matches!(
             tool_title.map(str::trim),
             Some(SLACK_SEND_MESSAGE_TOOL_TITLE)
         )
 }
 
-fn is_slack_connector(connector_name: Option<&str>) -> bool {
-    connector_name
+fn is_slack_connector(connector_id: Option<&str>) -> bool {
+    connector_id
         .map(str::trim)
-        .is_some_and(|connector_name| connector_name.starts_with("Slack"))
+        .is_some_and(|connector_id| connector_id == SLACK_CONNECTOR_ID)
 }
 
 fn parse_payload_from_text_content(content: &[Value]) -> Option<Value> {
@@ -130,10 +136,13 @@ fn raw_text_content(content: &[Value]) -> Option<&str> {
 
 fn slack_channel_name_from_payload(payload: &Value) -> Option<SlackChannelName> {
     let payload = payload.as_object()?;
-    if let Some(result_text) = payload.get(RESULT_FIELD_NAME).and_then(nonempty_string) {
+    let result = payload
+        .get(RESULT_FIELD_NAME)
+        .or_else(|| payload.get(RESULTS_FIELD_NAME));
+    if let Some(result_text) = result.and_then(nonempty_string) {
         return parse_slack_channel_name_from_text(result_text);
     }
-    if let Some(result_object) = payload.get(RESULT_FIELD_NAME).and_then(Value::as_object) {
+    if let Some(result_object) = result.and_then(Value::as_object) {
         return slack_channel_name_from_profile_object(result_object);
     }
 
@@ -269,8 +278,8 @@ mod tests {
         };
 
         assert_eq!(
-            slack_channel_name_from_profile_result(
-                Some("Slack Codex App"),
+            slack_channel_name_from_tool_result(
+                Some(SLACK_CONNECTOR_ID),
                 Some("get_profile"),
                 &result
             ),
@@ -294,8 +303,8 @@ mod tests {
         };
 
         assert_eq!(
-            slack_channel_name_from_profile_result(
-                Some("Slack"),
+            slack_channel_name_from_tool_result(
+                Some(SLACK_CONNECTOR_ID),
                 Some("slack_read_user_profile"),
                 &result
             ),
@@ -318,8 +327,8 @@ mod tests {
         };
 
         assert_eq!(
-            slack_channel_name_from_profile_result(
-                Some("Slack"),
+            slack_channel_name_from_tool_result(
+                Some(SLACK_CONNECTOR_ID),
                 Some("slack_read_user_profile"),
                 &result
             ),
@@ -345,8 +354,60 @@ mod tests {
         };
 
         assert_eq!(
-            slack_channel_name_from_profile_result(Some("Linear"), Some("get_profile"), &result),
+            slack_channel_name_from_tool_result(
+                Some("connector_linear"),
+                Some("get_profile"),
+                &result
+            ),
             None
+        );
+    }
+
+    #[test]
+    fn extracts_slack_channel_name_from_search_users_result() {
+        let result = CallToolResult {
+            content: Vec::new(),
+            structured_content: Some(json!({
+                "results": "# Search Results for: mzeng@openai.com\n\n## Users (1 results)\n### Result 1 of 1\nName: Matthew Zeng\nUser ID: U07B9LBRPST\nTitle: Codexing agent\nEmail: mzeng@openai.com",
+            })),
+            is_error: Some(false),
+            meta: None,
+        };
+
+        assert_eq!(
+            slack_channel_name_from_tool_result(
+                Some(SLACK_CONNECTOR_ID),
+                Some("slack_search_users"),
+                &result
+            ),
+            Some(SlackChannelName {
+                channel_id: "U07B9LBRPST".to_string(),
+                channel_name: "Matthew Zeng".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn extracts_slack_channel_name_from_read_user_profile_results_result() {
+        let result = CallToolResult {
+            content: Vec::new(),
+            structured_content: Some(json!({
+                "results": "# Search Results for: mzeng@openai.com\n\n## Users (1 results)\n### Result 1 of 1\nName: Matthew Zeng\nUser ID: U07B9LBRPST\nTitle: Codexing agent\nEmail: mzeng@openai.com",
+            })),
+            is_error: Some(false),
+            meta: None,
+        };
+
+        assert_eq!(
+            slack_channel_name_from_tool_result(
+                Some(SLACK_CONNECTOR_ID),
+                Some("slack_read_user_profile"),
+                &result
+            ),
+            Some(SlackChannelName {
+                channel_id: "U07B9LBRPST".to_string(),
+                channel_name: "Matthew Zeng".to_string(),
+            })
         );
     }
 
@@ -354,7 +415,7 @@ mod tests {
     fn translates_slack_send_message_tool_params() {
         assert_eq!(
             translated_slack_send_message_tool_params(
-                Some("Slack"),
+                Some(SLACK_CONNECTOR_ID),
                 Some("slack_send_message"),
                 Some(&json!({
                     "channel_id": "U123",
@@ -374,7 +435,7 @@ mod tests {
     fn leaves_non_slack_send_message_tool_params_unchanged() {
         assert_eq!(
             translated_slack_send_message_tool_params(
-                Some("Slack"),
+                Some(SLACK_CONNECTOR_ID),
                 Some("slack_search_channels"),
                 Some(&json!({
                     "query": "eng",
