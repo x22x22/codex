@@ -24,6 +24,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
+use std::time::Instant;
 use wiremock::MockServer;
 
 fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
@@ -34,6 +35,23 @@ fn custom_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value>
         }
         _ => panic!("custom tool output should be serialized as text or content items"),
     }
+}
+
+fn tool_names(body: &Value) -> Vec<String> {
+    body.get("tools")
+        .and_then(Value::as_array)
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| {
+                    tool.get("name")
+                        .or_else(|| tool.get("type"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn function_tool_output_items(req: &ResponsesRequest, call_id: &str) -> Vec<Value> {
@@ -233,6 +251,86 @@ text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marke
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    let resp_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::CodeModeOnly);
+    });
+    let test = builder.build(&server).await?;
+    test.submit_turn("list tools in code mode only").await?;
+
+    let first_body = resp_mock.single_request().body_json();
+    assert_eq!(
+        tool_names(&first_body),
+        vec!["exec".to_string(), "exec_wait".to_string()]
+    );
+
+    Ok(())
+}
+
+#[cfg_attr(windows, ignore = "no exec_command on Windows")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn code_mode_only_can_call_nested_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = responses::start_mock_server().await;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_custom_tool_call(
+                "call-1",
+                "exec",
+                r#"
+const output = await tools.exec_command({ cmd: "printf code_mode_only_nested_tool_marker" });
+text(output.output);
+"#,
+            ),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+    let follow_up_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(|config| {
+        let _ = config.features.enable(Feature::CodeModeOnly);
+    });
+    let test = builder.build(&server).await?;
+    test.submit_turn("use exec to run nested tool in code mode only")
+        .await?;
+
+    let request = follow_up_mock.single_request();
+    let (output, success) = custom_tool_output_body_and_success(&request, "call-1");
+    assert_ne!(
+        success,
+        Some(false),
+        "code_mode_only nested tool call failed unexpectedly: {output}"
+    );
+    assert_eq!(output, "code_mode_only_nested_tool_marker");
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn code_mode_nested_tool_calls_can_run_in_parallel() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -304,7 +402,14 @@ text(JSON.stringify(results));
 
     test.submit_turn("warm up nested tools in parallel").await?;
 
+    let start = Instant::now();
     test.submit_turn("run nested tools in parallel").await?;
+    let duration = start.elapsed();
+
+    assert!(
+        duration < Duration::from_millis(1_600),
+        "expected nested tools to finish in parallel, got {duration:?}",
+    );
 
     let req = response_mock
         .last_request()
@@ -1819,7 +1924,7 @@ text(JSON.stringify(tool));
         parsed,
         serde_json::json!({
             "name": "view_image",
-            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  view_image(args: {\n    path: string;\n  }): Promise<unknown>;\n};\n```",
+            "description": "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: { path: string; }): Promise<unknown>; };\n```",
         })
     );
 
@@ -1854,7 +1959,7 @@ text(JSON.stringify(tool));
         parsed,
         serde_json::json!({
             "name": "mcp__rmcp__echo",
-            "description": "Echo back the provided message and include environment data.\n\nCode mode declaration:\n```ts\ndeclare const tools: {\n  mcp__rmcp__echo(args: {\n    env_var?: string;\n    message: string;\n  }): Promise<{\n    _meta?: unknown;\n    content: Array<unknown>;\n    isError?: boolean;\n    structuredContent?: unknown;\n  }>;\n};\n```",
+            "description": "Echo back the provided message and include environment data.\n\nexec tool declaration:\n```ts\ndeclare const tools: { mcp__rmcp__echo(args: { env_var?: string; message: string; }): Promise<{ _meta?: unknown; content: Array<unknown>; isError?: boolean; structuredContent?: unknown; }>; };\n```",
         })
     );
 

@@ -339,6 +339,9 @@
             "code_mode": {
               "type": "boolean"
             },
+            "code_mode_only": {
+              "type": "boolean"
+            },
             "codex_git_commit": {
               "type": "boolean"
             },
@@ -424,9 +427,6 @@
               "type": "boolean"
             },
             "realtime_conversation": {
-              "type": "boolean"
-            },
-            "realtime_conversation_v2": {
               "type": "boolean"
             },
             "remote_models": {
@@ -1342,10 +1342,29 @@
       },
       "type": "object"
     },
+    "RealtimeToml": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "$ref": "#/definitions/RealtimeWsMode"
+        },
+        "version": {
+          "$ref": "#/definitions/RealtimeWsVersion"
+        }
+      },
+      "type": "object"
+    },
     "RealtimeWsMode": {
       "enum": [
         "conversational",
         "transcription"
+      ],
+      "type": "string"
+    },
+    "RealtimeWsVersion": {
+      "enum": [
+        "v1",
+        "v2"
       ],
       "type": "string"
     },
@@ -1699,6 +1718,10 @@
       "properties": {
         "sandbox": {
           "$ref": "#/definitions/WindowsSandboxModeToml"
+        },
+        "sandbox_private_desktop": {
+          "description": "Defaults to `true`. Set to `false` to launch the final sandboxed child process on `Winsta0\\\\Default` instead of a private desktop.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -1823,14 +1846,6 @@
       "description": "Experimental / do not use. Overrides only the realtime conversation websocket transport base URL (the `Op::RealtimeConversation` `/v1/realtime` connection) without changing normal provider HTTP requests.",
       "type": "string"
     },
-    "experimental_realtime_ws_mode": {
-      "allOf": [
-        {
-          "$ref": "#/definitions/RealtimeWsMode"
-        }
-      ],
-      "description": "Experimental / do not use. Selects the realtime websocket intent mode. `conversational` is speech-to-speech while `transcription` is transcript-only."
-    },
     "experimental_realtime_ws_model": {
       "description": "Experimental / do not use. Selects the realtime websocket model/snapshot used for the `Op::RealtimeConversation` connection.",
       "type": "string"
@@ -1866,6 +1881,9 @@
           "type": "boolean"
         },
         "code_mode": {
+          "type": "boolean"
+        },
+        "code_mode_only": {
           "type": "boolean"
         },
         "codex_git_commit": {
@@ -1953,9 +1971,6 @@
           "type": "boolean"
         },
         "realtime_conversation": {
-          "type": "boolean"
-        },
-        "realtime_conversation_v2": {
           "type": "boolean"
         },
         "remote_models": {
@@ -2304,6 +2319,15 @@
         "$ref": "#/definitions/ProjectConfig"
       },
       "type": "object"
+    },
+    "realtime": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RealtimeToml"
+        }
+      ],
+      "default": null,
+      "description": "Experimental / do not use. Realtime websocket session selection. `version` controls v1/v2 and `type` controls conversational/transcription."
     },
     "review_model": {
       "description": "Review model override used by the `/review` feature.",

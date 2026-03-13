@@ -87,6 +87,8 @@ pub enum Feature {
     JsRepl,
     /// Enable a minimal JavaScript mode backed by Node's built-in vm runtime.
     CodeMode,
+    /// Restrict model-visible tools to code mode entrypoints (`exec`, `exec_wait`).
+    CodeModeOnly,
     /// Only expose js_repl tools directly to the model.
     JsReplToolsOnly,
     /// Use the single unified PTY-backed exec tool.
@@ -180,8 +182,6 @@ pub enum Feature {
     VoiceTranscription,
     /// Enable experimental realtime voice conversation mode in the TUI.
     RealtimeConversation,
-    /// Route realtime conversations through the v2 event parser.
-    RealtimeConversationV2,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
     /// Use the Responses API WebSocket transport for OpenAI by default.
@@ -431,6 +431,9 @@ impl Features {
         if self.enabled(Feature::SpawnCsv) && !self.enabled(Feature::Collab) {
             self.enable(Feature::Collab);
         }
+        if self.enabled(Feature::CodeModeOnly) && !self.enabled(Feature::CodeMode) {
+            self.enable(Feature::CodeMode);
+        }
         if self.enabled(Feature::JsReplToolsOnly) && !self.enabled(Feature::JsRepl) {
             tracing::warn!("js_repl_tools_only requires js_repl; disabling js_repl_tools_only");
             self.disable(Feature::JsReplToolsOnly);
@@ -557,6 +560,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::CodeMode,
         key: "code_mode",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::CodeModeOnly,
+        key: "code_mode_only",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
@@ -703,9 +712,9 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::Collab,
         key: "multi_agent",
         stage: Stage::Experimental {
-            name: "Multi-agents",
-            menu_description: "Ask Codex to spawn multiple agents to parallelize the work and win in efficiency.",
-            announcement: "NEW: Multi-agents can now be spawned by Codex. Enable in /experimental and restart Codex!",
+            name: "Subagents",
+            menu_description: "Ask Codex to spawn subagents to parallelize the work and move faster.",
+            announcement: "NEW: Subagents can now be spawned by Codex. Enable in /experimental and restart Codex!",
         },
         default_enabled: false,
     },
@@ -822,12 +831,6 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::RealtimeConversation,
         key: "realtime_conversation",
-        stage: Stage::UnderDevelopment,
-        default_enabled: false,
-    },
-    FeatureSpec {
-        id: Feature::RealtimeConversationV2,
-        key: "realtime_conversation_v2",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
