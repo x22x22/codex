@@ -9,7 +9,13 @@
 
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
+use crate::environment_context::EnvironmentContext;
+use crate::instructions::AgentsMdInstructions;
+use crate::instructions::PluginInstructions;
+use crate::instructions::SkillInstructions;
 use crate::shell::Shell;
+use crate::tasks::TurnAbortedMarker;
+use crate::user_shell_command::UserShellCommandFragment;
 use codex_execpolicy::Policy;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::CustomDeveloperInstructions;
@@ -276,33 +282,27 @@ where
 /// contextual-user diff fragments in one place.
 const REGISTERED_CONTEXTUAL_USER_FRAGMENTS: &[ContextualUserFragmentRegistration] = &[
     ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<crate::instructions::AgentsMdInstructions>,
-        Some(
-            build_contextual_user_turn_state_fragment::<crate::instructions::AgentsMdInstructions>,
-        ),
+        detect_contextual_user_fragment::<AgentsMdInstructions>,
+        Some(build_contextual_user_turn_state_fragment::<AgentsMdInstructions>),
     ),
     ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<crate::environment_context::EnvironmentContext>,
-        Some(
-            build_contextual_user_turn_state_fragment::<
-                crate::environment_context::EnvironmentContext,
-            >,
-        ),
+        detect_contextual_user_fragment::<EnvironmentContext>,
+        Some(build_contextual_user_turn_state_fragment::<EnvironmentContext>),
     ),
     ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<crate::instructions::SkillInstructions>,
+        detect_contextual_user_fragment::<SkillInstructions>,
         None,
     ),
     ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<crate::instructions::PluginInstructions>,
+        detect_contextual_user_fragment::<PluginInstructions>,
         None,
     ),
     ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<crate::user_shell_command::UserShellCommandFragment>,
+        detect_contextual_user_fragment::<UserShellCommandFragment>,
         None,
     ),
     ContextualUserFragmentRegistration::new(
-        detect_contextual_user_fragment::<crate::tasks::TurnAbortedMarker>,
+        detect_contextual_user_fragment::<TurnAbortedMarker>,
         None,
     ),
 ];
