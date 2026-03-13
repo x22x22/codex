@@ -1,5 +1,6 @@
-use crate::plugins::PluginCapabilitySummary;
+use crate::plugins::PluginDetailSummary;
 use codex_app_server_protocol::AppInfo;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -63,10 +64,22 @@ impl DiscoverableTool {
         }
     }
 
-    pub(crate) fn description(&self) -> Option<&str> {
+    pub(crate) fn action(&self) -> DiscoverableToolAction {
         match self {
-            Self::Connector(connector) => connector.description.as_deref(),
-            Self::Plugin(plugin) => plugin.description.as_deref(),
+            Self::Connector(connector) => {
+                if connector.is_accessible && !connector.is_enabled {
+                    DiscoverableToolAction::Enable
+                } else {
+                    DiscoverableToolAction::Install
+                }
+            }
+            Self::Plugin(plugin) => {
+                if plugin.installed && !plugin.enabled {
+                    DiscoverableToolAction::Enable
+                } else {
+                    DiscoverableToolAction::Install
+                }
+            }
         }
     }
 }
@@ -91,21 +104,44 @@ pub(crate) struct DiscoverablePluginInfo {
     pub(crate) has_skills: bool,
     pub(crate) mcp_server_names: Vec<String>,
     pub(crate) app_connector_ids: Vec<String>,
+    pub(crate) marketplace_path: AbsolutePathBuf,
+    pub(crate) plugin_name: String,
+    pub(crate) installed: bool,
+    pub(crate) enabled: bool,
 }
 
-impl From<PluginCapabilitySummary> for DiscoverablePluginInfo {
-    fn from(value: PluginCapabilitySummary) -> Self {
+impl DiscoverablePluginInfo {
+    pub(crate) fn from_plugin_detail(
+        marketplace_path: AbsolutePathBuf,
+        plugin: PluginDetailSummary,
+    ) -> Self {
+        let display_name = plugin
+            .interface
+            .as_ref()
+            .and_then(|interface| interface.display_name.clone())
+            .unwrap_or_else(|| plugin.name.clone());
+        let description = plugin.description.clone().or_else(|| {
+            plugin
+                .interface
+                .as_ref()
+                .and_then(|interface| interface.short_description.clone())
+        });
+
         Self {
-            id: value.config_name,
-            name: value.display_name,
-            description: value.description,
-            has_skills: value.has_skills,
-            mcp_server_names: value.mcp_server_names,
-            app_connector_ids: value
-                .app_connector_ids
+            id: plugin.id,
+            name: display_name,
+            description,
+            has_skills: !plugin.skills.is_empty(),
+            mcp_server_names: plugin.mcp_server_names,
+            app_connector_ids: plugin
+                .apps
                 .into_iter()
                 .map(|connector_id| connector_id.0)
                 .collect(),
+            marketplace_path,
+            plugin_name: plugin.name,
+            installed: plugin.installed,
+            enabled: plugin.enabled,
         }
     }
 }

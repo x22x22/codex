@@ -46,7 +46,7 @@ use crate::token_data::TokenData;
 pub use codex_connectors::CONNECTORS_CACHE_TTL;
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
 const DIRECTORY_CONNECTORS_TIMEOUT: Duration = Duration::from_secs(60);
-const TOOL_SUGGEST_DISCOVERABLE_CONNECTOR_IDS: &[&str] = &[
+pub(crate) const TOOL_SUGGEST_DISCOVERABLE_CONNECTOR_IDS: &[&str] = &[
     "connector_2128aebfecb84f64a069897515042a44",
     "connector_68df038e0ba48191908c8434991bbac2",
     "asdk_app_69a1d78e929881919bba0dbda1f6436d",
@@ -107,19 +107,6 @@ pub async fn list_accessible_connectors_from_mcp_tools(
             .await?
             .connectors,
     )
-}
-
-pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
-    config: &Config,
-    auth: Option<&CodexAuth>,
-    accessible_connectors: &[AppInfo],
-) -> anyhow::Result<Vec<AppInfo>> {
-    let directory_connectors =
-        list_directory_connectors_for_tool_suggest_with_auth(config, auth).await?;
-    Ok(filter_tool_suggest_discoverable_tools(
-        directory_connectors,
-        accessible_connectors,
-    ))
 }
 
 pub async fn list_cached_accessible_connectors_from_mcp_tools(
@@ -342,7 +329,7 @@ fn write_cached_accessible_connectors(
     });
 }
 
-fn filter_tool_suggest_discoverable_tools(
+pub(crate) fn filter_tool_suggest_discoverable_tools(
     directory_connectors: Vec<AppInfo>,
     accessible_connectors: &[AppInfo],
 ) -> Vec<AppInfo> {
@@ -369,7 +356,7 @@ fn filter_tool_suggest_discoverable_tools(
     connectors
 }
 
-async fn list_directory_connectors_for_tool_suggest_with_auth(
+pub(crate) async fn list_directory_connectors_with_auth(
     config: &Config,
     auth: Option<&CodexAuth>,
 ) -> anyhow::Result<Vec<AppInfo>> {

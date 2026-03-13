@@ -55,6 +55,7 @@ use codex_core::models_manager::collaboration_mode_presets::CollaborationModesCo
 use codex_core::models_manager::manager::RefreshStrategy;
 use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
+use codex_core::plugins::PluginInstallRequest;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_otel::SessionTelemetry;
@@ -777,6 +778,81 @@ impl App {
         self.apply_runtime_policy_overrides(&mut config);
         self.config = config;
         Ok(())
+    }
+
+    async fn finish_plugin_suggestion_update(&mut self, action: &str) {
+        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+            tracing::warn!(error = %err, action, "failed to refresh config after plugin update");
+        }
+        self.chat_widget.submit_op(Op::ReloadUserConfig);
+        self.chat_widget.refresh_connectors(true);
+    }
+
+    async fn install_suggested_plugin(
+        &mut self,
+        marketplace_path: AbsolutePathBuf,
+        plugin_name: String,
+    ) {
+        let enable_plugins_feature = ConfigEditsBuilder::new(&self.config.codex_home)
+            .set_feature_enabled(Feature::Plugins.key(), true)
+            .apply()
+            .await;
+        if let Err(err) = enable_plugins_feature {
+            self.chat_widget.add_error_message(format!(
+                "Failed to enable plugins feature for {plugin_name}: {err}"
+            ));
+            return;
+        }
+        if let Err(err) = self.config.features.set_enabled(Feature::Plugins, true) {
+            tracing::warn!(error = %err, "failed to update in-memory plugins feature state");
+        }
+        self.chat_widget.set_feature_enabled(Feature::Plugins, true);
+
+        match self
+            .server
+            .plugins_manager()
+            .install_plugin(PluginInstallRequest {
+                marketplace_path,
+                plugin_name: plugin_name.clone(),
+            })
+            .await
+        {
+            Ok(_) => {
+                self.finish_plugin_suggestion_update("plugin install").await;
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to install plugin {plugin_name}: {err}"));
+            }
+        }
+    }
+
+    async fn enable_suggested_plugin(&mut self, plugin_id: String) {
+        match ConfigEditsBuilder::new(&self.config.codex_home)
+            .set_feature_enabled(Feature::Plugins.key(), true)
+            .with_edits([ConfigEdit::SetPath {
+                segments: vec![
+                    "plugins".to_string(),
+                    plugin_id.clone(),
+                    "enabled".to_string(),
+                ],
+                value: true.into(),
+            }])
+            .apply()
+            .await
+        {
+            Ok(()) => {
+                if let Err(err) = self.config.features.set_enabled(Feature::Plugins, true) {
+                    tracing::warn!(error = %err, "failed to update in-memory plugins feature state");
+                }
+                self.chat_widget.set_feature_enabled(Feature::Plugins, true);
+                self.finish_plugin_suggestion_update("plugin enable").await;
+            }
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to enable plugin {plugin_id}: {err}"));
+            }
+        }
     }
 
     async fn refresh_in_memory_config_from_disk_best_effort(&mut self, action: &str) {
@@ -3254,6 +3330,16 @@ impl App {
                     }
                 }
             }
+            AppEvent::InstallSuggestedPlugin {
+                marketplace_path,
+                plugin_name,
+            } => {
+                self.install_suggested_plugin(marketplace_path, plugin_name)
+                    .await;
+            }
+            AppEvent::EnableSuggestedPlugin { plugin_id } => {
+                self.enable_suggested_plugin(plugin_id).await;
+            }
             AppEvent::OpenPermissionsPopup => {
                 self.chat_widget.open_permissions_popup();
             }
@@ -3906,14 +3992,17 @@ mod tests {
     use codex_protocol::protocol::UserMessageEvent;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use crossterm::event::KeyModifiers;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use ratatui::prelude::Line;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
+    use tokio::sync::mpsc::UnboundedReceiver;
     use tokio::time;
 
     #[test]
@@ -5151,6 +5240,94 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn install_suggested_plugin_updates_config_and_reloads_user_config() -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        set_test_app_home(&mut app, codex_home.path().to_path_buf()).await?;
+        let repo_root = codex_home.path().join("repo");
+        let marketplace_path = write_test_plugin_marketplace(&repo_root, "debug", "sample-plugin");
+
+        app.install_suggested_plugin(marketplace_path, "sample-plugin".to_string())
+            .await;
+
+        assert!(app.config.features.enabled(Feature::Plugins));
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert!(config.contains("plugins = true"));
+        assert!(
+            config.contains(r#"[plugins."sample-plugin@debug"]"#),
+            "unexpected config: {config}"
+        );
+        assert!(config.contains("enabled = true"));
+        expect_reload_user_config_op(&mut op_rx);
+        assert!(drain_history_messages(&mut app_event_rx).is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn install_suggested_plugin_reports_errors_without_reloading_user_config() -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        set_test_app_home(&mut app, codex_home.path().to_path_buf()).await?;
+        let repo_root = codex_home.path().join("repo");
+        let marketplace_path = write_test_plugin_marketplace(&repo_root, "debug", "other-plugin");
+
+        app.install_suggested_plugin(marketplace_path, "missing-plugin".to_string())
+            .await;
+
+        let history = drain_history_messages(&mut app_event_rx).join("\n");
+        assert!(history.contains("Failed to install plugin missing-plugin"));
+        assert_no_reload_user_config_op(&mut op_rx);
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert!(config.contains("plugins = true"));
+        assert!(!config.contains(r#"[plugins."missing-plugin@debug"]"#));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn enable_suggested_plugin_updates_config_and_reloads_user_config() -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        set_test_app_home(&mut app, codex_home.path().to_path_buf()).await?;
+        std::fs::write(
+            codex_home.path().join("config.toml"),
+            r#"[features]
+plugins = false
+
+[plugins."sample-plugin@debug"]
+enabled = false
+"#,
+        )?;
+
+        app.enable_suggested_plugin("sample-plugin@debug".to_string())
+            .await;
+
+        assert!(app.config.features.enabled(Feature::Plugins));
+        let config = std::fs::read_to_string(codex_home.path().join("config.toml"))?;
+        assert!(config.contains("plugins = true"));
+        assert!(config.contains(r#"[plugins."sample-plugin@debug"]"#));
+        assert!(config.contains("enabled = true"));
+        expect_reload_user_config_op(&mut op_rx);
+        assert!(drain_history_messages(&mut app_event_rx).is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn enable_suggested_plugin_reports_errors_without_reloading_user_config() -> Result<()> {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        let codex_home = tempdir()?;
+        set_test_app_home(&mut app, codex_home.path().to_path_buf()).await?;
+        std::fs::write(codex_home.path().join("config.toml"), "[broken")?;
+
+        app.enable_suggested_plugin("sample-plugin@debug".to_string())
+            .await;
+
+        let history = drain_history_messages(&mut app_event_rx).join("\n");
+        assert!(history.contains("Failed to enable plugin sample-plugin@debug"));
+        assert_no_reload_user_config_op(&mut op_rx);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn open_agent_picker_allows_existing_agent_threads_when_feature_is_disabled() -> Result<()>
     {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
@@ -5686,6 +5863,21 @@ mod tests {
         )
     }
 
+    async fn set_test_app_home(app: &mut App, codex_home: PathBuf) -> Result<()> {
+        app.config = ConfigBuilder::default()
+            .codex_home(codex_home.clone())
+            .build()
+            .await?;
+        app.server = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::from_api_key("Test API Key"),
+                app.config.model_provider.clone(),
+                codex_home,
+            ),
+        );
+        Ok(())
+    }
+
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
         let mut seen = Vec::new();
         while let Ok(op) = op_rx.try_recv() {
@@ -5695,6 +5887,85 @@ mod tests {
             seen.push(format!("{op:?}"));
         }
         panic!("expected UserTurn op, saw: {seen:?}");
+    }
+
+    fn expect_reload_user_config_op(op_rx: &mut UnboundedReceiver<Op>) {
+        let mut seen = Vec::new();
+        while let Ok(op) = op_rx.try_recv() {
+            if matches!(op, Op::ReloadUserConfig) {
+                return;
+            }
+            seen.push(format!("{op:?}"));
+        }
+        panic!("expected ReloadUserConfig op, saw: {seen:?}");
+    }
+
+    fn assert_no_reload_user_config_op(op_rx: &mut UnboundedReceiver<Op>) {
+        while let Ok(op) = op_rx.try_recv() {
+            assert!(
+                !matches!(op, Op::ReloadUserConfig),
+                "unexpected ReloadUserConfig op: {op:?}"
+            );
+        }
+    }
+
+    fn drain_history_messages(app_event_rx: &mut UnboundedReceiver<AppEvent>) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(event) = app_event_rx.try_recv() {
+            if let AppEvent::InsertHistoryCell(cell) = event {
+                out.push(
+                    cell.display_lines(120)
+                        .into_iter()
+                        .map(|line| line.to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                );
+            }
+        }
+        out
+    }
+
+    fn write_test_plugin_marketplace(
+        repo_root: &Path,
+        marketplace_name: &str,
+        plugin_name: &str,
+    ) -> AbsolutePathBuf {
+        let plugin_root = repo_root.join(plugin_name);
+        std::fs::create_dir_all(plugin_root.join(".codex-plugin")).expect("plugin metadata dir");
+        std::fs::create_dir_all(plugin_root.join("skills")).expect("plugin skills dir");
+        std::fs::write(
+            plugin_root.join(".codex-plugin/plugin.json"),
+            format!(r#"{{"name":"{plugin_name}"}}"#),
+        )
+        .expect("plugin manifest");
+        std::fs::write(plugin_root.join("skills/SKILL.md"), "skill").expect("skill file");
+        std::fs::write(plugin_root.join(".mcp.json"), r#"{"mcpServers":{}}"#)
+            .expect("mcp manifest");
+
+        let marketplace_path = repo_root.join(".agents/plugins/marketplace.json");
+        let parent = marketplace_path.parent().expect("marketplace parent");
+        std::fs::create_dir_all(parent).expect("marketplace dir");
+        std::fs::write(
+            &marketplace_path,
+            format!(
+                r#"{{
+  "name": "{marketplace_name}",
+  "plugins": [
+    {{
+      "name": "{plugin_name}",
+      "source": {{
+        "source": "local",
+        "path": "./{plugin_name}"
+      }},
+      "authPolicy": "ON_USE"
+    }}
+  ]
+}}"#
+            ),
+        )
+        .expect("marketplace file");
+
+        AbsolutePathBuf::try_from(marketplace_path).expect("absolute marketplace path")
     }
 
     fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {

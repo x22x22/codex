@@ -21,5 +21,5 @@ Workflow:
    - `tool_id`: exact id from the discoverable tools list above
    - `suggest_reason`: concise one-line user-facing reason this tool can help with the current request
 3. After the suggestion flow completes:
-   - if the user finished the install or enable flow, continue by searching again or using the newly available tool
+   - if the user finished the install or enable flow, continue by searching again; the tool should become available on the next router rebuild or next turn
    - if the user did not finish, continue without that tool, and don't suggest that tool again unless the user explicitly asks you to.

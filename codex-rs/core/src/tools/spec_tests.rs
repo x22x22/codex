@@ -7,7 +7,9 @@ use codex_app_server_protocol::AppInfo;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::path::PathBuf;
 
 use super::*;
 
@@ -1860,11 +1862,24 @@ fn tool_suggest_description_lists_discoverable_tools() {
     });
 
     let discoverable_tools = vec![
-        discoverable_connector(
-            "connector_2128aebfecb84f64a069897515042a44",
-            "Google Calendar",
-            "Plan events and schedules.",
-        ),
+        DiscoverableTool::Connector(Box::new(AppInfo {
+            id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
+            name: "Google Calendar".to_string(),
+            description: Some("Plan events and schedules.".to_string()),
+            logo_url: None,
+            logo_url_dark: None,
+            distribution_channel: None,
+            branding: None,
+            app_metadata: None,
+            labels: None,
+            install_url: Some(
+                "https://chatgpt.com/apps/google-calendar/connector_2128aebfecb84f64a069897515042a44"
+                    .to_string(),
+            ),
+            is_accessible: false,
+            is_enabled: true,
+            plugin_display_names: vec!["Calendar Plugin".to_string()],
+        })),
         discoverable_connector(
             "connector_68df038e0ba48191908c8434991bbac2",
             "Gmail",
@@ -1877,6 +1892,11 @@ fn tool_suggest_description_lists_discoverable_tools() {
             has_skills: true,
             mcp_server_names: vec!["sample-docs".to_string()],
             app_connector_ids: vec!["connector_sample".to_string()],
+            marketplace_path: AbsolutePathBuf::try_from(PathBuf::from("/tmp/openai-curated"))
+                .expect("absolute path"),
+            plugin_name: "sample".to_string(),
+            installed: true,
+            enabled: false,
         })),
     ];
 
@@ -1903,9 +1923,14 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(description.contains("Sample Plugin"));
     assert!(description.contains("Plan events and schedules."));
     assert!(description.contains("Find and summarize email threads."));
+    assert!(description.contains("available through plugins: Calendar Plugin"));
     assert!(description.contains("id: `sample@test`, type: plugin, action: enable"));
     assert!(
         description.contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
+    );
+    assert!(
+        description
+            .contains("the tool should become available on the next router rebuild or next turn")
     );
     assert!(description.contains("DO NOT explore or recommend tools that are not on this list."));
     let JsonSchema::Object { required, .. } = parameters else {

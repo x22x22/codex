@@ -1,0 +1,17 @@
+---
+source: tui/src/bottom_pane/plugin_suggestion_view.rs
+expression: "render_snapshot(&view, Rect::new(0, 0, 72, view.desired_height(72)))"
+---
+
+  Gmail Plugin
+
+  Search your inbox directly from Codex
+
+  Enable this plugin in Codex to use it for the current request.
+  Changes take effect after the next router rebuild or next turn.
+
+  Plugin ID: gmail@openai-curated
+
+  › 1. Enable plugin
+    2. Back
+  Use tab / ↑ ↓ to move, enter to select, esc to close

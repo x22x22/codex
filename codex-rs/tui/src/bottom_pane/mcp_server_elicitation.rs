@@ -12,6 +12,7 @@ use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::mcp::RequestId as McpRequestId;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::TextElement;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -70,6 +71,8 @@ const TOOL_NAME_KEY: &str = "tool_name";
 const TOOL_SUGGEST_SUGGEST_TYPE_KEY: &str = "suggest_type";
 const TOOL_SUGGEST_REASON_KEY: &str = "suggest_reason";
 const TOOL_SUGGEST_INSTALL_URL_KEY: &str = "install_url";
+const TOOL_SUGGEST_MARKETPLACE_PATH_KEY: &str = "marketplace_path";
+const TOOL_SUGGEST_PLUGIN_NAME_KEY: &str = "plugin_name";
 
 #[derive(Clone, PartialEq, Default)]
 struct ComposerDraft {
@@ -131,25 +134,29 @@ enum McpServerElicitationResponseMode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ToolSuggestionToolType {
-    Connector,
-    Plugin,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ToolSuggestionType {
     Install,
     Enable,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ToolSuggestionPayload {
+    Connector {
+        install_url: String,
+    },
+    Plugin {
+        marketplace_path: AbsolutePathBuf,
+        plugin_name: String,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ToolSuggestionRequest {
-    pub(crate) tool_type: ToolSuggestionToolType,
     pub(crate) suggest_type: ToolSuggestionType,
     pub(crate) suggest_reason: String,
     pub(crate) tool_id: String,
     pub(crate) tool_name: String,
-    pub(crate) install_url: String,
+    pub(crate) payload: ToolSuggestionPayload,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -347,11 +354,6 @@ fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionR
         return None;
     }
 
-    let tool_type = match meta.get(TOOL_TYPE_KEY).and_then(Value::as_str) {
-        Some("connector") => ToolSuggestionToolType::Connector,
-        Some("plugin") => ToolSuggestionToolType::Plugin,
-        _ => return None,
-    };
     let suggest_type = match meta
         .get(TOOL_SUGGEST_SUGGEST_TYPE_KEY)
         .and_then(Value::as_str)
@@ -361,8 +363,28 @@ fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionR
         _ => return None,
     };
 
+    let payload = match meta.get(TOOL_TYPE_KEY).and_then(Value::as_str) {
+        Some("connector") => ToolSuggestionPayload::Connector {
+            install_url: meta
+                .get(TOOL_SUGGEST_INSTALL_URL_KEY)
+                .and_then(Value::as_str)?
+                .to_string(),
+        },
+        Some("plugin") => ToolSuggestionPayload::Plugin {
+            marketplace_path: AbsolutePathBuf::try_from(PathBuf::from(
+                meta.get(TOOL_SUGGEST_MARKETPLACE_PATH_KEY)
+                    .and_then(Value::as_str)?,
+            ))
+            .ok()?,
+            plugin_name: meta
+                .get(TOOL_SUGGEST_PLUGIN_NAME_KEY)
+                .and_then(Value::as_str)?
+                .to_string(),
+        },
+        _ => return None,
+    };
+
     Some(ToolSuggestionRequest {
-        tool_type,
         suggest_type,
         suggest_reason: meta
             .get(TOOL_SUGGEST_REASON_KEY)
@@ -370,10 +392,7 @@ fn parse_tool_suggestion_request(meta: Option<&Value>) -> Option<ToolSuggestionR
             .to_string(),
         tool_id: meta.get(TOOL_ID_KEY).and_then(Value::as_str)?.to_string(),
         tool_name: meta.get(TOOL_NAME_KEY).and_then(Value::as_str)?.to_string(),
-        install_url: meta
-            .get(TOOL_SUGGEST_INSTALL_URL_KEY)
-            .and_then(Value::as_str)?
-            .to_string(),
+        payload,
     })
 }
 
@@ -1927,12 +1946,52 @@ mod tests {
         assert_eq!(
             request.tool_suggestion(),
             Some(&ToolSuggestionRequest {
-                tool_type: ToolSuggestionToolType::Connector,
                 suggest_type: ToolSuggestionType::Install,
                 suggest_reason: "Plan and reference events from your calendar".to_string(),
                 tool_id: "connector_2128aebfecb84f64a069897515042a44".to_string(),
                 tool_name: "Google Calendar".to_string(),
-                install_url: "https://example.test/google-calendar".to_string(),
+                payload: ToolSuggestionPayload::Connector {
+                    install_url: "https://example.test/google-calendar".to_string(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn plugin_tool_suggestion_meta_is_parsed_into_request_payload() {
+        let request = McpServerElicitationFormRequest::from_event(
+            ThreadId::default(),
+            form_request(
+                "Suggest Gmail Plugin",
+                empty_object_schema(),
+                Some(serde_json::json!({
+                    "codex_approval_kind": "tool_suggestion",
+                    "tool_type": "plugin",
+                    "suggest_type": "enable",
+                    "suggest_reason": "Search your inbox directly from Codex",
+                    "tool_id": "gmail@openai-curated",
+                    "tool_name": "Gmail Plugin",
+                    "marketplace_path": "/tmp/openai-curated",
+                    "plugin_name": "gmail",
+                })),
+            ),
+        )
+        .expect("expected tool suggestion form");
+
+        assert_eq!(
+            request.tool_suggestion(),
+            Some(&ToolSuggestionRequest {
+                suggest_type: ToolSuggestionType::Enable,
+                suggest_reason: "Search your inbox directly from Codex".to_string(),
+                tool_id: "gmail@openai-curated".to_string(),
+                tool_name: "Gmail Plugin".to_string(),
+                payload: ToolSuggestionPayload::Plugin {
+                    marketplace_path: AbsolutePathBuf::try_from(std::path::PathBuf::from(
+                        "/tmp/openai-curated",
+                    ))
+                    .expect("absolute path"),
+                    plugin_name: "gmail".to_string(),
+                },
             })
         );
     }

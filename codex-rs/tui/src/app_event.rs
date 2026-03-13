@@ -16,6 +16,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -373,6 +374,17 @@ pub(crate) enum AppEvent {
     SetAppEnabled {
         id: String,
         enabled: bool,
+    },
+
+    /// Install a suggested plugin from the given marketplace.
+    InstallSuggestedPlugin {
+        marketplace_path: AbsolutePathBuf,
+        plugin_name: String,
+    },
+
+    /// Enable a suggested plugin by plugin ID.
+    EnableSuggestedPlugin {
+        plugin_id: String,
     },
 
     /// Notify that the manage skills popup was closed.

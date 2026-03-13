@@ -15,8 +15,6 @@ use crate::tools::code_mode::wait_tool_description as code_mode_wait_tool_descri
 use crate::tools::code_mode_description::augment_tool_spec_for_code_mode;
 use crate::tools::discoverable::DiscoverablePluginInfo;
 use crate::tools::discoverable::DiscoverableTool;
-use crate::tools::discoverable::DiscoverableToolAction;
-use crate::tools::discoverable::DiscoverableToolType;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::TOOL_SEARCH_DEFAULT_LIMIT;
 use crate::tools::handlers::TOOL_SEARCH_TOOL_NAME;
@@ -1737,29 +1735,51 @@ fn format_discoverable_tools(discoverable_tools: &[DiscoverableTool]) -> String 
     discoverable_tools
         .into_iter()
         .map(|tool| {
-            let description = tool
-                .description()
-                .filter(|description| !description.trim().is_empty())
-                .map(ToString::to_string)
-                .unwrap_or_else(|| match &tool {
-                    DiscoverableTool::Connector(_) => "No description provided.".to_string(),
-                    DiscoverableTool::Plugin(plugin) => format_plugin_summary(plugin.as_ref()),
-                });
-            let default_action = match tool.tool_type() {
-                DiscoverableToolType::Connector => DiscoverableToolAction::Install,
-                DiscoverableToolType::Plugin => DiscoverableToolAction::Enable,
+            let description = match &tool {
+                DiscoverableTool::Connector(connector) => format_connector_summary(
+                    connector.as_ref(),
+                    connector.plugin_display_names.as_slice(),
+                ),
+                DiscoverableTool::Plugin(plugin) => format_plugin_summary(plugin.as_ref()),
             };
             format!(
                 "- {} (id: `{}`, type: {}, action: {}): {}",
                 tool.name(),
                 tool.id(),
                 tool.tool_type().as_str(),
-                default_action.as_str(),
+                tool.action().as_str(),
                 description
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn format_connector_summary(
+    connector: &codex_app_server_protocol::AppInfo,
+    plugin_display_names: &[String],
+) -> String {
+    let mut details = Vec::new();
+    if let Some(description) = connector
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+    {
+        details.push(description.to_string());
+    }
+    if !plugin_display_names.is_empty() {
+        details.push(format!(
+            "available through plugins: {}",
+            plugin_display_names.join(", ")
+        ));
+    }
+
+    if details.is_empty() {
+        "No description provided.".to_string()
+    } else {
+        details.join("; ")
+    }
 }
 
 fn format_plugin_summary(plugin: &DiscoverablePluginInfo) -> String {

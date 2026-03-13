@@ -45,6 +45,7 @@ mod app_link_view;
 mod approval_overlay;
 mod mcp_server_elicitation;
 mod multi_select_picker;
+mod plugin_suggestion_view;
 mod request_user_input;
 mod status_line_setup;
 pub(crate) use app_link_view::AppLinkElicitationTarget;
@@ -56,6 +57,9 @@ pub(crate) use approval_overlay::ApprovalRequest;
 pub(crate) use approval_overlay::format_additional_permissions_rule;
 pub(crate) use mcp_server_elicitation::McpServerElicitationFormRequest;
 pub(crate) use mcp_server_elicitation::McpServerElicitationOverlay;
+pub(crate) use plugin_suggestion_view::PluginSuggestionElicitationTarget;
+pub(crate) use plugin_suggestion_view::PluginSuggestionView;
+pub(crate) use plugin_suggestion_view::PluginSuggestionViewParams;
 pub(crate) use request_user_input::RequestUserInputOverlay;
 mod bottom_pane_view;
 
@@ -966,48 +970,79 @@ impl BottomPane {
         };
 
         if let Some(tool_suggestion) = request.tool_suggestion() {
-            let suggestion_type = match tool_suggestion.suggest_type {
-                mcp_server_elicitation::ToolSuggestionType::Install => {
-                    AppLinkSuggestionType::Install
-                }
-                mcp_server_elicitation::ToolSuggestionType::Enable => AppLinkSuggestionType::Enable,
-            };
-            let is_installed = matches!(
-                tool_suggestion.suggest_type,
-                mcp_server_elicitation::ToolSuggestionType::Enable
-            );
-            let view = AppLinkView::new(
-                AppLinkViewParams {
-                    app_id: tool_suggestion.tool_id.clone(),
-                    title: tool_suggestion.tool_name.clone(),
-                    description: None,
-                    instructions: match suggestion_type {
-                        AppLinkSuggestionType::Install => {
-                            "Install this app in your browser, then return here.".to_string()
-                        }
-                        AppLinkSuggestionType::Enable => {
-                            "Enable this app to use it for the current request.".to_string()
-                        }
-                    },
-                    url: tool_suggestion.install_url.clone(),
-                    is_installed,
-                    is_enabled: false,
-                    suggest_reason: Some(tool_suggestion.suggest_reason.clone()),
-                    suggestion_type: Some(suggestion_type),
-                    elicitation_target: Some(AppLinkElicitationTarget {
-                        thread_id: request.thread_id(),
-                        server_name: request.server_name().to_string(),
-                        request_id: request.request_id().clone(),
-                    }),
-                },
-                self.app_event_tx.clone(),
-            );
             self.pause_status_timer_for_modal();
             self.set_composer_input_enabled(
                 false,
                 Some("Respond to the tool suggestion to continue.".to_string()),
             );
-            self.push_view(Box::new(view));
+            match &tool_suggestion.payload {
+                mcp_server_elicitation::ToolSuggestionPayload::Connector { install_url } => {
+                    let elicitation_target = Some(AppLinkElicitationTarget {
+                        thread_id: request.thread_id(),
+                        server_name: request.server_name().to_string(),
+                        request_id: request.request_id().clone(),
+                    });
+                    let suggestion_type = match tool_suggestion.suggest_type {
+                        mcp_server_elicitation::ToolSuggestionType::Install => {
+                            AppLinkSuggestionType::Install
+                        }
+                        mcp_server_elicitation::ToolSuggestionType::Enable => {
+                            AppLinkSuggestionType::Enable
+                        }
+                    };
+                    let is_installed = matches!(
+                        tool_suggestion.suggest_type,
+                        mcp_server_elicitation::ToolSuggestionType::Enable
+                    );
+                    let view = AppLinkView::new(
+                        AppLinkViewParams {
+                            app_id: tool_suggestion.tool_id.clone(),
+                            title: tool_suggestion.tool_name.clone(),
+                            description: None,
+                            instructions: match suggestion_type {
+                                AppLinkSuggestionType::Install => {
+                                    "Install this app in your browser, then return here."
+                                        .to_string()
+                                }
+                                AppLinkSuggestionType::Enable => {
+                                    "Enable this app to use it for the current request.".to_string()
+                                }
+                            },
+                            url: install_url.clone(),
+                            is_installed,
+                            is_enabled: false,
+                            suggest_reason: Some(tool_suggestion.suggest_reason.clone()),
+                            suggestion_type: Some(suggestion_type),
+                            elicitation_target,
+                        },
+                        self.app_event_tx.clone(),
+                    );
+                    self.push_view(Box::new(view));
+                }
+                mcp_server_elicitation::ToolSuggestionPayload::Plugin {
+                    marketplace_path,
+                    plugin_name,
+                } => {
+                    let elicitation_target = PluginSuggestionElicitationTarget {
+                        thread_id: request.thread_id(),
+                        server_name: request.server_name().to_string(),
+                        request_id: request.request_id().clone(),
+                    };
+                    let view = PluginSuggestionView::new(
+                        PluginSuggestionViewParams {
+                            plugin_id: tool_suggestion.tool_id.clone(),
+                            title: tool_suggestion.tool_name.clone(),
+                            plugin_name: plugin_name.clone(),
+                            marketplace_path: marketplace_path.clone(),
+                            suggest_reason: tool_suggestion.suggest_reason.clone(),
+                            suggest_type: tool_suggestion.suggest_type,
+                            elicitation_target,
+                        },
+                        self.app_event_tx.clone(),
+                    );
+                    self.push_view(Box::new(view));
+                }
+            }
             return;
         }
 
