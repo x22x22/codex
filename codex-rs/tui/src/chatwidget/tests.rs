@@ -17,6 +17,11 @@ use crate::history_cell::UserHistoryCell;
 use crate::test_backend::VT100Backend;
 use crate::tui::FrameRequester;
 use assert_matches::assert_matches;
+use codex_app_server_protocol::SkillInterface;
+use codex_app_server_protocol::SkillMetadata;
+use codex_app_server_protocol::SkillScope;
+use codex_app_server_protocol::SkillsListEntry;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -30,7 +35,6 @@ use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::ModelsManager;
-use codex_core::skills::model::SkillMetadata;
 use codex_core::terminal::TerminalName;
 use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
@@ -88,7 +92,6 @@ use codex_protocol::protocol::RateLimitWindow;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SkillScope;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::TerminalInteractionEvent;
 use codex_protocol::protocol::ThreadRolledBackEvent;
@@ -996,11 +999,9 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: None,
-            permission_profile: None,
-            managed_network_override: None,
-            path_to_skills_md: repo_skill_path,
+            path: repo_skill_path,
             scope: SkillScope::Repo,
+            enabled: true,
         },
         SkillMetadata {
             name: "figma".to_string(),
@@ -1008,11 +1009,9 @@ async fn submission_prefers_selected_duplicate_skill_path() {
             short_description: None,
             interface: None,
             dependencies: None,
-            policy: None,
-            permission_profile: None,
-            managed_network_override: None,
-            path_to_skills_md: user_skill_path.clone(),
+            path: user_skill_path.clone(),
             scope: SkillScope::User,
+            enabled: true,
         },
     ]));
 
@@ -1039,6 +1038,94 @@ async fn submission_prefers_selected_duplicate_skill_path() {
         })
         .collect::<Vec<_>>();
     assert_eq!(selected_skill_paths, vec![user_skill_path]);
+}
+
+#[tokio::test]
+async fn app_server_skills_response_uses_active_cwd_and_enabled_mentions() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let active_cwd = PathBuf::from("/tmp/project");
+    chat.config.cwd = active_cwd.clone();
+
+    chat.set_skills_from_app_server_response(&SkillsListResponse {
+        data: vec![
+            SkillsListEntry {
+                cwd: PathBuf::from("/tmp/other"),
+                skills: vec![SkillMetadata {
+                    name: "ignored".to_string(),
+                    description: "Other cwd".to_string(),
+                    short_description: None,
+                    interface: None,
+                    dependencies: None,
+                    path: PathBuf::from("/tmp/other/ignored/SKILL.md"),
+                    scope: SkillScope::Repo,
+                    enabled: true,
+                }],
+                errors: Vec::new(),
+            },
+            SkillsListEntry {
+                cwd: active_cwd,
+                skills: vec![
+                    SkillMetadata {
+                        name: "enabled-skill".to_string(),
+                        description: "Enabled".to_string(),
+                        short_description: None,
+                        interface: None,
+                        dependencies: None,
+                        path: PathBuf::from("/tmp/project/enabled/SKILL.md"),
+                        scope: SkillScope::Repo,
+                        enabled: true,
+                    },
+                    SkillMetadata {
+                        name: "disabled-skill".to_string(),
+                        description: "Disabled".to_string(),
+                        short_description: None,
+                        interface: None,
+                        dependencies: None,
+                        path: PathBuf::from("/tmp/project/disabled/SKILL.md"),
+                        scope: SkillScope::Repo,
+                        enabled: false,
+                    },
+                ],
+                errors: Vec::new(),
+            },
+        ],
+    });
+
+    let skills = chat.skills().expect("skills should be populated");
+    assert_eq!(skills.len(), 1);
+    assert_eq!(skills[0].name, "enabled-skill");
+    assert_eq!(
+        skills[0].path,
+        PathBuf::from("/tmp/project/enabled/SKILL.md")
+    );
+}
+
+#[tokio::test]
+async fn manage_skills_popup_uses_app_server_display_name_and_short_description() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.skills_all = vec![SkillMetadata {
+        name: "google-calendar-skill".to_string(),
+        description: "Long description".to_string(),
+        short_description: Some("Legacy short description".to_string()),
+        interface: Some(SkillInterface {
+            display_name: Some("Google Calendar".to_string()),
+            short_description: Some("Plan events quickly".to_string()),
+            icon_small: None,
+            icon_large: None,
+            brand_color: None,
+            default_prompt: None,
+        }),
+        dependencies: None,
+        path: PathBuf::from("/tmp/project/google-calendar/SKILL.md"),
+        scope: SkillScope::Repo,
+        enabled: true,
+    }];
+
+    chat.open_manage_skills_popup();
+
+    let popup = render_bottom_popup(&chat, 72);
+    assert!(popup.contains("Google Calendar"));
+    assert!(popup.contains("Plan events quickly"));
 }
 
 #[tokio::test]

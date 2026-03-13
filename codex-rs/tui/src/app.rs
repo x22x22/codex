@@ -40,7 +40,12 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
+use codex_app_server_protocol::SkillErrorInfo as AppServerSkillErrorInfo;
+use codex_app_server_protocol::SkillsListParams;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -192,6 +197,42 @@ fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillEr
 }
 
 fn emit_skill_load_warnings(app_event_tx: &AppEventSender, errors: &[SkillErrorInfo]) {
+    if errors.is_empty() {
+        return;
+    }
+
+    let error_count = errors.len();
+    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+        crate::history_cell::new_warning_event(format!(
+            "Skipped loading {error_count} skill(s) due to invalid SKILL.md files."
+        )),
+    )));
+
+    for error in errors {
+        let path = error.path.display();
+        let message = error.message.as_str();
+        app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            crate::history_cell::new_warning_event(format!("{path}: {message}")),
+        )));
+    }
+}
+
+fn app_server_errors_for_cwd(
+    cwd: &Path,
+    response: &SkillsListResponse,
+) -> Vec<AppServerSkillErrorInfo> {
+    response
+        .data
+        .iter()
+        .find(|entry| entry.cwd.as_path() == cwd)
+        .map(|entry| entry.errors.clone())
+        .unwrap_or_default()
+}
+
+fn emit_app_server_skill_load_warnings(
+    app_event_tx: &AppEventSender,
+    errors: &[AppServerSkillErrorInfo],
+) {
     if errors.is_empty() {
         return;
     }
@@ -698,6 +739,7 @@ pub(crate) struct App {
     pending_shutdown_exit_thread_id: Option<ThreadId>,
 
     windows_sandbox: WindowsSandboxState,
+    next_app_server_request_id: i64,
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
@@ -787,6 +829,39 @@ impl App {
                 action,
                 "failed to refresh config before thread transition; continuing with current in-memory config"
             );
+        }
+    }
+
+    fn next_app_server_request_id(&mut self) -> AppServerRequestId {
+        let request_id = self.next_app_server_request_id;
+        self.next_app_server_request_id = self.next_app_server_request_id.saturating_add(1);
+        AppServerRequestId::Integer(request_id)
+    }
+
+    async fn refresh_skills(&mut self, app_server: &InProcessAppServerClient, force_reload: bool) {
+        let response = app_server
+            .request_typed::<SkillsListResponse>(ClientRequest::SkillsList {
+                request_id: self.next_app_server_request_id(),
+                params: SkillsListParams {
+                    cwds: Vec::new(),
+                    force_reload,
+                    per_cwd_extra_user_roots: None,
+                },
+            })
+            .await;
+
+        match response {
+            Ok(response) => {
+                let cwd = self.chat_widget.config_ref().cwd.clone();
+                let errors = app_server_errors_for_cwd(&cwd, &response);
+                emit_app_server_skill_load_warnings(&self.app_event_tx, &errors);
+                self.chat_widget
+                    .set_skills_from_app_server_response(&response);
+                self.chat_widget.refresh_plugin_mentions();
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "failed to refresh skills from embedded app server");
+            }
         }
     }
 
@@ -1943,6 +2018,7 @@ impl App {
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            next_app_server_request_id: 1,
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -2031,7 +2107,7 @@ impl App {
                         app.active_thread_rx.is_some()
                     ) => {
                         if let Some(event) = active {
-                            if let Err(err) = app.handle_active_thread_event(tui, event).await {
+                            if let Err(err) = app.handle_active_thread_event(tui, event, &app_server).await {
                                 break Err(err);
                             }
                         } else {
@@ -3491,6 +3567,18 @@ impl App {
         }
     }
 
+    async fn handle_codex_event_now_with_app_server(
+        &mut self,
+        event: Event,
+        app_server: &InProcessAppServerClient,
+    ) {
+        let should_refresh_skills = matches!(event.msg, EventMsg::SessionConfigured(_));
+        self.handle_codex_event_now(event);
+        if should_refresh_skills {
+            self.refresh_skills(app_server, true).await;
+        }
+    }
+
     fn handle_codex_event_replay(&mut self, event: Event) {
         self.chat_widget.handle_codex_event_replay(event);
     }
@@ -3500,7 +3588,12 @@ impl App {
     /// This function enforces shutdown intent routing: unexpected non-primary
     /// thread shutdowns fail over to the primary thread, while user-requested
     /// app exits consume only the tracked shutdown completion and then proceed.
-    async fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+    async fn handle_active_thread_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: Event,
+        app_server: &InProcessAppServerClient,
+    ) -> Result<()> {
         // Capture this before any potential thread switch: we only want to clear
         // the exit marker when the currently active thread acknowledges shutdown.
         let pending_shutdown_exit_completed = matches!(&event.msg, EventMsg::ShutdownComplete)
@@ -3540,7 +3633,8 @@ impl App {
             // thread, so unrelated shutdowns cannot consume this marker.
             self.pending_shutdown_exit_thread_id = None;
         }
-        self.handle_codex_event_now(event);
+        self.handle_codex_event_now_with_app_server(event, app_server)
+            .await;
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }
@@ -3915,10 +4009,15 @@ mod tests {
     use crate::history_cell::new_session_info;
     use crate::multi_agents::AgentPickerThreadEntry;
     use assert_matches::assert_matches;
+    use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
+    use codex_app_server_client::InProcessClientStartArgs;
+    use codex_arg0::Arg0DispatchPaths;
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::types::ModelAvailabilityNuxConfig;
+    use codex_core::config_loader::CloudRequirementsLoader;
+    use codex_core::config_loader::LoaderOverrides;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;
@@ -3948,6 +4047,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use tempfile::TempDir;
     use tempfile::tempdir;
     use tokio::time;
 
@@ -5647,6 +5747,7 @@ mod tests {
             suppress_shutdown_complete: false,
             pending_shutdown_exit_thread_id: None,
             windows_sandbox: WindowsSandboxState::default(),
+            next_app_server_request_id: 1,
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
             agent_navigation: AgentNavigationState::default(),
@@ -5707,6 +5808,7 @@ mod tests {
                 suppress_shutdown_complete: false,
                 pending_shutdown_exit_thread_id: None,
                 windows_sandbox: WindowsSandboxState::default(),
+                next_app_server_request_id: 1,
                 thread_event_channels: HashMap::new(),
                 thread_event_listener_tasks: HashMap::new(),
                 agent_navigation: AgentNavigationState::default(),
@@ -5721,6 +5823,34 @@ mod tests {
         )
     }
 
+    fn write_skill(root: &TempDir, name: &str, description: &str) {
+        let skill_dir = root.path().join("skills").join(name);
+        std::fs::create_dir_all(&skill_dir).expect("skill dir");
+        let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# {name}\n");
+        std::fs::write(skill_dir.join("SKILL.md"), content).expect("skill file");
+    }
+
+    async fn start_test_embedded_app_server(config: Config) -> InProcessAppServerClient {
+        InProcessAppServerClient::start(InProcessClientStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(config),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: codex_feedback::CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            client_name: "codex-tui-test".to_string(),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("embedded app server should start")
+    }
+
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
         let mut seen = Vec::new();
         while let Ok(op) = op_rx.try_recv() {
@@ -5730,6 +5860,105 @@ mod tests {
             seen.push(format!("{op:?}"));
         }
         panic!("expected UserTurn op, saw: {seen:?}");
+    }
+
+    #[tokio::test]
+    async fn session_configured_fetches_skills_via_embedded_app_server() {
+        let skills_home = TempDir::new().expect("temp dir");
+        write_skill(&skills_home, "repo-scout", "Scan the repo");
+
+        let workspace = skills_home.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace dir");
+
+        let mut app_server_config = ConfigBuilder::default()
+            .codex_home(skills_home.path().to_path_buf())
+            .build()
+            .await
+            .expect("config");
+        app_server_config.cwd = workspace.clone();
+        let app_server = start_test_embedded_app_server(app_server_config).await;
+
+        let (mut app, _app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.handle_codex_event_now_with_app_server(
+            Event {
+                id: "session".to_string(),
+                msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                    session_id: ThreadId::new(),
+                    forked_from_id: None,
+                    thread_name: None,
+                    model: "test-model".to_string(),
+                    model_provider_id: "test-provider".to_string(),
+                    service_tier: None,
+                    approval_policy: AskForApproval::Never,
+                    sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                    cwd: workspace,
+                    reasoning_effort: None,
+                    history_log_id: 0,
+                    history_entry_count: 0,
+                    initial_messages: None,
+                    network_proxy: None,
+                    rollout_path: None,
+                }),
+            },
+            &app_server,
+        )
+        .await;
+
+        let skills = app.chat_widget.skills().expect("skills should be present");
+        assert!(skills.iter().any(|skill| skill.name == "repo-scout"));
+        assert_eq!(op_rx.try_recv(), Ok(Op::ListCustomPrompts));
+        assert!(
+            op_rx.try_recv().is_err(),
+            "session configuration should not submit a legacy ListSkills op"
+        );
+
+        app_server
+            .shutdown()
+            .await
+            .expect("app server shutdown should succeed");
+    }
+
+    #[tokio::test]
+    async fn app_server_skill_warnings_match_legacy_warning_copy() {
+        let (app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let response = SkillsListResponse {
+            data: vec![codex_app_server_protocol::SkillsListEntry {
+                cwd: PathBuf::from("/tmp/project"),
+                skills: Vec::new(),
+                errors: vec![AppServerSkillErrorInfo {
+                    path: PathBuf::from("/tmp/project/broken/SKILL.md"),
+                    message: "missing description".to_string(),
+                }],
+            }],
+        };
+
+        let errors = app_server_errors_for_cwd(Path::new("/tmp/project"), &response);
+        emit_app_server_skill_load_warnings(&app.app_event_tx, &errors);
+
+        let summary = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected summary warning cell, got {other:?}"),
+        };
+        let summary_text = summary
+            .display_lines(120)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(summary_text.contains("Skipped loading 1 skill(s)"));
+
+        let detail = match app_event_rx.try_recv() {
+            Ok(AppEvent::InsertHistoryCell(cell)) => cell,
+            other => panic!("expected detail warning cell, got {other:?}"),
+        };
+        let detail_text = detail
+            .display_lines(120)
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(detail_text.contains("/tmp/project/broken/SKILL.md"));
+        assert!(detail_text.contains("missing description"));
     }
 
     fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {

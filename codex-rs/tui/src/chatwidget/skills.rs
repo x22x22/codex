@@ -12,16 +12,20 @@ use crate::bottom_pane::SkillsToggleView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
+use codex_app_server_protocol::SkillDependencies as AppServerSkillDependencies;
+use codex_app_server_protocol::SkillInterface as AppServerSkillInterface;
+use codex_app_server_protocol::SkillMetadata as AppServerSkillMetadata;
+use codex_app_server_protocol::SkillScope as AppServerSkillScope;
+use codex_app_server_protocol::SkillToolDependency as AppServerSkillToolDependency;
+use codex_app_server_protocol::SkillsListEntry as AppServerSkillsListEntry;
+use codex_app_server_protocol::SkillsListResponse;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::connectors::connector_mention_slug;
 use codex_core::mention_syntax::TOOL_MENTION_SIGIL;
-use codex_core::skills::model::SkillDependencies;
-use codex_core::skills::model::SkillInterface;
-use codex_core::skills::model::SkillMetadata;
-use codex_core::skills::model::SkillToolDependency;
 use codex_protocol::protocol::ListSkillsResponseEvent;
-use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_protocol::protocol::SkillsListEntry;
+use codex_protocol::protocol::SkillMetadata as LegacySkillMetadata;
+use codex_protocol::protocol::SkillScope as LegacySkillScope;
+use codex_protocol::protocol::SkillsListEntry as LegacySkillsListEntry;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {
@@ -75,11 +79,10 @@ impl ChatWidget {
             .skills_all
             .iter()
             .map(|skill| {
-                let core_skill = protocol_skill_to_core(skill);
-                let display_name = skill_display_name(&core_skill).to_string();
-                let description = skill_description(&core_skill).to_string();
-                let name = core_skill.name.clone();
-                let path = core_skill.path_to_skills_md;
+                let display_name = skill_display_name(skill).to_string();
+                let description = skill_description(skill).to_string();
+                let name = skill.name.clone();
+                let path = skill.path.clone();
                 SkillsToggleItem {
                     name: display_name,
                     skill_name: name,
@@ -101,7 +104,13 @@ impl ChatWidget {
                 skill.enabled = enabled;
             }
         }
-        self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
+        let enabled_skills = self
+            .skills_all
+            .iter()
+            .filter(|skill| skill.enabled)
+            .cloned()
+            .collect();
+        self.set_skills(Some(enabled_skills));
     }
 
     pub(crate) fn handle_manage_skills_closed(&mut self) {
@@ -138,13 +147,34 @@ impl ChatWidget {
     }
 
     pub(crate) fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
-        let skills = skills_for_cwd(&self.config.cwd, &response.skills);
+        let skills = legacy_skills_for_cwd(&self.config.cwd, &response.skills)
+            .iter()
+            .map(legacy_skill_to_app_server)
+            .collect();
+        self.set_skills_from_listing(skills);
+    }
+
+    pub(crate) fn set_skills_from_app_server_response(&mut self, response: &SkillsListResponse) {
+        let skills = app_server_skills_for_cwd(&self.config.cwd, &response.data);
+        self.set_skills_from_listing(skills);
+    }
+
+    fn set_skills_from_listing(&mut self, skills: Vec<AppServerSkillMetadata>) {
         self.skills_all = skills;
-        self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
+        let enabled_skills = self
+            .skills_all
+            .iter()
+            .filter(|skill| skill.enabled)
+            .cloned()
+            .collect();
+        self.set_skills(Some(enabled_skills));
     }
 }
 
-fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<ProtocolSkillMetadata> {
+fn app_server_skills_for_cwd(
+    cwd: &Path,
+    skills_entries: &[AppServerSkillsListEntry],
+) -> Vec<AppServerSkillMetadata> {
     skills_entries
         .iter()
         .find(|entry| entry.cwd.as_path() == cwd)
@@ -152,35 +182,41 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<Protoco
         .unwrap_or_default()
 }
 
-fn enabled_skills_for_mentions(skills: &[ProtocolSkillMetadata]) -> Vec<SkillMetadata> {
-    skills
+fn legacy_skills_for_cwd(
+    cwd: &Path,
+    skills_entries: &[LegacySkillsListEntry],
+) -> Vec<LegacySkillMetadata> {
+    skills_entries
         .iter()
-        .filter(|skill| skill.enabled)
-        .map(protocol_skill_to_core)
-        .collect()
+        .find(|entry| entry.cwd.as_path() == cwd)
+        .map(|entry| entry.skills.clone())
+        .unwrap_or_default()
 }
 
-fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
-    SkillMetadata {
+fn legacy_skill_to_app_server(skill: &LegacySkillMetadata) -> AppServerSkillMetadata {
+    AppServerSkillMetadata {
         name: skill.name.clone(),
         description: skill.description.clone(),
         short_description: skill.short_description.clone(),
-        interface: skill.interface.clone().map(|interface| SkillInterface {
-            display_name: interface.display_name,
-            short_description: interface.short_description,
-            icon_small: interface.icon_small,
-            icon_large: interface.icon_large,
-            brand_color: interface.brand_color,
-            default_prompt: interface.default_prompt,
-        }),
+        interface: skill
+            .interface
+            .clone()
+            .map(|interface| AppServerSkillInterface {
+                display_name: interface.display_name,
+                short_description: interface.short_description,
+                icon_small: interface.icon_small,
+                icon_large: interface.icon_large,
+                brand_color: interface.brand_color,
+                default_prompt: interface.default_prompt,
+            }),
         dependencies: skill
             .dependencies
             .clone()
-            .map(|dependencies| SkillDependencies {
+            .map(|dependencies| AppServerSkillDependencies {
                 tools: dependencies
                     .tools
                     .into_iter()
-                    .map(|tool| SkillToolDependency {
+                    .map(|tool| AppServerSkillToolDependency {
                         r#type: tool.r#type,
                         value: tool.value,
                         description: tool.description,
@@ -190,11 +226,18 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
                     })
                     .collect(),
             }),
-        policy: None,
-        permission_profile: None,
-        managed_network_override: None,
-        path_to_skills_md: skill.path.clone(),
-        scope: skill.scope,
+        path: skill.path.clone(),
+        scope: legacy_skill_scope_to_app_server(skill.scope),
+        enabled: skill.enabled,
+    }
+}
+
+fn legacy_skill_scope_to_app_server(scope: LegacySkillScope) -> AppServerSkillScope {
+    match scope {
+        LegacySkillScope::User => AppServerSkillScope::User,
+        LegacySkillScope::Repo => AppServerSkillScope::Repo,
+        LegacySkillScope::System => AppServerSkillScope::System,
+        LegacySkillScope::Admin => AppServerSkillScope::Admin,
     }
 }
 
@@ -217,8 +260,8 @@ pub(crate) fn collect_tool_mentions(
 
 pub(crate) fn find_skill_mentions_with_tool_mentions(
     mentions: &ToolMentions,
-    skills: &[SkillMetadata],
-) -> Vec<SkillMetadata> {
+    skills: &[AppServerSkillMetadata],
+) -> Vec<AppServerSkillMetadata> {
     let mention_skill_paths: HashSet<&str> = mentions
         .linked_paths
         .values()
@@ -228,26 +271,26 @@ pub(crate) fn find_skill_mentions_with_tool_mentions(
 
     let mut seen_names = HashSet::new();
     let mut seen_paths = HashSet::new();
-    let mut matches: Vec<SkillMetadata> = Vec::new();
+    let mut matches: Vec<AppServerSkillMetadata> = Vec::new();
 
     for skill in skills {
-        if seen_paths.contains(&skill.path_to_skills_md) {
+        if seen_paths.contains(&skill.path) {
             continue;
         }
-        let path_str = skill.path_to_skills_md.to_string_lossy();
+        let path_str = skill.path.to_string_lossy();
         if mention_skill_paths.contains(path_str.as_ref()) {
-            seen_paths.insert(skill.path_to_skills_md.clone());
+            seen_paths.insert(skill.path.clone());
             seen_names.insert(skill.name.clone());
             matches.push(skill.clone());
         }
     }
 
     for skill in skills {
-        if seen_paths.contains(&skill.path_to_skills_md) {
+        if seen_paths.contains(&skill.path) {
             continue;
         }
         if mentions.names.contains(&skill.name) && seen_names.insert(skill.name.clone()) {
-            seen_paths.insert(skill.path_to_skills_md.clone());
+            seen_paths.insert(skill.path.clone());
             matches.push(skill.clone());
         }
     }
