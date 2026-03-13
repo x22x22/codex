@@ -228,8 +228,18 @@ These are typed and registered, but not built from `TurnContext` diffs:
 These implement `build(...)` and participate in both full initial context and
 steady-state diffs:
 
+- `UserInstructionsFragment`
 - `AgentsMdInstructions`
+- `JsReplInstructionsFragment`
+- `SkillsSectionFragment`
+- `ChildAgentsInstructionsFragment`
 - `EnvironmentContext`
+
+Some of these are true steady-state diff fragments (`UserInstructionsFragment`,
+`AgentsMdInstructions`, `EnvironmentContext`). Others intentionally rebuild only
+when there is no baseline and therefore behave as initial-context fragments
+expressed through the same `build(...)` hook (`JsReplInstructionsFragment`,
+`SkillsSectionFragment`, `ChildAgentsInstructionsFragment`).
 
 ### Registered runtime contextual-user fragments
 
@@ -279,7 +289,11 @@ Examples:
 - permissions policy
 - collaboration mode
 - realtime start/end state
+- custom user instructions
 - AGENTS.md instructions
+- JS REPL guidance
+- skills catalog guidance
+- child-AGENTS guidance
 - environment context
 
 ### Use a registered runtime fragment when:

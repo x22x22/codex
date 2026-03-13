@@ -30,17 +30,23 @@
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::features::Feature;
+use crate::model_visible_context::CHILD_AGENTS_INSTRUCTIONS_CLOSE_TAG;
+use crate::model_visible_context::CHILD_AGENTS_INSTRUCTIONS_OPEN_TAG;
 use crate::model_visible_context::ContextualUserContextRole;
 use crate::model_visible_context::ContextualUserFragmentMarkers;
 use crate::model_visible_context::ContextualUserTextFragment;
 use crate::model_visible_context::DeveloperContextRole;
 use crate::model_visible_context::DeveloperTextFragment;
+use crate::model_visible_context::JS_REPL_INSTRUCTIONS_CLOSE_TAG;
+use crate::model_visible_context::JS_REPL_INSTRUCTIONS_OPEN_TAG;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::ModelVisibleContextRole;
 use crate::model_visible_context::PLUGINS_CLOSE_TAG;
 use crate::model_visible_context::PLUGINS_OPEN_TAG;
 use crate::model_visible_context::SKILL_CLOSE_TAG;
 use crate::model_visible_context::SKILL_OPEN_TAG;
+use crate::model_visible_context::SKILLS_SECTION_CLOSE_TAG;
+use crate::model_visible_context::SKILLS_SECTION_OPEN_TAG;
 use crate::model_visible_context::SUBAGENT_NOTIFICATION_CLOSE_TAG;
 use crate::model_visible_context::SUBAGENT_NOTIFICATION_OPEN_TAG;
 use crate::model_visible_context::SUBAGENTS_CLOSE_TAG;
@@ -50,7 +56,10 @@ use crate::model_visible_context::TURN_ABORTED_OPEN_TAG;
 use crate::model_visible_context::TurnContextDiffParams;
 use crate::model_visible_context::USER_SHELL_COMMAND_CLOSE_TAG;
 use crate::model_visible_context::USER_SHELL_COMMAND_OPEN_TAG;
+use crate::project_doc::HIERARCHICAL_AGENTS_MESSAGE;
+use crate::project_doc::render_js_repl_instructions;
 use crate::shell::Shell;
+use crate::skills::render_skills_section;
 use crate::tools::format_exec_output_str;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::MessageRole;
@@ -66,6 +75,8 @@ use codex_protocol::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
 use codex_protocol::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
+use codex_protocol::protocol::USER_INSTRUCTIONS_CLOSE_TAG;
+use codex_protocol::protocol::USER_INSTRUCTIONS_OPEN_TAG;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -129,7 +140,11 @@ const REGISTERED_MODEL_VISIBLE_FRAGMENTS: &[ModelVisibleFragmentRegistration] = 
     ModelVisibleFragmentRegistration::of::<PersonalityUpdateFragment>(),
     ModelVisibleFragmentRegistration::of::<SubagentRosterContext>(),
     ModelVisibleFragmentRegistration::of::<SubagentNotification>(),
+    ModelVisibleFragmentRegistration::of::<UserInstructionsFragment>(),
     ModelVisibleFragmentRegistration::of::<AgentsMdInstructions>(),
+    ModelVisibleFragmentRegistration::of::<JsReplInstructionsFragment>(),
+    ModelVisibleFragmentRegistration::of::<SkillsSectionFragment>(),
+    ModelVisibleFragmentRegistration::of::<ChildAgentsInstructionsFragment>(),
     ModelVisibleFragmentRegistration::of::<EnvironmentContext>(),
     ModelVisibleFragmentRegistration::of::<SkillInstructions>(),
     ModelVisibleFragmentRegistration::of::<PluginInstructions>(),
@@ -463,6 +478,42 @@ pub(crate) fn format_subagent_context_line(agent_id: &str, agent_nickname: Optio
 // Contextual-user turn-state fragments
 // ---------------------------------------------------------------------------
 
+pub(crate) struct UserInstructionsFragment {
+    text: String,
+}
+
+impl ModelVisibleContextFragment for UserInstructionsFragment {
+    type Role = ContextualUserContextRole;
+
+    fn render_text(&self) -> String {
+        Self::wrap_contextual_user_body(self.text.clone())
+    }
+
+    fn build(
+        turn_context: &TurnContext,
+        reference_context_item: Option<&TurnContextItem>,
+        _params: &TurnContextDiffParams<'_>,
+    ) -> Option<Self> {
+        let current = Self {
+            text: turn_context.user_instructions.clone()?,
+        };
+        if reference_context_item.and_then(|previous| previous.user_instructions.as_deref())
+            == Some(current.text.as_str())
+        {
+            return None;
+        }
+
+        Some(current)
+    }
+
+    fn contextual_user_markers() -> Option<ContextualUserFragmentMarkers> {
+        Some(ContextualUserFragmentMarkers::new(
+            USER_INSTRUCTIONS_OPEN_TAG,
+            USER_INSTRUCTIONS_CLOSE_TAG,
+        ))
+    }
+}
+
 const AGENTS_MD_START_MARKER: &str = "# AGENTS.md instructions for ";
 const AGENTS_MD_END_MARKER: &str = "</INSTRUCTIONS>";
 
@@ -494,12 +545,12 @@ impl ModelVisibleContextFragment for AgentsMdInstructions {
     ) -> Option<Self> {
         let current = Self {
             directory: turn_context.cwd.to_string_lossy().into_owned(),
-            text: turn_context.user_instructions.as_ref()?.clone(),
+            text: turn_context.project_doc_instructions.as_ref()?.clone(),
         };
         if let Some(previous) = reference_context_item {
             let previous_directory = previous.cwd.to_string_lossy().into_owned();
             if previous_directory == current.directory
-                && previous.user_instructions.as_deref() == Some(current.text.as_str())
+                && previous.project_doc_instructions.as_deref() == Some(current.text.as_str())
             {
                 return None;
             }
@@ -514,6 +565,107 @@ impl ModelVisibleContextFragment for AgentsMdInstructions {
         // intentionally change the shipped AGENTS.md fragment format.
         trimmed.starts_with(AGENTS_MD_START_MARKER)
             && trimmed.trim_end().ends_with(AGENTS_MD_END_MARKER)
+    }
+}
+
+pub(crate) struct JsReplInstructionsFragment {
+    text: String,
+}
+
+impl ModelVisibleContextFragment for JsReplInstructionsFragment {
+    type Role = ContextualUserContextRole;
+
+    fn render_text(&self) -> String {
+        Self::wrap_contextual_user_body(self.text.clone())
+    }
+
+    fn build(
+        turn_context: &TurnContext,
+        reference_context_item: Option<&TurnContextItem>,
+        _params: &TurnContextDiffParams<'_>,
+    ) -> Option<Self> {
+        if reference_context_item.is_some() {
+            return None;
+        }
+
+        Some(Self {
+            text: render_js_repl_instructions(&turn_context.config)?,
+        })
+    }
+
+    fn contextual_user_markers() -> Option<ContextualUserFragmentMarkers> {
+        Some(ContextualUserFragmentMarkers::new(
+            JS_REPL_INSTRUCTIONS_OPEN_TAG,
+            JS_REPL_INSTRUCTIONS_CLOSE_TAG,
+        ))
+    }
+}
+
+pub(crate) struct SkillsSectionFragment {
+    text: String,
+}
+
+impl ModelVisibleContextFragment for SkillsSectionFragment {
+    type Role = ContextualUserContextRole;
+
+    fn render_text(&self) -> String {
+        Self::wrap_contextual_user_body(self.text.clone())
+    }
+
+    fn build(
+        turn_context: &TurnContext,
+        reference_context_item: Option<&TurnContextItem>,
+        _params: &TurnContextDiffParams<'_>,
+    ) -> Option<Self> {
+        if reference_context_item.is_some() {
+            return None;
+        }
+
+        let skills = turn_context
+            .turn_skills
+            .outcome
+            .allowed_skills_for_implicit_invocation();
+        Some(Self {
+            text: render_skills_section(&skills)?,
+        })
+    }
+
+    fn contextual_user_markers() -> Option<ContextualUserFragmentMarkers> {
+        Some(ContextualUserFragmentMarkers::new(
+            SKILLS_SECTION_OPEN_TAG,
+            SKILLS_SECTION_CLOSE_TAG,
+        ))
+    }
+}
+
+pub(crate) struct ChildAgentsInstructionsFragment;
+
+impl ModelVisibleContextFragment for ChildAgentsInstructionsFragment {
+    type Role = ContextualUserContextRole;
+
+    fn render_text(&self) -> String {
+        Self::wrap_contextual_user_body(HIERARCHICAL_AGENTS_MESSAGE.to_string())
+    }
+
+    fn build(
+        turn_context: &TurnContext,
+        reference_context_item: Option<&TurnContextItem>,
+        _params: &TurnContextDiffParams<'_>,
+    ) -> Option<Self> {
+        if reference_context_item.is_some()
+            || !turn_context.features.enabled(Feature::ChildAgentsMd)
+        {
+            return None;
+        }
+
+        Some(Self)
+    }
+
+    fn contextual_user_markers() -> Option<ContextualUserFragmentMarkers> {
+        Some(ContextualUserFragmentMarkers::new(
+            CHILD_AGENTS_INSTRUCTIONS_OPEN_TAG,
+            CHILD_AGENTS_INSTRUCTIONS_CLOSE_TAG,
+        ))
     }
 }
 
@@ -896,6 +1048,13 @@ mod tests {
         assert!(is_contextual_user_fragment(&ContentItem::InputText {
             text: "# AGENTS.md instructions for /tmp\n\n<INSTRUCTIONS>\nbody\n</INSTRUCTIONS>"
                 .to_string(),
+        }));
+    }
+
+    #[test]
+    fn detects_user_instructions_fragment() {
+        assert!(is_contextual_user_fragment(&ContentItem::InputText {
+            text: "<user_instructions>\ncustom guidance\n</user_instructions>".to_string(),
         }));
     }
 

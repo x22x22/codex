@@ -53,6 +53,12 @@ use codex_protocol::protocol::TurnContextItem;
 
 pub(crate) const SKILL_OPEN_TAG: &str = "<skill>";
 pub(crate) const SKILL_CLOSE_TAG: &str = "</skill>";
+pub(crate) const JS_REPL_INSTRUCTIONS_OPEN_TAG: &str = "<js_repl_instructions>";
+pub(crate) const JS_REPL_INSTRUCTIONS_CLOSE_TAG: &str = "</js_repl_instructions>";
+pub(crate) const SKILLS_SECTION_OPEN_TAG: &str = "<skills_section>";
+pub(crate) const SKILLS_SECTION_CLOSE_TAG: &str = "</skills_section>";
+pub(crate) const CHILD_AGENTS_INSTRUCTIONS_OPEN_TAG: &str = "<child_agents_instructions>";
+pub(crate) const CHILD_AGENTS_INSTRUCTIONS_CLOSE_TAG: &str = "</child_agents_instructions>";
 pub(crate) const USER_SHELL_COMMAND_OPEN_TAG: &str = "<user_shell_command>";
 pub(crate) const USER_SHELL_COMMAND_CLOSE_TAG: &str = "</user_shell_command>";
 pub(crate) const TURN_ABORTED_OPEN_TAG: &str = "<turn_aborted>";
