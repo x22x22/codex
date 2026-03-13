@@ -107,6 +107,7 @@ async fn permissions_message_mentions_additional_permissions_for_legacy_exec_flo
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
@@ -149,6 +150,7 @@ async fn permissions_message_omits_additional_permissions_without_exec_approvals
                 text: "hello".into(),
                 text_elements: Vec::new(),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;

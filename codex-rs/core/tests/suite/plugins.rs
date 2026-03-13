@@ -387,6 +387,7 @@ async fn explicit_plugin_mentions_track_plugin_used_analytics() -> Result<()> {
                 name: "sample".into(),
                 path: format!("plugin://{SAMPLE_PLUGIN_CONFIG_NAME}"),
             }],
+            ephemeral_context: Vec::new(),
             final_output_json_schema: None,
         })
         .await?;
