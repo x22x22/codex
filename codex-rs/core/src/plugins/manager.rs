@@ -521,17 +521,6 @@ impl PluginsManager {
             .map(|_| ())
             .map_err(PluginInstallError::from)?;
 
-        let analytics_events_client = match self.analytics_events_client.read() {
-            Ok(client) => client.clone(),
-            Err(err) => err.into_inner().clone(),
-        };
-        if let Some(analytics_events_client) = analytics_events_client {
-            analytics_events_client.track_plugin_installed(plugin_telemetry_metadata_from_root(
-                &result.plugin_id,
-                result.installed_path.as_path(),
-            ));
-        }
-
         for app in load_plugin_apps(result.installed_path.as_path()) {
             if app.0 == RESERVED_APP_DEFAULT_KEY {
                 warn!(
@@ -556,6 +545,17 @@ impl PluginsManager {
                 .await
                 .map(|_| ())
                 .map_err(PluginInstallError::from)?;
+        }
+
+        let analytics_events_client = match self.analytics_events_client.read() {
+            Ok(client) => client.clone(),
+            Err(err) => err.into_inner().clone(),
+        };
+        if let Some(analytics_events_client) = analytics_events_client {
+            analytics_events_client.track_plugin_installed(plugin_telemetry_metadata_from_root(
+                &result.plugin_id,
+                result.installed_path.as_path(),
+            ));
         }
 
         Ok(PluginInstallOutcome {
