@@ -123,7 +123,16 @@ impl ActionKind {
                 let (path, _) = target.resolve_for_patch(test);
                 let _ = fs::remove_file(&path);
                 let command = format!("printf {content:?} > {path:?} && cat {path:?}");
-                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
+                // Approval matrix write fixtures don't depend on shell init files; keep them
+                // off the login-shell startup path so the timeout measures the command itself.
+                let event = shell_event_with_prefix_rule(
+                    call_id,
+                    &command,
+                    1_000,
+                    sandbox_permissions,
+                    None,
+                    Some(false),
+                )?;
                 Ok((event, Some(command)))
             }
             ActionKind::FetchUrl {
@@ -225,7 +234,14 @@ fn shell_event(
     timeout_ms: u64,
     sandbox_permissions: SandboxPermissions,
 ) -> Result<Value> {
-    shell_event_with_prefix_rule(call_id, command, timeout_ms, sandbox_permissions, None)
+    shell_event_with_prefix_rule(
+        call_id,
+        command,
+        timeout_ms,
+        sandbox_permissions,
+        None,
+        None,
+    )
 }
 
 fn shell_event_with_prefix_rule(
@@ -234,6 +250,7 @@ fn shell_event_with_prefix_rule(
     timeout_ms: u64,
     sandbox_permissions: SandboxPermissions,
     prefix_rule: Option<Vec<String>>,
+    login: Option<bool>,
 ) -> Result<Value> {
     let mut args = json!({
         "command": command,
@@ -244,6 +261,9 @@ fn shell_event_with_prefix_rule(
     }
     if let Some(prefix_rule) = prefix_rule {
         args["prefix_rule"] = json!(prefix_rule);
+    }
+    if let Some(login) = login {
+        args["login"] = json!(login);
     }
     let args_str = serde_json::to_string(&args)?;
     Ok(ev_function_call(call_id, "shell_command", &args_str))
@@ -2082,6 +2102,7 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
         1_000,
         SandboxPermissions::RequireEscalated,
         Some(vec!["touch".to_string()]),
+        None,
     )?;
 
     let _ = mount_sse_once(
@@ -2133,6 +2154,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
         1_000,
         SandboxPermissions::RequireEscalated,
         Some(vec!["touch".to_string()]),
+        None,
     )?;
 
     let _ = mount_sse_once(
@@ -2180,6 +2202,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
         1_000,
         SandboxPermissions::RequireEscalated,
         Some(vec!["touch".to_string()]),
+        None,
     )?;
 
     let _ = mount_sse_once(
