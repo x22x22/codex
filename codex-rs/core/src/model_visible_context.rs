@@ -7,74 +7,38 @@
 //! `model_visible_fragments.rs`. This module keeps only the shared rendering,
 //! role, and turn-context parameter helpers that every fragment uses.
 //!
-//! Contributor guide for adding new model-visible context:
+//! Contributor guide:
 //!
-//! 1. Start by deciding whether the new context should be model-visible at
-//!    all. If it is only for UI/state bookkeeping and the model should never
-//!    see it, do not add a fragment.
-//! 2. If the model should see it, define a typed fragment in
-//!    `model_visible_fragments.rs` and implement
-//!    `ModelVisibleContextFragment`. Do not hand-construct raw
-//!    `ResponseItem::Message` values for prompt context in new code.
-//! 3. Choose the role carefully:
-//!    - `DeveloperContextRole` is for developer guidance, policies, or other
-//!      system-owned instructions that should live in the single developer
-//!      envelope.
-//!    - `ContextualUserContextRole` is for contextual state/runtime markers that
-//!      are intentionally represented as user-role history so parsing can treat
-//!      them as contextual state instead of user intent.
-//! 4. Decide whether the fragment is turn-state-derived:
-//!    - If it is derived from current durable turn/session state and should be
-//!      reinjected or diffed correctly across resume, compaction, backtracking,
-//!      or fork, implement `build(...)`.
-//!    - `build(...)` receives the current `TurnContext`, an optional
-//!      `reference_context_item`, and `TurnContextDiffParams`.
-//!      `reference_context_item` is the baseline state already represented in
-//!      model-visible history; compare against it to avoid emitting duplicate
-//!      context, and fall back to `TurnContextDiffParams` when there is no
-//!      baseline but previous runtime/session state still matters.
-//!    - If the fragment is a one-off runtime marker or session-prefix message,
-//!      leave `build(...)` as `None`; it should still be defined and
-//!      registered so rendering/detection stay standardized.
-//! 5. If the fragment has contextual-user role, make sure persisted history can
-//!    recognize it:
-//!    - Prefer `contextual_user_markers()` when the fragment has stable wrapper
-//!      markers.
-//!    - Override `matches_contextual_user_text()` only when fixed markers are
-//!      not enough.
-//!    - Every contextual-user fragment must have a stable detection path so old
-//!      history is parsed as contextual state rather than as literal user
-//!      input.
-//! 6. Register the fragment exactly once in the central ordered registry in
-//!    `model_visible_fragments.rs`.
-//!    - Registration is what makes the fragment participate in contextual-user
-//!      detection.
-//!    - Registration is also what makes turn-state fragments participate in the
-//!      shared initial-context and per-turn diff assembly.
-//!    - The registry order is the canonical prompt order, so place the new
-//!      fragment where it should appear relative to the others.
-//! 7. Keep the two-envelope invariant intact:
-//!    - turn-state developer fragments are grouped into one developer message
-//!    - turn-state contextual-user fragments are grouped into one
-//!      contextual-user message
-//!    - runtime/session-prefix fragments may still be emitted as standalone
-//!      messages when the event itself is the thing being recorded
-//! 8. Prefer fragment-local logic over ad hoc helpers. The fragment type should
-//!    own:
-//!    - how the text is rendered
-//!    - how current state is inspected
-//!    - how diffing against an existing baseline works
-//!    - how contextual-user detection works, if applicable
-//! 9. Keep legacy compatibility bounded. If old shipped history needs special
-//!    detection for a wrapper we no longer emit, add a small legacy shim in the
-//!    detection path rather than inventing a fake new fragment type.
-//!
-//! Rule of thumb:
-//! - “Should the model see this every turn as part of durable prompt state?”
-//!   => typed fragment + `build(...)` + registry.
-//! - “Should the model see this only because a runtime event just happened?”
-//!   => typed fragment + registry, but no `build(...)`.
-//! - “Should the model not see this at all?” => not a fragment.
+//! - If the model should not see the data, do not add a fragment.
+//! - If it should, define a typed fragment in `model_visible_fragments.rs`,
+//!   implement `ModelVisibleContextFragment`, and register it exactly once in
+//!   the central registry there. Registration is what enables shared
+//!   contextual-user detection and registry-driven turn-state assembly.
+//! - Choose the role intentionally:
+//!   - `DeveloperContextRole` for developer guidance/policy
+//!   - `ContextualUserContextRole` for contextual user-role state that must be
+//!     parsed as context rather than literal user intent
+//! - If the fragment is durable turn/session state that should rebuild across
+//!   resume, compaction, backtracking, or fork, implement `build(...)`.
+//!   `reference_context_item` is the baseline already represented in
+//!   model-visible history; compare against it to avoid duplicates, and use
+//!   `TurnContextDiffParams` for other runtime/session inputs such as
+//!   `previous_turn_settings`.
+//! - If the fragment is a runtime/session-prefix marker rather than turn-state
+//!   context, leave `build(...)` as `None`.
+//! - Contextual-user fragments must have stable detection. Prefer
+//!   `contextual_user_markers()`; override `matches_contextual_user_text()`
+//!   only when matching is genuinely custom.
+//! - Keep the turn-state two-envelope invariant intact: turn-state developer
+//!   fragments are grouped into one developer message, and turn-state
+//!   contextual-user fragments are grouped into one contextual-user message.
+//!   Runtime/session-prefix fragments may still be emitted as standalone
+//!   messages.
+//! - Keep logic fragment-local. The fragment type should own rendering,
+//!   state/diff inspection, and contextual-user detection when applicable.
+//! - Keep legacy compatibility bounded: if old shipped history needs special
+//!   detection for a wrapper we no longer emit, add a small shim in the
+//!   detection path rather than inventing a fake current fragment type.
 
 use crate::codex::PreviousTurnSettings;
 use crate::codex::TurnContext;
