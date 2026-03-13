@@ -124,7 +124,7 @@ impl ActionKind {
                 let _ = fs::remove_file(&path);
                 let command = format!("printf {content:?} > {path:?} && cat {path:?}");
                 let event =
-                    approval_matrix_shell_event(call_id, &command, 1_000, sandbox_permissions)?;
+                    approval_matrix_shell_event(call_id, &command, 5_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
             ActionKind::FetchUrl {
