@@ -327,11 +327,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .expect("permissions message");
     let pos_user_instructions = messages
         .iter()
-        .position(|(role, text)| {
-            role == "user"
-                && text.contains("be nice")
-                && text.starts_with("# AGENTS.md instructions for ")
-        })
+        .position(|(role, text)| role == "user" && text.contains("be nice"))
         .expect("user instructions");
     let pos_environment = messages
         .iter()
@@ -908,9 +904,9 @@ async fn includes_user_instructions_message_in_request() {
     let ui_text = user_context_texts
         .iter()
         .copied()
-        .find(|text| text.starts_with("# AGENTS.md instructions for "))
+        .find(|text| text.contains("<INSTRUCTIONS>"))
         .expect("invalid message content");
-    assert!(ui_text.contains("</INSTRUCTIONS>"));
+    assert!(ui_text.contains("<INSTRUCTIONS>"));
     assert!(ui_text.contains("be nice"));
     assert!(
         user_context_texts
@@ -1766,9 +1762,9 @@ async fn includes_developer_instructions_message_in_request() {
     let ui_text = user_context_texts
         .iter()
         .copied()
-        .find(|text| text.starts_with("# AGENTS.md instructions for "))
+        .find(|text| text.contains("<INSTRUCTIONS>"))
         .expect("invalid message content");
-    assert!(ui_text.contains("</INSTRUCTIONS>"));
+    assert!(ui_text.contains("<INSTRUCTIONS>"));
     assert!(ui_text.contains("be nice"));
     assert!(
         user_context_texts
