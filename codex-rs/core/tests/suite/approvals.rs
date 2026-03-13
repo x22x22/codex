@@ -123,16 +123,8 @@ impl ActionKind {
                 let (path, _) = target.resolve_for_patch(test);
                 let _ = fs::remove_file(&path);
                 let command = format!("printf {content:?} > {path:?} && cat {path:?}");
-                // Approval matrix write fixtures don't depend on shell init files; keep them
-                // off the login-shell startup path so the timeout measures the command itself.
-                let event = shell_event_with_prefix_rule(
-                    call_id,
-                    &command,
-                    1_000,
-                    sandbox_permissions,
-                    None,
-                    Some(false),
-                )?;
+                let event =
+                    approval_matrix_shell_event(call_id, &command, 1_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
             ActionKind::FetchUrl {
@@ -154,7 +146,8 @@ impl ActionKind {
                 );
 
                 let command = format!("python3 -c \"{script}\"");
-                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
+                let event =
+                    approval_matrix_shell_event(call_id, &command, 5_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
             ActionKind::FetchUrlNoProxy {
@@ -176,11 +169,13 @@ impl ActionKind {
                 );
 
                 let command = format!("python3 -c \"{script}\"");
-                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
+                let event =
+                    approval_matrix_shell_event(call_id, &command, 5_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
             ActionKind::RunCommand { command } => {
-                let event = shell_event(call_id, command, 1_000, sandbox_permissions)?;
+                let event =
+                    approval_matrix_shell_event(call_id, command, 1_000, sandbox_permissions)?;
                 Ok((event, Some(command.to_string())))
             }
             ActionKind::RunUnifiedExecCommand {
@@ -207,7 +202,8 @@ impl ActionKind {
                 let _ = fs::remove_file(&path);
                 let patch = build_add_file_patch(&patch_path, content);
                 let command = shell_apply_patch_command(&patch);
-                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
+                let event =
+                    approval_matrix_shell_event(call_id, &command, 5_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
         }
@@ -241,6 +237,23 @@ fn shell_event(
         sandbox_permissions,
         None,
         None,
+    )
+}
+
+fn approval_matrix_shell_event(
+    call_id: &str,
+    command: &str,
+    timeout_ms: u64,
+    sandbox_permissions: SandboxPermissions,
+) -> Result<Value> {
+    // Approval-matrix shell fixtures verify permission behavior, not login-shell startup.
+    shell_event_with_prefix_rule(
+        call_id,
+        command,
+        timeout_ms,
+        sandbox_permissions,
+        None,
+        Some(false),
     )
 }
 
