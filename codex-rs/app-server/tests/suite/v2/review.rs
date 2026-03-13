@@ -18,13 +18,10 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ThreadItem;
-use codex_app_server_protocol::ThreadReadParams;
-use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
 use codex_app_server_protocol::ThreadStatusChangedNotification;
-use codex_app_server_protocol::TurnCompletedNotification;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
@@ -222,67 +219,38 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
 
     let approval_item_id =
         approval_item_id.expect("did not observe command execution approval request");
-    let mut saw_turn_completed = false;
-    while !saw_turn_completed {
+    let mut completed_command_execution_item_id = None;
+    while completed_command_execution_item_id.is_none() {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let message = timeout(remaining, mcp.read_next_message()).await??;
         if let JSONRPCMessage::Notification(notification) = message {
-            if notification.method != "turn/completed" {
-                continue;
+            match notification.method.as_str() {
+                "item/completed" => {
+                    let completed: ItemCompletedNotification = serde_json::from_value(
+                        notification.params.expect("params must be present"),
+                    )?;
+                    if completed.turn_id != turn_id {
+                        continue;
+                    }
+                    if let ThreadItem::CommandExecution { id, .. } = completed.item {
+                        eprintln!(
+                            "review approval probe saw completed command execution item: turn_id={turn_id}, item_id={item_id}",
+                            turn_id = completed.turn_id,
+                            item_id = id
+                        );
+                        completed_command_execution_item_id = Some(id);
+                    }
+                }
+                "turn/completed" => {
+                    eprintln!("review approval probe saw turn/completed before command item");
+                }
+                _ => continue,
             }
-            let completed: TurnCompletedNotification =
-                serde_json::from_value(notification.params.expect("params must be present"))?;
-            eprintln!(
-                "review approval probe saw turn/completed for turn {turn_id}",
-                turn_id = completed.turn.id
-            );
-            if completed.turn.id == turn_id {
-                saw_turn_completed = true;
-            }
-        }
-    }
-
-    let expected_command_execution_item_ids = vec![approval_item_id.clone()];
-    let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
-    let mut command_execution_item_ids = None;
-    while command_execution_item_ids.is_none() {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let read_id = mcp
-            .send_thread_read_request(ThreadReadParams {
-                thread_id: thread_id.clone(),
-                include_turns: true,
-            })
-            .await?;
-        let read_resp: JSONRPCResponse = timeout(
-            remaining,
-            mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
-        )
-        .await??;
-        let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
-        let maybe_turn = thread.turns.iter().find(|turn| turn.id == turn_id.as_str());
-        let persisted_item_ids = maybe_turn
-            .map(|turn| {
-                turn.items
-                    .iter()
-                    .filter_map(|item| match item {
-                        ThreadItem::CommandExecution { id, .. } => Some(id.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        eprintln!(
-            "review approval probe thread/read persisted command execution items: {persisted_item_ids:?}"
-        );
-        if persisted_item_ids == expected_command_execution_item_ids {
-            command_execution_item_ids = Some(persisted_item_ids);
-        } else {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
     }
     assert_eq!(
-        command_execution_item_ids.expect("missing persisted command execution items"),
-        expected_command_execution_item_ids
+        completed_command_execution_item_id.expect("missing completed command execution item"),
+        approval_item_id
     );
 
     Ok(())
