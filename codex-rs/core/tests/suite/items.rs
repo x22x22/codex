@@ -362,6 +362,137 @@ async fn user_message_type_prompt_steering_metadata_is_emitted_when_feature_enab
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_message_type_prompt_queued_metadata_is_emitted_when_feature_enabled()
+-> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let temp = tempdir()?;
+    let unblock_path = temp.path().join("unblock-queued");
+    let command = format!(
+        "while [ ! -f \"{}\" ]; do sleep 0.01; done; echo done",
+        unblock_path.display()
+    );
+    let call_id = "shell-queued-call";
+
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(
+                    call_id,
+                    "shell",
+                    &serde_json::to_string(&json!({
+                        "command": ["/bin/sh", "-c", command],
+                    }))?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-2", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let test = test_codex()
+        .with_model("gpt-5")
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::UserMessageTypeMetadata)
+                .expect("feature flag should be enabled for this test");
+        })
+        .build(&server)
+        .await?;
+    let codex = test.codex.clone();
+    let turn_model = test.session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "start queued flow".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd: test.cwd_path().to_path_buf(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: turn_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    let turn_id = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+
+    wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::ExecCommandBegin(event) if event.call_id == call_id => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let queued_text = "queued metadata check";
+    assert!(
+        codex
+            .inject_response_items(vec![codex_protocol::models::ResponseInputItem::Message {
+                role: "user".into(),
+                content: vec![codex_protocol::models::ContentItem::InputText {
+                    text: queued_text.into(),
+                }],
+            }])
+            .await
+            .is_ok(),
+        "inject_response_items should succeed on active turn"
+    );
+
+    std::fs::write(&unblock_path, "go")?;
+
+    wait_for_event(&codex, |ev| match ev {
+        EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+        _ => false,
+    })
+    .await;
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while responses.requests().len() < 2 {
+        if Instant::now() >= deadline {
+            panic!("timed out waiting for second responses request");
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    let requests = responses.requests();
+    let second_body = requests
+        .get(1)
+        .expect("second responses request should be present")
+        .body_json();
+    let input = second_body
+        .get("input")
+        .and_then(Value::as_array)
+        .expect("request input array");
+    let queued_message = user_message_item_by_text(input, queued_text);
+    assert_eq!(
+        queued_message
+            .get("metadata")
+            .and_then(|metadata| metadata.get("user_message_type"))
+            .and_then(Value::as_str),
+        Some("prompt_queued")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn assistant_message_item_is_emitted() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
