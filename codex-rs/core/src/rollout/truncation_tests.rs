@@ -50,10 +50,10 @@ fn truncates_rollout_from_start_before_nth_user_only() {
         },
         ResponseItem::FunctionCall {
             id: None,
+            call_id: "c1".to_string(),
             name: "tool".to_string(),
             namespace: None,
             arguments: "{}".to_string(),
-            call_id: "c1".to_string(),
         },
         assistant_msg("a4"),
     ];
