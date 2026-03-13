@@ -242,35 +242,48 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
         }
     }
 
-    let read_id = mcp
-        .send_thread_read_request(ThreadReadParams {
-            thread_id: thread_id.clone(),
-            include_turns: true,
-        })
-        .await?;
-    let read_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
-    )
-    .await??;
-    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
-    let turn = thread
-        .turns
-        .iter()
-        .find(|turn| turn.id == turn_id.as_str())
-        .expect("did not observe completed review turn in thread/read");
-    let command_execution_item_ids = turn
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            ThreadItem::CommandExecution { id, .. } => Some(id.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    eprintln!(
-        "review approval probe observed persisted command execution items: {command_execution_item_ids:?}"
+    let expected_command_execution_item_ids = vec![approval_item_id.clone()];
+    let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
+    let mut command_execution_item_ids = None;
+    while command_execution_item_ids.is_none() {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let read_id = mcp
+            .send_thread_read_request(ThreadReadParams {
+                thread_id: thread_id.clone(),
+                include_turns: true,
+            })
+            .await?;
+        let read_resp: JSONRPCResponse = timeout(
+            remaining,
+            mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+        )
+        .await??;
+        let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+        let maybe_turn = thread.turns.iter().find(|turn| turn.id == turn_id.as_str());
+        let persisted_item_ids = maybe_turn
+            .map(|turn| {
+                turn.items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ThreadItem::CommandExecution { id, .. } => Some(id.clone()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        eprintln!(
+            "review approval probe thread/read persisted command execution items: {persisted_item_ids:?}"
+        );
+        if persisted_item_ids == expected_command_execution_item_ids {
+            command_execution_item_ids = Some(persisted_item_ids);
+        } else {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+    assert_eq!(
+        command_execution_item_ids.expect("missing persisted command execution items"),
+        expected_command_execution_item_ids
     );
-    assert_eq!(command_execution_item_ids, vec![approval_item_id]);
 
     Ok(())
 }

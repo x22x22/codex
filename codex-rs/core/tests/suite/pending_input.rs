@@ -46,6 +46,12 @@ fn message_input_texts(body: &Value, role: &str) -> Vec<String> {
         .collect()
 }
 
+fn has_user_text(body: &Value, text: &str) -> bool {
+    message_input_texts(body, "user")
+        .iter()
+        .any(|candidate| candidate == text)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn injected_user_input_triggers_follow_up_request_with_deltas() {
     let (gate_completed_tx, gate_completed_rx) = oneshot::channel();
@@ -172,14 +178,27 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
 
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
     let second_body: Value = serde_json::from_slice(&requests[1]).expect("parse second request");
+    eprintln!("pending input probe request[0] body: {first_body}");
+    eprintln!("pending input probe request[1] body: {second_body}");
 
-    let first_texts = message_input_texts(&first_body, "user");
-    assert!(first_texts.iter().any(|text| text == "first prompt"));
-    assert!(!first_texts.iter().any(|text| text == "second prompt"));
+    let request_bodies = [&first_body, &second_body];
+    let initial_request_matches = request_bodies
+        .iter()
+        .filter(|body| has_user_text(body, "first prompt") && !has_user_text(body, "second prompt"))
+        .count();
+    let follow_up_request_matches = request_bodies
+        .iter()
+        .filter(|body| has_user_text(body, "first prompt") && has_user_text(body, "second prompt"))
+        .count();
 
-    let second_texts = message_input_texts(&second_body, "user");
-    assert!(second_texts.iter().any(|text| text == "first prompt"));
-    assert!(second_texts.iter().any(|text| text == "second prompt"));
+    assert_eq!(
+        initial_request_matches, 1,
+        "expected exactly one initial request with only the first prompt, bodies: {request_bodies:?}"
+    );
+    assert_eq!(
+        follow_up_request_matches, 1,
+        "expected exactly one follow-up request with both prompts, bodies: {request_bodies:?}"
+    );
 
     server.shutdown().await;
 }
