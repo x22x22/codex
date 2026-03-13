@@ -147,3 +147,108 @@ pub(crate) fn spawn_op_forwarder(thread: std::sync::Arc<CodexThread>) -> Unbound
 
     codex_op_tx
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use codex_core::CodexAuth;
+    use codex_core::ThreadManager;
+    use codex_core::config::ConfigBuilder;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config_loader::LoaderOverrides;
+    use codex_protocol::protocol::EventMsg;
+    use std::path::Path;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::mpsc::unbounded_channel;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    async fn build_malformed_rules_config(
+        codex_home: &Path,
+        cwd: &Path,
+    ) -> std::io::Result<Config> {
+        let cwd_display = cwd.display();
+        let config_contents = format!(
+            r#"model_provider = "ollama"
+
+[projects."{cwd_display}"]
+trust_level = "trusted"
+"#
+        );
+        std::fs::write(codex_home.join("config.toml"), config_contents)?;
+
+        ConfigBuilder::default()
+            .codex_home(codex_home.to_path_buf())
+            .harness_overrides(ConfigOverrides {
+                cwd: Some(cwd.to_path_buf()),
+                ..ConfigOverrides::default()
+            })
+            .loader_overrides(LoaderOverrides {
+                #[cfg(target_os = "macos")]
+                managed_preferences_base64: Some(String::new()),
+                macos_managed_config_requirements_base64: Some(String::new()),
+                ..LoaderOverrides::default()
+            })
+            .build()
+            .await
+    }
+
+    #[tokio::test]
+    async fn malformed_rules_emit_graceful_startup_error() {
+        let codex_home = tempdir().expect("temp codex home");
+        let project_dir = tempdir().expect("temp project dir");
+        std::fs::write(
+            codex_home.path().join("rules"),
+            "rules should be a directory not a file",
+        )
+        .expect("write malformed rules fixture");
+
+        let config = build_malformed_rules_config(codex_home.path(), project_dir.path())
+            .await
+            .expect("load config");
+        let manager = Arc::new(ThreadManager::with_models_provider_and_home_for_tests(
+            CodexAuth::from_api_key("dummy"),
+            config.model_provider.clone(),
+            config.codex_home.clone(),
+        ));
+        let (app_event_tx, mut app_event_rx) = unbounded_channel();
+
+        let _codex_op_tx = spawn_agent(config, AppEventSender::new(app_event_tx), manager);
+
+        let mut startup_error_message = None;
+        let fatal_message = timeout(Duration::from_secs(5), async {
+            loop {
+                match app_event_rx.recv().await {
+                    Some(AppEvent::CodexEvent(event)) => {
+                        if let EventMsg::Error(err) = event.msg {
+                            startup_error_message = Some(err.message);
+                        }
+                    }
+                    Some(AppEvent::FatalExitRequest(message)) => break message,
+                    Some(_) => {}
+                    None => panic!("app event channel closed before fatal startup error"),
+                }
+            }
+        })
+        .await
+        .expect("wait for startup failure");
+
+        assert!(
+            fatal_message.contains("Failed to initialize codex:"),
+            "expected fatal startup prefix, got: {fatal_message}"
+        );
+        assert!(
+            fatal_message.contains("failed to read rules files"),
+            "expected rules read error in fatal exit, got: {fatal_message}"
+        );
+
+        let startup_error_message =
+            startup_error_message.expect("error event should precede fatal exit");
+        assert!(
+            startup_error_message.contains("failed to read rules files"),
+            "expected rules read error event, got: {startup_error_message}"
+        );
+    }
+}
