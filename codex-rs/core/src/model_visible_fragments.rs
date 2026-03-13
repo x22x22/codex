@@ -224,10 +224,7 @@ impl ModelVisibleContextFragment for PermissionsUpdateFragment {
                 &turn_context.cwd,
                 turn_context
                     .features
-                    .enabled(Feature::ExecPermissionApprovals)
-                    || turn_context
-                        .features
-                        .enabled(Feature::RequestPermissionsTool),
+                    .enabled(Feature::ExecPermissionApprovals),
             ),
         })
     }

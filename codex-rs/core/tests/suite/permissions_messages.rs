@@ -123,6 +123,48 @@ async fn permissions_message_mentions_additional_permissions_for_legacy_exec_flo
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn permissions_message_omits_additional_permissions_without_exec_approvals() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let req = mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let mut builder = test_codex().with_config(move |config| {
+        config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
+        config
+            .features
+            .enable(Feature::RequestPermissionsTool)
+            .expect("test config should allow feature update");
+    });
+    let test = builder.build(&server).await?;
+
+    test.codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "hello".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request = req.single_request();
+    let body = request.body_json();
+    let input = body["input"].as_array().expect("input array");
+    let permissions = permissions_texts(input);
+    assert_eq!(permissions.len(), 1);
+    assert!(!permissions[0].contains("with_additional_permissions"));
+    assert!(!permissions[0].contains("additional_permissions"));
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn permissions_message_added_on_override_change() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
