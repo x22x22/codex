@@ -13,6 +13,8 @@ use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tokio::sync::oneshot;
+use tokio::time::Duration;
+use tokio::time::timeout;
 
 fn ev_message_item_done(id: &str, text: &str) -> Value {
     serde_json::json!({
@@ -86,8 +88,8 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         },
     ];
 
-    let (server, _completions) =
-        start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+    let (server, completions) = start_streaming_sse_server(vec![first_chunks, second_chunks]).await;
+    let mut completions = completions.into_iter();
 
     let codex = test_codex()
         .with_model("gpt-5.1")
@@ -111,6 +113,7 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         matches!(event, EventMsg::AgentMessageContentDelta(_))
     })
     .await;
+    eprintln!("pending input probe observed first assistant delta");
 
     codex
         .submit(Op::UserInput {
@@ -122,12 +125,31 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         })
         .await
         .unwrap();
+    eprintln!("pending input probe injected second user input");
 
     let _ = gate_completed_tx.send(());
+    eprintln!("pending input probe released first response completion gate");
 
-    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+    let first_completion = completions
+        .next()
+        .expect("missing first response stream completion handle");
+    timeout(Duration::from_secs(5), first_completion)
+        .await
+        .expect("timed out waiting for first response stream completion")
+        .expect("first response stream closed before completion");
+    eprintln!("pending input probe observed first response stream completion");
+
+    let second_completion = completions
+        .next()
+        .expect("missing follow-up response stream completion handle");
+    timeout(Duration::from_secs(5), second_completion)
+        .await
+        .expect("timed out waiting for follow-up response stream completion")
+        .expect("follow-up response stream closed before completion");
+    eprintln!("pending input probe observed follow-up response stream completion");
 
     let requests = server.requests().await;
+    eprintln!("pending input probe captured {} requests", requests.len());
     assert_eq!(requests.len(), 2);
 
     let first_body: Value = serde_json::from_slice(&requests[0]).expect("parse first request");
