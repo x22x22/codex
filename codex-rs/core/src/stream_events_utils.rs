@@ -19,7 +19,7 @@ use crate::parse_turn_item;
 use crate::state_db;
 use crate::tools::parallel::ToolCallRuntime;
 use crate::tools::router::ToolRouter;
-use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::CustomDeveloperInstructions;
 use codex_protocol::models::FunctionCallOutputBody;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
@@ -305,8 +305,8 @@ pub(crate) async fn handle_non_tool_response_item(
                 match save_image_generation_result(&image_item.id, &image_item.result).await {
                     Ok(path) => {
                         image_item.saved_path = Some(path.to_string_lossy().into_owned());
-                        let image_output_dir = std::env::temp_dir();
-                        let message: ResponseItem = DeveloperInstructions::new(format!(
+                        let image_output_dir = default_image_generation_output_dir();
+                        let message: ResponseItem = CustomDeveloperInstructions::new(format!(
                             "Generated images are saved to {} as {} by default.",
                             image_output_dir.display(),
                             image_output_dir.join("<image_id>.png").display(),
