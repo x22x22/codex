@@ -6,8 +6,10 @@ use super::ParsedShellCommand;
 use super::commands_for_intercepted_exec_policy;
 use super::evaluate_intercepted_exec_policy;
 use super::extract_shell_script;
+use super::is_unconfigured_zsh_exec;
 use super::join_program_and_argv;
 use super::map_exec_result;
+use super::resolve_host_zsh_path;
 #[cfg(target_os = "macos")]
 use crate::config::Constrained;
 #[cfg(target_os = "macos")]
@@ -50,6 +52,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 #[cfg(target_os = "macos")]
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -203,39 +206,16 @@ fn extract_shell_script_preserves_login_flag() {
 }
 
 #[test]
-fn extract_shell_script_supports_wrapped_command_prefixes() {
-    assert_eq!(
-        extract_shell_script(&[
-            "/usr/bin/env".into(),
-            "CODEX_EXECVE_WRAPPER=1".into(),
-            "/bin/zsh".into(),
-            "-lc".into(),
-            "echo hello".into()
-        ])
-        .unwrap(),
-        ParsedShellCommand {
-            program: "/bin/zsh".to_string(),
-            script: "echo hello".to_string(),
-            login: true,
-        }
-    );
-
-    assert_eq!(
-        extract_shell_script(&[
-            "sandbox-exec".into(),
-            "-p".into(),
-            "sandbox_policy".into(),
-            "/bin/zsh".into(),
-            "-c".into(),
-            "pwd".into(),
-        ])
-        .unwrap(),
-        ParsedShellCommand {
-            program: "/bin/zsh".to_string(),
-            script: "pwd".to_string(),
-            login: false,
-        }
-    );
+fn extract_shell_script_rejects_wrapped_command_prefixes() {
+    let err = extract_shell_script(&[
+        "/usr/bin/env".into(),
+        "CODEX_EXECVE_WRAPPER=1".into(),
+        "/bin/zsh".into(),
+        "-lc".into(),
+        "echo hello".into(),
+    ])
+    .unwrap_err();
+    assert!(matches!(err, super::ToolError::Rejected(_)));
 }
 
 #[test]
@@ -272,6 +252,80 @@ fn join_program_and_argv_replaces_original_argv_zero() {
         ),
         vec!["/tmp/tool"]
     );
+}
+
+#[test]
+fn is_unconfigured_zsh_exec_matches_non_configured_zsh_paths() {
+    let program = AbsolutePathBuf::try_from(host_absolute_path(&["bin", "zsh"])).unwrap();
+    let host = PathBuf::from(host_absolute_path(&["bin", "zsh"]));
+    let configured = PathBuf::from(host_absolute_path(&["tmp", "codex-zsh"]));
+    assert!(is_unconfigured_zsh_exec(
+        &program,
+        Some(configured.as_path()),
+        Some(host.as_path()),
+    ));
+}
+
+#[test]
+fn is_unconfigured_zsh_exec_ignores_non_zsh_or_configured_paths() {
+    let configured = PathBuf::from(host_absolute_path(&["tmp", "codex-zsh"]));
+    let host = PathBuf::from(host_absolute_path(&["bin", "zsh"]));
+    let configured_program = AbsolutePathBuf::try_from(configured.clone()).unwrap();
+    assert!(!is_unconfigured_zsh_exec(
+        &configured_program,
+        Some(configured.as_path()),
+        Some(host.as_path()),
+    ));
+
+    let non_zsh =
+        AbsolutePathBuf::try_from(host_absolute_path(&["usr", "bin", "python3"])).unwrap();
+    assert!(!is_unconfigured_zsh_exec(
+        &non_zsh,
+        Some(configured.as_path()),
+        Some(host.as_path()),
+    ));
+    assert!(!is_unconfigured_zsh_exec(
+        &non_zsh,
+        None,
+        Some(host.as_path()),
+    ));
+}
+
+#[test]
+fn is_unconfigured_zsh_exec_does_not_match_non_host_zsh_named_binaries() {
+    let program = AbsolutePathBuf::try_from(host_absolute_path(&["tmp", "repo", "zsh"])).unwrap();
+    let configured = PathBuf::from(host_absolute_path(&["tmp", "codex-zsh"]));
+    let host = PathBuf::from(host_absolute_path(&["bin", "zsh"]));
+    assert!(!is_unconfigured_zsh_exec(
+        &program,
+        Some(configured.as_path()),
+        Some(host.as_path()),
+    ));
+}
+
+#[test]
+fn resolve_host_zsh_path_ignores_repo_local_path_shadowing() {
+    let shadow_dir = tempfile::tempdir().expect("create shadow dir");
+    let cwd_dir = tempfile::tempdir().expect("create cwd dir");
+    let fake_zsh = shadow_dir.path().join("zsh");
+    std::fs::write(&fake_zsh, "#!/bin/sh\nexit 0\n").expect("write fake zsh");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = std::fs::metadata(&fake_zsh)
+            .expect("metadata for fake zsh")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_zsh, permissions).expect("chmod fake zsh");
+    }
+
+    let path_env =
+        std::env::join_paths([shadow_dir.path(), Path::new("/usr/bin"), Path::new("/bin")])
+            .expect("join PATH")
+            .into_string()
+            .expect("PATH should be UTF-8");
+    let resolved = resolve_host_zsh_path(Some(&path_env), cwd_dir.path());
+    assert_ne!(resolved.as_deref(), Some(fake_zsh.as_path()));
 }
 
 #[test]
@@ -670,6 +724,8 @@ async fn prepare_escalated_exec_turn_default_preserves_macos_seatbelt_extensions
         }),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
+        shell_zsh_path: None,
+        host_zsh_path: None,
     };
 
     let prepared = executor
@@ -719,6 +775,8 @@ async fn prepare_escalated_exec_permissions_preserve_macos_seatbelt_extensions()
         macos_seatbelt_profile_extensions: None,
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
+        shell_zsh_path: None,
+        host_zsh_path: None,
     };
 
     let permissions = Permissions {
@@ -797,6 +855,8 @@ async fn prepare_escalated_exec_permission_profile_unions_turn_and_requested_mac
         }),
         codex_linux_sandbox_exe: None,
         use_legacy_landlock: false,
+        shell_zsh_path: None,
+        host_zsh_path: None,
     };
 
     let prepared = executor
