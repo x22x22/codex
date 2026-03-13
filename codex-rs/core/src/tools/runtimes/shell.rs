@@ -144,7 +144,10 @@ impl Approvable<ShellRequest> for ShellRuntime {
         ctx: ApprovalCtx<'a>,
     ) -> BoxFuture<'a, ReviewDecision> {
         let keys = self.approval_keys(req);
-        let command = req.command.clone();
+        let command = ctx
+            .command_override
+            .clone()
+            .unwrap_or_else(|| req.command.clone());
         let cwd = req.cwd.clone();
         let retry_reason = ctx.retry_reason.clone();
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
@@ -220,8 +223,9 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
+        let base_command = ctx.command_override.as_ref().unwrap_or(&req.command);
         let command = maybe_wrap_shell_lc_with_snapshot(
-            &req.command,
+            base_command,
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,

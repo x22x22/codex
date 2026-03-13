@@ -459,6 +459,7 @@ impl ShellHandler {
             turn: turn.clone(),
             call_id: call_id.clone(),
             tool_name,
+            command_override: None,
         };
         let out = orchestrator
             .run(
