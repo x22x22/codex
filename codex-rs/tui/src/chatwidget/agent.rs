@@ -4,6 +4,7 @@ use codex_core::CodexThread;
 use codex_core::NewThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
+use codex_core::error::CodexErr;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -24,6 +25,17 @@ async fn initialize_app_server_client_name(thread: &CodexThread) {
     }
 }
 
+fn emit_startup_error(app_event_tx: &AppEventSender, err: &CodexErr) {
+    let message = format!("Failed to initialize codex: {err}");
+    tracing::error!("{message}");
+    app_event_tx.send(AppEvent::CodexEvent(Event {
+        id: String::new(),
+        msg: EventMsg::Error(err.to_error_event(None)),
+    }));
+    app_event_tx.send(AppEvent::FatalExitRequest(message));
+    tracing::error!("failed to initialize codex: {err}");
+}
+
 /// Spawn the agent bootstrapper and op forwarding loop, returning the
 /// `UnboundedSender<Op>` used by the UI to submit operations.
 pub(crate) fn spawn_agent(
@@ -42,14 +54,7 @@ pub(crate) fn spawn_agent(
         } = match server.start_thread(config).await {
             Ok(v) => v,
             Err(err) => {
-                let message = format!("Failed to initialize codex: {err}");
-                tracing::error!("{message}");
-                app_event_tx_clone.send(AppEvent::CodexEvent(Event {
-                    id: "".to_string(),
-                    msg: EventMsg::Error(err.to_error_event(None)),
-                }));
-                app_event_tx_clone.send(AppEvent::FatalExitRequest(message));
-                tracing::error!("failed to initialize codex: {err}");
+                emit_startup_error(&app_event_tx_clone, &err);
                 return;
             }
         };
@@ -151,105 +156,43 @@ pub(crate) fn spawn_op_forwarder(thread: std::sync::Arc<CodexThread>) -> Unbound
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_event::AppEvent;
-    use codex_core::CodexAuth;
-    use codex_core::config::ConfigBuilder;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config_loader::LoaderOverrides;
-    use codex_protocol::protocol::EventMsg;
-    use std::path::Path;
-    use std::sync::Arc;
-    use tempfile::tempdir;
     use tokio::sync::mpsc::unbounded_channel;
-    use tokio::time::Duration;
-    use tokio::time::timeout;
-
-    async fn build_malformed_rules_config(
-        codex_home: &Path,
-        cwd: &Path,
-    ) -> std::io::Result<Config> {
-        let cwd_display = cwd.display().to_string().replace('\'', "''");
-        let config_contents = format!(
-            r#"model_provider = "ollama"
-
-[projects.'{cwd_display}']
-trust_level = "trusted"
-"#
-        );
-        std::fs::write(codex_home.join("config.toml"), config_contents)?;
-
-        ConfigBuilder::default()
-            .codex_home(codex_home.to_path_buf())
-            .harness_overrides(ConfigOverrides {
-                cwd: Some(cwd.to_path_buf()),
-                ..ConfigOverrides::default()
-            })
-            .loader_overrides(LoaderOverrides {
-                #[cfg(target_os = "macos")]
-                managed_preferences_base64: Some(String::new()),
-                macos_managed_config_requirements_base64: Some(String::new()),
-                ..LoaderOverrides::default()
-            })
-            .build()
-            .await
-    }
-
-    #[tokio::test]
-    async fn malformed_rules_emit_graceful_startup_error() {
-        let codex_home = tempdir().expect("temp codex home");
-        let project_dir = tempdir().expect("temp project dir");
-        std::fs::write(
-            codex_home.path().join("rules"),
-            "rules should be a directory not a file",
-        )
-        .expect("write malformed rules fixture");
-
-        let config = build_malformed_rules_config(codex_home.path(), project_dir.path())
-            .await
-            .expect("load config");
-        let manager = Arc::new(
-            codex_core::test_support::thread_manager_with_models_provider_and_home(
-                CodexAuth::from_api_key("dummy"),
-                config.model_provider.clone(),
-                config.codex_home.clone(),
-            ),
-        );
+    #[test]
+    fn startup_errors_are_forwarded_to_the_ui() {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
+        let err = CodexErr::Io(std::io::Error::other("failed to read rules files"));
 
-        let _codex_op_tx = spawn_agent(config, AppEventSender::new(app_event_tx), manager);
+        emit_startup_error(&AppEventSender::new(app_event_tx), &err);
 
-        let mut startup_error_message = None;
-        let fatal_message = timeout(Duration::from_secs(5), async {
-            loop {
-                match app_event_rx.recv().await {
-                    Some(AppEvent::CodexEvent(event)) => {
-                        if let EventMsg::Error(err) = event.msg {
-                            startup_error_message = Some(err.message);
-                        }
-                    }
-                    Some(AppEvent::FatalExitRequest(message)) => break message,
-                    Some(_) => {}
-                    None => panic!("app event channel closed before fatal startup error"),
-                }
-            }
-        })
-        .await
-        .expect("wait for startup failure");
+        let error_event = app_event_rx
+            .try_recv()
+            .expect("error event should be forwarded");
+        let fatal_exit = app_event_rx
+            .try_recv()
+            .expect("fatal exit should be forwarded");
 
+        let AppEvent::CodexEvent(event) = error_event else {
+            panic!("expected CodexEvent, got {error_event:?}");
+        };
+        let EventMsg::Error(err) = event.msg else {
+            panic!("expected Error event, got {:?}", event.msg);
+        };
         assert!(
-            fatal_message.contains("Failed to initialize codex:"),
-            "expected fatal startup prefix, got: {fatal_message}"
-        );
-        assert!(
-            fatal_message.contains("failed to read rules files"),
-            "expected rules read error in fatal exit, got: {fatal_message}"
+            err.message.contains("failed to read rules files"),
+            "expected rules read error in forwarded event, got: {}",
+            err.message
         );
 
-        let startup_error_message =
-            startup_error_message.expect("error event should precede fatal exit");
+        let AppEvent::FatalExitRequest(message) = fatal_exit else {
+            panic!("expected FatalExitRequest, got {fatal_exit:?}");
+        };
         assert!(
-            startup_error_message.contains("failed to read rules files"),
-            "expected rules read error event, got: {startup_error_message}"
+            message.contains("Failed to initialize codex:"),
+            "expected fatal startup prefix, got: {message}"
+        );
+        assert!(
+            message.contains("failed to read rules files"),
+            "expected rules read error in fatal exit, got: {message}"
         );
     }
 }

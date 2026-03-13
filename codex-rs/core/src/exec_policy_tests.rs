@@ -185,6 +185,27 @@ async fn loads_policies_from_policy_subdirectory() {
 }
 
 #[tokio::test]
+async fn returns_error_when_rules_path_is_a_file() {
+    let temp_dir = tempdir().expect("create temp dir");
+    let config_stack = config_stack_for_dot_codex_folder(temp_dir.path());
+    fs::write(
+        temp_dir.path().join(RULES_DIR_NAME),
+        "rules should be a directory not a file",
+    )
+    .expect("write malformed rules fixture");
+
+    let err = load_exec_policy(&config_stack)
+        .await
+        .expect_err("expected malformed rules path to fail");
+    let rendered = format_exec_policy_error_with_source(&err);
+
+    assert!(
+        rendered.contains("failed to read rules files"),
+        "expected rules read error, got: {rendered}"
+    );
+}
+
+#[tokio::test]
 async fn merges_requirements_exec_policy_network_rules() -> anyhow::Result<()> {
     let temp_dir = tempdir()?;
 
