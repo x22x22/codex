@@ -6,6 +6,7 @@ use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
 use crate::unified_exec::SpawnLifecycleHandle;
+use std::path::Path;
 
 pub(crate) struct PreparedUnifiedExecSpawn {
     pub(crate) exec_request: ExecRequest,
@@ -37,8 +38,18 @@ pub(crate) async fn maybe_prepare_unified_exec(
     attempt: &SandboxAttempt<'_>,
     ctx: &ToolCtx,
     exec_request: ExecRequest,
+    shell_zsh_path: &Path,
+    main_execve_wrapper_exe: &Path,
 ) -> Result<Option<PreparedUnifiedExecSpawn>, ToolError> {
-    imp::maybe_prepare_unified_exec(req, attempt, ctx, exec_request).await
+    imp::maybe_prepare_unified_exec(
+        req,
+        attempt,
+        ctx,
+        exec_request,
+        shell_zsh_path,
+        main_execve_wrapper_exe,
+    )
+    .await
 }
 
 #[cfg(unix)]
@@ -83,9 +94,18 @@ mod imp {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
         exec_request: ExecRequest,
+        shell_zsh_path: &Path,
+        main_execve_wrapper_exe: &Path,
     ) -> Result<Option<PreparedUnifiedExecSpawn>, ToolError> {
-        let Some(prepared) =
-            unix_escalation::prepare_unified_exec_zsh_fork(req, attempt, ctx, exec_request).await?
+        let Some(prepared) = unix_escalation::prepare_unified_exec_zsh_fork(
+            req,
+            attempt,
+            ctx,
+            exec_request,
+            shell_zsh_path,
+            main_execve_wrapper_exe,
+        )
+        .await?
         else {
             return Ok(None);
         };
@@ -118,8 +138,17 @@ mod imp {
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
         exec_request: ExecRequest,
+        shell_zsh_path: &Path,
+        main_execve_wrapper_exe: &Path,
     ) -> Result<Option<PreparedUnifiedExecSpawn>, ToolError> {
-        let _ = (req, attempt, ctx, exec_request);
+        let _ = (
+            req,
+            attempt,
+            ctx,
+            exec_request,
+            shell_zsh_path,
+            main_execve_wrapper_exe,
+        );
         Ok(None)
     }
 }

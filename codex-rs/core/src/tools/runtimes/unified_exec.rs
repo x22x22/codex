@@ -32,7 +32,7 @@ use crate::tools::sandboxing::ToolError;
 use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
-use crate::tools::spec::UnifiedExecBackendConfig;
+use crate::tools::spec::UnifiedExecShellMode;
 use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
@@ -71,12 +71,15 @@ pub struct UnifiedExecApprovalKey {
 
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
-    backend: UnifiedExecBackendConfig,
+    shell_mode: UnifiedExecShellMode,
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
-    pub fn new(manager: &'a UnifiedExecProcessManager, backend: UnifiedExecBackendConfig) -> Self {
-        Self { manager, backend }
+    pub fn new(manager: &'a UnifiedExecProcessManager, shell_mode: UnifiedExecShellMode) -> Self {
+        Self {
+            manager,
+            shell_mode,
+        }
     }
 }
 
@@ -208,7 +211,11 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = req.network.as_ref() {
             network.apply_to_env(&mut env);
         }
-        if self.backend == UnifiedExecBackendConfig::ZshFork {
+        if let UnifiedExecShellMode::ZshFork {
+            shell_zsh_path,
+            main_execve_wrapper_exe,
+        } = &self.shell_mode
+        {
             let spec = build_command_spec(
                 &command,
                 &req.cwd,
@@ -222,7 +229,16 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             let exec_env = attempt
                 .env_for(spec, req.network.as_ref())
                 .map_err(|err| ToolError::Codex(err.into()))?;
-            match zsh_fork_backend::maybe_prepare_unified_exec(req, attempt, ctx, exec_env).await? {
+            match zsh_fork_backend::maybe_prepare_unified_exec(
+                req,
+                attempt,
+                ctx,
+                exec_env,
+                shell_zsh_path.as_path(),
+                main_execve_wrapper_exe.as_path(),
+            )
+            .await?
+            {
                 Some(prepared) => {
                     return self
                         .manager
