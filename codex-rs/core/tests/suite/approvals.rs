@@ -126,7 +126,7 @@ impl ActionKind {
                 // does not depend on launching an extra `cat` subprocess.
                 let command = format!("printf {content:?} > {path:?} && printf {content:?}");
                 let event =
-                    approval_matrix_shell_event(call_id, &command, 1_000, sandbox_permissions)?;
+                    approval_matrix_shell_event(call_id, &command, 5_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
             ActionKind::FetchUrl {
@@ -1684,6 +1684,10 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             let command = expected_command
                 .as_deref()
                 .expect("exec approval requires shell command");
+            eprintln!(
+                "waiting for exec approval in scenario {}: {command}",
+                scenario.name
+            );
             let approval = expect_exec_approval(&test, command).await;
             if let Some(expected_reason) = expected_reason {
                 assert_eq!(
@@ -1727,6 +1731,10 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
 
     let output_item = results_mock.single_request().function_call_output(call_id);
     let result = parse_result(&output_item);
+    eprintln!(
+        "scenario {} finished with exit_code={:?}, stdout={:?}",
+        scenario.name, result.exit_code, result.stdout
+    );
     scenario.expectation.verify(&test, &result)?;
 
     Ok(())
