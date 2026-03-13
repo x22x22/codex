@@ -218,18 +218,27 @@ async fn plugin_instructions_are_split_from_agents_instructions() -> Result<()> 
 
     let request = resp_mock.single_request();
     let user_texts = request.message_input_texts("user");
-    let instructions_text = user_texts
+    let agents_text = user_texts
         .iter()
-        .find(|text| text.starts_with("# AGENTS.md instructions for "))
-        .expect("AGENTS instructions text");
+        .find(|text| text.starts_with("# AGENTS.md instructions for "));
+    let skills_text = user_texts
+        .iter()
+        .find(|text| text.starts_with("<skills_section>\n"))
+        .expect("skills section text");
     let plugin_text = user_texts
         .iter()
         .find(|text| text.starts_with("<plugins>\n"))
         .expect("plugins fragment text");
-    assert!(
-        !instructions_text.contains("## Plugins"),
-        "expected plugins section to be separate from AGENTS instructions"
-    );
+    if let Some(agents_text) = agents_text {
+        assert!(
+            !agents_text.contains("## Plugins"),
+            "expected plugins section to be separate from AGENTS instructions"
+        );
+        assert!(
+            !agents_text.contains("## Skills"),
+            "expected skills section to be split from AGENTS instructions"
+        );
+    }
     assert!(
         plugin_text.contains("## Plugins"),
         "expected plugins section present"
@@ -243,25 +252,17 @@ async fn plugin_instructions_are_split_from_agents_instructions() -> Result<()> 
         "expected plugin usage guidance heading"
     );
     assert!(
-        instructions_text.contains("## Skills"),
+        skills_text.contains("## Skills"),
         "expected skills section present"
     );
     assert!(
-        instructions_text.contains("`sample`: inspect sample data"),
-        "expected plugin description in instructions"
-    );
-    assert!(
-        instructions_text.contains("skill entries are prefixed with `plugin_name:`"),
-        "expected plugin skill naming guidance"
-    );
-    assert!(
-        instructions_text.contains("sample:sample-search: inspect sample data"),
+        skills_text.contains("sample:sample-search: inspect sample data"),
         "expected namespaced plugin skill summary"
     );
     let expected_path = normalize_path(skill_path)?;
     let expected_path_str = expected_path.to_string_lossy().replace('\\', "/");
     assert!(
-        instructions_text.contains(&expected_path_str),
+        skills_text.contains(&expected_path_str),
         "expected path {expected_path_str} in instructions"
     );
     assert!(
@@ -271,9 +272,9 @@ async fn plugin_instructions_are_split_from_agents_instructions() -> Result<()> 
             .expect("plugin fragment position")
             > user_texts
                 .iter()
-                .position(|text| text == instructions_text)
-                .expect("instructions fragment position"),
-        "expected plugin fragment to appear after AGENTS instructions"
+                .position(|text| text == skills_text)
+                .expect("skills fragment position"),
+        "expected plugin fragment to appear after the skills fragment"
     );
 
     Ok(())

@@ -1,6 +1,5 @@
 ---
 source: core/tests/suite/compact_remote.rs
-assertion_line: 1950
 expression: "format_labeled_requests_snapshot(\"After remote manual /compact and resume, the first resumed turn rebuilds history from the compaction item and restates realtime-end instructions from reconstructed previous-turn settings.\",\n&[(\"Remote Compaction Request\", &compact_request),\n(\"Remote Post-Resume History Layout\", after_resume_request),])"
 ---
 Scenario: After remote manual /compact and resume, the first resumed turn rebuilds history from the compaction item and restates realtime-end instructions from reconstructed previous-turn settings.
@@ -10,8 +9,8 @@ Scenario: After remote manual /compact and resume, the first resumed turn rebuil
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <realtime_conversation>\nRealtime conversation started.\n\nYou a...
 01:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 02:message/user:USER_ONE
 03:message/assistant:REMOTE_FIRST_REPLY
 
@@ -21,6 +20,6 @@ Scenario: After remote manual /compact and resume, the first resumed turn rebuil
     [01] <PERMISSIONS_INSTRUCTIONS>
     [02] <realtime_conversation>\nRealtime conversation ended.\n\nSubsequ...
 02:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 03:message/user:USER_TWO

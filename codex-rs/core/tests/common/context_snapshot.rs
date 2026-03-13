@@ -232,6 +232,21 @@ impl SnapshotCanonicalizer {
         if text.starts_with("# AGENTS.md instructions for ") {
             return "<AGENTS_MD>".to_string();
         }
+        if text.starts_with("<user_instructions>") {
+            return "<USER_INSTRUCTIONS>".to_string();
+        }
+        if text.starts_with("<skills_section>") {
+            return "<SKILLS_SECTION>".to_string();
+        }
+        if text.starts_with("<plugins>") {
+            return "<PLUGINS>".to_string();
+        }
+        if text.starts_with("<js_repl_instructions>") {
+            return "<JS_REPL_INSTRUCTIONS>".to_string();
+        }
+        if text.starts_with("<child_agents_instructions>") {
+            return "<CHILD_AGENTS_INSTRUCTIONS>".to_string();
+        }
         if text.starts_with("<environment_context>") {
             if let (Some(cwd_start), Some(cwd_end)) = (text.find("<cwd>"), text.find("</cwd>")) {
                 let cwd = &text[cwd_start + "<cwd>".len()..cwd_end];
@@ -384,6 +399,50 @@ mod tests {
         );
 
         assert_eq!(rendered, "00:message/developer:<SUBAGENTS:count=2>");
+    }
+
+    #[test]
+    fn redacted_text_mode_canonicalizes_split_contextual_user_fragments() {
+        let items = vec![
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<user_instructions>\nbe nice\n</user_instructions>"
+                }]
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<skills_section>\n## Skills\n- foo\n</skills_section>"
+                }]
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<plugins>\n## Plugins\n- bar\n</plugins>"
+                }]
+            }),
+        ];
+
+        let rendered = format_response_items_snapshot(
+            &items,
+            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::RedactedText),
+        );
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "00:message/user:<USER_INSTRUCTIONS>\n",
+                "01:message/user:<SKILLS_SECTION>\n",
+                "02:message/user:<PLUGINS>"
+            )
+        );
     }
 
     #[test]

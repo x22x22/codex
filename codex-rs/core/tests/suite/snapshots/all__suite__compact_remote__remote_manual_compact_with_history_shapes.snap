@@ -7,8 +7,8 @@ Scenario: Remote manual /compact where remote compact output is compaction-only:
 ## Remote Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 02:message/user:hello remote compact
 03:message/assistant:FIRST_REMOTE_REPLY
 
@@ -16,6 +16,6 @@ Scenario: Remote manual /compact where remote compact output is compaction-only:
 00:compaction:encrypted=true
 01:message/developer:<PERMISSIONS_INSTRUCTIONS>
 02:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 03:message/user:after compact

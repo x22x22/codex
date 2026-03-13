@@ -6,21 +6,21 @@ Scenario: Second turn changes cwd to a directory with different AGENTS.md; updat
 
 ## First Request (agents_one)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user[2]:
+01:message/user[3]:
     [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
+    [02] <SKILLS_SECTION>
+    [03] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 02:message/user:first turn in agents_one
 
 ## Second Request (agents_two cwd)
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
-01:message/user[2]:
+01:message/user[3]:
     [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
-02:message/developer:<PERMISSIONS_INSTRUCTIONS>
-03:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD#2>>
-04:message/user:first turn in agents_one
-05:message/assistant:turn one complete
-06:message/user[2]:
+    [02] <SKILLS_SECTION>
+    [03] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
+02:message/user:first turn in agents_one
+03:message/assistant:turn one complete
+04:message/user[2]:
     [01] <AGENTS_MD>
     [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#2>>
-07:message/user:second turn in agents_two
+05:message/user:second turn in agents_two

@@ -7,8 +7,8 @@ Scenario: rollback past compaction replay after rollback
 ## compaction request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 02:message/user:hello world
 03:message/assistant:FIRST_REPLY
 04:message/user:<SUMMARIZATION_PROMPT>
@@ -18,8 +18,8 @@ Scenario: rollback past compaction replay after rollback
 01:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
 03:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 04:message/user:EDITED_AFTER_COMPACT
 
 ## after rollback
@@ -27,10 +27,10 @@ Scenario: rollback past compaction replay after rollback
 01:message/user:<COMPACTION_SUMMARY>\nSUMMARY_ONLY_CONTEXT
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
 03:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 04:message/developer:<PERMISSIONS_INSTRUCTIONS>
 05:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 06:message/user:AFTER_ROLLBACK

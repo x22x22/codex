@@ -7,8 +7,8 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 ## Local Compaction Request
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 02:message/user:first manual turn
 03:message/assistant:FIRST_REPLY
 04:message/user:<SUMMARIZATION_PROMPT>
@@ -18,6 +18,6 @@ Scenario: Manual /compact with prior user history compacts existing history and 
 01:message/user:<COMPACTION_SUMMARY>\nFIRST_MANUAL_SUMMARY
 02:message/developer:<PERMISSIONS_INSTRUCTIONS>
 03:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 04:message/user:second manual turn

@@ -7,15 +7,15 @@ Scenario: First post-resume turn where resumed config model differs from rollout
 ## Last Request Before Resume
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 02:message/user:seed resume history
 
 ## First Request After Resume
 00:message/developer:<PERMISSIONS_INSTRUCTIONS>
 01:message/user[2]:
-    [01] <AGENTS_MD>
-    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD>>
+    [01] <SKILLS_SECTION>
+    [02] <ENVIRONMENT_CONTEXT:cwd=<CWD#1>>
 02:message/user:seed resume history
 03:message/assistant:recorded before resume
 04:message/developer[2]:
