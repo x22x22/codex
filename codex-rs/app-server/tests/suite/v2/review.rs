@@ -244,7 +244,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
-            thread_id,
+            thread_id: thread_id.clone(),
             include_turns: true,
         })
         .await?;
@@ -257,7 +257,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
     let turn = thread
         .turns
         .iter()
-        .find(|turn| turn.id == turn_id)
+        .find(|turn| turn.id == turn_id.as_str())
         .expect("did not observe completed review turn in thread/read");
     let command_execution_item_ids = turn
         .items
