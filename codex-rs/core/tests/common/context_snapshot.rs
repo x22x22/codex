@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::collections::HashMap;
 
 use crate::responses::ResponsesRequest;
 
@@ -42,6 +43,7 @@ pub fn format_request_input_snapshot(
 }
 
 pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshotOptions) -> String {
+    let mut canonicalizer = SnapshotCanonicalizer::default();
     items
         .iter()
         .enumerate()
@@ -70,7 +72,11 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                                 .iter()
                                 .map(|entry| {
                                     if let Some(text) = entry.get("text").and_then(Value::as_str) {
-                                        return format_snapshot_text(text, options);
+                                        return format_snapshot_text(
+                                            text,
+                                            options,
+                                            &mut canonicalizer,
+                                        );
                                     }
                                     let Some(content_type) =
                                         entry.get("type").and_then(Value::as_str)
@@ -123,7 +129,7 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                     let output = item
                         .get("output")
                         .and_then(Value::as_str)
-                        .map(|output| format_snapshot_text(output, options))
+                        .map(|output| format_snapshot_text(output, options, &mut canonicalizer))
                         .unwrap_or_else(|| "<NON_STRING_OUTPUT>".to_string());
                     format!("{idx:02}:function_call_output:{output}")
                 }
@@ -139,7 +145,9 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                                 .collect::<Vec<&str>>()
                                 .join(" ")
                         })
-                        .map(|command| format_snapshot_text(&command, options))
+                        .map(|command| {
+                            format_snapshot_text(&command, options, &mut canonicalizer)
+                        })
                         .filter(|cmd| !cmd.is_empty())
                         .unwrap_or_else(|| "<NO_COMMAND>".to_string());
                     format!("{idx:02}:local_shell_call:{command}")
@@ -151,7 +159,7 @@ pub fn format_response_items_snapshot(items: &[Value], options: &ContextSnapshot
                         .and_then(|summary| summary.first())
                         .and_then(|entry| entry.get("text"))
                         .and_then(Value::as_str)
-                        .map(|text| format_snapshot_text(text, options))
+                        .map(|text| format_snapshot_text(text, options, &mut canonicalizer))
                         .unwrap_or_else(|| "<NO_SUMMARY>".to_string());
                     let has_encrypted_content = item
                         .get("encrypted_content")
@@ -211,17 +219,71 @@ pub fn format_labeled_items_snapshot(
     format!("Scenario: {scenario}\n\n{sections}")
 }
 
-fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String {
+#[derive(Default)]
+struct SnapshotCanonicalizer {
+    cwd_placeholders: HashMap<String, usize>,
+}
+
+impl SnapshotCanonicalizer {
+    fn canonicalize_text(&mut self, text: &str) -> String {
+        if text.starts_with("<permissions instructions>") {
+            return "<PERMISSIONS_INSTRUCTIONS>".to_string();
+        }
+        if text.starts_with("# AGENTS.md instructions for ") {
+            return "<AGENTS_MD>".to_string();
+        }
+        if text.starts_with("<environment_context>") {
+            if let (Some(cwd_start), Some(cwd_end)) = (text.find("<cwd>"), text.find("</cwd>")) {
+                let cwd = &text[cwd_start + "<cwd>".len()..cwd_end];
+                return if cwd.ends_with("PRETURN_CONTEXT_DIFF_CWD") {
+                    "<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>".to_string()
+                } else {
+                    let next_idx = self.cwd_placeholders.len() + 1;
+                    let idx = *self
+                        .cwd_placeholders
+                        .entry(cwd.to_string())
+                        .or_insert(next_idx);
+                    format!("<ENVIRONMENT_CONTEXT:cwd=<CWD#{idx}>>")
+                };
+            }
+            return "<ENVIRONMENT_CONTEXT>".to_string();
+        }
+        if text.starts_with("<subagents>") {
+            let subagent_count = text
+                .lines()
+                .filter(|line| line.trim_start().starts_with("- "))
+                .count();
+            return format!("<SUBAGENTS:count={subagent_count}>");
+        }
+        if text.starts_with("You are performing a CONTEXT CHECKPOINT COMPACTION.") {
+            return "<SUMMARIZATION_PROMPT>".to_string();
+        }
+        if text.starts_with("Another language model started to solve this problem")
+            && let Some((_, summary)) = text.split_once('\n')
+        {
+            return format!("<COMPACTION_SUMMARY>\n{summary}");
+        }
+        text.to_string()
+    }
+}
+
+fn format_snapshot_text(
+    text: &str,
+    options: &ContextSnapshotOptions,
+    canonicalizer: &mut SnapshotCanonicalizer,
+) -> String {
     match options.render_mode {
         ContextSnapshotRenderMode::RedactedText => {
-            normalize_snapshot_line_endings(&canonicalize_snapshot_text(text)).replace('\n', "\\n")
+            normalize_snapshot_line_endings(&canonicalizer.canonicalize_text(text))
+                .replace('\n', "\\n")
         }
         ContextSnapshotRenderMode::FullText => {
             normalize_snapshot_line_endings(text).replace('\n', "\\n")
         }
         ContextSnapshotRenderMode::KindWithTextPrefix { max_chars } => {
-            let normalized = normalize_snapshot_line_endings(&canonicalize_snapshot_text(text))
-                .replace('\n', "\\n");
+            let normalized =
+                normalize_snapshot_line_endings(&canonicalizer.canonicalize_text(text))
+                    .replace('\n', "\\n");
             if normalized.chars().count() <= max_chars {
                 normalized
             } else {
@@ -235,42 +297,6 @@ fn format_snapshot_text(text: &str, options: &ContextSnapshotOptions) -> String 
 
 fn normalize_snapshot_line_endings(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
-}
-
-fn canonicalize_snapshot_text(text: &str) -> String {
-    if text.starts_with("<permissions instructions>") {
-        return "<PERMISSIONS_INSTRUCTIONS>".to_string();
-    }
-    if text.starts_with("# AGENTS.md instructions for ") {
-        return "<AGENTS_MD>".to_string();
-    }
-    if text.starts_with("<environment_context>") {
-        if let (Some(cwd_start), Some(cwd_end)) = (text.find("<cwd>"), text.find("</cwd>")) {
-            let cwd = &text[cwd_start + "<cwd>".len()..cwd_end];
-            return if cwd.ends_with("PRETURN_CONTEXT_DIFF_CWD") {
-                "<ENVIRONMENT_CONTEXT:cwd=PRETURN_CONTEXT_DIFF_CWD>".to_string()
-            } else {
-                "<ENVIRONMENT_CONTEXT:cwd=<CWD>>".to_string()
-            };
-        }
-        return "<ENVIRONMENT_CONTEXT>".to_string();
-    }
-    if text.starts_with("<subagents>") {
-        let subagent_count = text
-            .lines()
-            .filter(|line| line.trim_start().starts_with("- "))
-            .count();
-        return format!("<SUBAGENTS:count={subagent_count}>");
-    }
-    if text.starts_with("You are performing a CONTEXT CHECKPOINT COMPACTION.") {
-        return "<SUMMARIZATION_PROMPT>".to_string();
-    }
-    if text.starts_with("Another language model started to solve this problem")
-        && let Some((_, summary)) = text.split_once('\n')
-    {
-        return format!("<COMPACTION_SUMMARY>\n{summary}");
-    }
-    text.to_string()
 }
 
 #[cfg(test)]
@@ -358,6 +384,50 @@ mod tests {
         );
 
         assert_eq!(rendered, "00:message/developer:<SUBAGENTS:count=2>");
+    }
+
+    #[test]
+    fn redacted_text_mode_assigns_distinct_cwd_placeholders_within_one_snapshot() {
+        let items = vec![
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<environment_context>\n  <cwd>/tmp/one</cwd>\n</environment_context>"
+                }]
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<environment_context>\n  <cwd>/tmp/two</cwd>\n</environment_context>"
+                }]
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<environment_context>\n  <cwd>/tmp/one</cwd>\n</environment_context>"
+                }]
+            }),
+        ];
+
+        let rendered = format_response_items_snapshot(
+            &items,
+            &ContextSnapshotOptions::default().render_mode(ContextSnapshotRenderMode::RedactedText),
+        );
+
+        assert_eq!(
+            rendered,
+            concat!(
+                "00:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD#1>>\n",
+                "01:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD#2>>\n",
+                "02:message/user:<ENVIRONMENT_CONTEXT:cwd=<CWD#1>>"
+            )
+        );
     }
 
     #[test]
