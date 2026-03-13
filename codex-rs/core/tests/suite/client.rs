@@ -327,7 +327,11 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .expect("permissions message");
     let pos_user_instructions = messages
         .iter()
-        .position(|(role, text)| role == "user" && text.contains("be nice"))
+        .position(|(role, text)| {
+            role == "user"
+                && text.contains("be nice")
+                && (text.starts_with("# AGENTS.md instructions for "))
+        })
         .expect("user instructions");
     let pos_environment = messages
         .iter()
