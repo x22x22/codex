@@ -24,11 +24,6 @@ use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
-<<<<<<< HEAD
-use codex_protocol::protocol::FileSystemSandboxKind;
-use codex_protocol::protocol::FileSystemSandboxPolicy;
-=======
->>>>>>> 8a34b897a (Drop permission policy changes from context fragment PR)
 use codex_protocol::protocol::SandboxPolicy;
 use thiserror::Error;
 use tokio::fs;
@@ -566,11 +561,7 @@ pub fn render_decision_for_unmatched_command(
                 Decision::Allow
             }
             FileSystemSandboxKind::Restricted => {
-<<<<<<< HEAD
-                if sandbox_permissions.requires_additional_permissions() {
-=======
                 if sandbox_permissions.requests_sandbox_override() {
->>>>>>> 8a34b897a (Drop permission policy changes from context fragment PR)
                     Decision::Prompt
                 } else {
                     Decision::Allow
