@@ -1437,12 +1437,12 @@ await codex.emitImage({ bytes: png, mimeType: "image/png", detail: null });
         )
         .await?;
     assert_eq!(
-        result.content_items.as_slice(),
-        [FunctionCallOutputContentItem::InputImage {
-            image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
-            detail: None,
-        }]
-        .as_slice()
+            result.content_items.as_slice(),
+            [FunctionCallOutputContentItem::InputImage {
+                image_url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==".to_string(),
+                detail: None,
+            }]
+            .as_slice()
     );
     assert!(session.get_pending_input_with_metadata().await.is_empty());
 
