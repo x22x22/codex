@@ -63,6 +63,7 @@ use tracing::warn;
 const DEFAULT_SKILLS_DIR_NAME: &str = "skills";
 const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
+const RESERVED_APP_DEFAULT_KEY: &str = "_default";
 const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 const REMOTE_PLUGIN_SYNC_TIMEOUT: Duration = Duration::from_secs(30);
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
@@ -532,6 +533,14 @@ impl PluginsManager {
         }
 
         for app in load_plugin_apps(result.installed_path.as_path()) {
+            if app.0 == RESERVED_APP_DEFAULT_KEY {
+                warn!(
+                    plugin_id = ?result.plugin_id,
+                    "skipping plugin app enablement for reserved app id"
+                );
+                continue;
+            }
+
             let mut app_config = JsonMap::new();
             app_config.insert("enabled".to_string(), JsonValue::Bool(true));
             let mut apps_config = JsonMap::new();
