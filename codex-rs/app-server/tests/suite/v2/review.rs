@@ -193,10 +193,9 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
             JSONRPCMessage::Notification(notification) if notification.method == "item/started" => {
                 let started: ItemStartedNotification =
                     serde_json::from_value(notification.params.expect("params must be present"))?;
-                if started.turn_id != turn_id {
-                    continue;
-                }
-                if let ThreadItem::CommandExecution { id, .. } = started.item {
+                if started.turn_id == turn_id
+                    && let ThreadItem::CommandExecution { id, .. } = started.item
+                {
                     eprintln!(
                         "review approval probe saw started command execution item: turn_id={turn_id}, item_id={item_id}",
                         turn_id = started.turn_id,
