@@ -545,20 +545,28 @@ impl ModelVisibleContextFragment for AgentsMdInstructions {
         reference_context_item: Option<&TurnContextItem>,
         _params: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
-        let current = Self {
-            directory: turn_context.cwd.to_string_lossy().into_owned(),
-            text: turn_context.project_doc_instructions.as_ref()?.clone(),
-        };
+        let current_directory = turn_context.cwd.to_string_lossy().into_owned();
+        let current_text = turn_context.project_doc_instructions.as_deref();
         if let Some(previous) = reference_context_item {
             let previous_directory = previous.cwd.to_string_lossy().into_owned();
-            if previous_directory == current.directory
-                && previous.project_doc_instructions.as_deref() == Some(current.text.as_str())
+            if previous_directory == current_directory
+                && previous.project_doc_instructions.as_deref() == current_text
             {
                 return None;
             }
+
+            if current_text.is_none() && previous.project_doc_instructions.is_some() {
+                return Some(Self {
+                    directory: current_directory,
+                    text: String::new(),
+                });
+            }
         }
 
-        Some(current)
+        Some(Self {
+            directory: current_directory,
+            text: current_text?.to_string(),
+        })
     }
 
     fn matches_contextual_user_text(text: &str) -> bool {
