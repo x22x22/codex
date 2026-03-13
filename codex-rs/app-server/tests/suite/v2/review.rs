@@ -28,6 +28,7 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::json;
+use std::collections::BTreeSet;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -185,11 +186,12 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
 
     let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
     let mut approval_item_id: Option<String> = None;
-    let mut command_item_id: Option<String> = None;
+    let mut matched_command_item_id: Option<String> = None;
+    let mut observed_command_item_ids = BTreeSet::new();
     let mut saw_turn_completed = false;
     let mut sent_approval = false;
 
-    while approval_item_id.is_none() || command_item_id.is_none() {
+    while approval_item_id.is_none() || matched_command_item_id.is_none() {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let message = timeout(remaining, mcp.read_next_message()).await??;
         match message {
@@ -209,6 +211,13 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
                 );
                 assert_eq!(params.item_id, "review-call-1");
                 assert_eq!(params.turn_id, turn_id);
+                if observed_command_item_ids.contains(&params.item_id) {
+                    eprintln!(
+                        "review approval probe already observed approved command execution item: turn_id={turn_id}, item_id={item_id}",
+                        item_id = params.item_id
+                    );
+                    matched_command_item_id = Some(params.item_id.clone());
+                }
                 approval_item_id = Some(params.item_id);
                 if !sent_approval {
                     mcp.send_response(
@@ -235,7 +244,10 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
                     eprintln!(
                         "review approval probe matched command execution item start: turn_id={turn_id}, item_id={id}"
                     );
-                    command_item_id = Some(id);
+                    if approval_item_id.as_deref() == Some(id.as_str()) {
+                        matched_command_item_id = Some(id.clone());
+                    }
+                    observed_command_item_ids.insert(id);
                 }
             }
             JSONRPCMessage::Notification(notification)
@@ -254,7 +266,10 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
                     eprintln!(
                         "review approval probe matched command execution item completion: turn_id={turn_id}, item_id={id}"
                     );
-                    command_item_id = Some(id);
+                    if approval_item_id.as_deref() == Some(id.as_str()) {
+                        matched_command_item_id = Some(id.clone());
+                    }
+                    observed_command_item_ids.insert(id);
                 }
             }
             JSONRPCMessage::Notification(notification)
@@ -279,7 +294,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
         "did not observe command execution approval request"
     );
     assert_eq!(
-        command_item_id.expect("did not observe command execution item"),
+        matched_command_item_id.expect("did not observe approved command execution item"),
         approval_item_id.expect("did not observe command execution approval request")
     );
     if !saw_turn_completed {
