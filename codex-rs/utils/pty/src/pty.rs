@@ -159,11 +159,12 @@ async fn spawn_process_portable(
     }
 
     let mut child = pair.slave.spawn_command(command_builder)?;
+    let pid = child.process_id();
     #[cfg(unix)]
     // portable-pty establishes the spawned PTY child as a new session leader on
     // Unix, so PID == PGID and we can reuse the pipe backend's process-group
     // hard-kill semantics for descendants.
-    let process_group_id = child.process_id();
+    let process_group_id = pid;
     let killer = child.clone_killer();
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
@@ -241,6 +242,7 @@ async fn spawn_process_portable(
         wait_handle,
         exit_status,
         exit_code,
+        pid,
         Some(handles),
     );
 
