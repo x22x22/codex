@@ -18,6 +18,8 @@ use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
 use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadStartedNotification;
@@ -28,7 +30,6 @@ use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::collections::BTreeSet;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -168,7 +169,7 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
 
     let review_req = mcp
         .send_review_start_request(ReviewStartParams {
-            thread_id,
+            thread_id: thread_id.clone(),
             delivery: Some(ReviewDelivery::Inline),
             target: ReviewTarget::Commit {
                 sha: "1234567deadbeef".to_string(),
@@ -183,15 +184,10 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
     .await??;
     let ReviewStartResponse { turn, .. } = to_response::<ReviewStartResponse>(review_resp)?;
     let turn_id = turn.id.clone();
+    let mut approval_item_id: Option<String> = None;
 
     let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
-    let mut approval_item_id: Option<String> = None;
-    let mut matched_command_item_id: Option<String> = None;
-    let mut observed_command_item_ids = BTreeSet::new();
-    let mut saw_turn_completed = false;
-    let mut sent_approval = false;
-
-    while approval_item_id.is_none() || matched_command_item_id.is_none() {
+    while approval_item_id.is_none() {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         let message = timeout(remaining, mcp.read_next_message()).await??;
         match message {
@@ -211,99 +207,70 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
                 );
                 assert_eq!(params.item_id, "review-call-1");
                 assert_eq!(params.turn_id, turn_id);
-                if observed_command_item_ids.contains(&params.item_id) {
-                    eprintln!(
-                        "review approval probe already observed approved command execution item: turn_id={turn_id}, item_id={item_id}",
-                        item_id = params.item_id
-                    );
-                    matched_command_item_id = Some(params.item_id.clone());
-                }
                 approval_item_id = Some(params.item_id);
-                if !sent_approval {
-                    mcp.send_response(
-                        request.id,
-                        serde_json::json!({
-                            "decision": codex_protocol::protocol::ReviewDecision::Approved
-                        }),
-                    )
-                    .await?;
-                    sent_approval = true;
-                }
-            }
-            JSONRPCMessage::Notification(notification) if notification.method == "item/started" => {
-                let started: ItemStartedNotification =
-                    serde_json::from_value(notification.params.expect("params must be present"))?;
-                eprintln!(
-                    "review approval probe saw item/started for turn {turn_id}",
-                    turn_id = started.turn_id
-                );
-                if started.turn_id != turn_id {
-                    continue;
-                }
-                if let ThreadItem::CommandExecution { id, .. } = started.item {
-                    eprintln!(
-                        "review approval probe matched command execution item start: turn_id={turn_id}, item_id={id}"
-                    );
-                    if approval_item_id.as_deref() == Some(id.as_str()) {
-                        matched_command_item_id = Some(id.clone());
-                    }
-                    observed_command_item_ids.insert(id);
-                }
-            }
-            JSONRPCMessage::Notification(notification)
-                if notification.method == "item/completed" =>
-            {
-                let completed: ItemCompletedNotification =
-                    serde_json::from_value(notification.params.expect("params must be present"))?;
-                eprintln!(
-                    "review approval probe saw item/completed for turn {turn_id}",
-                    turn_id = completed.turn_id
-                );
-                if completed.turn_id != turn_id {
-                    continue;
-                }
-                if let ThreadItem::CommandExecution { id, .. } = completed.item {
-                    eprintln!(
-                        "review approval probe matched command execution item completion: turn_id={turn_id}, item_id={id}"
-                    );
-                    if approval_item_id.as_deref() == Some(id.as_str()) {
-                        matched_command_item_id = Some(id.clone());
-                    }
-                    observed_command_item_ids.insert(id);
-                }
-            }
-            JSONRPCMessage::Notification(notification)
-                if notification.method == "turn/completed" =>
-            {
-                let completed: TurnCompletedNotification =
-                    serde_json::from_value(notification.params.expect("params must be present"))?;
-                eprintln!(
-                    "review approval probe saw turn/completed for turn {turn_id}",
-                    turn_id = completed.turn.id
-                );
-                if completed.turn.id == turn_id {
-                    saw_turn_completed = true;
-                }
+                mcp.send_response(
+                    request.id,
+                    serde_json::json!({
+                        "decision": codex_protocol::protocol::ReviewDecision::Approved
+                    }),
+                )
+                .await?;
             }
             _ => continue,
         }
     }
 
-    assert!(
-        sent_approval,
-        "did not observe command execution approval request"
-    );
-    assert_eq!(
-        matched_command_item_id.expect("did not observe approved command execution item"),
-        approval_item_id.expect("did not observe command execution approval request")
-    );
-    if !saw_turn_completed {
-        timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message("turn/completed"),
-        )
-        .await??;
+    let approval_item_id =
+        approval_item_id.expect("did not observe command execution approval request");
+    let mut saw_turn_completed = false;
+    while !saw_turn_completed {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let message = timeout(remaining, mcp.read_next_message()).await??;
+        if let JSONRPCMessage::Notification(notification) = message {
+            if notification.method != "turn/completed" {
+                continue;
+            }
+            let completed: TurnCompletedNotification =
+                serde_json::from_value(notification.params.expect("params must be present"))?;
+            eprintln!(
+                "review approval probe saw turn/completed for turn {turn_id}",
+                turn_id = completed.turn.id
+            );
+            if completed.turn.id == turn_id {
+                saw_turn_completed = true;
+            }
+        }
     }
+
+    let read_id = mcp
+        .send_thread_read_request(ThreadReadParams {
+            thread_id,
+            include_turns: true,
+        })
+        .await?;
+    let read_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(read_id)),
+    )
+    .await??;
+    let ThreadReadResponse { thread } = to_response::<ThreadReadResponse>(read_resp)?;
+    let turn = thread
+        .turns
+        .iter()
+        .find(|turn| turn.id == turn_id)
+        .expect("did not observe completed review turn in thread/read");
+    let command_execution_item_ids = turn
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ThreadItem::CommandExecution { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    eprintln!(
+        "review approval probe observed persisted command execution items: {command_execution_item_ids:?}"
+    );
+    assert_eq!(command_execution_item_ids, vec![approval_item_id]);
 
     Ok(())
 }

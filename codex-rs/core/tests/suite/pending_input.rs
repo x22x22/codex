@@ -126,6 +126,14 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         .await
         .unwrap();
     eprintln!("pending input probe injected second user input");
+    timeout(Duration::from_secs(5), async {
+        while !codex.has_pending_input().await {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("timed out waiting for second user input to become pending");
+    eprintln!("pending input probe observed second user input queued as pending");
 
     let _ = gate_completed_tx.send(());
     eprintln!("pending input probe released first response completion gate");
@@ -148,7 +156,17 @@ async fn injected_user_input_triggers_follow_up_request_with_deltas() {
         .expect("follow-up response stream closed before completion");
     eprintln!("pending input probe observed follow-up response stream completion");
 
-    let requests = server.requests().await;
+    let requests = timeout(Duration::from_secs(5), async {
+        loop {
+            let requests = server.requests().await;
+            if requests.len() >= 2 {
+                break requests;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("timed out waiting for follow-up request capture");
     eprintln!("pending input probe captured {} requests", requests.len());
     assert_eq!(requests.len(), 2);
 
