@@ -2506,6 +2506,19 @@ async fn on_command_execution_request_approval_response(
 
             let (decision, completion_status) = match decision {
                 CommandExecutionApprovalDecision::Accept => (ReviewDecision::Approved, None),
+                CommandExecutionApprovalDecision::AcceptWithOverrideCommand { command } => {
+                    if command.is_empty() {
+                        error!(
+                            "failed to deserialize CommandExecutionRequestApprovalResponse: override command cannot be empty"
+                        );
+                        (
+                            ReviewDecision::Denied,
+                            Some(CommandExecutionStatus::Declined),
+                        )
+                    } else {
+                        (ReviewDecision::ApprovedOverrideCommand { command }, None)
+                    }
+                }
                 CommandExecutionApprovalDecision::AcceptForSession => {
                     (ReviewDecision::ApprovedForSession, None)
                 }

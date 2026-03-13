@@ -618,6 +618,7 @@ impl UnifiedExecProcessManager {
             turn: context.turn.clone(),
             call_id: context.call_id.clone(),
             tool_name: "exec_command".to_string(),
+            command_override: None,
         };
         orchestrator
             .run(
