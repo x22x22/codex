@@ -73,9 +73,13 @@ async fn save_image_generation_result(call_id: &str, result: &str) -> Result<Pat
     if file_stem.is_empty() {
         file_stem = "generated_image".to_string();
     }
-    let path = std::env::temp_dir().join(format!("{file_stem}.png"));
+    let path = default_image_generation_output_dir().join(format!("{file_stem}.png"));
     tokio::fs::write(&path, bytes).await?;
     Ok(path)
+}
+
+pub(crate) fn default_image_generation_output_dir() -> PathBuf {
+    std::env::temp_dir()
 }
 
 /// Persist a completed model response item and record any cited memory usage.
@@ -319,7 +323,7 @@ pub(crate) async fn handle_non_tool_response_item(
                         .await;
                     }
                     Err(err) => {
-                        let output_dir = std::env::temp_dir();
+                        let output_dir = default_image_generation_output_dir();
                         tracing::warn!(
                             call_id = %image_item.id,
                             output_dir = %output_dir.display(),
