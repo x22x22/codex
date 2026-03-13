@@ -18,10 +18,11 @@
 //!   - `DeveloperContextRole` for developer guidance/policy
 //!   - `ContextualUserContextRole` for contextual user-role state that must be
 //!     parsed as context rather than literal user intent
-//! - If the fragment is durable turn/session state that should rebuild across
-//!   resume, compaction, backtracking, or fork, implement `build(...)` for the
-//!   common zero-or-one case, or override `build_many(...)` when a fragment
-//!   source needs to emit multiple content items from one turn-state source.
+//! - If the fragment is turn/session state that should be rebuilt from the
+//!   current `TurnContext` during initial-context assembly or diffing,
+//!   implement `build(...)` for the common zero-or-one case, or override
+//!   `build_many(...)` when a fragment source needs to emit multiple content
+//!   items from one turn-state source.
 //!   `reference_context_item` is the baseline already represented in
 //!   model-visible history; compare against it to avoid duplicates, and use
 //!   `TurnContextDiffParams` for other runtime/session inputs such as

@@ -14,7 +14,8 @@
 //!    `matches_contextual_user_text()` for custom matching.
 //! 4. If the fragment is derived from `TurnContext` and should participate in
 //!    initial-context assembly and turn-to-turn diffing, implementing
-//!    `build(...)`.
+//!    `build(...)` for the common zero-or-one case or overriding
+//!    `build_many(...)` for zero-or-many sources.
 //! 5. Registering the fragment exactly once in
 //!    `REGISTERED_MODEL_VISIBLE_FRAGMENTS` in the rough order it should appear
 //!    in model-visible context.
@@ -79,7 +80,6 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::USER_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::USER_INSTRUCTIONS_OPEN_TAG;
-use codex_protocol::user_input::EphemeralContext;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -151,7 +151,7 @@ const REGISTERED_MODEL_VISIBLE_FRAGMENTS: &[ModelVisibleFragmentRegistration] = 
     ModelVisibleFragmentRegistration::of::<SkillsSectionFragment>(),
     ModelVisibleFragmentRegistration::of::<ChildAgentsInstructionsFragment>(),
     ModelVisibleFragmentRegistration::of::<EnvironmentContext>(),
-    ModelVisibleFragmentRegistration::of::<EphemeralContext>(),
+    ModelVisibleFragmentRegistration::of::<EphemeralContextFragment>(),
     ModelVisibleFragmentRegistration::of::<SkillInstructions>(),
     ModelVisibleFragmentRegistration::of::<PluginInstructions>(),
     ModelVisibleFragmentRegistration::of::<UserShellCommandFragment>(),
@@ -848,7 +848,14 @@ impl ModelVisibleContextFragment for EnvironmentContext {
     }
 }
 
-impl ModelVisibleContextFragment for EphemeralContext {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename = "ephemeral_context_fragment", rename_all = "snake_case")]
+pub(crate) struct EphemeralContextFragment {
+    title: String,
+    text: String,
+}
+
+impl ModelVisibleContextFragment for EphemeralContextFragment {
     type Role = ContextualUserContextRole;
 
     fn render_text(&self) -> String {
@@ -863,7 +870,17 @@ impl ModelVisibleContextFragment for EphemeralContext {
         _reference_context_item: Option<&TurnContextItem>,
         _params: &TurnContextDiffParams<'_>,
     ) -> Vec<Self> {
-        turn_context.ephemeral_context.clone()
+        // Ephemeral context is current-turn-scoped state: rebuild the active
+        // turn's latest snapshot, but never diff it against persisted
+        // reference_context_item history from older turns.
+        turn_context
+            .ephemeral_context
+            .iter()
+            .map(|context| Self {
+                title: context.title.clone(),
+                text: context.text.clone(),
+            })
+            .collect()
     }
 
     fn contextual_user_markers() -> Option<ContextualUserFragmentMarkers> {
@@ -1048,7 +1065,7 @@ pub(crate) fn is_ephemeral_context_fragment(content_item: &ContentItem) -> bool 
     let ContentItem::InputText { text } = content_item else {
         return false;
     };
-    EphemeralContext::matches_contextual_user_text(text)
+    EphemeralContextFragment::matches_contextual_user_text(text)
 }
 
 pub(crate) fn build_turn_state_fragments(
