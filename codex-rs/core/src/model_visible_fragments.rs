@@ -278,8 +278,10 @@ impl ModelVisibleContextFragment for CollaborationModeUpdateFragment {
         _params: &TurnContextDiffParams<'_>,
     ) -> Option<Self> {
         if let Some(previous) = reference_context_item {
-            let previous_mode = previous.collaboration_mode.as_ref()?;
-            let previous_text = developer_collaboration_mode_text(previous_mode);
+            let previous_text = previous
+                .collaboration_mode
+                .as_ref()
+                .and_then(developer_collaboration_mode_text);
             let current_text = developer_collaboration_mode_text(&turn_context.collaboration_mode);
             if previous_text == current_text {
                 return None;
