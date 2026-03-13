@@ -112,6 +112,39 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     assert_eq!(exec_params.arg0, None);
 }
 
+#[tokio::test]
+async fn shell_command_handler_to_exec_params_preserves_absolute_workdir() {
+    let (session, turn_context) = make_session_and_context().await;
+    let absolute_workdir = turn_context.cwd.join("absolute-subdir");
+    let expected_env = create_env(
+        &turn_context.shell_environment_policy,
+        Some(session.conversation_id),
+    );
+
+    let params = ShellCommandToolCallParams {
+        command: "echo hello".to_string(),
+        workdir: Some(absolute_workdir.to_string_lossy().to_string()),
+        login: None,
+        timeout_ms: Some(250),
+        sandbox_permissions: Some(SandboxPermissions::UseDefault),
+        additional_permissions: None,
+        prefix_rule: None,
+        justification: None,
+    };
+
+    let exec_params = ShellCommandHandler::to_exec_params(
+        &params,
+        &session,
+        &turn_context,
+        session.conversation_id,
+        true,
+    )
+    .expect("absolute workdir should be accepted");
+
+    assert_eq!(exec_params.cwd, absolute_workdir);
+    assert_eq!(exec_params.env, expected_env);
+}
+
 #[test]
 fn shell_command_handler_respects_explicit_login_flag() {
     let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {

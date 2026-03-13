@@ -924,9 +924,12 @@ impl TurnContext {
     }
 
     pub(crate) fn resolve_path(&self, path: Option<String>) -> PathBuf {
-        path.as_ref()
-            .map(PathBuf::from)
-            .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
+        path.as_ref().map(PathBuf::from).map_or_else(
+            || self.cwd.clone(),
+            |p| {
+                if p.is_absolute() { p } else { self.cwd.join(p) }
+            },
+        )
     }
 
     pub(crate) fn compact_prompt(&self) -> &str {
