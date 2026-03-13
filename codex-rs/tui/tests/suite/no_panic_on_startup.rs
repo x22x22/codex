@@ -14,27 +14,25 @@ async fn malformed_rules_should_not_panic() -> anyhow::Result<()> {
 
     let tmp = tempfile::tempdir()?;
     let codex_home = tmp.path();
+    let repo_root = codex_utils_cargo_bin::repo_root()?;
     std::fs::write(
         codex_home.join("rules"),
         "rules should be a directory not a file",
     )?;
 
-    // TODO(mbolin): Figure out why using a temp dir as the cwd causes this test
-    // to hang.
-    let cwd = std::env::current_dir()?;
     let config_contents = format!(
         r#"
 # Pick a local provider so the CLI doesn't prompt for OpenAI auth in this test.
 model_provider = "ollama"
 
 [projects]
-"{cwd}" = {{ trust_level = "trusted" }}
+"{repo_root}" = {{ trust_level = "trusted" }}
 "#,
-        cwd = cwd.display()
+        repo_root = repo_root.display()
     );
     std::fs::write(codex_home.join("config.toml"), config_contents)?;
 
-    let CodexCliOutput { exit_code, output } = run_codex_cli(codex_home, cwd).await?;
+    let CodexCliOutput { exit_code, output } = run_codex_cli(codex_home, &repo_root).await?;
     assert_ne!(0, exit_code, "Codex CLI should exit nonzero.");
     assert!(
         output.contains("ERROR: Failed to initialize codex:"),
@@ -63,7 +61,14 @@ async fn run_codex_cli(
         codex_home.as_ref().display().to_string(),
     );
 
-    let args = vec!["-c".to_string(), "analytics.enabled=false".to_string()];
+    let args = vec![
+        "--skip-git-repo-check".to_string(),
+        "--no-alt-screen".to_string(),
+        "-C".to_string(),
+        cwd.as_ref().display().to_string(),
+        "-c".to_string(),
+        "analytics.enabled=false".to_string(),
+    ];
     let spawned = codex_utils_pty::spawn_pty_process(
         codex_cli.to_string_lossy().as_ref(),
         &args,
@@ -107,10 +112,18 @@ async fn run_codex_cli(
     .await;
     let exit_code = match exit_code_result {
         Ok(Ok(code)) => code,
-        Ok(Err(err)) => return Err(err.into()),
+        Ok(Err(err)) => {
+            anyhow::bail!(
+                "failed waiting for codex CLI exit: {err}; output so far: {}",
+                String::from_utf8_lossy(&output)
+            );
+        }
         Err(_) => {
             session.terminate();
-            anyhow::bail!("timed out waiting for codex CLI to exit");
+            anyhow::bail!(
+                "timed out waiting for codex CLI to exit; output so far: {}",
+                String::from_utf8_lossy(&output)
+            );
         }
     };
     // Drain any output that raced with the exit notification.
