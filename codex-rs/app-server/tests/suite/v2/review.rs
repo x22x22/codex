@@ -182,91 +182,52 @@ async fn review_start_exec_approval_item_id_matches_command_execution_item() -> 
     let ReviewStartResponse { turn, .. } = to_response::<ReviewStartResponse>(review_resp)?;
     let turn_id = turn.id.clone();
 
-    let deadline = tokio::time::Instant::now() + DEFAULT_READ_TIMEOUT;
-    let mut approval_request: Option<(RequestId, String)> = None;
-    let mut command_item_id: Option<String> = None;
-    while approval_request.is_none() {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let message = timeout(remaining, mcp.read_next_message()).await??;
-        match message {
-            JSONRPCMessage::Request(request) => {
-                eprintln!(
-                    "review approval probe saw request method: {}",
-                    request.method
-                );
-                if request.method != "item/commandExecution/requestApproval" {
-                    continue;
-                }
-                let params: CommandExecutionRequestApprovalParams =
-                    serde_json::from_value(request.params.expect("params must be present"))?;
-                eprintln!(
-                    "review approval probe matched approval request: turn_id={}, item_id={}",
-                    params.turn_id, params.item_id
-                );
-                assert_eq!(params.item_id, "review-call-1");
-                assert_eq!(params.turn_id, turn_id);
-                approval_request = Some((request.id, params.item_id));
+    let command_item_id = timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let item_started = mcp.read_stream_until_notification_message("item/started").await?;
+            let started: ItemStartedNotification =
+                serde_json::from_value(item_started.params.expect("params must be present"))?;
+            eprintln!(
+                "review approval probe saw item/started for turn {}",
+                started.turn_id
+            );
+            if started.turn_id != turn_id {
+                continue;
             }
-            JSONRPCMessage::Notification(notification) if notification.method == "item/started" => {
-                let started: ItemStartedNotification =
-                    serde_json::from_value(notification.params.expect("params must be present"))?;
+            if let ThreadItem::CommandExecution { id, .. } = started.item {
                 eprintln!(
-                    "review approval probe saw item/started for turn {}",
-                    started.turn_id
+                    "review approval probe matched command execution item: turn_id={turn_id}, item_id={id}"
                 );
-                if started.turn_id != turn_id {
-                    continue;
-                }
-                if let ThreadItem::CommandExecution { id, .. } = started.item {
-                    eprintln!(
-                        "review approval probe matched command execution item: turn_id={turn_id}, item_id={id}"
-                    );
-                    command_item_id = Some(id);
-                }
+                return Ok::<String, anyhow::Error>(id);
             }
-            _ => continue,
         }
-    }
+    })
+    .await??;
 
-    let (request_id, approval_item_id) =
-        approval_request.expect("did not observe command execution approval request");
+    let approval_request = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_request_method("item/commandExecution/requestApproval"),
+    )
+    .await??;
+    eprintln!(
+        "review approval probe saw request method: {}",
+        approval_request.method
+    );
+    let params: CommandExecutionRequestApprovalParams =
+        serde_json::from_value(approval_request.params.expect("params must be present"))?;
+    eprintln!(
+        "review approval probe matched approval request: turn_id={}, item_id={}",
+        params.turn_id, params.item_id
+    );
+    assert_eq!(params.item_id, "review-call-1");
+    assert_eq!(params.turn_id, turn_id);
+
     mcp.send_response(
-        request_id,
+        approval_request.id,
         serde_json::json!({ "decision": codex_protocol::protocol::ReviewDecision::Approved }),
     )
     .await?;
-
-    while command_item_id.is_none() {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let message = timeout(remaining, mcp.read_next_message()).await??;
-        let JSONRPCMessage::Notification(notification) = message else {
-            continue;
-        };
-        if notification.method != "item/started" {
-            continue;
-        }
-
-        let started: ItemStartedNotification =
-            serde_json::from_value(notification.params.expect("params must be present"))?;
-        eprintln!(
-            "review approval probe saw item/started for turn {}",
-            started.turn_id
-        );
-        if started.turn_id != turn_id {
-            continue;
-        }
-        if let ThreadItem::CommandExecution { id, .. } = started.item {
-            eprintln!(
-                "review approval probe matched command execution item: turn_id={turn_id}, item_id={id}"
-            );
-            command_item_id = Some(id);
-        }
-    }
-
-    assert_eq!(
-        command_item_id.expect("did not observe command execution item"),
-        approval_item_id
-    );
+    assert_eq!(command_item_id, params.item_id);
     timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_notification_message("turn/completed"),

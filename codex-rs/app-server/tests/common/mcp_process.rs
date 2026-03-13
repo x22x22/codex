@@ -918,6 +918,27 @@ impl McpProcess {
             .with_context(|| "failed to deserialize ServerRequest from JSONRPCRequest")
     }
 
+    pub async fn read_stream_until_request_method(
+        &mut self,
+        method: &str,
+    ) -> anyhow::Result<JSONRPCRequest> {
+        eprintln!("in read_stream_until_request_method({method})");
+
+        let message = self
+            .read_stream_until_message(|message| {
+                matches!(
+                    message,
+                    JSONRPCMessage::Request(request) if request.method == method
+                )
+            })
+            .await?;
+
+        let JSONRPCMessage::Request(request) = message else {
+            unreachable!("expected JSONRPCMessage::Request, got {message:?}");
+        };
+        Ok(request)
+    }
+
     pub async fn read_stream_until_response_message(
         &mut self,
         request_id: RequestId,
