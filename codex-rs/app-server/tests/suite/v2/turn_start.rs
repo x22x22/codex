@@ -322,6 +322,169 @@ async fn turn_start_forwards_ephemeral_context_to_model_input() -> Result<()> {
 }
 
 #[tokio::test]
+async fn turn_start_steering_active_turn_preserves_ephemeral_context() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    let shell_command = vec![
+        "powershell".to_string(),
+        "-Command".to_string(),
+        "Start-Sleep -Seconds 2".to_string(),
+    ];
+    #[cfg(not(target_os = "windows"))]
+    let shell_command = vec!["sleep".to_string(), "2".to_string()];
+
+    let responses = vec![
+        create_shell_command_sse_response(shell_command, None, Some(5_000), "call-sleep")?,
+        create_final_assistant_message_sse_response("Done")?,
+    ];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let first_turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "run sleep".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let first_turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(first_turn_req)),
+    )
+    .await??;
+    let TurnStartResponse { turn: _first_turn } =
+        to_response::<TurnStartResponse>(first_turn_resp)?;
+
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let notif = mcp
+                .read_stream_until_notification_message("item/started")
+                .await?;
+            let started: ItemStartedNotification = serde_json::from_value(
+                notif
+                    .params
+                    .clone()
+                    .expect("item/started should include params"),
+            )?;
+            if matches!(started.item, ThreadItem::CommandExecution { .. }) {
+                return Ok::<(), anyhow::Error>(());
+            }
+        }
+    })
+    .await??;
+
+    let steering_turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id,
+            input: vec![V2UserInput::Text {
+                text: "Follow-up".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: Some(vec![EphemeralContext {
+                title: "Context from my editor".to_string(),
+                text: "## Active file: src/main.rs".to_string(),
+            }]),
+            ..Default::default()
+        })
+        .await?;
+    let steering_turn_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(steering_turn_req)),
+    )
+    .await??;
+    let TurnStartResponse {
+        turn: _steering_turn,
+    } = to_response::<TurnStartResponse>(steering_turn_resp)?;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    timeout(DEFAULT_READ_TIMEOUT, async {
+        loop {
+            let requests = server
+                .received_requests()
+                .await
+                .expect("failed to fetch received requests");
+            let responses_request_count = requests
+                .iter()
+                .filter(|request| {
+                    request.method == "POST" && request.url.path().ends_with("/responses")
+                })
+                .count();
+            if responses_request_count == 2 {
+                return Ok::<(), anyhow::Error>(());
+            }
+            if responses_request_count > 2 {
+                anyhow::bail!(
+                    "expected exactly 2 /responses requests, got {responses_request_count}"
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    let responses_requests = requests
+        .iter()
+        .filter(|request| request.method == "POST" && request.url.path().ends_with("/responses"))
+        .collect::<Vec<_>>();
+    assert_eq!(responses_requests.len(), 2);
+    assert!(
+        body_contains(responses_requests[1], "<additional_context_for_this_turn>"),
+        "expected steered follow-up request to contain additional_context_for_this_turn wrapper"
+    );
+    assert!(
+        body_contains(
+            responses_requests[1],
+            "<title>Context from my editor</title>"
+        ),
+        "expected steered follow-up request to contain ephemeral context title"
+    );
+    assert!(
+        body_contains(responses_requests[1], "## Active file: src/main.rs"),
+        "expected steered follow-up request to contain ephemeral context body"
+    );
+    assert!(
+        body_contains(responses_requests[1], "Follow-up"),
+        "expected steered follow-up request to contain the steered user input"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn turn_start_accepts_text_at_limit_with_mention_item() -> Result<()> {
     let responses = vec![create_final_assistant_message_sse_response("Done")?];
     let server = create_mock_responses_server_sequence_unchecked(responses).await;

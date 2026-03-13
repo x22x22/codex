@@ -80,6 +80,7 @@ use codex_protocol::protocol::TurnContextItem;
 use codex_protocol::protocol::TurnContextNetworkItem;
 use codex_protocol::protocol::USER_INSTRUCTIONS_CLOSE_TAG;
 use codex_protocol::protocol::USER_INSTRUCTIONS_OPEN_TAG;
+use codex_protocol::user_input::EphemeralContext as ProtocolEphemeralContext;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::PathBuf;
@@ -1066,6 +1067,19 @@ pub(crate) fn is_ephemeral_context_fragment(content_item: &ContentItem) -> bool 
         return false;
     };
     EphemeralContextFragment::matches_contextual_user_text(text)
+}
+
+pub(crate) fn ephemeral_context_content_items(
+    ephemeral_context: &[ProtocolEphemeralContext],
+) -> Vec<ContentItem> {
+    ephemeral_context
+        .iter()
+        .map(|context| EphemeralContextFragment {
+            title: context.title.clone(),
+            text: context.text.clone(),
+        })
+        .map(ModelVisibleContextFragment::into_content_item)
+        .collect()
 }
 
 pub(crate) fn build_turn_state_fragments(

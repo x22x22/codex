@@ -3748,6 +3748,16 @@ impl Session {
         input: Vec<UserInput>,
         expected_turn_id: Option<&str>,
     ) -> Result<String, SteerInputError> {
+        self.steer_input_with_ephemeral_context(input, &[], expected_turn_id)
+            .await
+    }
+
+    async fn steer_input_with_ephemeral_context(
+        &self,
+        input: Vec<UserInput>,
+        ephemeral_context: &[EphemeralContext],
+        expected_turn_id: Option<&str>,
+    ) -> Result<String, SteerInputError> {
         if input.is_empty() {
             return Err(SteerInputError::EmptyInput);
         }
@@ -3770,8 +3780,24 @@ impl Session {
             });
         }
 
+        let response_input = if ephemeral_context.is_empty() {
+            input.into()
+        } else {
+            let ResponseInputItem::Message { role, content } = ResponseInputItem::from(input)
+            else {
+                unreachable!("user input should always convert into a message");
+            };
+            let mut prefixed_content =
+                crate::model_visible_fragments::ephemeral_context_content_items(ephemeral_context);
+            prefixed_content.extend(content);
+            ResponseInputItem::Message {
+                role,
+                content: prefixed_content,
+            }
+        };
+
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input.into());
+        turn_state.push_pending_input(response_input);
         Ok(active_turn_id.clone())
     }
 
@@ -4442,7 +4468,10 @@ mod handlers {
         current_context.session_telemetry.user_prompt(&items);
 
         // Attempt to inject input into current task.
-        if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
+        if let Err(SteerInputError::NoActiveTurn(items)) = sess
+            .steer_input_with_ephemeral_context(items, &current_context.ephemeral_context, None)
+            .await
+        {
             sess.refresh_mcp_servers_if_requested(&current_context)
                 .await;
             let regular_task = sess.take_startup_regular_task().await.unwrap_or_default();

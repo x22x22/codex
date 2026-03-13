@@ -66,9 +66,12 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::developer_personality_spec_text;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_CLOSE_TAG;
+use codex_protocol::protocol::EPHEMERAL_CONTEXT_OPEN_TAG;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::W3cTraceContext;
+use codex_protocol::user_input::EphemeralContext;
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry::trace::TraceId;
 use opentelemetry::trace::TracerProvider as _;
@@ -3971,6 +3974,58 @@ async fn steer_input_returns_active_turn_id() {
 
     assert_eq!(turn_id, tc.sub_id);
     assert!(sess.has_pending_input().await);
+}
+
+#[tokio::test]
+async fn user_input_or_turn_steering_preserves_ephemeral_context() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    handlers::user_input_or_turn(
+        &sess,
+        "steer-submission".to_string(),
+        Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "steer".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ephemeral_context: vec![EphemeralContext {
+                title: "Context from my editor".to_string(),
+                text: "## Active file: src/main.rs".to_string(),
+            }],
+            final_output_json_schema: None,
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sess.get_pending_input().await,
+        vec![ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![
+                ContentItem::InputText {
+                    text: format!(
+                        "{EPHEMERAL_CONTEXT_OPEN_TAG}\n  <title>Context from my editor</title>\n  <content>\n## Active file: src/main.rs\n  </content>\n{EPHEMERAL_CONTEXT_CLOSE_TAG}"
+                    ),
+                },
+                ContentItem::InputText {
+                    text: "steer".to_string(),
+                },
+            ],
+        }]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
