@@ -38,6 +38,31 @@ fn default_attribution_uses_codex_trailer() {
         Some(&"core.hooksPath".to_string())
     );
     assert!(script.contains("Co-authored-by=Codex <noreply@openai.com>"));
+    assert!(script.contains("existing_hook=\"$existing_hooks_path/prepare-commit-msg\""));
+}
+
+#[test]
+fn generated_hooks_preserve_other_commit_hooks() {
+    let tmp = tempdir().expect("create temp dir");
+    let mut env = HashMap::new();
+
+    configure_git_hooks_env(&mut env, tmp.path(), None);
+
+    let hooks_dir = tmp.path().join("hooks").join("commit-attribution");
+    for hook_name in [
+        "applypatch-msg",
+        "commit-msg",
+        "post-commit",
+        "pre-applypatch",
+        "pre-commit",
+        "pre-merge-commit",
+        "prepare-commit-msg",
+    ] {
+        let script = fs::read_to_string(hooks_dir.join(hook_name)).expect("read generated hook");
+        assert!(script.contains(&format!(
+            "existing_hook=\"$existing_hooks_path/{hook_name}\""
+        )));
+    }
 }
 
 #[test]
@@ -72,7 +97,16 @@ fn custom_attribution_writes_custom_hook_script() {
     let script = fs::read_to_string(hook_path).expect("read generated hook");
 
     assert!(script.contains("Co-authored-by=AgentX <agent@example.com>"));
-    assert!(script.contains("existing_hook"));
+    assert!(script.contains("existing_hook=\"$existing_hooks_path/prepare-commit-msg\""));
+    assert!(script.contains("\"$existing_hook\" \"$@\""));
+    let pre_commit = fs::read_to_string(
+        tmp.path()
+            .join("hooks")
+            .join("commit-attribution")
+            .join("pre-commit"),
+    )
+    .expect("read generated pre-commit hook");
+    assert!(!pre_commit.contains("Co-authored-by=AgentX <agent@example.com>"));
 }
 
 #[test]

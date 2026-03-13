@@ -1417,6 +1417,7 @@ enum WebSearchToolConfigInput {
 #[serde(untagged)]
 enum CommitAttributionInput {
     String(String),
+    // Ignore malformed values so a bad local override does not prevent Codex from starting.
     Ignored(IgnoredAny),
 }
 

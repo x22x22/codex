@@ -9,6 +9,15 @@ use crate::config::Config;
 
 const DEFAULT_ATTRIBUTION_VALUE: &str = "Codex <noreply@openai.com>";
 const PREPARE_COMMIT_MSG_HOOK_NAME: &str = "prepare-commit-msg";
+const COMMIT_HOOK_NAMES: &[&str] = &[
+    "applypatch-msg",
+    "commit-msg",
+    "post-commit",
+    "pre-applypatch",
+    "pre-commit",
+    "pre-merge-commit",
+    PREPARE_COMMIT_MSG_HOOK_NAME,
+];
 
 pub(crate) fn configure_git_hooks_env_for_config(
     env: &mut HashMap<String, String>,
@@ -69,31 +78,41 @@ fn ensure_codex_hook_scripts(codex_home: &Path, value: &str) -> std::io::Result<
     let hooks_dir = codex_home.join("hooks").join("commit-attribution");
     fs::create_dir_all(&hooks_dir)?;
 
-    let script = build_hook_script(value);
-    let hook_path = hooks_dir.join(PREPARE_COMMIT_MSG_HOOK_NAME);
-    let should_write = match fs::read_to_string(&hook_path) {
-        Ok(existing) => existing != script,
-        Err(_) => true,
-    };
+    for hook_name in COMMIT_HOOK_NAMES {
+        let script = build_hook_script(hook_name, value);
+        let hook_path = hooks_dir.join(hook_name);
+        let should_write = match fs::read_to_string(&hook_path) {
+            Ok(existing) => existing != script,
+            Err(_) => true,
+        };
 
-    if should_write {
-        fs::write(&hook_path, script.as_bytes())?;
-    }
+        if should_write {
+            fs::write(&hook_path, script.as_bytes())?;
+        }
 
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(&hook_path)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&hook_path, perms)?;
+        #[cfg(unix)]
+        {
+            let mut perms = fs::metadata(&hook_path)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&hook_path, perms)?;
+        }
     }
 
     Ok(hooks_dir)
 }
 
-fn build_hook_script(value: &str) -> String {
+fn build_hook_script(hook_name: &str, value: &str) -> String {
     let escaped_value = value.replace('\'', "'\"'\"'");
+    let prepare_commit_msg_body = if hook_name == PREPARE_COMMIT_MSG_HOOK_NAME {
+        format!(
+            "\nmsg_file=\"${{1:-}}\"\nif [[ -n \"$msg_file\" && -f \"$msg_file\" ]]; then\n  git interpret-trailers \\\n    --in-place \\\n    --if-exists doNothing \\\n    --if-missing add \\\n    --trailer 'Co-authored-by={escaped_value}' \\\n    \"$msg_file\" || true\nfi\n"
+        )
+    } else {
+        String::new()
+    };
+
     format!(
-        "#!/usr/bin/env bash\nset -euo pipefail\n\nmsg_file=\"${{1:-}}\"\nif [[ -n \"$msg_file\" && -f \"$msg_file\" ]]; then\n  git interpret-trailers \\\n    --in-place \\\n    --if-exists doNothing \\\n    --if-missing add \\\n    --trailer 'Co-authored-by={escaped_value}' \\\n    \"$msg_file\" || true\nfi\n\nunset GIT_CONFIG_COUNT\nwhile IFS='=' read -r name _; do\n  case \"$name\" in\n    GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) unset \"$name\" ;;\n  esac\ndone < <(env)\n\nexisting_hooks_path=\"$(git config --path core.hooksPath 2>/dev/null || true)\"\nif [[ -z \"$existing_hooks_path\" ]]; then\n  git_dir=\"$(git rev-parse --git-common-dir 2>/dev/null || git rev-parse --git-dir 2>/dev/null || true)\"\n  if [[ -n \"$git_dir\" ]]; then\n    existing_hooks_path=\"$git_dir/hooks\"\n  fi\nfi\n\nif [[ -n \"$existing_hooks_path\" ]]; then\n  existing_hook=\"$existing_hooks_path/{PREPARE_COMMIT_MSG_HOOK_NAME}\"\n  if [[ -x \"$existing_hook\" && \"$existing_hook\" != \"$0\" ]]; then\n    \"$existing_hook\" \"$@\"\n  fi\nfi\n"
+        "#!/usr/bin/env bash\nset -euo pipefail\n\nunset GIT_CONFIG_COUNT\nwhile IFS='=' read -r name _; do\n  case \"$name\" in\n    GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) unset \"$name\" ;;\n  esac\ndone < <(env)\n\nexisting_hooks_path=\"$(git config --path core.hooksPath 2>/dev/null || true)\"\nif [[ -z \"$existing_hooks_path\" ]]; then\n  git_dir=\"$(git rev-parse --git-common-dir 2>/dev/null || git rev-parse --git-dir 2>/dev/null || true)\"\n  if [[ -n \"$git_dir\" ]]; then\n    existing_hooks_path=\"$git_dir/hooks\"\n  fi\nfi\n\nif [[ -n \"$existing_hooks_path\" ]]; then\n  existing_hook=\"$existing_hooks_path/{hook_name}\"\n  if [[ -x \"$existing_hook\" && \"$existing_hook\" != \"$0\" ]]; then\n    \"$existing_hook\" \"$@\"\n  fi\nfi\n{prepare_commit_msg_body}"
     )
 }
 
