@@ -73,9 +73,10 @@ fn assert_default_env_context(text: &str, cwd: &str, shell: &Shell) {
 }
 
 fn message_input_texts(value: &serde_json::Value) -> Vec<&str> {
-    value["content"]
-        .as_array()
-        .expect("message content array")
+    let Some(content) = value["content"].as_array() else {
+        panic!("message content array");
+    };
+    content
         .iter()
         .filter_map(|entry| entry["text"].as_str())
         .collect()
