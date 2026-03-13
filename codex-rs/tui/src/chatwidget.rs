@@ -5263,7 +5263,7 @@ impl ChatWidget {
                     .send(AppEvent::UpdatePersonality(personality));
                 self.app_event_tx
                     .send(AppEvent::PersistPersonalitySelection { personality });
-                QueueReplayControl::Continue
+                QueueReplayControl::ResumeWhenIdle
             }
             SlashCommand::Rename => {
                 self.session_telemetry
