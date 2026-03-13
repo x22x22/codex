@@ -16,7 +16,7 @@ use codex_protocol::models::developer_model_switch_text;
 use codex_protocol::models::developer_permissions_text;
 use codex_protocol::models::developer_personality_spec_text;
 use codex_protocol::models::developer_realtime_end_text;
-use codex_protocol::models::developer_realtime_start_text;
+use codex_protocol::models::developer_realtime_start_text_with_instructions;
 use codex_protocol::protocol::TurnContextItem;
 
 // ---------------------------------------------------------------------------
@@ -208,7 +208,14 @@ impl TurnContextDiffFragment for RealtimeUpdateFragment {
             turn_context.realtime_active,
         ) {
             (Some(true), false) => Some(developer_realtime_end_text("inactive")),
-            (Some(false), true) | (None, true) => Some(developer_realtime_start_text()),
+            (Some(false), true) | (None, true) => {
+                Some(developer_realtime_start_text_with_instructions(
+                    turn_context
+                        .config
+                        .experimental_realtime_start_instructions
+                        .as_deref(),
+                ))
+            }
             (Some(true), true) | (Some(false), false) => None,
             (None, false) => params
                 .previous_turn_settings
