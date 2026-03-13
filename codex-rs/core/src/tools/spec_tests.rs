@@ -415,6 +415,11 @@ fn model_provided_unified_exec_is_blocked_for_windows_sandboxed_policies() {
 }
 
 #[test]
+fn extracted_spec_tests_can_resolve_wait_tool_helper() {
+    assert_eq!(tool_name(&create_wait_tool()), "wait");
+}
+
+#[test]
 fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     let model_info = model_info_from_models_json("gpt-5-codex");
     let mut features = Features::with_defaults();
