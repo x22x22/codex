@@ -153,7 +153,6 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::CodexAuth;
-    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config_loader::LoaderOverrides;
@@ -208,11 +207,13 @@ trust_level = "trusted"
         let config = build_malformed_rules_config(codex_home.path(), project_dir.path())
             .await
             .expect("load config");
-        let manager = Arc::new(ThreadManager::with_models_provider_and_home_for_tests(
-            CodexAuth::from_api_key("dummy"),
-            config.model_provider.clone(),
-            config.codex_home.clone(),
-        ));
+        let manager = Arc::new(
+            codex_core::test_support::thread_manager_with_models_provider_and_home(
+                CodexAuth::from_api_key("dummy"),
+                config.model_provider.clone(),
+                config.codex_home.clone(),
+            ),
+        );
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
 
         let _codex_op_tx = spawn_agent(config, AppEventSender::new(app_event_tx), manager);
