@@ -259,9 +259,21 @@ where
 
 /// Canonical contextual-user fragment registry.
 ///
-/// Add new contextual-user fragment types here so injected context is not
-/// mistaken for real user intent during event mapping/truncation, and to wire
-/// turn-state contextual-user diff fragments in one place.
+/// Add new contextual-user fragments by:
+/// 1. Defining a typed fragment struct.
+/// 2. Implementing `ModelVisibleContextFragment` with
+///    `Role = ContextualUserContextRole`.
+/// 3. Implementing contextual-user detection via
+///    `TaggedContextualUserFragment` or `ContextualUserFragmentDetector`.
+/// 4. If the fragment is derived from turn state, implementing
+///    `TurnContextDiffFragment::build` and registering it with
+///    `Some(build_contextual_user_turn_state_fragment::<YourType>)`.
+/// 5. Otherwise registering it with `None` for diffing so it still participates
+///    in contextual-user history parsing.
+///
+/// Register new fragment types here so injected context is not mistaken for
+/// real user intent during event mapping/truncation, and to wire turn-state
+/// contextual-user diff fragments in one place.
 const REGISTERED_CONTEXTUAL_USER_FRAGMENTS: &[ContextualUserFragmentRegistration] = &[
     ContextualUserFragmentRegistration::new(
         detect_contextual_user_fragment::<crate::instructions::AgentsMdInstructions>,
