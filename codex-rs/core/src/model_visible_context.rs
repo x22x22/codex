@@ -53,21 +53,20 @@ pub(crate) struct ContextualUserFragmentMarkers {
     end_marker: &'static str,
 }
 
-pub(crate) trait ContextualUserFragmentDetector {
-    fn matches_contextual_user_text(text: &str) -> bool;
-}
+pub(crate) trait ContextualUserFragment {
+    fn markers() -> Option<ContextualUserFragmentMarkers> {
+        None
+    }
 
-pub(crate) trait TaggedContextualUserFragment {
-    const MARKERS: ContextualUserFragmentMarkers;
+    fn matches_contextual_user_text(text: &str) -> bool {
+        Self::markers().is_some_and(|markers| markers.matches_text(text))
+    }
 
     fn wrap_contextual_user_body(body: String) -> String {
-        Self::MARKERS.wrap_body(body)
-    }
-}
-
-impl<T: TaggedContextualUserFragment> ContextualUserFragmentDetector for T {
-    fn matches_contextual_user_text(text: &str) -> bool {
-        T::MARKERS.matches_text(text)
+        let markers = Self::markers().expect(
+            "contextual-user fragments using wrap_contextual_user_body must define markers",
+        );
+        markers.wrap_body(body)
     }
 }
 
@@ -241,7 +240,7 @@ pub(crate) trait TurnContextDiffFragment: ModelVisibleContextFragment + Sized {
     ) -> Option<Self>;
 }
 
-fn detect_contextual_user_fragment<F: ContextualUserFragmentDetector>(text: &str) -> bool {
+fn detect_contextual_user_fragment<F: ContextualUserFragment>(text: &str) -> bool {
     F::matches_contextual_user_text(text)
 }
 
@@ -251,7 +250,7 @@ fn build_contextual_user_turn_state_fragment<F>(
     params: &TurnContextDiffParams<'_>,
 ) -> Option<ContextualUserTextFragment>
 where
-    F: TurnContextDiffFragment<Role = ContextualUserContextRole>,
+    F: TurnContextDiffFragment<Role = ContextualUserContextRole> + ContextualUserFragment,
 {
     let fragment = F::build(turn_context, reference_context_item, params)?;
     Some(ContextualUserTextFragment::new(fragment.render_text()))
@@ -263,8 +262,9 @@ where
 /// 1. Defining a typed fragment struct.
 /// 2. Implementing `ModelVisibleContextFragment` with
 ///    `Role = ContextualUserContextRole`.
-/// 3. Implementing contextual-user detection via
-///    `TaggedContextualUserFragment` or `ContextualUserFragmentDetector`.
+/// 3. Implementing `ContextualUserFragment` for detection. Prefer defining
+///    `markers()` so the default matcher/wrapper behavior applies; override
+///    `matches_contextual_user_text()` only for genuinely custom formats.
 /// 4. If the fragment is derived from turn state, implementing
 ///    `TurnContextDiffFragment::build` and registering it with
 ///    `Some(build_contextual_user_turn_state_fragment::<YourType>)`.
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn marker_matching_ignores_plain_text() {
         assert!(
-            !<crate::instructions::SkillInstructions as ContextualUserFragmentDetector>::matches_contextual_user_text("plain text")
+            !<crate::instructions::SkillInstructions as ContextualUserFragment>::matches_contextual_user_text("plain text")
         );
     }
 }

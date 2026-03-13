@@ -1,8 +1,8 @@
 use crate::codex::TurnContext;
 use crate::model_visible_context::ContextualUserContextRole;
+use crate::model_visible_context::ContextualUserFragment;
 use crate::model_visible_context::ContextualUserFragmentMarkers;
 use crate::model_visible_context::ModelVisibleContextFragment;
-use crate::model_visible_context::TaggedContextualUserFragment;
 use crate::model_visible_context::TurnContextDiffFragment;
 use crate::model_visible_context::TurnContextDiffParams;
 use crate::shell::Shell;
@@ -134,8 +134,10 @@ impl ModelVisibleContextFragment for EnvironmentContext {
     }
 }
 
-impl TaggedContextualUserFragment for EnvironmentContext {
-    const MARKERS: ContextualUserFragmentMarkers = Self::MARKERS;
+impl ContextualUserFragment for EnvironmentContext {
+    fn markers() -> Option<ContextualUserFragmentMarkers> {
+        Some(Self::MARKERS)
+    }
 }
 
 impl TurnContextDiffFragment for EnvironmentContext {

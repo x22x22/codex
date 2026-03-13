@@ -5,9 +5,9 @@ use codex_protocol::models::ResponseItem;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
 use crate::model_visible_context::ContextualUserContextRole;
+use crate::model_visible_context::ContextualUserFragment;
 use crate::model_visible_context::ContextualUserFragmentMarkers;
 use crate::model_visible_context::ModelVisibleContextFragment;
-use crate::model_visible_context::TaggedContextualUserFragment;
 use crate::model_visible_context::USER_SHELL_COMMAND_CLOSE_TAG;
 use crate::model_visible_context::USER_SHELL_COMMAND_OPEN_TAG;
 use crate::tools::format_exec_output_str;
@@ -19,11 +19,13 @@ fn format_duration_line(duration: Duration) -> String {
 
 pub(crate) struct UserShellCommandFragment;
 
-impl TaggedContextualUserFragment for UserShellCommandFragment {
-    const MARKERS: ContextualUserFragmentMarkers = ContextualUserFragmentMarkers::new(
-        USER_SHELL_COMMAND_OPEN_TAG,
-        USER_SHELL_COMMAND_CLOSE_TAG,
-    );
+impl ContextualUserFragment for UserShellCommandFragment {
+    fn markers() -> Option<ContextualUserFragmentMarkers> {
+        Some(ContextualUserFragmentMarkers::new(
+            USER_SHELL_COMMAND_OPEN_TAG,
+            USER_SHELL_COMMAND_CLOSE_TAG,
+        ))
+    }
 }
 
 struct UserShellCommandRecord<'a> {
@@ -49,7 +51,9 @@ impl ModelVisibleContextFragment for UserShellCommandRecord<'_> {
             self.turn_context.truncation_policy,
         ));
         sections.push("</result>".to_string());
-        UserShellCommandFragment::wrap_contextual_user_body(sections.join("\n"))
+        <UserShellCommandFragment as ContextualUserFragment>::wrap_contextual_user_body(
+            sections.join("\n"),
+        )
     }
 }
 

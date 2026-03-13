@@ -24,11 +24,11 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::event_mapping::parse_turn_item;
 use crate::model_visible_context::ContextualUserContextRole;
+use crate::model_visible_context::ContextualUserFragment;
 use crate::model_visible_context::ContextualUserFragmentMarkers;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::TURN_ABORTED_CLOSE_TAG;
 use crate::model_visible_context::TURN_ABORTED_OPEN_TAG;
-use crate::model_visible_context::TaggedContextualUserFragment;
 use crate::models_manager::manager::ModelsManager;
 use crate::protocol::EventMsg;
 use crate::protocol::TokenUsage;
@@ -70,13 +70,17 @@ impl ModelVisibleContextFragment for TurnAbortedMarker {
     type Role = ContextualUserContextRole;
 
     fn render_text(&self) -> String {
-        Self::wrap_contextual_user_body(self.guidance.to_string())
+        <Self as ContextualUserFragment>::wrap_contextual_user_body(self.guidance.to_string())
     }
 }
 
-impl TaggedContextualUserFragment for TurnAbortedMarker {
-    const MARKERS: ContextualUserFragmentMarkers =
-        ContextualUserFragmentMarkers::new(TURN_ABORTED_OPEN_TAG, TURN_ABORTED_CLOSE_TAG);
+impl ContextualUserFragment for TurnAbortedMarker {
+    fn markers() -> Option<ContextualUserFragmentMarkers> {
+        Some(ContextualUserFragmentMarkers::new(
+            TURN_ABORTED_OPEN_TAG,
+            TURN_ABORTED_CLOSE_TAG,
+        ))
+    }
 }
 
 fn emit_turn_network_proxy_metric(

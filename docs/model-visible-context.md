@@ -26,11 +26,12 @@ When adding new model-visible context:
 2. Implement `ModelVisibleContextFragment` for it.
 3. Set the fragment `type Role` to the correct developer or contextual-user role.
 4. If it is a contextual-user fragment, implement contextual-user detection:
-   - prefer `TaggedContextualUserFragment` for marker-based detection/wrapping
-   - use `ContextualUserFragmentDetector` when matching is dynamic (for example AGENTS.md tags that embed directory names)
+   - implement `ContextualUserFragment`
+   - prefer defining `markers()` so the default marker-based detection/wrapping applies
+   - override `matches_contextual_user_text()` only when matching is genuinely custom (for example AGENTS.md)
 5. If the fragment is derived from durable/current turn state and should be diffed/reinjected after history mutations, also implement `TurnContextDiffFragment`.
 6. Register the fragment type:
-   - developer turn-state fragments: add to `REGISTERED_DEVELOPER_TURN_STATE_FRAGMENT_BUILDERS` in `context_manager/updates.rs`.
+   - developer turn-state fragments: add to `REGISTERED_TURN_STATE_FRAGMENT_BUILDERS` in `context_manager/updates.rs`.
    - contextual-user fragments: add once to `REGISTERED_CONTEXTUAL_USER_FRAGMENTS` in `model_visible_context.rs` (this powers both history detection and optional turn-state diff assembly).
 7. Push the resulting fragments through the shared envelope builders.
 

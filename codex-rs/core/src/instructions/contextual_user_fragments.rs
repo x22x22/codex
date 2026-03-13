@@ -9,14 +9,13 @@ use serde::Serialize;
 
 use crate::codex::TurnContext;
 use crate::model_visible_context::ContextualUserContextRole;
-use crate::model_visible_context::ContextualUserFragmentDetector;
+use crate::model_visible_context::ContextualUserFragment;
 use crate::model_visible_context::ContextualUserFragmentMarkers;
 use crate::model_visible_context::ModelVisibleContextFragment;
 use crate::model_visible_context::PLUGINS_CLOSE_TAG;
 use crate::model_visible_context::PLUGINS_OPEN_TAG;
 use crate::model_visible_context::SKILL_CLOSE_TAG;
 use crate::model_visible_context::SKILL_OPEN_TAG;
-use crate::model_visible_context::TaggedContextualUserFragment;
 use crate::model_visible_context::TurnContextDiffFragment;
 use crate::model_visible_context::TurnContextDiffParams;
 use codex_protocol::protocol::TurnContextItem;
@@ -76,7 +75,7 @@ impl TurnContextDiffFragment for AgentsMdInstructions {
     }
 }
 
-impl ContextualUserFragmentDetector for AgentsMdInstructions {
+impl ContextualUserFragment for AgentsMdInstructions {
     fn matches_contextual_user_text(text: &str) -> bool {
         let trimmed = text.trim_start();
         // TODO(ccunningham): Switch detection to the XML-ish wrapper once we
@@ -102,16 +101,20 @@ impl ModelVisibleContextFragment for SkillInstructions {
     type Role = ContextualUserContextRole;
 
     fn render_text(&self) -> String {
-        Self::wrap_contextual_user_body(format!(
+        <Self as ContextualUserFragment>::wrap_contextual_user_body(format!(
             "<name>{}</name>\n<path>{}</path>\n{}",
             self.name, self.path, self.contents
         ))
     }
 }
 
-impl TaggedContextualUserFragment for SkillInstructions {
-    const MARKERS: ContextualUserFragmentMarkers =
-        ContextualUserFragmentMarkers::new(SKILL_OPEN_TAG, SKILL_CLOSE_TAG);
+impl ContextualUserFragment for SkillInstructions {
+    fn markers() -> Option<ContextualUserFragmentMarkers> {
+        Some(ContextualUserFragmentMarkers::new(
+            SKILL_OPEN_TAG,
+            SKILL_CLOSE_TAG,
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -128,13 +131,17 @@ impl ModelVisibleContextFragment for PluginInstructions {
     type Role = ContextualUserContextRole;
 
     fn render_text(&self) -> String {
-        Self::wrap_contextual_user_body(self.text.clone())
+        <Self as ContextualUserFragment>::wrap_contextual_user_body(self.text.clone())
     }
 }
 
-impl TaggedContextualUserFragment for PluginInstructions {
-    const MARKERS: ContextualUserFragmentMarkers =
-        ContextualUserFragmentMarkers::new(PLUGINS_OPEN_TAG, PLUGINS_CLOSE_TAG);
+impl ContextualUserFragment for PluginInstructions {
+    fn markers() -> Option<ContextualUserFragmentMarkers> {
+        Some(ContextualUserFragmentMarkers::new(
+            PLUGINS_OPEN_TAG,
+            PLUGINS_CLOSE_TAG,
+        ))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +188,7 @@ mod tests {
             }
         ));
         assert!(
-            <AgentsMdInstructions as ContextualUserFragmentDetector>::matches_contextual_user_text(
+            <AgentsMdInstructions as ContextualUserFragment>::matches_contextual_user_text(
                 "# AGENTS.md instructions for test_directory\n\n<INSTRUCTIONS>\ntest_text\n</INSTRUCTIONS>"
             )
         );
@@ -215,12 +222,12 @@ mod tests {
     #[test]
     fn test_is_skill_instructions() {
         assert!(
-            <SkillInstructions as ContextualUserFragmentDetector>::matches_contextual_user_text(
+            <SkillInstructions as ContextualUserFragment>::matches_contextual_user_text(
                 "<skill>\n<name>demo-skill</name>\n<path>skills/demo/SKILL.md</path>\nbody\n</skill>"
             )
         );
         assert!(
-            !<SkillInstructions as ContextualUserFragmentDetector>::matches_contextual_user_text(
+            !<SkillInstructions as ContextualUserFragment>::matches_contextual_user_text(
                 "regular text"
             )
         );
