@@ -84,6 +84,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+use serde::de::IgnoredAny;
 use similar::DiffableStr;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -1103,6 +1104,7 @@ pub struct ConfigToml {
     /// Optional commit attribution text for commit message co-author trailers.
     ///
     /// Set to an empty string to disable automatic commit attribution.
+    #[serde(default, deserialize_with = "deserialize_optional_commit_attribution")]
     pub commit_attribution: Option<String>,
 
     /// When set, restricts ChatGPT login to a specific workspace identifier.
@@ -1409,6 +1411,28 @@ pub struct ToolsToml {
 enum WebSearchToolConfigInput {
     Enabled(bool),
     Config(WebSearchToolConfig),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CommitAttributionInput {
+    String(String),
+    Ignored(IgnoredAny),
+}
+
+fn deserialize_optional_commit_attribution<'de, D>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<CommitAttributionInput>::deserialize(deserializer)?;
+
+    Ok(match value {
+        None => None,
+        Some(CommitAttributionInput::String(value)) => Some(value),
+        Some(CommitAttributionInput::Ignored(_)) => None,
+    })
 }
 
 fn deserialize_optional_web_search_tool_config<'de, D>(
