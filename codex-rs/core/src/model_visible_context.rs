@@ -69,9 +69,9 @@ pub(crate) trait ContextualUserFragment {
     }
 
     fn wrap_contextual_user_body(body: String) -> String {
-        let markers = Self::markers().expect(
-            "contextual-user fragments using wrap_contextual_user_body must define markers",
-        );
+        let Some(markers) = Self::markers() else {
+            panic!("contextual-user fragments using wrap_contextual_user_body must define markers");
+        };
         markers.wrap_body(body)
     }
 }
