@@ -1,124 +1,364 @@
-# Model-visible context fragments
+# Model-visible context
 
-Codex injects model-visible context through two turn-state envelopes:
+This document describes how model-visible prompt context is represented in the
+current `codex-rs` codebase, and how to add new context without breaking
+resume, compaction, backtracking, or history parsing.
 
-- the developer envelope, rendered as a single `developer` message
-- the contextual-user envelope, rendered as a single `user` message whose contents are contextual state rather than real user intent
+The key modules are:
 
-Both envelopes are assembled from the single ordered fragment registry in
-[`codex-rs/core/src/model_visible_fragments.rs`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_fragments.rs).
-Envelope builders normalize text fragment boundaries by inserting `\n\n`
-between adjacent text content items, so fragments do not run together in the
-model-visible token stream.
+- [`codex-rs/core/src/model_visible_context.rs`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_context.rs):
+  shared fragment abstractions, roles, marker helpers, and diff params
+- [`codex-rs/core/src/model_visible_fragments.rs`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_fragments.rs):
+  concrete fragment definitions, the central registry, shared contextual-user
+  detection, and turn-state fragment assembly
+- [`codex-rs/core/src/context_manager/updates.rs`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/context_manager/updates.rs):
+  the shared developer/contextual-user envelope builders and steady-state
+  per-turn diff assembly
+- [`codex-rs/core/src/codex.rs`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/codex.rs):
+  initial-context assembly and the normal runtime path that decides whether to
+  inject full context or only diffs
 
-## Canonical rules
+## Core model
 
-1. All model-visible injected context must be represented as a typed `ModelVisibleContextFragment`.
-2. Turn-state context assembly always produces exactly two envelopes: one developer message and one contextual-user message.
-3. There is one blessed place to define and register current fragment types: [`model_visible_fragments.rs`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_fragments.rs).
-4. Contextual-user fragments must provide stable detection so history parsing can distinguish contextual state from true user intent.
-5. Fragments derived from durable/current turn state that should survive history-mutating flows (resume/fork/compaction/backtracking) via re-diffing should implement `ModelVisibleContextFragment::build(...)`.
-6. Do not hand-construct model-visible `ResponseItem::Message` payloads in new code. Use fragment conversion (`into_message` / `into_response_input_item`) and the shared envelope builders.
+Model-visible prompt context falls into three buckets:
 
-Rule 2 applies to turn-state context assembly (`build_initial_context` /
-`build_settings_update_items`). Runtime or session-prefix events may still
-inject standalone fragment messages, but those fragment types still belong in
-the central registry so rendering and contextual-user detection remain
-standardized.
+1. Turn-state fragments.
+   These are derived from current durable turn/session state and are the ones
+   that must survive history-mutating flows such as resume, compaction,
+   backtracking, and fork by being rebuilt from current state plus an optional
+   persisted baseline.
+2. Registered runtime fragments.
+   These are not derived from `TurnContext` diffs, but they are still modeled
+   as typed fragments because they are emitted into model-visible history and,
+   for contextual-user fragments, must still be recognized during later history
+   parsing.
+3. Developer-only one-off text injections.
+   These are not currently represented as dedicated registered fragments. They
+   are developer-role text added in a few call sites where no contextual-user
+   detection or turn-state diffing is needed.
 
-## Blessed path
+The single most important distinction is whether the model-visible state is:
 
-When adding new model-visible context:
+- durable turn/session state that should be rebuilt from `TurnContext`
+- or a one-off event/message that is only relevant because it just happened
 
-1. Define a typed fragment type in [`model_visible_fragments.rs`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_fragments.rs).
-2. Implement `ModelVisibleContextFragment` for it.
-3. Set the fragment `type Role` to the correct developer or contextual-user role.
-4. If it is a contextual-user fragment:
-   - define `contextual_user_markers()` when marker-based detection/wrapping is sufficient
-   - override `matches_contextual_user_text()` only when matching is genuinely custom (for example AGENTS.md)
-5. If it is derived from current/persisted turn state and should participate in initial-context assembly and turn-to-turn diffing, implement `build(...)`.
-6. Register the fragment exactly once in `REGISTERED_MODEL_VISIBLE_FRAGMENTS`, in the rough order it should appear in model-visible context.
+That determines whether the fragment needs `build(...)`.
 
-That single registration powers:
+## Two-envelope rule
 
-- contextual-user history detection
-- developer-envelope turn-state assembly
-- contextual-user-envelope turn-state assembly
+Turn-state context assembly always produces exactly two envelopes:
 
-This is intentionally stricter than “implement the trait somewhere.” A fragment
-definition is not integrated until it is registered.
+- one `developer` message
+- one contextual `user` message
 
-## Choosing an envelope
+Those envelopes are assembled by the shared builders in
+[`updates.rs`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/context_manager/updates.rs).
+Adjacent text content items are explicitly separated with `\n\n` because, from
+the model's perspective, adjacent text `ContentItem`s inside one message are
+effectively concatenated.
 
-Use the developer envelope for developer-role guidance:
+This two-envelope rule applies to turn-state context assembly:
 
-- permissions / approval policy instructions
-- collaboration-mode developer guidance
-- model switch and realtime notices
-- personality guidance
-- subagent roster and subagent notifications
-- other developer-only instructions
+- [`Codex::build_initial_context(...)`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/codex.rs#L3342)
+- [`build_settings_update_items(...)`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/context_manager/updates.rs#L105)
 
-Use `CustomDeveloperInstructions` only for custom developer override text (for
-example config/app-server `developer_instructions` values).
+It does not mean every model-visible message in the system is forced into those
+two envelopes. Runtime/session-prefix messages may still be emitted as separate
+messages when the event itself is what needs to be recorded, and some
+initial-only contextual/developer additions are appended to the envelopes
+outside registry-driven `build(...)` assembly.
 
-For system-generated developer guidance (permissions, collaboration-mode
-wrappers, realtime notices, personality wrappers, model-switch notices), use
-typed developer fragments whose text comes from the neutral
-`developer_*_text` helpers in `codex_protocol::models`.
+## Current architecture
 
-Use the contextual-user envelope for contextual state that should not count as
-real user turns:
+### 1. Shared fragment trait
 
-- AGENTS / user instructions
-- environment context
+Every named fragment type implements
+[`ModelVisibleContextFragment`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_context.rs#L180).
 
-Use standalone contextual-user fragment messages for runtime contextual state or
-markers that also should not count as real user turns:
+That trait owns:
 
-- plugin instructions
-- skill instructions
-- user shell command records
-- turn-aborted markers
+- `type Role`
+- `render_text()`
+- optional `build(...)` for turn-state fragments
+- optional contextual-user detection via `contextual_user_markers()` or
+  `matches_contextual_user_text()`
+- standard conversions such as `into_message()` and `into_response_input_item()`
 
-Contextual-user fragments must have stable detection because history parsing
-uses it to distinguish contextual state from real user intent.
+Roles are:
 
-Use `<environment_context>` only for environment facts derived from turn/session
-state (`TurnContext`) that may need turn-to-turn diffing. Today that includes
-`cwd`, `shell`, optional `current_date`, optional `timezone`, and optional
-network allow/deny domain summaries. Do not put developer policy/instructions
-or plugin/skill metadata into `<environment_context>`; those belong in their
-own typed fragments.
+- `DeveloperContextRole`
+- `ContextualUserContextRole`
 
-## Build semantics
+### 2. Central registry
 
-`ModelVisibleContextFragment::build(...)` is the canonical hook for turn-state
-fragments.
+Current fragment types are registered exactly once in
+[`REGISTERED_MODEL_VISIBLE_FRAGMENTS`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_fragments.rs#L123).
+
+That registry is used for:
+
+- contextual-user fragment detection during history parsing
+- turn-state fragment assembly for both envelopes by calling `build(...)`
+
+Registration is therefore an integration step, not just bookkeeping. Defining
+the type is not enough; the fragment is not part of the system until it is
+registered.
+
+### 3. Build semantics
+
+[`ModelVisibleContextFragment::build(...)`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_context.rs#L187)
+is the canonical hook for turn-state fragments.
 
 It receives:
 
 - the current `TurnContext`
-- an optional `reference_context_item`, which is the last persisted turn-state snapshot already represented in model-visible history
-- `TurnContextDiffParams` for shared runtime inputs such as shell rendering, previous-turn bridge state, exec-policy rendering context, and feature gating flags
+- `reference_context_item: Option<&TurnContextItem>`
+- `TurnContextDiffParams`
 
-Turn-state fragments should return:
+`reference_context_item` is the persisted durable baseline already represented
+in model-visible history. A turn-state fragment should compare against that
+baseline to avoid emitting duplicate prompt state. When there is no baseline
+(`None`), the fragment should decide whether to emit full current context or
+fall back to `TurnContextDiffParams` for other relevant previous-turn/session
+state such as `previous_turn_settings`.
 
-- `Some(fragment)` when current model-visible state should be injected
-- `None` when no model-visible update is needed
+Turn-state fragments return:
 
-Runtime/session-prefix fragments that are not built from turn state should leave
-the default `build(...) -> None`.
+- `Some(fragment)` when model-visible state should be injected
+- `None` when the current state is already represented and no update is needed
 
-## History behavior
+Fragments that are not turn-state-derived leave `build(...)` as the default
+`None`.
 
-Developer fragments do not need contextual-user detection because they are
-already separable by message role.
+## Initial context vs steady-state diffs
 
-Contextual-user fragments do need contextual-user detection because they share
-the `user` role with real user turns, and history parsing / truncation must
-avoid treating injected context as actual user input.
+The code intentionally treats these differently.
 
-Current fragment types live in the registry. Historical wrappers that are no
-longer current fragments should stay in a tiny separate compatibility shim near
-the detection path rather than being added as fake current fragments.
+### Full initial context
+
+[`Codex::build_initial_context(...)`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/codex.rs#L3342)
+always builds turn-state fragments with `reference_context_item = None`. In
+other words, it asks every turn-state fragment for the full current prompt
+state, not a diff.
+
+That is the right behavior for:
+
+- first real user turn in a thread
+- any path that must re-establish canonical prompt context from scratch
+
+There is also
+[`build_initial_context_without_reference_context_item(...)`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/codex.rs#L3445),
+which currently delegates to the same full-context behavior and exists to make
+the “ignore any existing baseline” intent explicit in compaction rebuild paths.
+
+### Steady-state turn updates
+
+[`build_settings_update_items(...)`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/context_manager/updates.rs#L105)
+passes the current `reference_context_item` into the registry-driven turn-state
+builder loop, so registered turn-state fragments can emit only the minimal
+developer/contextual-user diffs for the next turn.
+
+### Normal runtime path
+
+[`record_context_updates_and_set_reference_context_item(...)`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/codex.rs#L3479)
+uses this rule:
+
+- if there is no baseline, inject full initial context
+- otherwise inject only turn-state diffs
+
+After each real user turn it persists the latest `TurnContextItem` and advances
+the in-memory baseline even if no model-visible diff message was emitted. That
+is what keeps later diffing aligned with current state.
+
+## Contextual-user detection
+
+Contextual-user fragments share the `user` role with real user messages, so
+history parsing must be able to distinguish:
+
+- contextual state
+- true user intent
+
+That is why contextual-user fragments need stable detection.
+
+Preferred path:
+
+- implement `contextual_user_markers()` when the fragment has stable fixed
+  wrappers
+
+Fallback path:
+
+- override `matches_contextual_user_text()` when detection is genuinely custom
+  (for example the current AGENTS.md wrapper)
+
+The shared detection entrypoint is
+[`is_contextual_user_fragment(...)`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_fragments.rs#L843).
+It first checks the current registry, then applies a very small legacy shim for
+historical user-role wrappers that were shipped previously but are no longer
+current fragment types.
+
+Current legacy shim:
+
+- old user-role `<subagent_notification>...</subagent_notification>` messages
+
+Those legacy checks should stay bounded and local to detection. Do not create
+fake current fragment types just to recognize old persisted history.
+
+## Current fragment inventory
+
+### Registered turn-state developer fragments
+
+These implement `build(...)` and participate in both full initial context and
+steady-state diffs:
+
+- `ModelInstructionsUpdateFragment`
+- `PermissionsUpdateFragment`
+- `CustomDeveloperInstructionsUpdateFragment`
+- `CollaborationModeUpdateFragment`
+- `RealtimeUpdateFragment`
+- `PersonalityUpdateFragment`
+
+### Registered runtime developer fragments
+
+These are typed and registered, but not built from `TurnContext` diffs:
+
+- `SubagentRosterContext`
+- `SubagentNotification`
+
+### Registered turn-state contextual-user fragments
+
+These implement `build(...)` and participate in both full initial context and
+steady-state diffs:
+
+- `AgentsMdInstructions`
+- `EnvironmentContext`
+
+### Registered runtime contextual-user fragments
+
+These are typed and registered for rendering/detection, but not built from
+`TurnContext` diffs:
+
+- `SkillInstructions`
+- `PluginInstructions`
+- `UserShellCommandFragment`
+- `TurnAbortedMarker`
+
+`PluginInstructions` is currently appended to the initial contextual-user
+envelope during full initial-context assembly. `SkillInstructions`,
+`UserShellCommandFragment`, and `TurnAbortedMarker` are currently emitted as
+standalone contextual-user messages.
+
+## Current non-registry developer text injections
+
+The current codebase still has a few developer-role prompt injections that are
+not dedicated registered fragments. These are accurate descriptions of current
+behavior, not the preferred path for new work.
+
+Current examples include:
+
+- memory-tool initial developer instructions
+- apps guidance in the initial developer envelope
+- commit-attribution guidance in the initial developer envelope
+- explicit plugin-mention developer hints
+- a few one-off runtime developer messages such as stop-hook and hook-provided
+  additional context
+
+These are acceptable because they are developer-role only and do not need
+contextual-user detection or turn-state diff reconstruction. But for new
+model-visible context, prefer a dedicated typed fragment unless the message is
+truly an isolated one-off developer event.
+
+## Choosing the right representation
+
+### Use a registered turn-state fragment when:
+
+- the context is derived from `TurnContext` / durable session state
+- resume, fork, compaction, or backtracking should be able to rebuild it
+- it belongs in one of the two turn-state envelopes
+
+Examples:
+
+- permissions policy
+- collaboration mode
+- realtime start/end state
+- AGENTS.md instructions
+- environment context
+
+### Use a registered runtime fragment when:
+
+- the context is model-visible
+- it is not derived from `TurnContext` diffs
+- it still benefits from standardized rendering and, for contextual-user
+  fragments, shared detection
+
+These fragments may either:
+
+- be appended to an envelope in a non-diff initial-context path
+- or be emitted as standalone runtime/session-prefix messages
+
+Examples:
+
+- turn-aborted marker
+- user shell command record
+- skill injection
+- plugin session instructions
+- subagent roster / subagent notification
+
+### Use a plain developer text wrapper only when:
+
+- the message is developer-role only
+- it is a narrow one-off or initial-only addition
+- it does not need contextual-user detection
+- it does not need to participate in turn-state diff reconstruction
+
+If you are tempted to use a plain `String` or `DeveloperTextFragment`, stop and
+verify that this is really just an isolated developer-only event and not new
+shared prompt state.
+
+## Environment context rule
+
+Use `<environment_context>` only for environment facts derived from
+`TurnContext` that may need turn-to-turn refresh semantics.
+
+Current fields are:
+
+- `cwd`
+- `shell`
+- optional `current_date`
+- optional `timezone`
+- optional network allow/deny summaries
+
+Do not put other guidance in `<environment_context>`, especially:
+
+- permissions/policy instructions
+- skills or plugins
+- AGENTS instructions
+- subagent notices
+
+Those should stay in their own fragment types.
+
+## Blessed path for new work
+
+When adding new model-visible context:
+
+1. Decide whether the model should see it at all.
+2. Decide whether it is durable turn/session state or a one-off runtime event.
+3. If it should be represented as a named fragment, define a typed fragment in
+   [`model_visible_fragments.rs`](/Users/ccunningham/code/codex-worktree-tria/codex-rs/core/src/model_visible_fragments.rs).
+4. Implement `ModelVisibleContextFragment`.
+5. Set `type Role` correctly.
+6. If it is turn-state context, implement `build(...)`.
+7. If it is contextual-user, provide stable detection with
+   `contextual_user_markers()` or custom `matches_contextual_user_text()`.
+8. Register it exactly once in `REGISTERED_MODEL_VISIBLE_FRAGMENTS`, in prompt
+   order.
+9. Use the shared envelope builders or fragment conversions rather than
+   hand-constructing model-visible `ResponseItem::Message` payloads in new
+   turn-state paths.
+
+Rule of thumb:
+
+- “This is durable prompt state” => registered typed fragment, usually with
+  `build(...)`
+- “This is a one-off contextual/runtime marker” => registered typed fragment,
+  usually without `build(...)`
+- “This is an isolated developer-only text event” => plain developer text is
+  sometimes acceptable, but it is the exception, not the default

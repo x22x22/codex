@@ -39,17 +39,18 @@ In the codex-rs folder where the rust code lives:
 ### Model-visible context fragments
 
 - Model-visible prompt context should go through the shared fragment abstractions described in `docs/model-visible-context.md`.
-- Every new model-visible fragment should implement `ModelVisibleContextFragment` and set `type Role`.
+- Every named fragment type should implement `ModelVisibleContextFragment` and set `type Role`.
 - Turn-state model-visible context assembly should produce exactly two envelopes (one developer message + one contextual-user message) via the shared envelope builders.
-- Define and register current model-visible fragment types in `codex-rs/core/src/model_visible_fragments.rs`. That registry is the single source of truth for contextual-user detection and both turn-state envelopes.
-- Contextual-user fragments should use the shared detection path on `ModelVisibleContextFragment`: prefer defining `contextual_user_markers()` when marker-based detection/wrapping is sufficient, and override `matches_contextual_user_text()` only for genuinely custom matching (for example AGENTS.md).
+- Define and register current fragment types in `codex-rs/core/src/model_visible_fragments.rs`. `REGISTERED_MODEL_VISIBLE_FRAGMENTS` is the integration point for contextual-user detection and registry-driven turn-state assembly.
+- If a fragment represents durable turn/session state that should be rebuilt correctly across resume/fork/compaction/backtracking, implement `ModelVisibleContextFragment::build(...)`.
+- If a fragment is contextual-user, it must provide stable detection: prefer `contextual_user_markers()` when fixed markers are sufficient, and override `matches_contextual_user_text()` only for genuinely custom matching (for example AGENTS.md).
 - Use the developer envelope for developer guidance. Custom override text (for example config/app-server `developer_instructions`) should use `CustomDeveloperInstructions`; system-generated developer context should use typed fragments plus the neutral `developer_*_text` helpers rather than reusing the custom override type.
-- Use the contextual-user envelope for user-role contextual state or runtime markers such as AGENTS instructions, plugin instructions, environment context, skills, and shell-command markers. Contextual-user fragments must provide stable markers so history parsing treats them as contextual state rather than user intent.
+- Use contextual-user fragments for contextual user-role state. Turn-state contextual-user fragments such as AGENTS instructions and environment context belong in the contextual-user envelope. Initial-only or runtime contextual-user fragments should still use typed fragments so history parsing treats them as contextual state rather than user intent; some are appended to the initial contextual-user envelope (for example plugin session instructions) and others are emitted as standalone messages (for example skills, shell-command records, and turn-aborted notices).
 - Use `<environment_context>` specifically for environment facts derived from `TurnContext` that may need turn-to-turn diffs (`cwd`, `shell`, optional `current_date`, optional `timezone`, optional network allow/deny domain summaries). Do not put policy text, plugin/skill listings, or other guidance into `<environment_context>`; those should use dedicated fragments.
-- Fragments derived from durable/current turn state that should update/reinject via diff across resume/fork/compaction/backtracking should implement `ModelVisibleContextFragment::build(...)` so current-state extraction, diffing, and rendering live together.
-- Runtime/session-prefix one-off fragments should leave `ModelVisibleContextFragment::build(...)` as `None` when they are not turn-state diffs.
-- Register every current fragment exactly once in `REGISTERED_MODEL_VISIBLE_FRAGMENTS` in `codex-rs/core/src/model_visible_fragments.rs`, in the rough order it should appear in model-visible context.
-- Do not hand-construct model-visible `ResponseItem::Message` payloads in new code; use fragment conversion and shared envelope builders.
+- Runtime/session-prefix fragments that are not turn-state diffs should usually leave `ModelVisibleContextFragment::build(...)` as `None`.
+- Register every current fragment exactly once in `REGISTERED_MODEL_VISIBLE_FRAGMENTS`, in the rough order it should appear in model-visible context.
+- Prefer dedicated typed fragments over plain strings. Developer-only one-off text is acceptable only when it is truly isolated, does not need contextual-user detection, and does not participate in turn-state diff reconstruction.
+- Do not hand-construct model-visible `ResponseItem::Message` payloads in new turn-state code; use fragment conversion and the shared envelope builders.
 - Do not inject raw strings directly into the initial-context or settings-update builders, and do not call fragment wrapping helpers ad hoc from new code.
 
 Run `just fmt` (in `codex-rs` directory) automatically after you have finished making Rust code changes; do not ask for approval to run it. Additionally, run the tests:
