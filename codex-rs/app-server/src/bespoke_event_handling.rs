@@ -389,7 +389,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                             id: item_id.clone(),
                             changes: patch_changes.clone(),
                             status: PatchApplyStatus::InProgress,
-                            metadata: None,
                         };
                         let notification = ItemStartedNotification {
                             thread_id: conversation_id.to_string(),
@@ -751,7 +750,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     content_items: None,
                     success: None,
                     duration_ms: None,
-                    metadata: None,
                 };
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
@@ -822,7 +820,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     ),
                     success: Some(response.success),
                     duration_ms,
-                    metadata: None,
                 };
                 let notification = ItemCompletedNotification {
                     thread_id: conversation_id.to_string(),
@@ -868,7 +865,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: Some(begin_event.model),
                 reasoning_effort: Some(begin_event.reasoning_effort),
                 agents_states: HashMap::new(),
-                metadata: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -908,7 +904,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: Some(end_event.model),
                 reasoning_effort: Some(end_event.reasoning_effort),
                 agents_states,
-                metadata: None,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -931,7 +926,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states: HashMap::new(),
-                metadata: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -960,7 +954,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states: [(receiver_id, received_status)].into_iter().collect(),
-                metadata: None,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -987,7 +980,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states: HashMap::new(),
-                metadata: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1026,7 +1018,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states,
-                metadata: None,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1048,7 +1039,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states: HashMap::new(),
-                metadata: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1091,7 +1081,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 model: None,
                 reasoning_effort: None,
                 agents_states,
-                metadata: None,
             };
             let notification = ItemCompletedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1274,7 +1263,6 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item = ThreadItem::ImageView {
                 id: view_image_event.call_id.clone(),
                 path: view_image_event.path.to_string_lossy().into_owned(),
-                metadata: None,
             };
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1300,7 +1288,6 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item = ThreadItem::EnteredReviewMode {
                 id: event_turn_id.clone(),
                 review,
-                metadata: None,
             };
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1373,7 +1360,6 @@ pub(crate) async fn apply_bespoke_event_handling(
             let item = ThreadItem::ExitedReviewMode {
                 id: event_turn_id.clone(),
                 review,
-                metadata: None,
             };
             let started = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1420,7 +1406,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                     id: item_id.clone(),
                     changes,
                     status: PatchApplyStatus::InProgress,
-                    metadata: None,
                 };
                 let notification = ItemStartedNotification {
                     thread_id: conversation_id.to_string(),
@@ -1479,7 +1464,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 aggregated_output: None,
                 exit_code: None,
                 duration_ms: None,
-                metadata: None,
             };
             let notification = ItemStartedNotification {
                 thread_id: conversation_id.to_string(),
@@ -1589,7 +1573,6 @@ pub(crate) async fn apply_bespoke_event_handling(
                 aggregated_output,
                 exit_code: Some(exit_code),
                 duration_ms: Some(duration_ms),
-                metadata: None,
             };
 
             let notification = ItemCompletedNotification {
@@ -1829,7 +1812,6 @@ async fn complete_file_change_item(
         id: item_id,
         changes,
         status,
-        metadata: None,
     };
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -1863,7 +1845,6 @@ async fn complete_command_execution_item(
         aggregated_output: None,
         exit_code: None,
         duration_ms: None,
-        metadata: None,
     };
     let notification = ItemCompletedNotification {
         thread_id: conversation_id.to_string(),
@@ -2553,7 +2534,6 @@ fn collab_resume_begin_item(
         model: None,
         reasoning_effort: None,
         agents_states: HashMap::new(),
-        metadata: None,
     }
 }
 
@@ -2580,7 +2560,6 @@ fn collab_resume_end_item(end_event: codex_protocol::protocol::CollabResumeEndEv
         model: None,
         reasoning_effort: None,
         agents_states,
-        metadata: None,
     }
 }
 
@@ -2599,7 +2578,6 @@ async fn construct_mcp_tool_call_notification(
         result: None,
         error: None,
         duration_ms: None,
-        metadata: None,
     };
     ItemStartedNotification {
         thread_id,
@@ -2646,7 +2624,6 @@ async fn construct_mcp_tool_call_end_notification(
         result,
         error,
         duration_ms,
-        metadata: None,
     };
     ItemCompletedNotification {
         thread_id,
@@ -2957,7 +2934,6 @@ mod tests {
             model: None,
             reasoning_effort: None,
             agents_states: HashMap::new(),
-            metadata: None,
         };
         assert_eq!(item, expected);
     }
@@ -2990,7 +2966,6 @@ mod tests {
             )]
             .into_iter()
             .collect(),
-            metadata: None,
         };
         assert_eq!(item, expected);
     }
@@ -3354,7 +3329,6 @@ mod tests {
                 result: None,
                 error: None,
                 duration_ms: None,
-                metadata: None,
             },
         };
 
@@ -3491,7 +3465,6 @@ mod tests {
                 result: None,
                 error: None,
                 duration_ms: None,
-                metadata: None,
             },
         };
 
@@ -3546,7 +3519,6 @@ mod tests {
                 }),
                 error: None,
                 duration_ms: Some(0),
-                metadata: None,
             },
         };
 
@@ -3589,7 +3561,6 @@ mod tests {
                     message: "boom".to_string(),
                 }),
                 duration_ms: Some(1),
-                metadata: None,
             },
         };
 

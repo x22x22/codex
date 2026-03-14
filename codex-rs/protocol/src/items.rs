@@ -29,29 +29,10 @@ pub enum TurnItem {
     ContextCompaction(ContextCompactionItem),
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case")]
-pub enum ItemSandboxPolicy {
-    ReadOnly,
-    Sandbox,
-    FullAccess,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
-pub struct TurnItemMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub sandbox_policy: Option<ItemSandboxPolicy>,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct UserMessageItem {
     pub id: String,
     pub content: Vec<UserInput>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub metadata: Option<TurnItemMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -77,18 +58,12 @@ pub struct AgentMessageItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub phase: Option<MessagePhase>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub metadata: Option<TurnItemMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct PlanItem {
     pub id: String,
     pub text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub metadata: Option<TurnItemMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -97,9 +72,6 @@ pub struct ReasoningItem {
     pub summary_text: Vec<String>,
     #[serde(default)]
     pub raw_content: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub metadata: Option<TurnItemMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -107,9 +79,6 @@ pub struct WebSearchItem {
     pub id: String,
     pub query: String,
     pub action: WebSearchAction,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub metadata: Option<TurnItemMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
@@ -123,24 +92,17 @@ pub struct ImageGenerationItem {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub saved_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub metadata: Option<TurnItemMetadata>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
 pub struct ContextCompactionItem {
     pub id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub metadata: Option<TurnItemMetadata>,
 }
 
 impl ContextCompactionItem {
     pub fn new() -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            metadata: None,
         }
     }
 
@@ -160,7 +122,6 @@ impl UserMessageItem {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             content: content.to_vec(),
-            metadata: None,
         }
     }
 
@@ -240,7 +201,6 @@ impl AgentMessageItem {
             id: uuid::Uuid::new_v4().to_string(),
             content: content.to_vec(),
             phase: None,
-            metadata: None,
         }
     }
 
