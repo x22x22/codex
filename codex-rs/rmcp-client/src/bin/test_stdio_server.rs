@@ -5,16 +5,16 @@ use std::sync::Arc;
 use rmcp::ErrorData as McpError;
 use rmcp::ServiceExt;
 use rmcp::handler::server::ServerHandler;
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
 use rmcp::model::JsonObject;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::ListToolsResult;
-use rmcp::model::PaginatedRequestParam;
+use rmcp::model::PaginatedRequestParams;
 use rmcp::model::RawResource;
 use rmcp::model::RawResourceTemplate;
-use rmcp::model::ReadResourceRequestParam;
+use rmcp::model::ReadResourceRequestParams;
 use rmcp::model::ReadResourceResult;
 use rmcp::model::Resource;
 use rmcp::model::ResourceContents;
@@ -45,6 +45,7 @@ impl TestToolServer {
     fn new() -> Self {
         let tools = vec![
             Self::echo_tool(),
+            Self::echo_dash_tool(),
             Self::image_tool(),
             Self::image_scenario_tool(),
         ];
@@ -58,6 +59,20 @@ impl TestToolServer {
     }
 
     fn echo_tool() -> Tool {
+        Self::build_echo_tool(
+            "echo",
+            "Echo back the provided message and include environment data.",
+        )
+    }
+
+    fn echo_dash_tool() -> Tool {
+        Self::build_echo_tool(
+            "echo-tool",
+            "Echo back the provided message via a tool name that is not a legal JS identifier.",
+        )
+    }
+
+    fn build_echo_tool(name: &'static str, description: &'static str) -> Tool {
         #[expect(clippy::expect_used)]
         let schema: JsonObject = serde_json::from_value(json!({
             "type": "object",
@@ -71,8 +86,8 @@ impl TestToolServer {
         .expect("echo tool schema should deserialize");
 
         Tool::new(
-            Cow::Borrowed("echo"),
-            Cow::Borrowed("Echo back the provided message and include environment data."),
+            Cow::Borrowed(name),
+            Cow::Borrowed(description),
             Arc::new(schema),
         )
     }
@@ -171,6 +186,7 @@ impl TestToolServer {
                 "Template for memo://codex/{slug} resources used in tests.".to_string(),
             ),
             mime_type: Some("text/plain".to_string()),
+            icons: None,
         };
         ResourceTemplate::new(raw, None)
     }
@@ -227,7 +243,7 @@ impl ServerHandler for TestToolServer {
 
     fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         let tools = self.tools.clone();
@@ -242,7 +258,7 @@ impl ServerHandler for TestToolServer {
 
     fn list_resources(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
         let resources = self.resources.clone();
@@ -257,7 +273,7 @@ impl ServerHandler for TestToolServer {
 
     async fn list_resource_templates(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ListResourceTemplatesResult, McpError> {
         Ok(ListResourceTemplatesResult {
@@ -269,7 +285,7 @@ impl ServerHandler for TestToolServer {
 
     async fn read_resource(
         &self,
-        ReadResourceRequestParam { uri }: ReadResourceRequestParam,
+        ReadResourceRequestParams { uri, .. }: ReadResourceRequestParams,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<ReadResourceResult, McpError> {
         if uri == MEMO_URI {
@@ -291,11 +307,11 @@ impl ServerHandler for TestToolServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         _context: rmcp::service::RequestContext<rmcp::service::RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         match request.name.as_ref() {
-            "echo" => {
+            "echo" | "echo-tool" => {
                 let args: EchoArgs = match request.arguments {
                     Some(arguments) => serde_json::from_value(serde_json::Value::Object(
                         arguments.into_iter().collect(),
@@ -303,7 +319,7 @@ impl ServerHandler for TestToolServer {
                     .map_err(|err| McpError::invalid_params(err.to_string(), None))?,
                     None => {
                         return Err(McpError::invalid_params(
-                            "missing arguments for echo tool",
+                            format!("missing arguments for {} tool", request.name),
                             None,
                         ));
                     }
@@ -357,7 +373,7 @@ impl ServerHandler for TestToolServer {
 
 impl TestToolServer {
     fn parse_call_args<T: for<'de> Deserialize<'de>>(
-        request: &CallToolRequestParam,
+        request: &CallToolRequestParams,
         tool_name: &'static str,
     ) -> Result<T, McpError> {
         match request.arguments.as_ref() {

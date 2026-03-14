@@ -15,7 +15,7 @@ use crate::key_hint;
 use crate::render::Insets;
 use crate::render::RectExt;
 use crate::text_formatting::truncate_text;
-use codex_common::fuzzy_match::fuzzy_match;
+use codex_utils_fuzzy_match::fuzzy_match;
 
 #[derive(Clone, Debug)]
 pub(crate) struct MentionItem {
@@ -24,7 +24,11 @@ pub(crate) struct MentionItem {
     pub(crate) insert_text: String,
     pub(crate) search_terms: Vec<String>,
     pub(crate) path: Option<String>,
+    pub(crate) category_tag: Option<String>,
+    pub(crate) sort_rank: u8,
 }
+
+const MENTION_NAME_TRUNCATE_LEN: usize = 24;
 
 pub(crate) struct SkillPopup {
     query: String,
@@ -94,13 +98,27 @@ impl SkillPopup {
             .into_iter()
             .map(|(idx, indices, _score)| {
                 let mention = &self.mentions[idx];
-                let name = truncate_text(&mention.display_name, 21);
-                let description = mention.description.clone().unwrap_or_default();
+                let name = truncate_text(&mention.display_name, MENTION_NAME_TRUNCATE_LEN);
+                let description = match (
+                    mention.category_tag.as_deref(),
+                    mention.description.as_deref(),
+                ) {
+                    (Some(tag), Some(description)) if !description.is_empty() => {
+                        Some(format!("{tag} {description}"))
+                    }
+                    (Some(tag), _) => Some(tag.to_string()),
+                    (None, Some(description)) if !description.is_empty() => {
+                        Some(description.to_string())
+                    }
+                    _ => None,
+                };
                 GenericDisplayRow {
                     name,
+                    name_prefix_spans: Vec::new(),
                     match_indices: indices,
                     display_shortcut: None,
-                    description: Some(description).filter(|desc| !desc.is_empty()),
+                    description,
+                    category_tag: None,
                     is_disabled: false,
                     disabled_reason: None,
                     wrap_indent: None,
@@ -113,14 +131,12 @@ impl SkillPopup {
         let filter = self.query.trim();
         let mut out: Vec<(usize, Option<Vec<usize>>, i32)> = Vec::new();
 
-        if filter.is_empty() {
-            for (idx, _mention) in self.mentions.iter().enumerate() {
-                out.push((idx, None, 0));
-            }
-            return out;
-        }
-
         for (idx, mention) in self.mentions.iter().enumerate() {
+            if filter.is_empty() {
+                out.push((idx, None, 0));
+                continue;
+            }
+
             let mut best_match: Option<(Option<Vec<usize>>, i32)> = None;
 
             if let Some((indices, score)) = fuzzy_match(&mention.display_name, filter) {
@@ -153,11 +169,15 @@ impl SkillPopup {
         }
 
         out.sort_by(|a, b| {
-            a.2.cmp(&b.2).then_with(|| {
-                let an = self.mentions[a.0].display_name.as_str();
-                let bn = self.mentions[b.0].display_name.as_str();
-                an.cmp(bn)
-            })
+            self.mentions[a.0]
+                .sort_rank
+                .cmp(&self.mentions[b.0].sort_rank)
+                .then_with(|| a.2.cmp(&b.2))
+                .then_with(|| {
+                    let an = self.mentions[a.0].display_name.as_str();
+                    let bn = self.mentions[b.0].display_name.as_str();
+                    an.cmp(bn)
+                })
         });
 
         out

@@ -6,18 +6,24 @@ use anyhow::Context;
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use codex_windows_sandbox::canonicalize_path;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::ensure_allow_mask_aces_with_inheritance;
 use codex_windows_sandbox::ensure_allow_write_aces;
 use codex_windows_sandbox::extract_setup_failure;
 use codex_windows_sandbox::hide_newly_created_users;
+use codex_windows_sandbox::is_command_cwd_root;
 use codex_windows_sandbox::load_or_create_cap_sids;
 use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
+use codex_windows_sandbox::protect_workspace_agents_dir;
+use codex_windows_sandbox::protect_workspace_codex_dir;
+use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
 use codex_windows_sandbox::string_from_sid_bytes;
 use codex_windows_sandbox::to_wide;
+use codex_windows_sandbox::workspace_cap_sid_for_cwd;
 use codex_windows_sandbox::write_setup_error_report;
 use codex_windows_sandbox::SetupErrorCode;
 use codex_windows_sandbox::SetupErrorReport;
@@ -75,6 +81,7 @@ struct Payload {
     offline_username: String,
     online_username: String,
     codex_home: PathBuf,
+    command_cwd: PathBuf,
     read_roots: Vec<PathBuf>,
     write_roots: Vec<PathBuf>,
     real_user: String,
@@ -239,6 +246,8 @@ fn lock_sandbox_dir(
     real_user: &str,
     sandbox_group_sid: &[u8],
     sandbox_group_access_mode: i32,
+    sandbox_group_mask: u32,
+    real_user_mask: u32,
     _log: &mut File,
 ) -> Result<()> {
     std::fs::create_dir_all(dir)?;
@@ -248,7 +257,7 @@ fn lock_sandbox_dir(
     let entries = [
         (
             sandbox_group_sid.to_vec(),
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            sandbox_group_mask,
             sandbox_group_access_mode,
         ),
         (
@@ -261,11 +270,7 @@ fn lock_sandbox_dir(
             FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
             GRANT_ACCESS,
         ),
-        (
-            real_sid,
-            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
-            GRANT_ACCESS,
-        ),
+        (real_sid, real_user_mask, GRANT_ACCESS),
     ];
     unsafe {
         let mut eas: Vec<EXPLICIT_ACCESS_W> = Vec::new();
@@ -560,6 +565,11 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             ))
         })?
     };
+    let workspace_sid_str = workspace_cap_sid_for_cwd(&payload.codex_home, &payload.command_cwd)?;
+    let workspace_psid = unsafe {
+        convert_string_sid_to_sid(&workspace_sid_str)
+            .ok_or_else(|| anyhow::anyhow!("convert workspace capability SID failed"))?
+    };
     let mut refresh_errors: Vec<String> = Vec::new();
     if !refresh_only {
         let firewall_result = firewall::ensure_offline_outbound_block(&offline_sid_str, log);
@@ -609,12 +619,12 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     let cap_sid_str = caps.workspace.clone();
     let sandbox_group_sid_str =
         string_from_sid_bytes(&sandbox_group_sid).map_err(anyhow::Error::msg)?;
-    let sid_strings = vec![sandbox_group_sid_str, cap_sid_str];
     let write_mask =
         FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
     let mut grant_tasks: Vec<PathBuf> = Vec::new();
 
     let mut seen_write_roots: HashSet<PathBuf> = HashSet::new();
+    let canonical_command_cwd = canonicalize_path(&payload.command_cwd);
 
     for root in &payload.write_roots {
         if !seen_write_roots.insert(root.clone()) {
@@ -628,7 +638,21 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             continue;
         }
         let mut need_grant = false;
-        for (label, psid) in [("sandbox_group", sandbox_group_psid), ("cap", cap_psid)] {
+        let is_command_cwd = is_command_cwd_root(root, &canonical_command_cwd);
+        let cap_label = if is_command_cwd {
+            "workspace_cap"
+        } else {
+            "cap"
+        };
+        let cap_psid_for_root = if is_command_cwd {
+            workspace_psid
+        } else {
+            cap_psid
+        };
+        for (label, psid) in [
+            ("sandbox_group", sandbox_group_psid),
+            (cap_label, cap_psid_for_root),
+        ] {
             let has = match path_mask_allows(root, &[psid], write_mask, true) {
                 Ok(h) => h,
                 Err(e) => {
@@ -667,7 +691,12 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
     let (tx, rx) = mpsc::channel::<(PathBuf, Result<bool>)>();
     std::thread::scope(|scope| {
         for root in grant_tasks {
-            let sid_strings = sid_strings.clone();
+            let is_command_cwd = is_command_cwd_root(&root, &canonical_command_cwd);
+            let sid_strings = if is_command_cwd {
+                vec![sandbox_group_sid_str.clone(), workspace_sid_str.clone()]
+            } else {
+                vec![sandbox_group_sid_str.clone(), cap_sid_str.clone()]
+            };
             let tx = tx.clone();
             scope.spawn(move || {
                 // Convert SID strings to psids locally in this thread.
@@ -710,6 +739,25 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
         }
     });
 
+    lock_sandbox_dir(
+        &sandbox_bin_dir(&payload.codex_home),
+        &payload.real_user,
+        &sandbox_group_sid,
+        GRANT_ACCESS,
+        FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+        log,
+    )
+    .map_err(|err| {
+        anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperSandboxLockFailed,
+            format!(
+                "lock sandbox bin dir {} failed: {err}",
+                sandbox_bin_dir(&payload.codex_home).display()
+            ),
+        ))
+    })?;
+
     if refresh_only {
         log_line(
             log,
@@ -726,6 +774,8 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             &payload.real_user,
             &sandbox_group_sid,
             GRANT_ACCESS,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
             log,
         )
         .map_err(|err| {
@@ -742,6 +792,8 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             &payload.real_user,
             &sandbox_group_sid,
             DENY_ACCESS,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE,
+            FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE,
             log,
         )
         .map_err(|err| {
@@ -758,12 +810,64 @@ fn run_setup_full(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<(
             let _ = std::fs::remove_file(&legacy_users);
         }
     }
+
+    // Protect the current workspace's `.codex` and `.agents` directories from tampering
+    // (write/delete) by using a workspace-specific capability SID. If a directory doesn't exist
+    // yet, skip it (it will be picked up on the next refresh).
+    match unsafe { protect_workspace_codex_dir(&payload.command_cwd, workspace_psid) } {
+        Ok(true) => {
+            let cwd_codex = payload.command_cwd.join(".codex");
+            log_line(
+                log,
+                &format!(
+                    "applied deny ACE to protect workspace .codex {}",
+                    cwd_codex.display()
+                ),
+            )?;
+        }
+        Ok(false) => {}
+        Err(err) => {
+            let cwd_codex = payload.command_cwd.join(".codex");
+            refresh_errors.push(format!("deny ACE failed on {}: {err}", cwd_codex.display()));
+            log_line(
+                log,
+                &format!("deny ACE failed on {}: {err}", cwd_codex.display()),
+            )?;
+        }
+    }
+    match unsafe { protect_workspace_agents_dir(&payload.command_cwd, workspace_psid) } {
+        Ok(true) => {
+            let cwd_agents = payload.command_cwd.join(".agents");
+            log_line(
+                log,
+                &format!(
+                    "applied deny ACE to protect workspace .agents {}",
+                    cwd_agents.display()
+                ),
+            )?;
+        }
+        Ok(false) => {}
+        Err(err) => {
+            let cwd_agents = payload.command_cwd.join(".agents");
+            refresh_errors.push(format!(
+                "deny ACE failed on {}: {err}",
+                cwd_agents.display()
+            ));
+            log_line(
+                log,
+                &format!("deny ACE failed on {}: {err}", cwd_agents.display()),
+            )?;
+        }
+    }
     unsafe {
         if !sandbox_group_psid.is_null() {
             LocalFree(sandbox_group_psid as HLOCAL);
         }
         if !cap_psid.is_null() {
             LocalFree(cap_psid as HLOCAL);
+        }
+        if !workspace_psid.is_null() {
+            LocalFree(workspace_psid as HLOCAL);
         }
     }
     if refresh_only && !refresh_errors.is_empty() {

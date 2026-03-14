@@ -60,6 +60,22 @@ pub(crate) enum PlanType {
     Unknown(String),
 }
 
+impl PlanType {
+    pub(crate) fn from_raw_value(raw: &str) -> Self {
+        match raw.to_ascii_lowercase().as_str() {
+            "free" => Self::Known(KnownPlan::Free),
+            "go" => Self::Known(KnownPlan::Go),
+            "plus" => Self::Known(KnownPlan::Plus),
+            "pro" => Self::Known(KnownPlan::Pro),
+            "team" => Self::Known(KnownPlan::Team),
+            "business" => Self::Known(KnownPlan::Business),
+            "enterprise" => Self::Known(KnownPlan::Enterprise),
+            "education" | "edu" => Self::Known(KnownPlan::Edu),
+            _ => Self::Unknown(raw.to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum KnownPlan {
@@ -111,9 +127,9 @@ pub enum IdTokenInfoError {
     Json(#[from] serde_json::Error),
 }
 
-pub fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
+pub fn parse_chatgpt_jwt_claims(jwt: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
     // JWT format: header.payload.signature
-    let mut parts = id_token.split('.');
+    let mut parts = jwt.split('.');
     let (_header_b64, payload_b64, _sig_b64) = match (parts.next(), parts.next(), parts.next()) {
         (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => (h, p, s),
         _ => return Err(IdTokenInfoError::InvalidFormat),
@@ -128,14 +144,14 @@ pub fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
     match claims.auth {
         Some(auth) => Ok(IdTokenInfo {
             email,
-            raw_jwt: id_token.to_string(),
+            raw_jwt: jwt.to_string(),
             chatgpt_plan_type: auth.chatgpt_plan_type,
             chatgpt_user_id: auth.chatgpt_user_id.or(auth.user_id),
             chatgpt_account_id: auth.chatgpt_account_id,
         }),
         None => Ok(IdTokenInfo {
             email,
-            raw_jwt: id_token.to_string(),
+            raw_jwt: jwt.to_string(),
             chatgpt_plan_type: None,
             chatgpt_user_id: None,
             chatgpt_account_id: None,
@@ -148,7 +164,7 @@ where
     D: serde::Deserializer<'de>,
 {
     let s = String::deserialize(deserializer)?;
-    parse_id_token(&s).map_err(serde::de::Error::custom)
+    parse_chatgpt_jwt_claims(&s).map_err(serde::de::Error::custom)
 }
 
 fn serialize_id_token<S>(id_token: &IdTokenInfo, serializer: S) -> Result<S::Ok, S::Error>
@@ -159,114 +175,5 @@ where
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-    use serde::Serialize;
-
-    #[test]
-    fn id_token_info_parses_email_and_plan() {
-        #[derive(Serialize)]
-        struct Header {
-            alg: &'static str,
-            typ: &'static str,
-        }
-        let header = Header {
-            alg: "none",
-            typ: "JWT",
-        };
-        let payload = serde_json::json!({
-            "email": "user@example.com",
-            "https://api.openai.com/auth": {
-                "chatgpt_plan_type": "pro"
-            }
-        });
-
-        fn b64url_no_pad(bytes: &[u8]) -> String {
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-        }
-
-        let header_b64 = b64url_no_pad(&serde_json::to_vec(&header).unwrap());
-        let payload_b64 = b64url_no_pad(&serde_json::to_vec(&payload).unwrap());
-        let signature_b64 = b64url_no_pad(b"sig");
-        let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
-
-        let info = parse_id_token(&fake_jwt).expect("should parse");
-        assert_eq!(info.email.as_deref(), Some("user@example.com"));
-        assert_eq!(info.get_chatgpt_plan_type().as_deref(), Some("Pro"));
-    }
-
-    #[test]
-    fn id_token_info_parses_go_plan() {
-        #[derive(Serialize)]
-        struct Header {
-            alg: &'static str,
-            typ: &'static str,
-        }
-        let header = Header {
-            alg: "none",
-            typ: "JWT",
-        };
-        let payload = serde_json::json!({
-            "email": "user@example.com",
-            "https://api.openai.com/auth": {
-                "chatgpt_plan_type": "go"
-            }
-        });
-
-        fn b64url_no_pad(bytes: &[u8]) -> String {
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-        }
-
-        let header_b64 = b64url_no_pad(&serde_json::to_vec(&header).unwrap());
-        let payload_b64 = b64url_no_pad(&serde_json::to_vec(&payload).unwrap());
-        let signature_b64 = b64url_no_pad(b"sig");
-        let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
-
-        let info = parse_id_token(&fake_jwt).expect("should parse");
-        assert_eq!(info.email.as_deref(), Some("user@example.com"));
-        assert_eq!(info.get_chatgpt_plan_type().as_deref(), Some("Go"));
-    }
-
-    #[test]
-    fn id_token_info_handles_missing_fields() {
-        #[derive(Serialize)]
-        struct Header {
-            alg: &'static str,
-            typ: &'static str,
-        }
-        let header = Header {
-            alg: "none",
-            typ: "JWT",
-        };
-        let payload = serde_json::json!({ "sub": "123" });
-
-        fn b64url_no_pad(bytes: &[u8]) -> String {
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-        }
-
-        let header_b64 = b64url_no_pad(&serde_json::to_vec(&header).unwrap());
-        let payload_b64 = b64url_no_pad(&serde_json::to_vec(&payload).unwrap());
-        let signature_b64 = b64url_no_pad(b"sig");
-        let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
-
-        let info = parse_id_token(&fake_jwt).expect("should parse");
-        assert!(info.email.is_none());
-        assert!(info.get_chatgpt_plan_type().is_none());
-    }
-
-    #[test]
-    fn workspace_account_detection_matches_workspace_plans() {
-        let workspace = IdTokenInfo {
-            chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Business)),
-            ..IdTokenInfo::default()
-        };
-        assert_eq!(workspace.is_workspace_account(), true);
-
-        let personal = IdTokenInfo {
-            chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
-            ..IdTokenInfo::default()
-        };
-        assert_eq!(personal.is_workspace_account(), false);
-    }
-}
+#[path = "token_data_tests.rs"]
+mod tests;

@@ -1,4 +1,5 @@
 use crate::bottom_pane::ApprovalRequest;
+use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::render::renderable::Renderable;
 use codex_protocol::request_user_input::RequestUserInputEvent;
 use crossterm::event::KeyEvent;
@@ -14,6 +15,17 @@ pub(crate) trait BottomPaneView: Renderable {
     /// Return `true` if the view has finished and should be removed.
     fn is_complete(&self) -> bool {
         false
+    }
+
+    /// Stable identifier for views that need external refreshes while open.
+    fn view_id(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Actual item index for list-based views that want to preserve selection
+    /// across external refreshes.
+    fn selected_index(&self) -> Option<usize> {
+        None
     }
 
     /// Handle Ctrl-C while this view is active.
@@ -64,6 +76,15 @@ pub(crate) trait BottomPaneView: Renderable {
         &mut self,
         request: RequestUserInputEvent,
     ) -> Option<RequestUserInputEvent> {
+        Some(request)
+    }
+
+    /// Try to handle a supported MCP server elicitation form request; return the original value if
+    /// not consumed.
+    fn try_consume_mcp_server_elicitation_request(
+        &mut self,
+        request: McpServerElicitationFormRequest,
+    ) -> Option<McpServerElicitationFormRequest> {
         Some(request)
     }
 }

@@ -6,12 +6,17 @@ use rand::Rng;
 const ANNOUNCEMENT_TIP_URL: &str =
     "https://raw.githubusercontent.com/openai/codex/main/announcement_tip.toml";
 
-const PAID_TOOLTIP: &str =
-    "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. https://chatgpt.com/codex";
-const OTHER_TOOLTIP: &str =
-    "*New* Build faster with the **Codex App**. Try it now. https://chatgpt.com/codex";
+const IS_MACOS: bool = cfg!(target_os = "macos");
+const IS_WINDOWS: bool = cfg!(target_os = "windows");
+
+const PAID_TOOLTIP: &str = "*New* Try the **Codex App** with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
+const PAID_TOOLTIP_WINDOWS: &str = "*New* Try the **Codex App**, now available on **Windows**, with 2x rate limits until *April 2nd*. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
+const PAID_TOOLTIP_NON_MAC: &str = "*New* 2x rate limits until *April 2nd*.";
+const FAST_TOOLTIP: &str = "*New* Use **/fast** to enable our fastest inference at 2X plan usage.";
+const OTHER_TOOLTIP: &str = "*New* Build faster with the **Codex App**. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true";
+const OTHER_TOOLTIP_NON_MAC: &str = "*New* Build faster with Codex.";
 const FREE_GO_TOOLTIP: &str =
-    "*New* Codex is included in your plan for free through *March 2nd* – let’s build together.";
+    "*New* For a limited time, Codex is included in your plan for free – let’s build together.";
 
 const RAW_TOOLTIPS: &str = include_str!("../tooltips.txt");
 
@@ -19,7 +24,15 @@ lazy_static! {
     static ref TOOLTIPS: Vec<&'static str> = RAW_TOOLTIPS
         .lines()
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| {
+            if line.is_empty() || line.starts_with('#') {
+                return false;
+            }
+            if !IS_MACOS && !IS_WINDOWS && line.contains("codex app") {
+                return false;
+            }
+            true
+        })
         .collect();
     static ref ALL_TOOLTIPS: Vec<&'static str> = {
         let mut tips = Vec::new();
@@ -37,8 +50,12 @@ fn experimental_tooltips() -> Vec<&'static str> {
 }
 
 /// Pick a random tooltip to show to the user when starting Codex.
-pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
+pub(crate) fn get_tooltip(plan: Option<PlanType>, fast_mode_enabled: bool) -> Option<String> {
     let mut rng = rand::rng();
+
+    if let Some(announcement) = announcement::fetch_announcement_tip() {
+        return Some(announcement);
+    }
 
     // Leave small chance for a random tooltip to be shown.
     if rng.random_ratio(8, 10) {
@@ -48,20 +65,45 @@ pub(crate) fn get_tooltip(plan: Option<PlanType>) -> Option<String> {
             | Some(PlanType::Team)
             | Some(PlanType::Enterprise)
             | Some(PlanType::Pro) => {
-                return Some(PAID_TOOLTIP.to_string());
+                return Some(pick_paid_tooltip(&mut rng, fast_mode_enabled).to_string());
             }
             Some(PlanType::Go) | Some(PlanType::Free) => {
                 return Some(FREE_GO_TOOLTIP.to_string());
             }
-            _ => return Some(OTHER_TOOLTIP.to_string()),
+            _ => {
+                let tooltip = if IS_MACOS {
+                    OTHER_TOOLTIP
+                } else {
+                    OTHER_TOOLTIP_NON_MAC
+                };
+                return Some(tooltip.to_string());
+            }
         }
     }
 
-    if let Some(announcement) = announcement::fetch_announcement_tip() {
-        return Some(announcement);
-    }
-
     pick_tooltip(&mut rng).map(str::to_string)
+}
+
+fn paid_app_tooltip() -> &'static str {
+    if IS_MACOS {
+        PAID_TOOLTIP
+    } else if IS_WINDOWS {
+        PAID_TOOLTIP_WINDOWS
+    } else {
+        PAID_TOOLTIP_NON_MAC
+    }
+}
+
+/// Paid users spend most startup sessions in a dedicated promo slot rather than the
+/// generic random tip pool. Keep this business logic explicit: we currently split
+/// that slot between the app promo and Fast mode, but suppress the Fast promo once
+/// the user already has Fast mode enabled.
+fn pick_paid_tooltip<R: Rng + ?Sized>(rng: &mut R, fast_mode_enabled: bool) -> &'static str {
+    if fast_mode_enabled || rng.random_bool(0.5) {
+        paid_app_tooltip()
+    } else {
+        FAST_TOOLTIP
+    }
 }
 
 fn pick_tooltip<R: Rng + ?Sized>(rng: &mut R) -> Option<&'static str> {
@@ -240,6 +282,31 @@ mod tests {
 
         let mut rng = StdRng::seed_from_u64(7);
         assert_eq!(expected, pick_tooltip(&mut rng));
+    }
+
+    #[test]
+    fn paid_tooltip_pool_rotates_between_promos() {
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..32 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            seen.insert(pick_paid_tooltip(&mut rng, false));
+        }
+
+        let expected = std::collections::BTreeSet::from([paid_app_tooltip(), FAST_TOOLTIP]);
+        assert_eq!(seen, expected);
+    }
+
+    #[test]
+    fn paid_tooltip_pool_skips_fast_when_fast_mode_is_enabled() {
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 0..8 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            seen.insert(pick_paid_tooltip(&mut rng, true));
+        }
+
+        let expected = std::collections::BTreeSet::from([paid_app_tooltip()]);
+        assert_eq!(seen, expected);
+        assert!(!seen.contains(&FAST_TOOLTIP));
     }
 
     #[test]

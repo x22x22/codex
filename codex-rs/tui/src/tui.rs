@@ -10,6 +10,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
@@ -51,6 +52,9 @@ mod frame_rate_limiter;
 mod frame_requester;
 #[cfg(unix)]
 mod job_control;
+
+/// Target frame interval for UI redraw scheduling.
+pub(crate) const TARGET_FRAME_INTERVAL: Duration = frame_rate_limiter::MIN_FRAME_INTERVAL;
 
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
@@ -209,6 +213,8 @@ pub fn init() -> Result<Terminal> {
         return Err(std::io::Error::other("stdout is not a terminal"));
     }
     set_modes()?;
+
+    flush_terminal_input_buffer();
 
     set_panic_hook();
 
@@ -437,6 +443,10 @@ impl Tui {
     pub fn insert_history_lines(&mut self, lines: Vec<Line<'static>>) {
         self.pending_history_lines.extend(lines);
         self.frame_requester().schedule_frame();
+    }
+
+    pub fn clear_pending_history_lines(&mut self) {
+        self.pending_history_lines.clear();
     }
 
     pub fn draw(

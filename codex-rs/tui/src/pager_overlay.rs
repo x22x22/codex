@@ -17,7 +17,6 @@
 
 use std::io::Result;
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
 use crate::history_cell::HistoryCell;
@@ -299,7 +298,7 @@ impl PagerView {
             }
         }
         tui.frame_requester()
-            .schedule_frame_in(Duration::from_millis(16));
+            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
         Ok(())
     }
 
@@ -410,8 +409,9 @@ struct CellRenderable {
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let p =
-            Paragraph::new(Text::from(self.cell.transcript_lines(area.width))).style(self.style);
+        let p = Paragraph::new(Text::from(self.cell.transcript_lines(area.width)))
+            .style(self.style)
+            .wrap(Wrap { trim: false });
         p.render(area, buf);
     }
 
@@ -540,6 +540,26 @@ impl TranscriptOverlay {
         }
     }
 
+    /// Replace committed transcript cells while keeping any cached in-progress output that is
+    /// currently shown at the end of the overlay.
+    ///
+    /// This is used when existing history is trimmed (for example after rollback) so the
+    /// transcript overlay immediately reflects the same committed cells as the main transcript.
+    pub(crate) fn replace_cells(&mut self, cells: Vec<Arc<dyn HistoryCell>>) {
+        let follow_bottom = self.view.is_scrolled_to_bottom();
+        self.cells = cells;
+        if self
+            .highlight_cell
+            .is_some_and(|idx| idx >= self.cells.len())
+        {
+            self.highlight_cell = None;
+        }
+        self.rebuild_renderables();
+        if follow_bottom {
+            self.view.scroll_offset = usize::MAX;
+        }
+    }
+
     /// Sync the active-cell live tail with the current width and cell state.
     ///
     /// Recomputes the tail only when the cache key changes, preserving scroll
@@ -626,7 +646,7 @@ impl TranscriptOverlay {
         has_prior_cells: bool,
         is_stream_continuation: bool,
     ) -> Box<dyn Renderable> {
-        let paragraph = Paragraph::new(Text::from(lines));
+        let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         let mut renderable: Box<dyn Renderable> = Box::new(CachedRenderable::new(paragraph));
         if has_prior_cells && !is_stream_continuation {
             renderable = Box::new(InsetRenderable::new(renderable, Insets::tlbr(1, 0, 0, 0)));
@@ -680,6 +700,11 @@ impl TranscriptOverlay {
     }
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
+    }
+
+    #[cfg(test)]
+    pub(crate) fn committed_cell_count(&self) -> usize {
+        self.cells.len()
     }
 }
 
@@ -772,8 +797,8 @@ fn render_offset_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codex_core::protocol::ExecCommandSource;
-    use codex_core::protocol::ReviewDecision;
+    use codex_protocol::protocol::ExecCommandSource;
+    use codex_protocol::protocol::ReviewDecision;
     use insta::assert_snapshot;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
@@ -785,8 +810,8 @@ mod tests {
     use crate::history_cell;
     use crate::history_cell::HistoryCell;
     use crate::history_cell::new_patch_event;
-    use codex_core::protocol::FileChange;
     use codex_protocol::parse_command::ParsedCommand;
+    use codex_protocol::protocol::FileChange;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::text::Text;
@@ -963,9 +988,12 @@ mod tests {
         let apply_begin_cell: Arc<dyn HistoryCell> = Arc::new(new_patch_event(apply_changes, &cwd));
         cells.push(apply_begin_cell);
 
-        let apply_end_cell: Arc<dyn HistoryCell> =
-            history_cell::new_approval_decision_cell(vec!["ls".into()], ReviewDecision::Approved)
-                .into();
+        let apply_end_cell: Arc<dyn HistoryCell> = history_cell::new_approval_decision_cell(
+            vec!["ls".into()],
+            ReviewDecision::Approved,
+            history_cell::ApprovalDecisionActor::User,
+        )
+        .into();
         cells.push(apply_end_cell);
 
         let mut exec_cell = crate::exec_cell::new_active_exec_command(

@@ -1,9 +1,11 @@
+use crate::models::MessagePhase;
 use crate::models::WebSearchAction;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningEvent;
 use crate::protocol::AgentReasoningRawContentEvent;
 use crate::protocol::ContextCompactedEvent;
 use crate::protocol::EventMsg;
+use crate::protocol::ImageGenerationEndEvent;
 use crate::protocol::UserMessageEvent;
 use crate::protocol::WebSearchEndEvent;
 use crate::user_input::ByteRange;
@@ -23,6 +25,7 @@ pub enum TurnItem {
     Plan(PlanItem),
     Reasoning(ReasoningItem),
     WebSearch(WebSearchItem),
+    ImageGeneration(ImageGenerationItem),
     ContextCompaction(ContextCompactionItem),
 }
 
@@ -40,9 +43,21 @@ pub enum AgentMessageContent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
+/// Assistant-authored message payload used in turn-item streams.
+///
+/// `phase` is optional because not all providers/models emit it. Consumers
+/// should use it when present, but retain legacy completion semantics when it
+/// is `None`.
 pub struct AgentMessageItem {
     pub id: String,
     pub content: Vec<AgentMessageContent>,
+    /// Optional phase metadata carried through from `ResponseItem::Message`.
+    ///
+    /// This is currently used by TUI rendering to distinguish mid-turn
+    /// commentary from a final answer and avoid status-indicator jitter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub phase: Option<MessagePhase>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -64,6 +79,19 @@ pub struct WebSearchItem {
     pub id: String,
     pub query: String,
     pub action: WebSearchAction,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq)]
+pub struct ImageGenerationItem {
+    pub id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub revised_prompt: Option<String>,
+    pub result: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub saved_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
@@ -172,6 +200,7 @@ impl AgentMessageItem {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             content: content.to_vec(),
+            phase: None,
         }
     }
 
@@ -181,6 +210,7 @@ impl AgentMessageItem {
             .map(|c| match c {
                 AgentMessageContent::Text { text } => EventMsg::AgentMessage(AgentMessageEvent {
                     message: text.clone(),
+                    phase: self.phase.clone(),
                 }),
             })
             .collect()
@@ -220,6 +250,18 @@ impl WebSearchItem {
     }
 }
 
+impl ImageGenerationItem {
+    pub fn as_legacy_event(&self) -> EventMsg {
+        EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
+            call_id: self.id.clone(),
+            status: self.status.clone(),
+            revised_prompt: self.revised_prompt.clone(),
+            result: self.result.clone(),
+            saved_path: self.saved_path.clone(),
+        })
+    }
+}
+
 impl TurnItem {
     pub fn id(&self) -> String {
         match self {
@@ -228,6 +270,7 @@ impl TurnItem {
             TurnItem::Plan(item) => item.id.clone(),
             TurnItem::Reasoning(item) => item.id.clone(),
             TurnItem::WebSearch(item) => item.id.clone(),
+            TurnItem::ImageGeneration(item) => item.id.clone(),
             TurnItem::ContextCompaction(item) => item.id.clone(),
         }
     }
@@ -238,6 +281,7 @@ impl TurnItem {
             TurnItem::AgentMessage(item) => item.as_legacy_events(),
             TurnItem::Plan(_) => Vec::new(),
             TurnItem::WebSearch(item) => vec![item.as_legacy_event()],
+            TurnItem::ImageGeneration(item) => vec![item.as_legacy_event()],
             TurnItem::Reasoning(item) => item.as_legacy_events(show_raw_agent_reasoning),
             TurnItem::ContextCompaction(item) => vec![item.as_legacy_event()],
         }

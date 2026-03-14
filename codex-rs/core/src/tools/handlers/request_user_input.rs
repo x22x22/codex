@@ -1,24 +1,69 @@
-use async_trait::async_trait;
-
 use crate::function_tool::FunctionCallError;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
-use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use async_trait::async_trait;
 use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::TUI_VISIBLE_COLLABORATION_MODES;
 use codex_protocol::request_user_input::RequestUserInputArgs;
 
-pub struct RequestUserInputHandler;
+fn request_user_input_is_available(mode: ModeKind, default_mode_request_user_input: bool) -> bool {
+    mode.allows_request_user_input()
+        || (default_mode_request_user_input && mode == ModeKind::Default)
+}
+
+fn format_allowed_modes(default_mode_request_user_input: bool) -> String {
+    let mode_names: Vec<&str> = TUI_VISIBLE_COLLABORATION_MODES
+        .into_iter()
+        .filter(|mode| request_user_input_is_available(*mode, default_mode_request_user_input))
+        .map(ModeKind::display_name)
+        .collect();
+
+    match mode_names.as_slice() {
+        [] => "no modes".to_string(),
+        [mode] => format!("{mode} mode"),
+        [first, second] => format!("{first} or {second} mode"),
+        [..] => format!("modes: {}", mode_names.join(",")),
+    }
+}
+
+pub(crate) fn request_user_input_unavailable_message(
+    mode: ModeKind,
+    default_mode_request_user_input: bool,
+) -> Option<String> {
+    if request_user_input_is_available(mode, default_mode_request_user_input) {
+        None
+    } else {
+        let mode_name = mode.display_name();
+        Some(format!(
+            "request_user_input is unavailable in {mode_name} mode"
+        ))
+    }
+}
+
+pub(crate) fn request_user_input_tool_description(default_mode_request_user_input: bool) -> String {
+    let allowed_modes = format_allowed_modes(default_mode_request_user_input);
+    format!(
+        "Request user input for one to three short questions and wait for the response. This tool is only available in {allowed_modes}."
+    )
+}
+
+pub struct RequestUserInputHandler {
+    pub default_mode_request_user_input: bool,
+}
 
 #[async_trait]
 impl ToolHandler for RequestUserInputHandler {
+    type Output = FunctionToolOutput;
+
     fn kind(&self) -> ToolKind {
         ToolKind::Function
     }
 
-    async fn handle(&self, invocation: ToolInvocation) -> Result<ToolOutput, FunctionCallError> {
+    async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
         let ToolInvocation {
             session,
             turn,
@@ -37,16 +82,10 @@ impl ToolHandler for RequestUserInputHandler {
         };
 
         let mode = session.collaboration_mode().await.mode;
-        if !matches!(mode, ModeKind::Plan | ModeKind::PairProgramming) {
-            let mode_name = match mode {
-                ModeKind::Code => "Code",
-                ModeKind::Execute => "Execute",
-                ModeKind::Custom => "Custom",
-                ModeKind::Plan | ModeKind::PairProgramming => unreachable!(),
-            };
-            return Err(FunctionCallError::RespondToModel(format!(
-                "request_user_input is unavailable in {mode_name} mode"
-            )));
+        if let Some(message) =
+            request_user_input_unavailable_message(mode, self.default_mode_request_user_input)
+        {
+            return Err(FunctionCallError::RespondToModel(message));
         }
 
         let mut args: RequestUserInputArgs = parse_arguments(&arguments)?;
@@ -77,10 +116,10 @@ impl ToolHandler for RequestUserInputHandler {
             ))
         })?;
 
-        Ok(ToolOutput::Function {
-            content,
-            content_items: None,
-            success: Some(true),
-        })
+        Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
+
+#[cfg(test)]
+#[path = "request_user_input_tests.rs"]
+mod tests;

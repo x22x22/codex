@@ -1,21 +1,16 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_core::WireApi;
-use codex_core::built_in_model_providers;
 use codex_core::features::Feature;
-use codex_core::protocol::SandboxPolicy;
 use codex_protocol::config_types::WebSearchMode;
-use core_test_support::load_sse_fixture_with_id;
+use codex_protocol::protocol::SandboxPolicy;
 use core_test_support::responses;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::test_codex;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
-
-fn sse_completed(id: &str) -> String {
-    load_sse_fixture_with_id("../fixtures/completed_template.json", id)
-}
+use serde_json::json;
+use std::sync::Arc;
 
 #[allow(clippy::expect_used)]
 fn find_web_search_tool(body: &Value) -> &Value {
@@ -27,36 +22,36 @@ fn find_web_search_tool(body: &Value) -> &Value {
         .expect("tools should include a web_search tool")
 }
 
-#[allow(clippy::expect_used)]
-fn has_web_search_tool(body: &Value) -> bool {
-    body["tools"]
-        .as_array()
-        .expect("request body should include tools array")
-        .iter()
-        .any(|tool| tool.get("type").and_then(Value::as_str) == Some("web_search"))
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn web_search_mode_cached_sets_external_web_access_false() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
-    let sse = sse_completed("resp-1");
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let mut builder = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
-            config.web_search_mode = Some(WebSearchMode::Cached);
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
         });
     let test = builder
         .build(&server)
         .await
         .expect("create test Codex conversation");
 
-    test.submit_turn("hello cached web search")
-        .await
-        .expect("submit turn");
+    test.submit_turn_with_policy(
+        "hello cached web search",
+        SandboxPolicy::new_read_only_policy(),
+    )
+    .await
+    .expect("submit turn");
 
     let body = resp_mock.single_request().body_json();
     let tool = find_web_search_tool(&body);
@@ -72,23 +67,35 @@ async fn web_search_mode_takes_precedence_over_legacy_flags() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
-    let sse = sse_completed("resp-1");
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let mut builder = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
-            config.features.enable(Feature::WebSearchRequest);
-            config.web_search_mode = Some(WebSearchMode::Cached);
+            config
+                .features
+                .enable(Feature::WebSearchRequest)
+                .expect("test config should allow feature update");
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
         });
     let test = builder
         .build(&server)
         .await
         .expect("create test Codex conversation");
 
-    test.submit_turn("hello cached+live flags")
-        .await
-        .expect("submit turn");
+    test.submit_turn_with_policy(
+        "hello cached+live flags",
+        SandboxPolicy::new_read_only_policy(),
+    )
+    .await
+    .expect("submit turn");
 
     let body = resp_mock.single_request().body_json();
     let tool = find_web_search_tool(&body);
@@ -100,28 +107,43 @@ async fn web_search_mode_takes_precedence_over_legacy_flags() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn web_search_mode_defaults_to_cached_when_unset() {
+async fn web_search_mode_defaults_to_cached_when_features_disabled() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
-    let sse = sse_completed("resp-1");
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
     let mut builder = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
-            config.web_search_mode = None;
-            config.features.disable(Feature::WebSearchCached);
-            config.features.disable(Feature::WebSearchRequest);
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
+            config
+                .features
+                .disable(Feature::WebSearchCached)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .disable(Feature::WebSearchRequest)
+                .expect("test config should allow feature update");
         });
     let test = builder
         .build(&server)
         .await
         .expect("create test Codex conversation");
 
-    test.submit_turn_with_policy("hello default cached web search", SandboxPolicy::ReadOnly)
-        .await
-        .expect("submit turn");
+    test.submit_turn_with_policy(
+        "hello default cached web search",
+        SandboxPolicy::new_read_only_policy(),
+    )
+    .await
+    .expect("submit turn");
 
     let body = resp_mock.single_request().body_json();
     let tool = find_web_search_tool(&body);
@@ -139,23 +161,41 @@ async fn web_search_mode_updates_between_turns_with_sandbox_policy() {
     let server = start_mock_server().await;
     let resp_mock = responses::mount_sse_sequence(
         &server,
-        vec![sse_completed("resp-1"), sse_completed("resp-2")],
+        vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_completed("resp-1"),
+            ]),
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_completed("resp-2"),
+            ]),
+        ],
     )
     .await;
 
     let mut builder = test_codex()
         .with_model("gpt-5-codex")
         .with_config(|config| {
-            config.web_search_mode = None;
-            config.features.disable(Feature::WebSearchCached);
-            config.features.disable(Feature::WebSearchRequest);
+            config
+                .web_search_mode
+                .set(WebSearchMode::Cached)
+                .expect("test web_search_mode should satisfy constraints");
+            config
+                .features
+                .disable(Feature::WebSearchCached)
+                .expect("test config should allow feature update");
+            config
+                .features
+                .disable(Feature::WebSearchRequest)
+                .expect("test config should allow feature update");
         });
     let test = builder
         .build(&server)
         .await
         .expect("create test Codex conversation");
 
-    test.submit_turn_with_policy("hello cached", SandboxPolicy::ReadOnly)
+    test.submit_turn_with_policy("hello cached", SandboxPolicy::new_read_only_policy())
         .await
         .expect("submit first turn");
     test.submit_turn_with_policy("hello live", SandboxPolicy::DangerFullAccess)
@@ -187,43 +227,59 @@ async fn web_search_mode_updates_between_turns_with_sandbox_policy() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn web_search_mode_defaults_to_disabled_for_azure_responses() {
+async fn web_search_tool_config_from_config_toml_is_forwarded_to_request() {
     skip_if_no_network!();
 
     let server = start_mock_server().await;
-    let sse = sse_completed("resp-1");
+    let sse = responses::sse(vec![
+        responses::ev_response_created("resp-1"),
+        responses::ev_completed("resp-1"),
+    ]);
     let resp_mock = responses::mount_sse_once(&server, sse).await;
 
-    let mut builder = test_codex()
-        .with_model("gpt-5-codex")
-        .with_config(|config| {
-            let base_url = config.model_provider.base_url.clone();
-            let mut provider = built_in_model_providers()["openai"].clone();
-            provider.name = "Azure".to_string();
-            provider.base_url = base_url;
-            provider.wire_api = WireApi::Responses;
-            config.model_provider_id = provider.name.clone();
-            config.model_provider = provider;
-            config.web_search_mode = None;
-            config.features.disable(Feature::WebSearchCached);
-            config.features.disable(Feature::WebSearchRequest);
-        });
+    let home = Arc::new(tempfile::TempDir::new().expect("create codex home"));
+    std::fs::write(
+        home.path().join("config.toml"),
+        r#"web_search = "live"
+
+[tools.web_search]
+context_size = "high"
+allowed_domains = ["example.com"]
+location = { country = "US", city = "New York", timezone = "America/New_York" }
+"#,
+    )
+    .expect("write config.toml");
+
+    let mut builder = test_codex().with_model("gpt-5-codex").with_home(home);
     let test = builder
         .build(&server)
         .await
         .expect("create test Codex conversation");
 
     test.submit_turn_with_policy(
-        "hello azure default web search",
+        "hello configured web search",
         SandboxPolicy::DangerFullAccess,
     )
     .await
     .expect("submit turn");
 
     let body = resp_mock.single_request().body_json();
+    let tool = find_web_search_tool(&body);
     assert_eq!(
-        has_web_search_tool(&body),
-        false,
-        "azure responses requests should disable web_search by default"
+        tool,
+        &json!({
+            "type": "web_search",
+            "external_web_access": true,
+            "search_context_size": "high",
+            "filters": {
+                "allowed_domains": ["example.com"],
+            },
+            "user_location": {
+                "type": "approximate",
+                "country": "US",
+                "city": "New York",
+                "timezone": "America/New_York",
+            },
+        })
     );
 }

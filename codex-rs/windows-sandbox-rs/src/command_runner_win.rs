@@ -5,8 +5,8 @@ use anyhow::Result;
 use codex_windows_sandbox::allow_null_device;
 use codex_windows_sandbox::convert_string_sid_to_sid;
 use codex_windows_sandbox::create_process_as_user;
-use codex_windows_sandbox::create_readonly_token_with_cap_from;
-use codex_windows_sandbox::create_workspace_write_token_with_cap_from;
+use codex_windows_sandbox::create_readonly_token_with_caps_from;
+use codex_windows_sandbox::create_workspace_write_token_with_caps_from;
 use codex_windows_sandbox::get_current_token_for_restriction;
 use codex_windows_sandbox::hide_current_user_profile_dir;
 use codex_windows_sandbox::log_note;
@@ -20,11 +20,14 @@ use std::path::Path;
 use std::path::PathBuf;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::GetLastError;
+use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Storage::FileSystem::CreateFileW;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_READ;
 use windows_sys::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows_sys::Win32::Storage::FileSystem::OPEN_EXISTING;
+use windows_sys::Win32::System::Diagnostics::Debug::SetErrorMode;
 use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
 use windows_sys::Win32::System::JobObjects::CreateJobObjectW;
 use windows_sys::Win32::System::JobObjects::JobObjectExtendedLimitInformation;
@@ -48,11 +51,12 @@ struct RunnerRequest {
     codex_home: PathBuf,
     // Real user's CODEX_HOME for shared data (caps, config).
     real_codex_home: PathBuf,
-    cap_sid: String,
+    cap_sids: Vec<String>,
     command: Vec<String>,
     cwd: PathBuf,
     env_map: HashMap<String, String>,
     timeout_ms: Option<u64>,
+    use_private_desktop: bool,
     stdin_pipe: String,
     stdout_pipe: String,
     stderr_pipe: String,
@@ -101,6 +105,8 @@ pub fn main() -> Result<()> {
     let req: RunnerRequest = serde_json::from_str(&input).context("parse runner request json")?;
     let log_dir = Some(req.codex_home.as_path());
     hide_current_user_profile_dir(req.codex_home.as_path());
+    // Suppress Windows error UI from sandboxed child crashes so callers only observe exit codes.
+    let _ = unsafe { SetErrorMode(0x0001 | 0x0002) }; // SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX
     log_note(
         &format!(
             "runner start cwd={} cmd={:?} real_codex_home={}",
@@ -112,27 +118,50 @@ pub fn main() -> Result<()> {
     );
 
     let policy = parse_policy(&req.policy_json_or_preset).context("parse policy_json_or_preset")?;
-    let psid_cap: *mut c_void = unsafe { convert_string_sid_to_sid(&req.cap_sid).unwrap() };
+    if !policy.has_full_disk_read_access() {
+        anyhow::bail!(
+            "Restricted read-only access is not yet supported by the Windows sandbox backend"
+        );
+    }
+    let mut cap_psids: Vec<*mut c_void> = Vec::new();
+    for sid in &req.cap_sids {
+        let Some(psid) = (unsafe { convert_string_sid_to_sid(sid) }) else {
+            anyhow::bail!("ConvertStringSidToSidW failed for capability SID");
+        };
+        cap_psids.push(psid);
+    }
+    if cap_psids.is_empty() {
+        anyhow::bail!("runner: empty capability SID list");
+    }
 
     // Create restricted token from current process token.
     let base = unsafe { get_current_token_for_restriction()? };
-    let token_res: Result<(HANDLE, *mut c_void)> = unsafe {
+    let token_res: Result<HANDLE> = unsafe {
         match &policy {
-            SandboxPolicy::ReadOnly => create_readonly_token_with_cap_from(base, psid_cap),
+            SandboxPolicy::ReadOnly { .. } => {
+                create_readonly_token_with_caps_from(base, &cap_psids)
+            }
             SandboxPolicy::WorkspaceWrite { .. } => {
-                create_workspace_write_token_with_cap_from(base, psid_cap)
+                create_workspace_write_token_with_caps_from(base, &cap_psids)
             }
             SandboxPolicy::DangerFullAccess | SandboxPolicy::ExternalSandbox { .. } => {
                 unreachable!()
             }
         }
     };
-    let (h_token, psid_to_use) = token_res?;
+    let h_token = token_res?;
     unsafe {
         CloseHandle(base);
     }
     unsafe {
-        allow_null_device(psid_to_use);
+        for psid in &cap_psids {
+            allow_null_device(*psid);
+        }
+        for psid in cap_psids {
+            if !psid.is_null() {
+                LocalFree(psid as HLOCAL);
+            }
+        }
     }
 
     // Open named pipes for stdio.
@@ -208,9 +237,10 @@ pub fn main() -> Result<()> {
             &req.env_map,
             Some(&req.codex_home),
             stdio,
+            req.use_private_desktop,
         )
     };
-    let (proc_info, _si) = match spawn_result {
+    let created = match spawn_result {
         Ok(v) => v,
         Err(e) => {
             log_note(&format!("runner: spawn failed: {e:?}"), log_dir);
@@ -223,6 +253,8 @@ pub fn main() -> Result<()> {
             return Err(e);
         }
     };
+    let proc_info = created.process_info;
+    let _desktop = created;
 
     // Optional job kill on close.
     let h_job = unsafe { create_job_kill_on_close().ok() };
