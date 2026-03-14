@@ -2802,12 +2802,14 @@ impl App {
             }
             AppEvent::OpenWorldWritableWarningConfirmation {
                 preset,
+                approvals_reviewer,
                 sample_paths,
                 extra_count,
                 failed_scan,
             } => {
                 self.chat_widget.open_world_writable_warning_confirmation(
                     preset,
+                    approvals_reviewer,
                     sample_paths,
                     extra_count,
                     failed_scan,
@@ -2827,10 +2829,17 @@ impl App {
                     self.launch_external_editor(tui).await;
                 }
             }
-            AppEvent::OpenWindowsSandboxEnablePrompt { preset } => {
-                self.chat_widget.open_windows_sandbox_enable_prompt(preset);
+            AppEvent::OpenWindowsSandboxEnablePrompt {
+                preset,
+                approvals_reviewer,
+            } => {
+                self.chat_widget
+                    .open_windows_sandbox_enable_prompt(preset, approvals_reviewer);
             }
-            AppEvent::OpenWindowsSandboxFallbackPrompt { preset } => {
+            AppEvent::OpenWindowsSandboxFallbackPrompt {
+                preset,
+                approvals_reviewer,
+            } => {
                 self.session_telemetry.counter(
                     "codex.windows_sandbox.fallback_prompt_shown",
                     1,
@@ -2845,9 +2854,12 @@ impl App {
                     );
                 }
                 self.chat_widget
-                    .open_windows_sandbox_fallback_prompt(preset);
+                    .open_windows_sandbox_fallback_prompt(preset, approvals_reviewer);
             }
-            AppEvent::BeginWindowsSandboxElevatedSetup { preset } => {
+            AppEvent::BeginWindowsSandboxElevatedSetup {
+                preset,
+                approvals_reviewer,
+            } => {
                 #[cfg(target_os = "windows")]
                 {
                     let policy = preset.sandbox.clone();
@@ -2865,6 +2877,7 @@ impl App {
                         tx.send(AppEvent::EnableWindowsSandboxForAgentMode {
                             preset,
                             mode: WindowsSandboxEnableMode::Elevated,
+                            approvals_reviewer,
                         });
                         return Ok(AppRunControl::Continue);
                     }
@@ -2890,6 +2903,7 @@ impl App {
                                 AppEvent::EnableWindowsSandboxForAgentMode {
                                     preset: preset.clone(),
                                     mode: WindowsSandboxEnableMode::Elevated,
+                                    approvals_reviewer,
                                 }
                             }
                             Err(err) => {
@@ -2921,7 +2935,10 @@ impl App {
                                     error = %err,
                                     "failed to run elevated Windows sandbox setup"
                                 );
-                                AppEvent::OpenWindowsSandboxFallbackPrompt { preset }
+                                AppEvent::OpenWindowsSandboxFallbackPrompt {
+                                    preset,
+                                    approvals_reviewer,
+                                }
                             }
                         };
                         tx.send(event);
@@ -2929,10 +2946,13 @@ impl App {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = preset;
+                    let _ = (preset, approvals_reviewer);
                 }
             }
-            AppEvent::BeginWindowsSandboxLegacySetup { preset } => {
+            AppEvent::BeginWindowsSandboxLegacySetup {
+                preset,
+                approvals_reviewer,
+            } => {
                 #[cfg(target_os = "windows")]
                 {
                     let policy = preset.sandbox.clone();
@@ -2955,6 +2975,7 @@ impl App {
                         let event = match result {
                             Ok(()) => AppEvent::WindowsSandboxLegacySetupCompleted {
                                 preset,
+                                approvals_reviewer,
                                 error: None,
                             },
                             Err(err) => {
@@ -2964,6 +2985,7 @@ impl App {
                                 );
                                 AppEvent::WindowsSandboxLegacySetupCompleted {
                                     preset: preset_for_error,
+                                    approvals_reviewer,
                                     error: Some(err.to_string()),
                                 }
                             }
@@ -2973,10 +2995,14 @@ impl App {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = preset;
+                    let _ = (preset, approvals_reviewer);
                 }
             }
-            AppEvent::WindowsSandboxLegacySetupCompleted { preset, error } => {
+            AppEvent::WindowsSandboxLegacySetupCompleted {
+                preset,
+                approvals_reviewer,
+                error,
+            } => {
                 #[cfg(target_os = "windows")]
                 match error {
                     None => {
@@ -2984,6 +3010,7 @@ impl App {
                             .send(AppEvent::EnableWindowsSandboxForAgentMode {
                                 preset,
                                 mode: WindowsSandboxEnableMode::Legacy,
+                                approvals_reviewer,
                             });
                     }
                     Some(err) => {
@@ -2994,7 +3021,7 @@ impl App {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = (preset, error);
+                    let _ = (preset, approvals_reviewer, error);
                 }
             }
             AppEvent::BeginWindowsSandboxGrantReadRoot { path } => {
@@ -3054,7 +3081,11 @@ impl App {
                         ));
                 }
             },
-            AppEvent::EnableWindowsSandboxForAgentMode { preset, mode } => {
+            AppEvent::EnableWindowsSandboxForAgentMode {
+                preset,
+                mode,
+                approvals_reviewer,
+            } => {
                 #[cfg(target_os = "windows")]
                 {
                     self.chat_widget.clear_windows_sandbox_setup_status();
@@ -3110,6 +3141,7 @@ impl App {
                                 self.app_event_tx.send(
                                     AppEvent::OpenWorldWritableWarningConfirmation {
                                         preset: Some(preset.clone()),
+                                        approvals_reviewer: Some(approvals_reviewer),
                                         sample_paths,
                                         extra_count,
                                         failed_scan,
@@ -3120,7 +3152,7 @@ impl App {
                                     Op::OverrideTurnContext {
                                         cwd: None,
                                         approval_policy: Some(preset.approval),
-                                        approvals_reviewer: Some(self.config.approvals_reviewer),
+                                        approvals_reviewer: Some(approvals_reviewer),
                                         sandbox_policy: Some(preset.sandbox.clone()),
                                         windows_sandbox_level: Some(windows_sandbox_level),
                                         model: None,
@@ -3135,6 +3167,8 @@ impl App {
                                     .send(AppEvent::UpdateAskForApprovalPolicy(preset.approval));
                                 self.app_event_tx
                                     .send(AppEvent::UpdateSandboxPolicy(preset.sandbox.clone()));
+                                self.app_event_tx
+                                    .send(AppEvent::UpdateApprovalsReviewer(approvals_reviewer));
                                 let _ = mode;
                                 self.chat_widget.add_plain_history_lines(vec![
                                     Line::from(vec!["• ".dim(), "Sandbox ready".into()]),
@@ -3159,7 +3193,7 @@ impl App {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = (preset, mode);
+                    let _ = (preset, mode, approvals_reviewer);
                 }
             }
             AppEvent::PersistModelSelection { model, effort } => {
@@ -4239,6 +4273,7 @@ impl App {
                 // Scan failed: warn without examples.
                 tx.send(AppEvent::OpenWorldWritableWarningConfirmation {
                     preset: None,
+                    approvals_reviewer: None,
                     sample_paths: Vec::new(),
                     extra_count: 0usize,
                     failed_scan: true,
