@@ -247,7 +247,6 @@ async fn thread_snapshot_replay_does_not_duplicate_agent_message_history() {
                     text: "assistant reply".to_string(),
                 }],
                 phase: None,
-                metadata: None,
             }),
         }),
     });
@@ -3533,7 +3532,6 @@ fn complete_assistant_message(
                     text: text.to_string(),
                 }],
                 phase,
-                metadata: None,
             }),
         }),
     });
@@ -3569,7 +3567,6 @@ fn complete_user_message_for_inputs(chat: &mut ChatWidget, item_id: &str, conten
             item: TurnItem::UserMessage(UserMessageItem {
                 id: item_id.to_string(),
                 content,
-                metadata: None,
             }),
         }),
     });
@@ -5853,7 +5850,6 @@ async fn slash_copy_state_tracks_plan_item_completion() {
             item: TurnItem::Plan(PlanItem {
                 id: "plan-1".to_string(),
                 text: plan_text.clone(),
-                metadata: None,
             }),
         }),
     });
