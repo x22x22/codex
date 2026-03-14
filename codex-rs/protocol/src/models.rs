@@ -227,6 +227,9 @@ pub enum ResponseInputItem {
     Message {
         role: String,
         content: Vec<ContentItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     FunctionCallOutput {
         call_id: String,
@@ -247,6 +250,22 @@ pub enum ResponseInputItem {
         #[ts(type = "unknown[]")]
         tools: Vec<serde_json::Value>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum UserMessageType {
+    Prompt,
+    PromptSteering,
+    PromptQueued,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct ResponseItemMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_message_type: Option<UserMessageType>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
@@ -291,6 +310,9 @@ pub enum ResponseItem {
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
         // Do not use directly, no available consistently across all providers.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
@@ -740,6 +762,7 @@ impl From<DeveloperInstructions> for ResponseItem {
             content: vec![ContentItem::InputText {
                 text: di.into_text(),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         }
@@ -895,9 +918,14 @@ pub fn local_image_content_items_with_label_number(
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
-            ResponseInputItem::Message { role, content } => Self::Message {
+            ResponseInputItem::Message {
                 role,
                 content,
+                metadata,
+            } => Self::Message {
+                role,
+                content,
+                metadata,
                 id: None,
                 end_turn: None,
                 phase: None,
@@ -1025,6 +1053,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
+            metadata: None,
         }
     }
 }

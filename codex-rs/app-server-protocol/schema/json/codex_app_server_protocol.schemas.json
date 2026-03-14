@@ -8588,16 +8588,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "enum": [
                 "UserMessage"
@@ -8625,16 +8615,6 @@
             },
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "phase": {
               "anyOf": [
@@ -8668,16 +8648,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "text": {
               "type": "string"
             },
@@ -8701,16 +8671,6 @@
           "properties": {
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "raw_content": {
               "default": [],
@@ -8749,16 +8709,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "query": {
               "type": "string"
             },
@@ -8783,16 +8733,6 @@
           "properties": {
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "result": {
               "type": "string"
@@ -8834,16 +8774,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "enum": [
                 "ContextCompaction"
@@ -8860,21 +8790,6 @@
           "type": "object"
         }
       ]
-    },
-    "TurnItemMetadata": {
-      "properties": {
-        "user_message_type": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/v2/UserMessageType"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
     },
     "W3cTraceContext": {
       "properties": {
@@ -11940,21 +11855,6 @@
         "title": "ItemCompletedNotification",
         "type": "object"
       },
-      "ItemMetadata": {
-        "properties": {
-          "user_message_type": {
-            "anyOf": [
-              {
-                "$ref": "#/definitions/v2/UserMessageType"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "type": "object"
-      },
       "ItemStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
@@ -13767,6 +13667,16 @@
                 ],
                 "writeOnly": true
               },
+              "metadata": {
+                "anyOf": [
+                  {
+                    "$ref": "#/definitions/v2/ResponseItemMetadata"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "phase": {
                 "anyOf": [
                   {
@@ -14215,6 +14125,21 @@
             "type": "object"
           }
         ]
+      },
+      "ResponseItemMetadata": {
+        "properties": {
+          "user_message_type": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/UserMessageType"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object"
       },
       "ResponsesApiWebSearchAction": {
         "oneOf": [
@@ -15557,16 +15482,6 @@
               "id": {
                 "type": "string"
               },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "type": {
                 "enum": [
                   "userMessage"
@@ -15587,16 +15502,6 @@
             "properties": {
               "id": {
                 "type": "string"
-              },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
               },
               "phase": {
                 "anyOf": [
@@ -15634,16 +15539,6 @@
               "id": {
                 "type": "string"
               },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "text": {
                 "type": "string"
               },
@@ -15674,16 +15569,6 @@
               },
               "id": {
                 "type": "string"
-              },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
               },
               "summary": {
                 "default": [],
@@ -15750,16 +15635,6 @@
               "id": {
                 "type": "string"
               },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "processId": {
                 "description": "Identifier for the underlying PTY process (when available).",
                 "type": [
@@ -15799,16 +15674,6 @@
               },
               "id": {
                 "type": "string"
-              },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
               },
               "status": {
                 "$ref": "#/definitions/v2/PatchApplyStatus"
@@ -15853,16 +15718,6 @@
               },
               "id": {
                 "type": "string"
-              },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
               },
               "result": {
                 "anyOf": [
@@ -15925,16 +15780,6 @@
               "id": {
                 "type": "string"
               },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "status": {
                 "$ref": "#/definitions/v2/DynamicToolCallStatus"
               },
@@ -15977,16 +15822,6 @@
               "id": {
                 "description": "Unique identifier for this collab tool call.",
                 "type": "string"
-              },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
               },
               "model": {
                 "description": "Model requested for the spawned agent, when applicable.",
@@ -16075,16 +15910,6 @@
               "id": {
                 "type": "string"
               },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "query": {
                 "type": "string"
               },
@@ -16109,16 +15934,6 @@
               "id": {
                 "type": "string"
               },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "path": {
                 "type": "string"
               },
@@ -16142,16 +15957,6 @@
             "properties": {
               "id": {
                 "type": "string"
-              },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
               },
               "result": {
                 "type": "string"
@@ -16187,16 +15992,6 @@
               "id": {
                 "type": "string"
               },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "review": {
                 "type": "string"
               },
@@ -16221,16 +16016,6 @@
               "id": {
                 "type": "string"
               },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "review": {
                 "type": "string"
               },
@@ -16254,16 +16039,6 @@
             "properties": {
               "id": {
                 "type": "string"
-              },
-              "metadata": {
-                "anyOf": [
-                  {
-                    "$ref": "#/definitions/v2/ItemMetadata"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
               },
               "type": {
                 "enum": [

@@ -2413,7 +2413,6 @@ mod tests {
                 )]
                 .into_iter()
                 .collect(),
-                metadata: None,
             }
         );
     }

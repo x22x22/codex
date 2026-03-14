@@ -5170,6 +5170,16 @@
               ],
               "writeOnly": true
             },
+            "metadata": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ResponseItemMetadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "phase": {
               "anyOf": [
                 {
@@ -5618,6 +5628,21 @@
           "type": "object"
         }
       ]
+    },
+    "ResponseItemMetadata": {
+      "properties": {
+        "user_message_type": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserMessageType"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "ResponsesApiWebSearchAction": {
       "oneOf": [
@@ -6501,16 +6526,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "enum": [
                 "UserMessage"
@@ -6538,16 +6553,6 @@
             },
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "phase": {
               "anyOf": [
@@ -6581,16 +6586,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "text": {
               "type": "string"
             },
@@ -6614,16 +6609,6 @@
           "properties": {
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "raw_content": {
               "default": [],
@@ -6662,16 +6647,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "query": {
               "type": "string"
             },
@@ -6696,16 +6671,6 @@
           "properties": {
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "result": {
               "type": "string"
@@ -6747,16 +6712,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/TurnItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "enum": [
                 "ContextCompaction"
@@ -6773,21 +6728,6 @@
           "type": "object"
         }
       ]
-    },
-    "TurnItemMetadata": {
-      "properties": {
-        "user_message_type": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/UserMessageType"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
     },
     "UserInput": {
       "description": "User input",

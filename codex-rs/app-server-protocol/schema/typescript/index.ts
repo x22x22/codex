@@ -174,6 +174,7 @@ export type { RequestUserInputQuestionOption } from "./RequestUserInputQuestionO
 export type { Resource } from "./Resource";
 export type { ResourceTemplate } from "./ResourceTemplate";
 export type { ResponseItem } from "./ResponseItem";
+export type { ResponseItemMetadata } from "./ResponseItemMetadata";
 export type { ReviewCodeLocation } from "./ReviewCodeLocation";
 export type { ReviewDecision } from "./ReviewDecision";
 export type { ReviewFinding } from "./ReviewFinding";
@@ -213,7 +214,6 @@ export type { TurnAbortedEvent } from "./TurnAbortedEvent";
 export type { TurnCompleteEvent } from "./TurnCompleteEvent";
 export type { TurnDiffEvent } from "./TurnDiffEvent";
 export type { TurnItem } from "./TurnItem";
-export type { TurnItemMetadata } from "./TurnItemMetadata";
 export type { TurnStartedEvent } from "./TurnStartedEvent";
 export type { UndoCompletedEvent } from "./UndoCompletedEvent";
 export type { UndoStartedEvent } from "./UndoStartedEvent";

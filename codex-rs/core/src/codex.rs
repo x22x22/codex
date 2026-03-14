@@ -2670,6 +2670,7 @@ impl Session {
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
+                metadata: None,
             }])
             .await
             .is_err()
@@ -2767,6 +2768,7 @@ impl Session {
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
+                metadata: None,
             }])
             .await
             .is_err()
@@ -3241,6 +3243,7 @@ impl Session {
             content: vec![ContentItem::InputText {
                 text: format!("Warning: {}", message.into()),
             }],
+            metadata: None,
             end_turn: None,
             phase: None,
         };
