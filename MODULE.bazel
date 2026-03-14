@@ -295,6 +295,10 @@ module.write_text(text)
 defs = Path("bazel/defs.bzl")
 text = defs.read_text()
 text = text.replace('        deps = [":define_flags", "@libcxx//:libc++"],\\n', '        deps = [":define_flags"],\\n')
+text = text.replace(
+    '            "//conditions:default": ["-Wl,--no-as-needed -ldl -latomic -pthread"],\\n',
+    '            "//conditions:default": ["-Wl,--no-as-needed -ldl -pthread"],\\n',
+)
 defs.write_text(text)
 
 build = Path("BUILD.bazel")
@@ -350,6 +354,25 @@ text = text.replace(
     1,
 )
 stack_trace.write_text(text)
+
+platform_posix = Path("src/base/platform/platform-posix.cc")
+text = platform_posix.read_text()
+text = text.replace(
+    '#if defined(V8_LIBC_GLIBC)\\nextern "C" void* __libc_stack_end;\\n#endif\\n',
+    '',
+    1,
+)
+text = text.replace(
+    '#if defined(V8_LIBC_GLIBC)\\n    // pthread_getattr_np can fail for the main thread.\\n    // For the main thread we prefer using __libc_stack_end (if it exists) since\\n    // it generally provides a tighter limit for CSS.\\n    return __libc_stack_end;\\n#else\\n    return nullptr;\\n#endif  // !defined(V8_LIBC_GLIBC)\\n',
+    '    return nullptr;\\n',
+    1,
+)
+text = text.replace(
+    '#if defined(V8_LIBC_GLIBC)\\n  // __libc_stack_end is process global and thus is only valid for\\n  // the main thread. Check whether this is the main thread by checking\\n  // __libc_stack_end is within the thread\\'s stack.\\n  if ((base <= __libc_stack_end) && (__libc_stack_end <= stack_start)) {\\n    DCHECK(MainThreadIsCurrentThread());\\n    return __libc_stack_end;\\n  }\\n#endif  // !defined(V8_LIBC_GLIBC)\\n',
+    '',
+    1,
+)
+platform_posix.write_text(text)
 
 thread_isolated_allocator = Path("src/libplatform/default-thread-isolated-allocator.cc")
 text = thread_isolated_allocator.read_text()

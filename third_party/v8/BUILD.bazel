@@ -1,5 +1,5 @@
 load("@rules_cc//cc:cc_static_library.bzl", "cc_static_library")
-load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_import", "cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -40,6 +40,57 @@ cc_library(
         "@v8//:core_lib_icu",
         "@v8//:rusty_v8_internal_headers",
     ],
+)
+
+cc_library(
+    name = "v8_146_4_0_public_headers",
+    hdrs = ["@v8//:public_header_files"],
+    includes = ["../../external/v8+/include"],
+    deps = ["@v8//:rusty_v8_internal_headers"],
+)
+
+cc_binary(
+    name = "v8_146_4_0_smoke_test",
+    srcs = ["smoke_test.cc"],
+    copts = select({
+        "@v8//bazel/config:is_clang": ["-std=c++20"],
+        "@v8//bazel/config:is_gcc": ["-std=gnu++2a"],
+        "@v8//bazel/config:is_windows": ["/std:c++20"],
+        "//conditions:default": [],
+    }),
+    tags = ["manual"],
+    deps = [":v8_146_4_0_binding"],
+)
+
+cc_import(
+    name = "v8_146_4_0_x86_64_unknown_linux_musl_archive",
+    static_library = ":v8_146_4_0_x86_64_unknown_linux_musl",
+)
+
+cc_library(
+    name = "v8_146_4_0_x86_64_unknown_linux_musl_imported",
+    linkopts = [
+        "-Wl,--no-as-needed",
+        "-ldl",
+        "-pthread",
+    ],
+    deps = [
+        ":v8_146_4_0_x86_64_unknown_linux_musl_archive",
+        ":v8_146_4_0_public_headers",
+    ],
+)
+
+cc_binary(
+    name = "v8_146_4_0_x86_64_unknown_linux_musl_imported_smoke_test",
+    srcs = ["smoke_test.cc"],
+    copts = select({
+        "@v8//bazel/config:is_clang": ["-std=c++20"],
+        "@v8//bazel/config:is_gcc": ["-std=gnu++2a"],
+        "@v8//bazel/config:is_windows": ["/std:c++20"],
+        "//conditions:default": [],
+    }),
+    tags = ["manual"],
+    deps = [":v8_146_4_0_x86_64_unknown_linux_musl_imported"],
 )
 
 cc_static_library(
