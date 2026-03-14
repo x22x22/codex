@@ -157,6 +157,9 @@ pub(crate) struct MultiSelectPicker {
 
     /// Callback invoked when the user cancels the picker.
     on_cancel: Option<CancelCallback>,
+
+    /// Treat Left Arrow as back/cancel when ordering is disabled.
+    left_arrow_cancels: bool,
 }
 
 impl MultiSelectPicker {
@@ -418,6 +421,13 @@ impl BottomPaneView for MultiSelectPicker {
             KeyEvent { code: KeyCode::Left, .. } if self.ordering_enabled => {
                 self.move_selected_item(Direction::Up);
             }
+            KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.left_arrow_cancels => {
+                self.close();
+            }
             KeyEvent { code: KeyCode::Right, .. } if self.ordering_enabled => {
                 self.move_selected_item(Direction::Down);
             }
@@ -628,6 +638,7 @@ pub(crate) struct MultiSelectPickerBuilder {
     on_change: Option<ChangeCallBack>,
     on_confirm: Option<ConfirmCallback>,
     on_cancel: Option<CancelCallback>,
+    left_arrow_cancels: bool,
 }
 
 impl MultiSelectPickerBuilder {
@@ -644,6 +655,7 @@ impl MultiSelectPickerBuilder {
             on_change: None,
             on_confirm: None,
             on_cancel: None,
+            left_arrow_cancels: false,
         }
     }
 
@@ -714,6 +726,12 @@ impl MultiSelectPickerBuilder {
         self
     }
 
+    /// Treat Left Arrow as back/cancel when ordering is disabled.
+    pub fn left_arrow_cancels(mut self) -> Self {
+        self.left_arrow_cancels = true;
+        self
+    }
+
     /// Builds the [`MultiSelectPicker`] with all configured options.
     ///
     /// Initializes the filter to show all items and generates the initial
@@ -755,6 +773,7 @@ impl MultiSelectPickerBuilder {
             on_change: self.on_change,
             on_confirm: self.on_confirm,
             on_cancel: self.on_cancel,
+            left_arrow_cancels: self.left_arrow_cancels,
         };
         view.apply_filter();
         view.update_preview_line();

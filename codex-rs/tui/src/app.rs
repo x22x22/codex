@@ -2869,6 +2869,69 @@ impl App {
                     }
                 }
             }
+            AppEvent::OpenConfigWizardAccessMode => {
+                self.chat_widget.open_config_wizard_access_mode();
+            }
+            AppEvent::OpenConfigWizardWorkspaceWriteOptions => {
+                self.chat_widget
+                    .open_config_wizard_workspace_write_options();
+            }
+            AppEvent::OpenConfigWizardTextStep { step } => {
+                self.chat_widget.open_config_wizard_text_step(step);
+            }
+            AppEvent::ConfigWizardAccessModeSelected { access_mode } => {
+                self.chat_widget
+                    .update_config_wizard_access_mode(access_mode);
+                if access_mode == crate::config_wizard::ConfigWizardAccessMode::WorkspaceWrite {
+                    self.chat_widget
+                        .open_config_wizard_workspace_write_options();
+                } else {
+                    self.chat_widget.open_config_wizard_summary();
+                }
+            }
+            AppEvent::ConfigWizardWorkspaceWriteOptionsSelected { selected } => {
+                self.chat_widget
+                    .update_config_wizard_workspace_write_options(selected);
+                self.chat_widget.open_config_wizard_text_step(
+                    crate::config_wizard::ConfigWizardTextStep::WritableRoots,
+                );
+            }
+            AppEvent::ConfigWizardTextSubmitted { step, value } => {
+                match self.chat_widget.apply_config_wizard_text_step(step, value) {
+                    Ok(()) => match step {
+                        crate::config_wizard::ConfigWizardTextStep::WritableRoots => {
+                            self.chat_widget.open_config_wizard_summary();
+                        }
+                    },
+                    Err(err) => {
+                        self.chat_widget
+                            .add_error_message(format!("Invalid sandbox setup input: {err}"));
+                        self.chat_widget.open_config_wizard_text_step(step);
+                    }
+                }
+            }
+            AppEvent::ApplyConfigWizard { request } => {
+                match ConfigEditsBuilder::new(&self.config.codex_home)
+                    .with_edits(request.edits)
+                    .apply()
+                    .await
+                {
+                    Ok(()) => {
+                        if let Err(err) = self.refresh_in_memory_config_from_disk().await {
+                            tracing::warn!(
+                                error = %err,
+                                "failed to refresh config after guided config write"
+                            );
+                        }
+                        self.chat_widget.add_info_message(request.summary, None);
+                    }
+                    Err(err) => {
+                        tracing::error!(error = %err, "failed to persist guided config");
+                        self.chat_widget
+                            .add_error_message(format!("Failed to save guided config: {err}"));
+                    }
+                }
+            }
             AppEvent::PersistRealtimeAudioDeviceSelection { kind, name } => {
                 let builder = match kind {
                     RealtimeAudioDeviceKind::Microphone => {

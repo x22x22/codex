@@ -72,6 +72,12 @@ mod clipboard_paste;
 mod clipboard_text;
 mod collaboration_modes;
 mod color;
+#[path = "setup/config_wizard.rs"]
+mod config_wizard;
+#[path = "setup/config_wizard_recommendation.rs"]
+mod config_wizard_recommendation;
+#[path = "setup/config_wizard_state.rs"]
+mod config_wizard_state;
 pub mod custom_terminal;
 mod cwd_prompt;
 mod debug_config;

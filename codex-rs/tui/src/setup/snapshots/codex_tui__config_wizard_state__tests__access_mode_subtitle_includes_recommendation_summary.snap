@@ -1,0 +1,8 @@
+---
+source: tui/src/setup/config_wizard_state_tests.rs
+assertion_line: 97
+expression: state.access_mode_subtitle()
+---
+This flow writes sandbox settings to config.toml. Current session settings stay selected by default.
+
+Recommended from 12 recent interactive sessions: workspace-write access; network enabled in 6/8 workspace-write sessions; common directories: /Users/viyatb/code/openai.

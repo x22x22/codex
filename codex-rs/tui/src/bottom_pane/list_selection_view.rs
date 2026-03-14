@@ -173,6 +173,9 @@ pub(crate) struct SelectionViewParams {
 
     /// Called when the picker is dismissed via Esc/Ctrl+C without selecting.
     pub on_cancel: OnCancelCallback,
+
+    /// Treat Left Arrow as back/cancel.
+    pub left_arrow_cancels: bool,
 }
 
 impl Default for SelectionViewParams {
@@ -196,6 +199,7 @@ impl Default for SelectionViewParams {
             preserve_side_content_bg: false,
             on_selection_changed: None,
             on_cancel: None,
+            left_arrow_cancels: false,
         }
     }
 }
@@ -232,6 +236,9 @@ pub(crate) struct ListSelectionView {
 
     /// Called when the picker is dismissed via Esc/Ctrl+C without selecting.
     on_cancel: OnCancelCallback,
+
+    /// Treat Left Arrow as back/cancel.
+    left_arrow_cancels: bool,
 }
 
 impl ListSelectionView {
@@ -280,6 +287,7 @@ impl ListSelectionView {
             preserve_side_content_bg: params.preserve_side_content_bg,
             on_selection_changed: params.on_selection_changed,
             on_cancel: params.on_cancel,
+            left_arrow_cancels: params.left_arrow_cancels,
         };
         s.apply_filter();
         s
@@ -623,6 +631,13 @@ impl BottomPaneView for ListSelectionView {
                 self.apply_filter();
             }
             KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.left_arrow_cancels => {
+                self.on_ctrl_c();
+            }
+            KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
                 self.on_ctrl_c();
@@ -730,10 +745,10 @@ impl Renderable for ListSelectionView {
         }
 
         // Side content: when the terminal is wide enough the panel sits beside
-        // the list and shares vertical space; otherwise it stacks below.
-        if self.side_layout_width(inner_width).is_some() {
-            // Side-by-side — side content shares list rows vertically so it
-            // doesn't add to total height.
+        // the list, but the popup still needs enough vertical space to fit
+        // whichever side is taller.
+        if let Some(side_w) = self.side_layout_width(inner_width) {
+            height = height.max(self.side_content.desired_height(side_w));
         } else {
             let side_h = self.stacked_side_content().desired_height(inner_width);
             if side_h > 0 {
@@ -1784,6 +1799,35 @@ mod tests {
         assert!(
             saw_marker,
             "expected side marker renderable to draw into buffer"
+        );
+    }
+
+    #[test]
+    fn side_by_side_height_grows_to_fit_tall_preview() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let view = ListSelectionView::new(
+            SelectionViewParams {
+                title: Some("Debug".to_string()),
+                items: vec![SelectionItem {
+                    name: "Item 1".to_string(),
+                    dismiss_on_select: true,
+                    ..Default::default()
+                }],
+                side_content: Box::new(MarkerRenderable {
+                    marker: "W",
+                    height: 8,
+                }),
+                side_content_width: SideContentWidth::Half,
+                side_content_min_width: 10,
+                ..Default::default()
+            },
+            tx,
+        );
+
+        assert_snapshot!(
+            "list_selection_side_by_side_height_grows_to_fit_tall_preview",
+            render_lines_with_width(&view, 120)
         );
     }
 

@@ -44,6 +44,9 @@ use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::config_wizard::ConfigWizardAccessMode;
+use crate::config_wizard::ConfigWizardState;
+use crate::config_wizard::ConfigWizardTextStep;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
@@ -552,6 +555,7 @@ pub(crate) struct ChatWidget {
     /// where the overlay may briefly treat new tail content as already cached.
     active_cell_revision: u64,
     config: Config,
+    config_wizard: Option<ConfigWizardState>,
     /// The unmasked collaboration mode settings (always Default mode).
     ///
     /// Masks are applied on top of this base mode to derive the effective mode.
@@ -3118,6 +3122,7 @@ impl ChatWidget {
             active_cell,
             active_cell_revision: 0,
             config,
+            config_wizard: None,
             skills_all: Vec::new(),
             skills_initial_state: None,
             current_collaboration_mode,
@@ -3300,6 +3305,7 @@ impl ChatWidget {
             active_cell,
             active_cell_revision: 0,
             config,
+            config_wizard: None,
             skills_all: Vec::new(),
             skills_initial_state: None,
             current_collaboration_mode,
@@ -3474,6 +3480,7 @@ impl ChatWidget {
             active_cell: None,
             active_cell_revision: 0,
             config,
+            config_wizard: None,
             skills_all: Vec::new(),
             skills_initial_state: None,
             current_collaboration_mode,
@@ -3927,6 +3934,9 @@ impl ChatWidget {
             }
             SlashCommand::Permissions => {
                 self.open_permissions_popup();
+            }
+            SlashCommand::SetupSandbox => {
+                self.open_config_wizard();
             }
             SlashCommand::ElevateSandbox => {
                 #[cfg(target_os = "windows")]
@@ -6629,6 +6639,79 @@ impl ChatWidget {
             header: Box::new(()),
             ..Default::default()
         });
+    }
+
+    pub(crate) fn open_config_wizard(&mut self) {
+        self.config_wizard = Some(ConfigWizardState::detect_with_config(&self.config));
+        self.open_config_wizard_access_mode();
+    }
+
+    pub(crate) fn open_config_wizard_access_mode(&mut self) {
+        if self.config_wizard.is_none() {
+            self.config_wizard = Some(ConfigWizardState::detect_with_config(&self.config));
+        }
+        let Some(state) = self.config_wizard.as_ref() else {
+            return;
+        };
+        let view = state.access_mode_view(self.app_event_tx.clone());
+        self.bottom_pane.show_view(Box::new(view));
+    }
+
+    pub(crate) fn update_config_wizard_access_mode(&mut self, access_mode: ConfigWizardAccessMode) {
+        if let Some(state) = self.config_wizard.as_mut() {
+            state.access_mode = access_mode;
+        }
+    }
+
+    pub(crate) fn open_config_wizard_workspace_write_options(&mut self) {
+        let Some(state) = self.config_wizard.as_ref() else {
+            self.open_config_wizard();
+            return;
+        };
+        self.bottom_pane.show_view(Box::new(
+            state.workspace_write_options_picker(self.app_event_tx.clone()),
+        ));
+    }
+
+    pub(crate) fn update_config_wizard_workspace_write_options(
+        &mut self,
+        selected: Vec<crate::config_wizard::ConfigWizardWorkspaceWriteOption>,
+    ) {
+        if let Some(state) = self.config_wizard.as_mut() {
+            state.set_workspace_write_options(&selected);
+        }
+    }
+
+    pub(crate) fn open_config_wizard_text_step(&mut self, step: ConfigWizardTextStep) {
+        let Some(state) = self.config_wizard.as_ref() else {
+            self.open_config_wizard();
+            return;
+        };
+        self.bottom_pane.show_view(Box::new(
+            state.text_step_view(step, self.app_event_tx.clone()),
+        ));
+    }
+
+    pub(crate) fn apply_config_wizard_text_step(
+        &mut self,
+        step: ConfigWizardTextStep,
+        value: String,
+    ) -> anyhow::Result<()> {
+        if let Some(state) = self.config_wizard.as_mut() {
+            state.apply_text_step(step, value)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn open_config_wizard_summary(&mut self) {
+        let Some(state) = self.config_wizard.as_ref() else {
+            self.open_config_wizard();
+            return;
+        };
+        match state.summary_view(self.app_event_tx.clone()) {
+            Ok(view) => self.bottom_pane.show_view(Box::new(view)),
+            Err(err) => self.add_error_message(format!("Failed to build config preview: {err}")),
+        }
     }
 
     pub(crate) fn open_experimental_popup(&mut self) {

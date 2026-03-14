@@ -3,6 +3,7 @@ use crate::config::types::Notice;
 use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use anyhow::Context;
+use anyhow::Result;
 use codex_config::CONFIG_TOML_FILE;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
@@ -13,6 +14,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::task;
+use toml::Value as TomlValue;
 use toml_edit::ArrayOfTables;
 use toml_edit::DocumentMut;
 use toml_edit::Item as TomlItem;
@@ -77,6 +79,13 @@ pub fn status_line_items_edit(items: &[String]) -> ConfigEdit {
         segments: vec!["tui".to_string(), "status_line".to_string()],
         value: TomlItem::Value(array.into()),
     }
+}
+
+pub fn set_path_toml_edit(segments: Vec<String>, value: TomlValue) -> Result<ConfigEdit> {
+    Ok(ConfigEdit::SetPath {
+        segments,
+        value: toml_value_to_item(value)?,
+    })
 }
 
 pub fn model_availability_nux_count_edits(shown_count: &HashMap<String, u32>) -> Vec<ConfigEdit> {
@@ -291,6 +300,44 @@ mod document_helpers {
             table.insert(key, value(val.clone()));
         }
         TomlItem::Table(table)
+    }
+}
+
+fn toml_value_to_item(value: TomlValue) -> Result<TomlItem> {
+    match value {
+        TomlValue::Table(table) => {
+            let mut table_item = TomlTable::new();
+            table_item.set_implicit(false);
+            for (key, value) in table {
+                table_item.insert(&key, toml_value_to_item(value)?);
+            }
+            Ok(TomlItem::Table(table_item))
+        }
+        value => Ok(TomlItem::Value(toml_value_to_value(value)?)),
+    }
+}
+
+fn toml_value_to_value(value: TomlValue) -> Result<toml_edit::Value> {
+    match value {
+        TomlValue::String(value) => Ok(toml_edit::Value::from(value)),
+        TomlValue::Integer(value) => Ok(toml_edit::Value::from(value)),
+        TomlValue::Float(value) => Ok(toml_edit::Value::from(value)),
+        TomlValue::Boolean(value) => Ok(toml_edit::Value::from(value)),
+        TomlValue::Datetime(value) => Ok(toml_edit::Value::from(value)),
+        TomlValue::Array(values) => {
+            let mut array = toml_edit::Array::new();
+            for value in values {
+                array.push(toml_value_to_value(value)?);
+            }
+            Ok(toml_edit::Value::Array(array))
+        }
+        TomlValue::Table(table) => {
+            let mut inline = toml_edit::InlineTable::new();
+            for (key, value) in table {
+                inline.insert(&key, toml_value_to_value(value)?);
+            }
+            Ok(toml_edit::Value::InlineTable(inline))
+        }
     }
 }
 
@@ -1001,6 +1048,73 @@ model_reasoning_effort = "high"
         let contents =
             std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
         assert_eq!(contents, "enabled = true\n");
+    }
+
+    #[test]
+    fn set_path_toml_edit_writes_profile_tables_with_quoted_keys() {
+        let tmp = tempdir().expect("tmpdir");
+        let codex_home = tmp.path();
+
+        let mut filesystem = toml::map::Map::new();
+        filesystem.insert(
+            "~/.config/pip".to_string(),
+            TomlValue::String("write".to_string()),
+        );
+        filesystem.insert(
+            ":minimal".to_string(),
+            TomlValue::String("read".to_string()),
+        );
+        filesystem.insert(
+            ":project_roots".to_string(),
+            TomlValue::Table({
+                let mut project_roots = toml::map::Map::new();
+                project_roots.insert(".".to_string(), TomlValue::String("write".to_string()));
+                project_roots
+            }),
+        );
+        let profile = TomlValue::Table({
+            let mut table = toml::map::Map::new();
+            table.insert("filesystem".to_string(), TomlValue::Table(filesystem));
+            table
+        });
+
+        apply_blocking(
+            codex_home,
+            None,
+            &[set_path_toml_edit(
+                vec!["permissions".to_string(), "project-sandbox".to_string()],
+                profile,
+            )
+            .expect("build edit")],
+        )
+        .expect("persist");
+
+        let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
+        let config = toml::from_str::<TomlValue>(&raw).expect("parse config");
+        let filesystem = config
+            .get("permissions")
+            .and_then(TomlValue::as_table)
+            .and_then(|permissions| permissions.get("project-sandbox"))
+            .and_then(TomlValue::as_table)
+            .and_then(|profile| profile.get("filesystem"))
+            .and_then(TomlValue::as_table)
+            .expect("filesystem table");
+        assert_eq!(
+            filesystem.get("~/.config/pip").and_then(TomlValue::as_str),
+            Some("write")
+        );
+        assert_eq!(
+            filesystem.get(":minimal").and_then(TomlValue::as_str),
+            Some("read")
+        );
+        assert_eq!(
+            filesystem
+                .get(":project_roots")
+                .and_then(TomlValue::as_table)
+                .and_then(|roots| roots.get("."))
+                .and_then(TomlValue::as_str),
+            Some("write")
+        );
     }
 
     #[test]

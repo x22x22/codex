@@ -1,0 +1,16 @@
+---
+source: tui/src/setup/config_wizard_state_tests.rs
+assertion_line: 20
+expression: state.preview_toml()
+---
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+exclude_slash_tmp = false
+exclude_tmpdir_env_var = true
+network_access = true
+writable_roots = [
+    "/tmp/pip-cache",
+    "/tmp/ollama",
+]

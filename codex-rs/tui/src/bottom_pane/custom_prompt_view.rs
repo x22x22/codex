@@ -23,6 +23,8 @@ use super::textarea::TextAreaState;
 
 /// Callback invoked when the user submits a custom prompt.
 pub(crate) type PromptSubmitted = Box<dyn Fn(String) + Send + Sync>;
+/// Callback invoked when the user cancels a custom prompt.
+pub(crate) type PromptCancelled = Box<dyn Fn() + Send + Sync>;
 
 /// Minimal multi-line text input view to collect custom review instructions.
 pub(crate) struct CustomPromptView {
@@ -30,6 +32,9 @@ pub(crate) struct CustomPromptView {
     placeholder: String,
     context_label: Option<String>,
     on_submit: PromptSubmitted,
+    on_cancel: Option<PromptCancelled>,
+    submit_empty_input: bool,
+    left_arrow_cancels_at_start: bool,
 
     // UI state
     textarea: TextArea,
@@ -49,16 +54,48 @@ impl CustomPromptView {
             placeholder,
             context_label,
             on_submit,
+            on_cancel: None,
+            submit_empty_input: false,
+            left_arrow_cancels_at_start: false,
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
             complete: false,
         }
+    }
+
+    pub(crate) fn with_cancel_handler(mut self, on_cancel: PromptCancelled) -> Self {
+        self.on_cancel = Some(on_cancel);
+        self
+    }
+
+    pub(crate) fn with_initial_text(mut self, text: String) -> Self {
+        if !text.is_empty() {
+            self.textarea.insert_str(&text);
+        }
+        self
+    }
+
+    pub(crate) fn submit_empty_input(mut self) -> Self {
+        self.submit_empty_input = true;
+        self
+    }
+
+    pub(crate) fn left_arrow_cancels_at_start(mut self) -> Self {
+        self.left_arrow_cancels_at_start = true;
+        self
     }
 }
 
 impl BottomPaneView for CustomPromptView {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
+            KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } if self.left_arrow_cancels_at_start && self.textarea.cursor() == 0 => {
+                self.on_ctrl_c();
+            }
             KeyEvent {
                 code: KeyCode::Esc, ..
             } => {
@@ -70,7 +107,7 @@ impl BottomPaneView for CustomPromptView {
                 ..
             } => {
                 let text = self.textarea.text().trim().to_string();
-                if !text.is_empty() {
+                if !text.is_empty() || self.submit_empty_input {
                     (self.on_submit)(text);
                     self.complete = true;
                 }
@@ -88,6 +125,9 @@ impl BottomPaneView for CustomPromptView {
     }
 
     fn on_ctrl_c(&mut self) -> CancellationEvent {
+        if let Some(on_cancel) = self.on_cancel.as_ref() {
+            on_cancel();
+        }
         self.complete = true;
         CancellationEvent::Handled
     }

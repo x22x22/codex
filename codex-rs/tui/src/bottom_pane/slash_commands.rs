@@ -83,6 +83,16 @@ mod tests {
     }
 
     #[test]
+    fn setup_sandbox_command_resolves_without_config_alias() {
+        let flags = all_enabled_flags();
+        assert_eq!(
+            find_builtin_command("setup-sandbox", flags),
+            Some(SlashCommand::SetupSandbox)
+        );
+        assert_eq!(find_builtin_command("config", flags), None);
+    }
+
+    #[test]
     fn fast_command_is_hidden_when_disabled() {
         let mut flags = all_enabled_flags();
         flags.fast_command_enabled = false;
