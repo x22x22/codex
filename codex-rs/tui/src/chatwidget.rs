@@ -67,7 +67,6 @@ use codex_core::git_info::current_branch_name;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::git_info::local_git_branches;
 use codex_core::mcp::McpManager;
-use codex_core::models_manager::manager::ModelsManager;
 use codex_core::plugins::PluginsManager;
 use codex_core::project_doc::DEFAULT_PROJECT_DOC_FILENAME;
 use codex_core::skills::model::SkillMetadata;
@@ -274,7 +273,7 @@ use self::interrupts::InterruptManager;
 mod agent;
 use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
-pub(crate) use self::agent::spawn_op_forwarder;
+pub(crate) use self::agent::spawn_app_event_forwarder;
 mod session_header;
 use self::session_header::SessionHeader;
 mod skills;
@@ -476,7 +475,8 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
-    pub(crate) models_manager: Arc<ModelsManager>,
+    pub(crate) available_models: Vec<ModelPreset>,
+    pub(crate) available_collaboration_modes: Vec<CollaborationModeMask>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
     pub(crate) is_first_run: bool,
     pub(crate) feedback_audience: FeedbackAudience,
@@ -654,7 +654,8 @@ pub(crate) struct ChatWidget {
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
     auth_manager: Arc<AuthManager>,
-    models_manager: Arc<ModelsManager>,
+    available_models: Vec<ModelPreset>,
+    available_collaboration_modes: Vec<CollaborationModeMask>,
     session_telemetry: SessionTelemetry,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
@@ -1813,7 +1814,8 @@ impl ChatWidget {
     }
 
     fn open_plan_implementation_prompt(&mut self) {
-        let default_mask = collaboration_modes::default_mode_mask(self.models_manager.as_ref());
+        let default_mask =
+            collaboration_modes::default_mode_mask(&self.available_collaboration_modes);
         let (implement_actions, implement_disabled_reason) = match default_mask {
             Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
@@ -3519,7 +3521,8 @@ impl ChatWidget {
             initial_user_message,
             enhanced_keys_supported,
             auth_manager,
-            models_manager,
+            available_models,
+            available_collaboration_modes,
             feedback,
             is_first_run,
             feedback_audience,
@@ -3540,8 +3543,11 @@ impl ChatWidget {
         let model_for_header = model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
-        let active_collaboration_mask =
-            Self::initial_collaboration_mask(&config, models_manager.as_ref(), model_override);
+        let active_collaboration_mask = Self::initial_collaboration_mask(
+            &config,
+            &available_collaboration_modes,
+            model_override,
+        );
         let header_model = active_collaboration_mask
             .as_ref()
             .and_then(|mask| mask.model.clone())
@@ -3584,7 +3590,8 @@ impl ChatWidget {
             current_collaboration_mode,
             active_collaboration_mask,
             auth_manager,
-            models_manager,
+            available_models,
+            available_collaboration_modes,
             session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
@@ -3706,7 +3713,8 @@ impl ChatWidget {
             initial_user_message,
             enhanced_keys_supported,
             auth_manager,
-            models_manager,
+            available_models,
+            available_collaboration_modes,
             feedback,
             is_first_run,
             feedback_audience,
@@ -3726,8 +3734,11 @@ impl ChatWidget {
         let model_for_header = model
             .clone()
             .unwrap_or_else(|| DEFAULT_MODEL_DISPLAY_NAME.to_string());
-        let active_collaboration_mask =
-            Self::initial_collaboration_mask(&config, models_manager.as_ref(), model_override);
+        let active_collaboration_mask = Self::initial_collaboration_mask(
+            &config,
+            &available_collaboration_modes,
+            model_override,
+        );
         let header_model = active_collaboration_mask
             .as_ref()
             .and_then(|mask| mask.model.clone())
@@ -3770,7 +3781,8 @@ impl ChatWidget {
             current_collaboration_mode,
             active_collaboration_mask,
             auth_manager,
-            models_manager,
+            available_models,
+            available_collaboration_modes,
             session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
@@ -3884,7 +3896,8 @@ impl ChatWidget {
             initial_user_message,
             enhanced_keys_supported,
             auth_manager,
-            models_manager,
+            available_models,
+            available_collaboration_modes,
             feedback,
             is_first_run: _,
             feedback_audience,
@@ -3902,8 +3915,11 @@ impl ChatWidget {
         let header_model = model
             .clone()
             .unwrap_or_else(|| session_configured.model.clone());
-        let active_collaboration_mask =
-            Self::initial_collaboration_mask(&config, models_manager.as_ref(), model_override);
+        let active_collaboration_mask = Self::initial_collaboration_mask(
+            &config,
+            &available_collaboration_modes,
+            model_override,
+        );
         let header_model = active_collaboration_mask
             .as_ref()
             .and_then(|mask| mask.model.clone())
@@ -3948,7 +3964,8 @@ impl ChatWidget {
             current_collaboration_mode,
             active_collaboration_mask,
             auth_manager,
-            models_manager,
+            available_models,
+            available_collaboration_modes,
             session_telemetry,
             session_header: SessionHeader::new(header_model),
             initial_user_message,
@@ -4393,7 +4410,9 @@ impl ChatWidget {
                     );
                     return;
                 }
-                if let Some(mask) = collaboration_modes::plan_mask(self.models_manager.as_ref()) {
+                if let Some(mask) =
+                    collaboration_modes::plan_mask(&self.available_collaboration_modes)
+                {
                     self.set_collaboration_mask(mask);
                 } else {
                     self.add_info_message("Plan mode unavailable right now.".to_string(), None);
@@ -6106,8 +6125,7 @@ impl ChatWidget {
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
-        let models = self.models_manager.try_list_models().ok()?;
-        models
+        self.available_models
             .iter()
             .find(|preset| preset.show_in_picker && preset.model == NUDGE_MODEL_SLUG)
             .cloned()
@@ -6225,16 +6243,11 @@ impl ChatWidget {
             return;
         }
 
-        let presets: Vec<ModelPreset> = match self.models_manager.try_list_models() {
-            Ok(models) => models,
-            Err(_) => {
-                self.add_info_message(
-                    "Models are being updated; please try /model again in a moment.".to_string(),
-                    None,
-                );
-                return;
-            }
-        };
+        let presets = self.available_models.clone();
+        if presets.is_empty() {
+            self.add_info_message("No models are available right now.".to_string(), None);
+            return;
+        }
         self.open_model_popup_with_presets(presets);
     }
 
@@ -6645,7 +6658,7 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_collaboration_modes_popup(&mut self) {
-        let presets = collaboration_modes::presets_for_tui(self.models_manager.as_ref());
+        let presets = collaboration_modes::presets_for_tui(&self.available_collaboration_modes);
         if presets.is_empty() {
             self.add_info_message(
                 "No collaboration modes are available right now.".to_string(),
@@ -6659,7 +6672,7 @@ impl ChatWidget {
             .as_ref()
             .and_then(|mask| mask.mode)
             .or_else(|| {
-                collaboration_modes::default_mask(self.models_manager.as_ref())
+                collaboration_modes::default_mask(&self.available_collaboration_modes)
                     .and_then(|mask| mask.mode)
             });
         let items: Vec<SelectionItem> = presets
@@ -6748,25 +6761,25 @@ impl ChatWidget {
             None => "the selected reasoning".to_string(),
         };
         let plan_only_description = format!("Always use {reasoning_phrase} in Plan mode.");
-        let plan_reasoning_source = if let Some(plan_override) =
-            self.config.plan_mode_reasoning_effort
-        {
-            format!(
-                "user-chosen Plan override ({})",
-                Self::reasoning_effort_label(plan_override).to_lowercase()
-            )
-        } else if let Some(plan_mask) = collaboration_modes::plan_mask(self.models_manager.as_ref())
-        {
-            match plan_mask.reasoning_effort.flatten() {
-                Some(plan_effort) => format!(
-                    "built-in Plan default ({})",
-                    Self::reasoning_effort_label(plan_effort).to_lowercase()
-                ),
-                None => "built-in Plan default (no reasoning)".to_string(),
-            }
-        } else {
-            "built-in Plan default".to_string()
-        };
+        let plan_reasoning_source =
+            if let Some(plan_override) = self.config.plan_mode_reasoning_effort {
+                format!(
+                    "user-chosen Plan override ({})",
+                    Self::reasoning_effort_label(plan_override).to_lowercase()
+                )
+            } else if let Some(plan_mask) =
+                collaboration_modes::plan_mask(&self.available_collaboration_modes)
+            {
+                match plan_mask.reasoning_effort.flatten() {
+                    Some(plan_effort) => format!(
+                        "built-in Plan default ({})",
+                        Self::reasoning_effort_label(plan_effort).to_lowercase()
+                    ),
+                    None => "built-in Plan default (no reasoning)".to_string(),
+                }
+            } else {
+                "built-in Plan default".to_string()
+            };
         let all_modes_description = format!(
             "Set the global default reasoning level and the Plan mode override. This replaces the current {plan_reasoning_source}."
         );
@@ -7901,7 +7914,7 @@ impl ChatWidget {
             if let Some(effort) = effort {
                 mask.reasoning_effort = Some(Some(effort));
             } else if let Some(plan_mask) =
-                collaboration_modes::plan_mask(self.models_manager.as_ref())
+                collaboration_modes::plan_mask(&self.available_collaboration_modes)
             {
                 mask.reasoning_effort = plan_mask.reasoning_effort;
             }
@@ -8042,15 +8055,10 @@ impl ChatWidget {
 
     fn current_model_supports_personality(&self) -> bool {
         let model = self.current_model();
-        self.models_manager
-            .try_list_models()
-            .ok()
-            .and_then(|models| {
-                models
-                    .into_iter()
-                    .find(|preset| preset.model == model)
-                    .map(|preset| preset.supports_personality)
-            })
+        self.available_models
+            .iter()
+            .find(|preset| preset.model == model)
+            .map(|preset| preset.supports_personality)
             .unwrap_or(false)
     }
 
@@ -8060,15 +8068,10 @@ impl ChatWidget {
     /// failures do not hard-block user input in the UI.
     fn current_model_supports_images(&self) -> bool {
         let model = self.current_model();
-        self.models_manager
-            .try_list_models()
-            .ok()
-            .and_then(|models| {
-                models
-                    .into_iter()
-                    .find(|preset| preset.model == model)
-                    .map(|preset| preset.input_modalities.contains(&InputModality::Image))
-            })
+        self.available_models
+            .iter()
+            .find(|preset| preset.model == model)
+            .map(|preset| preset.input_modalities.contains(&InputModality::Image))
             .unwrap_or(true)
     }
 
@@ -8108,10 +8111,10 @@ impl ChatWidget {
 
     fn initial_collaboration_mask(
         _config: &Config,
-        models_manager: &ModelsManager,
+        available_collaboration_modes: &[CollaborationModeMask],
         model_override: Option<&str>,
     ) -> Option<CollaborationModeMask> {
-        let mut mask = collaboration_modes::default_mask(models_manager)?;
+        let mut mask = collaboration_modes::default_mask(available_collaboration_modes)?;
         if let Some(model_override) = model_override {
             mask.model = Some(model_override.to_string());
         }
@@ -8211,7 +8214,7 @@ impl ChatWidget {
         }
 
         if let Some(next_mask) = collaboration_modes::next_mask(
-            self.models_manager.as_ref(),
+            &self.available_collaboration_modes,
             self.active_collaboration_mask.as_ref(),
         ) {
             self.set_collaboration_mask(next_mask);
