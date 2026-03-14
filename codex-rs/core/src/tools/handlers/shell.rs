@@ -411,7 +411,7 @@ impl ShellHandler {
         }
 
         let source = ExecCommandSource::Agent;
-        let emitter = ToolEmitter::shell(
+        let begin_emitter = ToolEmitter::shell(
             exec_params.command.clone(),
             false,
             exec_params.cwd.clone(),
@@ -419,7 +419,7 @@ impl ShellHandler {
             freeform,
         );
         let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
-        emitter.begin(event_ctx).await;
+        begin_emitter.begin(event_ctx).await;
 
         let exec_approval_requirement = session
             .services
@@ -485,14 +485,14 @@ impl ShellHandler {
             .map(|result| result.output);
         let effective_command = effective_command.lock().await.clone();
         let is_command_overridden = effective_command != exec_params.command;
-        let emitter = ToolEmitter::shell(
+        let finish_emitter = ToolEmitter::shell(
             effective_command,
             is_command_overridden,
             exec_params.cwd.clone(),
             source,
             freeform,
         );
-        let content = emitter.finish(event_ctx, out).await?;
+        let content = finish_emitter.finish(event_ctx, out).await?;
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
 }
