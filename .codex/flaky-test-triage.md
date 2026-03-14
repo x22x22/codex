@@ -46,9 +46,9 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 
 ## Current Fix In Progress
 
-- Harden the remaining permissions-history snapshot tests in `codex-rs/tui/src/chatwidget/tests.rs`.
-- Assert that the popup starts on the current preset, then assert that navigation lands on the intended preset (`Full Access` or `Default`) before confirming.
-- Rationale: these snapshot tests were still inferring cursor position from arrow-key count instead of proving which row was selected, which is the same brittle pattern already fixed in the neighboring Smart Approvals tests.
+- Harden the `SessionConfigured` Smart Approvals popup tests in `codex-rs/tui/src/chatwidget/tests.rs`.
+- Assert that `Smart Approvals (current)` is the selected row, not merely present somewhere in the popup body.
+- Rationale: the same popup cluster was already showing selection-state brittleness on Windows CI. These two tests were still only checking rendered text and would miss a cursor-placement regression.
 
 ## Constraints
 

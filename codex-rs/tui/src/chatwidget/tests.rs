@@ -8579,8 +8579,8 @@ async fn permissions_selection_marks_smart_approvals_current_after_session_confi
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        popup.contains("Smart Approvals (current)"),
-        "expected Smart Approvals to be current after SessionConfigured sync: {popup}"
+        selected_popup_line(&popup).contains("Smart Approvals (current)"),
+        "expected SessionConfigured sync to select Smart Approvals in the popup: {popup}"
     );
 }
 
@@ -8633,8 +8633,8 @@ async fn permissions_selection_marks_smart_approvals_current_with_custom_workspa
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        popup.contains("Smart Approvals (current)"),
-        "expected Smart Approvals to be current even with custom workspace-write details: {popup}"
+        selected_popup_line(&popup).contains("Smart Approvals (current)"),
+        "expected custom workspace-write details to keep Smart Approvals selected: {popup}"
     );
 }
 
