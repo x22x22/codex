@@ -36,7 +36,6 @@ use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::protocol::ExecCommandSource;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
@@ -226,20 +225,6 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
     ) -> Result<ExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
         let base_command = ctx.command_override.as_ref().unwrap_or(&req.command);
-        crate::tools::events::ToolEmitter::shell(
-            base_command.to_vec(),
-            false,
-            req.cwd.clone(),
-            ExecCommandSource::Agent,
-            false,
-        )
-        .begin(crate::tools::events::ToolEventCtx::new(
-            ctx.session.as_ref(),
-            ctx.turn.as_ref(),
-            &ctx.call_id,
-            None,
-        ))
-        .await;
         let command = maybe_wrap_shell_lc_with_snapshot(
             base_command,
             session_shell.as_ref(),

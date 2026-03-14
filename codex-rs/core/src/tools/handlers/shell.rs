@@ -411,6 +411,15 @@ impl ShellHandler {
         }
 
         let source = ExecCommandSource::Agent;
+        let emitter = ToolEmitter::shell(
+            exec_params.command.clone(),
+            false,
+            exec_params.cwd.clone(),
+            source,
+            freeform,
+        );
+        let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
+        emitter.begin(event_ctx).await;
 
         let exec_approval_requirement = session
             .services
@@ -483,7 +492,6 @@ impl ShellHandler {
             source,
             freeform,
         );
-        let event_ctx = ToolEventCtx::new(session.as_ref(), turn.as_ref(), &call_id, None);
         let content = emitter.finish(event_ctx, out).await?;
         Ok(FunctionToolOutput::from_text(content, Some(true)))
     }
