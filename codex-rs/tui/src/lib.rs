@@ -13,7 +13,6 @@ use codex_app_server_client::InProcessClientStartArgs;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
-use codex_core::CodexAuth;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
@@ -227,6 +226,7 @@ mod wrapping;
 #[cfg(test)]
 pub mod test_backend;
 
+use crate::onboarding::account_login::read_login_status_via_app_server;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
@@ -663,12 +663,44 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&initial_config);
 
-    let auth_manager = AuthManager::shared(
-        initial_config.codex_home.clone(),
-        false,
-        initial_config.cli_auth_credentials_store_mode,
-    );
-    let login_status = get_login_status(&initial_config);
+    let mut onboarding_app_server = if initial_config.model_provider.requires_openai_auth {
+        Some(
+            match start_embedded_app_server(
+                arg0_paths.clone(),
+                initial_config.clone(),
+                cli_kv_overrides.clone(),
+                loader_overrides.clone(),
+                cloud_requirements.clone(),
+                feedback.clone(),
+            )
+            .await
+            {
+                Ok(app_server) => app_server,
+                Err(err) => {
+                    restore();
+                    session_log::log_session_end();
+                    return Err(err);
+                }
+            },
+        )
+    } else {
+        None
+    };
+    let login_status = if let Some(app_server) = onboarding_app_server.as_ref() {
+        match read_login_status_via_app_server(app_server).await {
+            Ok(status) => status,
+            Err(err) => {
+                if let Some(app_server) = onboarding_app_server.take() {
+                    let _ = app_server.shutdown().await;
+                }
+                restore();
+                session_log::log_session_end();
+                return Err(color_eyre::eyre::eyre!("{err}"));
+            }
+        }
+    } else {
+        LoginStatus::NotAuthenticated
+    };
     let should_show_trust_screen_flag = should_show_trust_screen(&initial_config);
     let should_show_onboarding =
         should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
@@ -681,12 +713,21 @@ async fn run_ratatui_app(
                 show_login_screen,
                 show_trust_screen: should_show_trust_screen_flag,
                 login_status,
-                auth_manager: auth_manager.clone(),
                 config: initial_config.clone(),
             },
             &mut tui,
+            onboarding_app_server
+                .as_mut()
+                .and_then(|client| show_login_screen.then_some(client)),
         )
-        .await?;
+        .await;
+        if let Some(app_server) = onboarding_app_server.take() {
+            app_server
+                .shutdown()
+                .await
+                .wrap_err("failed to shut down onboarding app server")?;
+        }
+        let onboarding_result = onboarding_result?;
         if onboarding_result.should_exit {
             restore();
             session_log::log_session_end();
@@ -705,7 +746,11 @@ async fn run_ratatui_app(
         // status detection edge cases.
         if show_login_screen {
             cloud_requirements = cloud_requirements_loader(
-                auth_manager.clone(),
+                AuthManager::shared(
+                    initial_config.codex_home.clone(),
+                    false,
+                    initial_config.cli_auth_credentials_store_mode,
+                ),
                 initial_config.chatgpt_base_url.clone(),
                 initial_config.codex_home.clone(),
             );
@@ -724,6 +769,12 @@ async fn run_ratatui_app(
             initial_config
         }
     } else {
+        if let Some(app_server) = onboarding_app_server.take() {
+            app_server
+                .shutdown()
+                .await
+                .wrap_err("failed to shut down onboarding app server")?;
+        }
         initial_config
     };
 
@@ -1196,24 +1247,6 @@ fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScree
 pub enum LoginStatus {
     AuthMode(AuthMode),
     NotAuthenticated,
-}
-
-fn get_login_status(config: &Config) -> LoginStatus {
-    if config.model_provider.requires_openai_auth {
-        // Reading the OpenAI API key is an async operation because it may need
-        // to refresh the token. Block on it.
-        let codex_home = config.codex_home.clone();
-        match CodexAuth::from_auth_storage(&codex_home, config.cli_auth_credentials_store_mode) {
-            Ok(Some(auth)) => LoginStatus::AuthMode(auth.auth_mode()),
-            Ok(None) => LoginStatus::NotAuthenticated,
-            Err(err) => {
-                error!("Failed to read auth.json: {err}");
-                LoginStatus::NotAuthenticated
-            }
-        }
-    } else {
-        LoginStatus::NotAuthenticated
-    }
 }
 
 async fn load_config_or_exit(

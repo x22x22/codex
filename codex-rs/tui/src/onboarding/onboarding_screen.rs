@@ -1,4 +1,7 @@
-use codex_core::AuthManager;
+use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::InProcessServerEvent;
+use codex_app_server_protocol::LoginAccountResponse;
+use codex_app_server_protocol::ServerNotification;
 use codex_core::config::Config;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
@@ -17,6 +20,8 @@ use ratatui::widgets::WidgetRef;
 use codex_protocol::config_types::ForcedLoginMethod;
 
 use crate::LoginStatus;
+use crate::onboarding::account_login::AuthCommand;
+use crate::onboarding::account_login::OnboardingAccountApi;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInOption;
 use crate::onboarding::auth::SignInState;
@@ -27,8 +32,10 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use color_eyre::eyre::Result;
+use color_eyre::eyre::eyre;
 use std::sync::Arc;
 use std::sync::RwLock;
+use tokio::sync::mpsc;
 
 #[allow(clippy::large_enum_variant)]
 enum Step {
@@ -64,7 +71,6 @@ pub(crate) struct OnboardingScreenArgs {
     pub show_trust_screen: bool,
     pub show_login_screen: bool,
     pub login_status: LoginStatus,
-    pub auth_manager: Arc<AuthManager>,
     pub config: Config,
 }
 
@@ -74,19 +80,20 @@ pub(crate) struct OnboardingResult {
 }
 
 impl OnboardingScreen {
-    pub(crate) fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
+    pub(crate) fn new(
+        tui: &mut Tui,
+        args: OnboardingScreenArgs,
+        auth_command_tx: Option<mpsc::UnboundedSender<AuthCommand>>,
+    ) -> Self {
         let OnboardingScreenArgs {
             show_trust_screen,
             show_login_screen,
             login_status,
-            auth_manager,
             config,
         } = args;
         let cwd = config.cwd.clone();
-        let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
-        let forced_login_method = config.forced_login_method;
         let codex_home = config.codex_home.clone();
-        let cli_auth_credentials_store_mode = config.cli_auth_credentials_store_mode;
+        let forced_login_method = config.forced_login_method;
         let mut steps: Vec<Step> = Vec::new();
         steps.push(Step::Welcome(WelcomeWidget::new(
             !matches!(login_status, LoginStatus::NotAuthenticated),
@@ -98,16 +105,16 @@ impl OnboardingScreen {
                 Some(ForcedLoginMethod::Api) => SignInOption::ApiKey,
                 _ => SignInOption::ChatGpt,
             };
+            let Some(auth_command_tx) = auth_command_tx else {
+                unreachable!("auth command sender should exist when login screen is shown");
+            };
             steps.push(Step::Auth(AuthModeWidget {
+                auth_command_tx,
                 request_frame: tui.frame_requester(),
                 highlighted_mode,
                 error: None,
                 sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
-                codex_home: codex_home.clone(),
-                cli_auth_credentials_store_mode,
                 login_status,
-                auth_manager,
-                forced_chatgpt_workspace_id,
                 forced_login_method,
                 animations_enabled: config.animations,
             }))
@@ -208,6 +215,13 @@ impl OnboardingScreen {
                     .is_ok_and(|g| matches!(&*g, SignInState::ApiKeyEntry(_)));
             }
             false
+        })
+    }
+
+    fn auth_widget_mut(&mut self) -> Option<&mut AuthModeWidget> {
+        self.steps.iter_mut().find_map(|step| match step {
+            Step::Auth(widget) => Some(widget),
+            Step::Welcome(_) | Step::TrustDirectory(_) => None,
         })
     }
 }
@@ -395,10 +409,14 @@ impl WidgetRef for Step {
 pub(crate) async fn run_onboarding_app(
     args: OnboardingScreenArgs,
     tui: &mut Tui,
+    app_server: Option<&mut InProcessAppServerClient>,
 ) -> Result<OnboardingResult> {
     use tokio_stream::StreamExt;
 
-    let mut onboarding_screen = OnboardingScreen::new(tui, args);
+    let show_login_screen = args.show_login_screen;
+    let (auth_command_tx, mut auth_command_rx) = mpsc::unbounded_channel();
+    let mut onboarding_screen =
+        OnboardingScreen::new(tui, args, show_login_screen.then_some(auth_command_tx));
     // One-time guard to fully clear the screen after ChatGPT login success message is shown
     let mut did_full_clear_after_success = false;
 
@@ -408,56 +426,178 @@ pub(crate) async fn run_onboarding_app(
 
     let tui_events = tui.event_stream();
     tokio::pin!(tui_events);
+    let mut account_api = OnboardingAccountApi::default();
 
-    while !onboarding_screen.is_done() {
-        if let Some(event) = tui_events.next().await {
-            match event {
-                TuiEvent::Key(key_event) => {
-                    onboarding_screen.handle_key_event(key_event);
+    if show_login_screen {
+        let app_server = app_server.ok_or_else(|| eyre!("missing app server for onboarding"))?;
+        while !onboarding_screen.is_done() {
+            tokio::select! {
+                Some(event) = tui_events.next() => {
+                    handle_tui_event(
+                        event,
+                        tui,
+                        &mut onboarding_screen,
+                        &mut did_full_clear_after_success,
+                    );
                 }
-                TuiEvent::Paste(text) => {
-                    onboarding_screen.handle_paste(text);
+                Some(command) = auth_command_rx.recv() => {
+                    handle_auth_command(
+                        command,
+                        app_server,
+                        &mut account_api,
+                        &mut onboarding_screen,
+                    ).await;
                 }
-                TuiEvent::Draw => {
-                    if !did_full_clear_after_success
-                        && onboarding_screen.steps.iter().any(|step| {
-                            if let Step::Auth(w) = step {
-                                w.sign_in_state.read().is_ok_and(|g| {
-                                    matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
-                                })
-                            } else {
-                                false
-                            }
-                        })
-                    {
-                        // Reset any lingering SGR (underline/color) before clearing
-                        let _ = ratatui::crossterm::execute!(
-                            std::io::stdout(),
-                            ratatui::crossterm::style::SetAttribute(
-                                ratatui::crossterm::style::Attribute::Reset
-                            ),
-                            ratatui::crossterm::style::SetAttribute(
-                                ratatui::crossterm::style::Attribute::NoUnderline
-                            ),
-                            ratatui::crossterm::style::SetForegroundColor(
-                                ratatui::crossterm::style::Color::Reset
-                            ),
-                            ratatui::crossterm::style::SetBackgroundColor(
-                                ratatui::crossterm::style::Color::Reset
-                            )
-                        );
-                        let _ = tui.terminal.clear();
-                        did_full_clear_after_success = true;
+                app_server_event = app_server.next_event() => {
+                    if let Some(event) = app_server_event {
+                        handle_app_server_event(
+                            event,
+                            app_server,
+                            &mut account_api,
+                            &mut onboarding_screen,
+                        ).await;
+                    } else {
+                        break;
                     }
-                    let _ = tui.draw(u16::MAX, |frame| {
-                        frame.render_widget_ref(&onboarding_screen, frame.area());
-                    });
                 }
             }
         }
+    } else {
+        while !onboarding_screen.is_done() {
+            if let Some(event) = tui_events.next().await {
+                handle_tui_event(
+                    event,
+                    tui,
+                    &mut onboarding_screen,
+                    &mut did_full_clear_after_success,
+                );
+            }
+        }
     }
+
     Ok(OnboardingResult {
         directory_trust_decision: onboarding_screen.directory_trust_decision(),
         should_exit: onboarding_screen.should_exit(),
     })
+}
+
+fn handle_tui_event(
+    event: TuiEvent,
+    tui: &mut Tui,
+    onboarding_screen: &mut OnboardingScreen,
+    did_full_clear_after_success: &mut bool,
+) {
+    match event {
+        TuiEvent::Key(key_event) => {
+            onboarding_screen.handle_key_event(key_event);
+        }
+        TuiEvent::Paste(text) => {
+            onboarding_screen.handle_paste(text);
+        }
+        TuiEvent::Draw => {
+            if !*did_full_clear_after_success
+                && onboarding_screen.steps.iter().any(|step| {
+                    if let Step::Auth(w) = step {
+                        w.sign_in_state.read().is_ok_and(|g| {
+                            matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
+                        })
+                    } else {
+                        false
+                    }
+                })
+            {
+                let _ = ratatui::crossterm::execute!(
+                    std::io::stdout(),
+                    ratatui::crossterm::style::SetAttribute(
+                        ratatui::crossterm::style::Attribute::Reset
+                    ),
+                    ratatui::crossterm::style::SetAttribute(
+                        ratatui::crossterm::style::Attribute::NoUnderline
+                    ),
+                    ratatui::crossterm::style::SetForegroundColor(
+                        ratatui::crossterm::style::Color::Reset
+                    ),
+                    ratatui::crossterm::style::SetBackgroundColor(
+                        ratatui::crossterm::style::Color::Reset
+                    )
+                );
+                let _ = tui.terminal.clear();
+                *did_full_clear_after_success = true;
+            }
+            let _ = tui.draw(u16::MAX, |frame| {
+                frame.render_widget_ref(&*onboarding_screen, frame.area());
+            });
+        }
+    }
+}
+
+async fn handle_auth_command(
+    command: AuthCommand,
+    app_server: &InProcessAppServerClient,
+    account_api: &mut OnboardingAccountApi,
+    onboarding_screen: &mut OnboardingScreen,
+) {
+    match command {
+        AuthCommand::StartApiKey { api_key } => {
+            if let Err(err) = account_api.start_api_key_login(app_server, api_key).await
+                && let Some(auth_widget) = onboarding_screen.auth_widget_mut()
+            {
+                auth_widget.show_api_key_login_error(format!("Failed to save API key: {err}"));
+            }
+        }
+        AuthCommand::StartChatgpt => {
+            let result = account_api.start_chatgpt_login(app_server).await;
+            if let Some(auth_widget) = onboarding_screen.auth_widget_mut() {
+                match result {
+                    Ok(LoginAccountResponse::Chatgpt { login_id, auth_url }) => {
+                        auth_widget.apply_chatgpt_login_started(login_id, auth_url);
+                    }
+                    Ok(response) => {
+                        auth_widget.show_login_request_error(format!(
+                            "Unexpected account/login/start response: {response:?}"
+                        ));
+                    }
+                    Err(err) => {
+                        auth_widget.show_login_request_error(err);
+                    }
+                }
+            }
+        }
+        AuthCommand::CancelChatgpt { login_id } => {
+            if let Err(err) = account_api.cancel_chatgpt_login(app_server, login_id).await {
+                tracing::warn!("failed to cancel onboarding login: {err}");
+            }
+        }
+    }
+}
+
+async fn handle_app_server_event(
+    event: InProcessServerEvent,
+    app_server: &InProcessAppServerClient,
+    account_api: &mut OnboardingAccountApi,
+    onboarding_screen: &mut OnboardingScreen,
+) {
+    match event {
+        InProcessServerEvent::ServerNotification(ServerNotification::AccountUpdated(_)) => {
+            match account_api.read_account(app_server).await {
+                Ok(response) => {
+                    if let Some(auth_widget) = onboarding_screen.auth_widget_mut() {
+                        auth_widget.apply_account(response.account.as_ref());
+                    }
+                }
+                Err(err) => tracing::warn!("failed to refresh onboarding account state: {err}"),
+            }
+        }
+        InProcessServerEvent::ServerNotification(ServerNotification::AccountLoginCompleted(
+            payload,
+        )) => {
+            if let Some(auth_widget) = onboarding_screen.auth_widget_mut() {
+                auth_widget.apply_login_completed(payload);
+            }
+        }
+        InProcessServerEvent::LegacyNotification(_)
+        | InProcessServerEvent::ServerNotification(_)
+        | InProcessServerEvent::ServerRequest(_)
+        | InProcessServerEvent::Lagged { .. } => {}
+    }
 }
