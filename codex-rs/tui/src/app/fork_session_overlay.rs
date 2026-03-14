@@ -48,10 +48,18 @@ enum OverlayCommandState {
     Resize,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum OverlayFocusedPane {
+    Background,
+    #[default]
+    Popup,
+}
+
 pub(crate) struct ForkSessionOverlayState {
     pub(crate) terminal: ForkSessionTerminal,
     popup: Rect,
     command_state: OverlayCommandState,
+    focused_pane: OverlayFocusedPane,
 }
 
 fn popup_size_bounds(area: Rect) -> Rect {
@@ -194,6 +202,8 @@ fn popup_hint(command_state: OverlayCommandState) -> Vec<Span<'static>> {
                 "  ".into(),
                 "r resize".yellow(),
                 "  ".into(),
+                "o other".yellow(),
+                "  ".into(),
                 "q close".yellow(),
                 "  ".into(),
                 "] send ^]".dim(),
@@ -224,29 +234,48 @@ fn popup_hint(command_state: OverlayCommandState) -> Vec<Span<'static>> {
     }
 }
 
-fn popup_block(exit_code: Option<i32>, command_state: OverlayCommandState) -> Block<'static> {
+fn popup_block(
+    exit_code: Option<i32>,
+    command_state: OverlayCommandState,
+    focused_pane: OverlayFocusedPane,
+) -> Block<'static> {
     let status = match exit_code {
         Some(code) => format!("exited {code}").red().bold(),
         None => "running".green().bold(),
+    };
+    let focus = match focused_pane {
+        OverlayFocusedPane::Background => "background focus".yellow().bold(),
+        OverlayFocusedPane::Popup => "popup focus".cyan().bold(),
     };
     let mut title = vec![
         " fork session ".bold().cyan(),
         "  ".into(),
         status,
         "  ".into(),
+        focus,
+        "  ".into(),
     ];
     title.extend(popup_hint(command_state));
     let title = Line::from(title);
+    let border_color = match focused_pane {
+        OverlayFocusedPane::Background => Color::DarkGray,
+        OverlayFocusedPane::Popup => Color::Cyan,
+    };
 
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(border_color))
         .title(title)
 }
 
 fn popup_terminal_size(popup: Rect) -> codex_utils_pty::TerminalSize {
-    let inner = popup_block(None, OverlayCommandState::PassThrough).inner(popup);
+    let inner = popup_block(
+        None,
+        OverlayCommandState::PassThrough,
+        OverlayFocusedPane::Popup,
+    )
+    .inner(popup);
     codex_utils_pty::TerminalSize {
         rows: inner.height.max(1),
         cols: inner.width.max(1),
@@ -314,6 +343,7 @@ impl App {
             terminal,
             popup,
             command_state: OverlayCommandState::PassThrough,
+            focused_pane: OverlayFocusedPane::Popup,
         });
         tui.frame_requester().schedule_frame();
         Ok(())
@@ -348,7 +378,14 @@ impl App {
                                 state.command_state = OverlayCommandState::AwaitingPrefix;
                                 tui.frame_requester().schedule_frame();
                             } else {
-                                forward_key = Some(key_event);
+                                match state.focused_pane {
+                                    OverlayFocusedPane::Background => {
+                                        self.handle_key_event(tui, key_event).await;
+                                    }
+                                    OverlayFocusedPane::Popup => {
+                                        forward_key = Some(key_event);
+                                    }
+                                }
                             }
                         }
                         OverlayCommandState::AwaitingPrefix => {
@@ -384,6 +421,13 @@ impl App {
                                     }
                                     KeyCode::Char('r') | KeyCode::Char('R') => {
                                         state.command_state = OverlayCommandState::Resize;
+                                    }
+                                    KeyCode::Char('o') | KeyCode::Char('O') => {
+                                        state.focused_pane = match state.focused_pane {
+                                            OverlayFocusedPane::Background => OverlayFocusedPane::Popup,
+                                            OverlayFocusedPane::Popup => OverlayFocusedPane::Background,
+                                        };
+                                        state.command_state = OverlayCommandState::PassThrough;
                                     }
                                     KeyCode::Char('q') | KeyCode::Char('Q') => {
                                         close_overlay = true;
@@ -530,7 +574,12 @@ impl App {
             TuiEvent::Paste(pasted) => {
                 if let Some(state) = self.fork_session_overlay.as_ref() {
                     let pasted = pasted.replace("\r", "\n");
-                    let _ = state.terminal.handle_paste(&pasted).await;
+                    match state.focused_pane {
+                        OverlayFocusedPane::Background => self.chat_widget.handle_paste(pasted),
+                        OverlayFocusedPane::Popup => {
+                            let _ = state.terminal.handle_paste(&pasted).await;
+                        }
+                    }
                 }
             }
             TuiEvent::Draw => {
@@ -547,11 +596,22 @@ impl App {
                     self.render_transcript_once(tui);
                 }
                 self.chat_widget.maybe_post_pending_notification(tui);
+                let skip_draw_for_background_paste_burst = self
+                    .chat_widget
+                    .handle_paste_burst_tick(tui.frame_requester())
+                    && self.fork_session_overlay.as_ref().is_some_and(|state| {
+                        state.focused_pane == OverlayFocusedPane::Background
+                    });
+                if skip_draw_for_background_paste_burst {
+                    return Ok(());
+                }
                 self.chat_widget.pre_draw_tick();
                 let terminal_height = tui.terminal.size()?.height;
                 tui.draw(terminal_height, |frame| {
-                    self.render_fork_session_background(frame);
+                    let background_cursor = self.render_fork_session_background(frame);
                     if let Some((x, y)) = self.render_fork_session_overlay_frame(frame) {
+                        frame.set_cursor_position((x, y));
+                    } else if let Some((x, y)) = background_cursor {
                         frame.set_cursor_position((x, y));
                     }
                 })?;
@@ -626,18 +686,25 @@ impl App {
         lines
     }
 
-    fn render_fork_session_background(&self, frame: &mut Frame<'_>) {
+    fn render_fork_session_background(&self, frame: &mut Frame<'_>) -> Option<(u16, u16)> {
         let area = frame.area();
         Clear.render(area, frame.buffer);
         let height = self.chat_widget.desired_height(area.width).min(area.height).max(1);
         let background_viewport = Rect::new(area.x, area.y, area.width, height);
+        let cursor = self
+            .fork_session_overlay
+            .as_ref()
+            .and_then(|state| match state.focused_pane {
+                OverlayFocusedPane::Background => self.chat_widget.cursor_pos(background_viewport),
+                OverlayFocusedPane::Popup => None,
+            });
 
         let Ok(mut terminal) = crate::custom_terminal::Terminal::with_options(VT100Backend::new(
             area.width,
             area.height,
         )) else {
             self.chat_widget.render(background_viewport, frame.buffer);
-            return;
+            return cursor;
         };
         terminal.set_viewport_area(background_viewport);
 
@@ -654,6 +721,7 @@ impl App {
         });
 
         let _ = render_screen(terminal.backend().vt100().screen(), area, frame.buffer);
+        cursor
     }
 
     pub(crate) fn render_fork_session_overlay_frame(
@@ -666,7 +734,7 @@ impl App {
         Clear.render(popup, frame.buffer);
 
         let exit_code = state.terminal.exit_code();
-        let block = popup_block(exit_code, state.command_state);
+        let block = popup_block(exit_code, state.command_state, state.focused_pane);
         let inner = block.inner(popup);
         block.render(popup, frame.buffer);
 
@@ -678,7 +746,11 @@ impl App {
             rows: inner.height.max(1),
             cols: inner.width.max(1),
         });
-        state.terminal.render(inner, frame.buffer)
+        let cursor = state.terminal.render(inner, frame.buffer);
+        match state.focused_pane {
+            OverlayFocusedPane::Background => None,
+            OverlayFocusedPane::Popup => cursor,
+        }
     }
 
     fn build_fork_session_overlay_args(&self, thread_id: codex_protocol::ThreadId) -> Vec<String> {
@@ -947,6 +1019,7 @@ ready for a fresh turn\r\n",
             terminal: ForkSessionTerminal::for_test(parser, None),
             popup: default_popup_rect(Rect::new(0, 0, 100, 28)),
             command_state: OverlayCommandState::PassThrough,
+            focused_pane: OverlayFocusedPane::Popup,
         });
 
         let area = Rect::new(0, 0, 100, 28);
@@ -961,6 +1034,45 @@ ready for a fresh turn\r\n",
         let _ = app.render_fork_session_overlay_frame(&mut frame);
 
         insta::assert_snapshot!("fork_session_overlay_popup", snapshot_buffer(&buf));
+    }
+
+    #[tokio::test]
+    async fn fork_session_overlay_popup_background_focus_snapshot() {
+        let mut app = make_test_app().await;
+        app.transcript_cells = vec![Arc::new(crate::history_cell::new_user_prompt(
+            "background session".to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))];
+
+        let mut parser = vt100::Parser::new(18, 74, 0);
+        parser.process(
+            b"\x1b[32mIndependent Codex session\x1b[0m\r\n\
+\r\n\
+> /tmp/worktree\r\n\
+\r\n\
+ready for a fresh turn\r\n",
+        );
+        app.fork_session_overlay = Some(ForkSessionOverlayState {
+            terminal: ForkSessionTerminal::for_test(parser, None),
+            popup: default_popup_rect(Rect::new(0, 0, 100, 28)),
+            command_state: OverlayCommandState::PassThrough,
+            focused_pane: OverlayFocusedPane::Background,
+        });
+
+        let area = Rect::new(0, 0, 100, 28);
+        let mut buf = Buffer::empty(area);
+        let mut frame = Frame {
+            cursor_position: None,
+            viewport_area: area,
+            buffer: &mut buf,
+        };
+
+        let _ = app.render_fork_session_background(&mut frame);
+        let _ = app.render_fork_session_overlay_frame(&mut frame);
+
+        insta::assert_snapshot!("fork_session_overlay_popup_background_focus", snapshot_buffer(&buf));
     }
 
     #[tokio::test]

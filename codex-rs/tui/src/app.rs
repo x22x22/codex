@@ -1508,7 +1508,6 @@ impl App {
 
     fn reset_app_ui_state_after_clear(&mut self) {
         self.overlay = None;
-        self.fork_session_overlay = None;
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
@@ -3177,7 +3176,6 @@ impl App {
 
     fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.overlay = None;
-        self.fork_session_overlay = None;
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
@@ -3968,13 +3966,6 @@ impl App {
                     .await;
             }
             AppEvent::ClearUi => {
-                if self.fork_session_overlay.is_some() {
-                    self.chat_widget.add_error_message(
-                        "Press Ctrl+] then q to close the forked session overlay before clearing the UI."
-                            .to_string(),
-                    );
-                    return Ok(AppRunControl::Continue);
-                }
                 self.clear_terminal_ui(tui, false)?;
                 self.reset_app_ui_state_after_clear();
 
