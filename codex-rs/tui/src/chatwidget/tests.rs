@@ -8617,9 +8617,25 @@ async fn permissions_selection_can_disable_smart_approvals() {
         .sandbox_policy
         .set(SandboxPolicy::new_workspace_write_policy())
         .expect("set sandbox policy");
+    chat.set_approvals_reviewer(ApprovalsReviewer::GuardianSubagent);
 
     chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup
+            .lines()
+            .any(|line| line.contains("Smart Approvals (current)") && line.contains('›')),
+        "expected permissions popup to open with Smart Approvals selected: {popup}"
+    );
+
     chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        popup
+            .lines()
+            .any(|line| line.contains("Default") && line.contains('›')),
+        "expected one Up from Smart Approvals to select Default: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let events = std::iter::from_fn(|| rx.try_recv().ok()).collect::<Vec<_>>();
