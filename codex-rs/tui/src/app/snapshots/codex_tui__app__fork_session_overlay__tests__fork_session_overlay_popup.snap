@@ -8,7 +8,7 @@ expression: snapshot_buffer(&buf)
 │ model:     gpt-5.3-codex   /model to change │
 │ directory: ~/code/codex/codex-rs/tui        │
 ╰─────────────────────────────────────────────╯
-                  ╭ fork session   running  popup focus  ctrl+] prefix───────────╮
+                  ╭ fork session   running  popup focus  ^O switch  ctrl+] prefix╮
                   │Independent Codex session                                     │
 › background sessi│                                                              │
                   │> /tmp/worktree                                               │

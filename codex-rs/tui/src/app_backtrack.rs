@@ -251,12 +251,33 @@ impl App {
     /// Re-render the full transcript into the terminal scrollback in one call.
     /// Useful when switching sessions to ensure prior history remains visible.
     pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
-        if !self.transcript_cells.is_empty() {
-            let width = tui.terminal.last_known_screen_size.width;
-            for cell in &self.transcript_cells {
-                tui.insert_history_lines(cell.display_lines(width));
-            }
+        let width = tui.terminal.last_known_screen_size.width;
+        let lines = self.transcript_history_lines(width);
+        if !lines.is_empty() {
+            tui.insert_history_lines(lines);
         }
+    }
+
+    pub(crate) fn transcript_history_lines(&self, width: u16) -> Vec<ratatui::text::Line<'static>> {
+        let mut lines = Vec::new();
+        let mut has_lines = false;
+
+        for cell in &self.transcript_cells {
+            let mut display = cell.display_lines(width);
+            if display.is_empty() {
+                continue;
+            }
+            if !cell.is_stream_continuation() {
+                if has_lines {
+                    lines.push("".into());
+                } else {
+                    has_lines = true;
+                }
+            }
+            lines.append(&mut display);
+        }
+
+        lines
     }
 
     /// Initialize backtrack state and show composer hint.

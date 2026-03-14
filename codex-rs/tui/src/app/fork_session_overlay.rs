@@ -89,14 +89,12 @@ fn popup_height_bounds(area: Rect) -> (u16, u16) {
 
 fn default_popup_rect(area: Rect) -> Rect {
     let bounds = popup_size_bounds(area);
-    let width = bounds
-        .width
-        .saturating_mul(DEFAULT_POPUP_WIDTH_NUMERATOR)
+    let width = bounds.width.saturating_mul(DEFAULT_POPUP_WIDTH_NUMERATOR)
         / DEFAULT_POPUP_WIDTH_DENOMINATOR;
-    let width = width.min(bounds.width).max(POPUP_MIN_WIDTH.min(bounds.width).max(1));
-    let height = bounds
-        .height
-        .saturating_mul(DEFAULT_POPUP_HEIGHT_NUMERATOR)
+    let width = width
+        .min(bounds.width)
+        .max(POPUP_MIN_WIDTH.min(bounds.width).max(1));
+    let height = bounds.height.saturating_mul(DEFAULT_POPUP_HEIGHT_NUMERATOR)
         / DEFAULT_POPUP_HEIGHT_DENOMINATOR;
     let height = height
         .min(bounds.height)
@@ -153,7 +151,12 @@ fn resize_left_edge(area: Rect, popup: Rect, delta: i32) -> Rect {
     let min_left = (right - i32::from(max_width)).max(i32::from(area.x));
     let max_left = right - i32::from(min_width);
     let next_left = (i32::from(popup.x) + delta).clamp(min_left, max_left);
-    Rect::new(next_left as u16, popup.y, (right - next_left) as u16, popup.height)
+    Rect::new(
+        next_left as u16,
+        popup.y,
+        (right - next_left) as u16,
+        popup.height,
+    )
 }
 
 fn resize_right_edge(area: Rect, popup: Rect, delta: i32) -> Rect {
@@ -173,7 +176,12 @@ fn resize_top_edge(area: Rect, popup: Rect, delta: i32) -> Rect {
     let min_top = (bottom - i32::from(max_height)).max(i32::from(area.y));
     let max_top = bottom - i32::from(min_height);
     let next_top = (i32::from(popup.y) + delta).clamp(min_top, max_top);
-    Rect::new(popup.x, next_top as u16, popup.width, (bottom - next_top) as u16)
+    Rect::new(
+        popup.x,
+        next_top as u16,
+        popup.width,
+        (bottom - next_top) as u16,
+    )
 }
 
 fn resize_bottom_edge(area: Rect, popup: Rect, delta: i32) -> Rect {
@@ -193,25 +201,33 @@ fn resize_all_edges(area: Rect, popup: Rect, delta: i32) -> Rect {
     resize_bottom_edge(area, popup, delta)
 }
 
+fn focus_toggle_shortcut(key_event: KeyEvent) -> bool {
+    matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+        && matches!(key_event.code, KeyCode::Char('o') | KeyCode::Char('O'))
+        && key_event.modifiers.contains(KeyModifiers::CONTROL)
+}
+
 fn popup_hint(command_state: OverlayCommandState) -> Vec<Span<'static>> {
     match command_state {
-        OverlayCommandState::PassThrough => vec!["ctrl+] prefix".dim()],
+        OverlayCommandState::PassThrough => {
+            vec!["^O switch".cyan(), "  ".into(), "ctrl+] prefix".dim()]
+        }
         OverlayCommandState::AwaitingPrefix => {
             vec![
-                "m move".yellow(),
+                "m move".cyan(),
                 "  ".into(),
-                "r resize".yellow(),
+                "r resize".cyan(),
                 "  ".into(),
-                "o other".yellow(),
+                "o other".cyan(),
                 "  ".into(),
-                "q close".yellow(),
+                "q close".cyan(),
                 "  ".into(),
                 "] send ^]".dim(),
             ]
         }
         OverlayCommandState::Move => {
             vec![
-                "move".yellow().bold(),
+                "move".cyan().bold(),
                 "  ".into(),
                 "hjkl/arrows".dim(),
                 "  ".into(),
@@ -222,7 +238,7 @@ fn popup_hint(command_state: OverlayCommandState) -> Vec<Span<'static>> {
         }
         OverlayCommandState::Resize => {
             vec![
-                "resize".yellow().bold(),
+                "resize".cyan().bold(),
                 "  ".into(),
                 "hjkl HJKL +/-".dim(),
                 "  ".into(),
@@ -244,7 +260,7 @@ fn popup_block(
         None => "running".green().bold(),
     };
     let focus = match focused_pane {
-        OverlayFocusedPane::Background => "background focus".yellow().bold(),
+        OverlayFocusedPane::Background => "background focus".cyan().bold(),
         OverlayFocusedPane::Popup => "popup focus".cyan().bold(),
     };
     let mut title = vec![
@@ -303,7 +319,10 @@ fn child_overlay_env(mut env: HashMap<String, String>) -> HashMap<String, String
         env.remove(key);
     }
     if let Some(bg) = crate::terminal_palette::default_bg() {
-        env.insert(PARENT_BG_RGB_ENV_VAR.to_string(), parent_bg_rgb_env_value(bg));
+        env.insert(
+            PARENT_BG_RGB_ENV_VAR.to_string(),
+            parent_bg_rgb_env_value(bg),
+        );
     }
     env
 }
@@ -323,6 +342,7 @@ impl App {
         tui: &mut tui::Tui,
         thread_id: codex_protocol::ThreadId,
     ) -> Result<()> {
+        tui.clear_pending_history_lines();
         let size = tui.terminal.size()?;
         let popup = default_popup_rect(Rect::new(0, 0, size.width, size.height));
         let terminal_size = popup_terminal_size(popup);
@@ -370,11 +390,17 @@ impl App {
                 if let Some(state) = self.fork_session_overlay.as_mut() {
                     let is_ctrl_prefix =
                         matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
-                        && matches!(key_event.code, KeyCode::Char(']'))
-                        && key_event.modifiers.contains(KeyModifiers::CONTROL);
+                            && matches!(key_event.code, KeyCode::Char(']'))
+                            && key_event.modifiers.contains(KeyModifiers::CONTROL);
                     match state.command_state {
                         OverlayCommandState::PassThrough => {
-                            if is_ctrl_prefix {
+                            if focus_toggle_shortcut(key_event) {
+                                state.focused_pane = match state.focused_pane {
+                                    OverlayFocusedPane::Background => OverlayFocusedPane::Popup,
+                                    OverlayFocusedPane::Popup => OverlayFocusedPane::Background,
+                                };
+                                tui.frame_requester().schedule_frame();
+                            } else if is_ctrl_prefix {
                                 state.command_state = OverlayCommandState::AwaitingPrefix;
                                 tui.frame_requester().schedule_frame();
                             } else {
@@ -393,15 +419,11 @@ impl App {
                             {
                                 if matches!(
                                     key_event.code,
-                                    KeyCode::Left
-                                        | KeyCode::Right
-                                        | KeyCode::Up
-                                        | KeyCode::Down
+                                    KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
                                 ) {
                                     if let Some((dx, dy)) = move_popup_delta(key_event) {
                                         state.command_state = OverlayCommandState::Move;
-                                        state.popup =
-                                            move_popup_rect(area, state.popup, dx, dy);
+                                        state.popup = move_popup_rect(area, state.popup, dx, dy);
                                     }
                                 } else if matches!(
                                     key_event.code,
@@ -416,51 +438,59 @@ impl App {
                                     state.popup = resize_all_edges(area, state.popup, delta);
                                 } else {
                                     match key_event.code {
-                                    KeyCode::Char('m') | KeyCode::Char('M') => {
-                                        state.command_state = OverlayCommandState::Move;
-                                    }
-                                    KeyCode::Char('r') | KeyCode::Char('R') => {
-                                        state.command_state = OverlayCommandState::Resize;
-                                    }
-                                    KeyCode::Char('o') | KeyCode::Char('O') => {
-                                        state.focused_pane = match state.focused_pane {
-                                            OverlayFocusedPane::Background => OverlayFocusedPane::Popup,
-                                            OverlayFocusedPane::Popup => OverlayFocusedPane::Background,
-                                        };
-                                        state.command_state = OverlayCommandState::PassThrough;
-                                    }
-                                    KeyCode::Char('q') | KeyCode::Char('Q') => {
-                                        close_overlay = true;
-                                    }
-                                    KeyCode::Char('d')
-                                        if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
-                                    {
-                                        close_overlay = true;
-                                    }
-                                    KeyCode::Char(']') => {
-                                        if is_ctrl_prefix {
+                                        KeyCode::Char('m') | KeyCode::Char('M') => {
+                                            state.command_state = OverlayCommandState::Move;
+                                        }
+                                        KeyCode::Char('r') | KeyCode::Char('R') => {
+                                            state.command_state = OverlayCommandState::Resize;
+                                        }
+                                        KeyCode::Char('o') | KeyCode::Char('O') => {
+                                            state.focused_pane = match state.focused_pane {
+                                                OverlayFocusedPane::Background => {
+                                                    OverlayFocusedPane::Popup
+                                                }
+                                                OverlayFocusedPane::Popup => {
+                                                    OverlayFocusedPane::Background
+                                                }
+                                            };
                                             state.command_state = OverlayCommandState::PassThrough;
-                                        } else {
-                                            forward_key = Some(KeyEvent::new(
-                                                KeyCode::Char(']'),
-                                                KeyModifiers::CONTROL,
-                                            ));
+                                        }
+                                        KeyCode::Char('q') | KeyCode::Char('Q') => {
+                                            close_overlay = true;
+                                        }
+                                        KeyCode::Char('d')
+                                            if key_event
+                                                .modifiers
+                                                .contains(KeyModifiers::CONTROL) =>
+                                        {
+                                            close_overlay = true;
+                                        }
+                                        KeyCode::Char(']') => {
+                                            if is_ctrl_prefix {
+                                                state.command_state =
+                                                    OverlayCommandState::PassThrough;
+                                            } else {
+                                                forward_key = Some(KeyEvent::new(
+                                                    KeyCode::Char(']'),
+                                                    KeyModifiers::CONTROL,
+                                                ));
+                                                state.command_state =
+                                                    OverlayCommandState::PassThrough;
+                                            }
+                                        }
+                                        KeyCode::Esc | KeyCode::Enter => {
+                                            state.command_state = OverlayCommandState::PassThrough;
+                                        }
+                                        _ => {
+                                            if is_ctrl_prefix {
+                                                forward_key = Some(KeyEvent::new(
+                                                    KeyCode::Char(']'),
+                                                    KeyModifiers::CONTROL,
+                                                ));
+                                            }
                                             state.command_state = OverlayCommandState::PassThrough;
                                         }
                                     }
-                                    KeyCode::Esc | KeyCode::Enter => {
-                                        state.command_state = OverlayCommandState::PassThrough;
-                                    }
-                                    _ => {
-                                        if is_ctrl_prefix {
-                                            forward_key = Some(KeyEvent::new(
-                                                KeyCode::Char(']'),
-                                                KeyModifiers::CONTROL,
-                                            ));
-                                        }
-                                        state.command_state = OverlayCommandState::PassThrough;
-                                    }
-                                }
                                 }
                                 tui.frame_requester().schedule_frame();
                             }
@@ -490,73 +520,88 @@ impl App {
                                     state.command_state = OverlayCommandState::PassThrough;
                                 } else {
                                     match key_event.code {
-                                    KeyCode::Left => {
-                                        let delta = if key_event.modifiers.contains(KeyModifiers::SHIFT) {
-                                            1
-                                        } else {
-                                            -1
-                                        };
-                                        state.popup = resize_left_edge(area, state.popup, delta);
+                                        KeyCode::Left => {
+                                            let delta = if key_event
+                                                .modifiers
+                                                .contains(KeyModifiers::SHIFT)
+                                            {
+                                                1
+                                            } else {
+                                                -1
+                                            };
+                                            state.popup =
+                                                resize_left_edge(area, state.popup, delta);
+                                        }
+                                        KeyCode::Right => {
+                                            let delta = if key_event
+                                                .modifiers
+                                                .contains(KeyModifiers::SHIFT)
+                                            {
+                                                -1
+                                            } else {
+                                                1
+                                            };
+                                            state.popup =
+                                                resize_right_edge(area, state.popup, delta);
+                                        }
+                                        KeyCode::Up => {
+                                            let delta = if key_event
+                                                .modifiers
+                                                .contains(KeyModifiers::SHIFT)
+                                            {
+                                                1
+                                            } else {
+                                                -1
+                                            };
+                                            state.popup = resize_top_edge(area, state.popup, delta);
+                                        }
+                                        KeyCode::Down => {
+                                            let delta = if key_event
+                                                .modifiers
+                                                .contains(KeyModifiers::SHIFT)
+                                            {
+                                                -1
+                                            } else {
+                                                1
+                                            };
+                                            state.popup =
+                                                resize_bottom_edge(area, state.popup, delta);
+                                        }
+                                        KeyCode::Char('h') => {
+                                            state.popup = resize_left_edge(area, state.popup, -1);
+                                        }
+                                        KeyCode::Char('H') => {
+                                            state.popup = resize_left_edge(area, state.popup, 1);
+                                        }
+                                        KeyCode::Char('j') => {
+                                            state.popup = resize_bottom_edge(area, state.popup, 1);
+                                        }
+                                        KeyCode::Char('J') => {
+                                            state.popup = resize_bottom_edge(area, state.popup, -1);
+                                        }
+                                        KeyCode::Char('k') => {
+                                            state.popup = resize_top_edge(area, state.popup, -1);
+                                        }
+                                        KeyCode::Char('K') => {
+                                            state.popup = resize_top_edge(area, state.popup, 1);
+                                        }
+                                        KeyCode::Char('l') => {
+                                            state.popup = resize_right_edge(area, state.popup, 1);
+                                        }
+                                        KeyCode::Char('L') => {
+                                            state.popup = resize_right_edge(area, state.popup, -1);
+                                        }
+                                        KeyCode::Char('=') | KeyCode::Char('+') => {
+                                            state.popup = resize_all_edges(area, state.popup, 1);
+                                        }
+                                        KeyCode::Char('-') => {
+                                            state.popup = resize_all_edges(area, state.popup, -1);
+                                        }
+                                        KeyCode::Esc | KeyCode::Enter => {
+                                            state.command_state = OverlayCommandState::PassThrough;
+                                        }
+                                        _ => {}
                                     }
-                                    KeyCode::Right => {
-                                        let delta = if key_event.modifiers.contains(KeyModifiers::SHIFT) {
-                                            -1
-                                        } else {
-                                            1
-                                        };
-                                        state.popup = resize_right_edge(area, state.popup, delta);
-                                    }
-                                    KeyCode::Up => {
-                                        let delta = if key_event.modifiers.contains(KeyModifiers::SHIFT) {
-                                            1
-                                        } else {
-                                            -1
-                                        };
-                                        state.popup = resize_top_edge(area, state.popup, delta);
-                                    }
-                                    KeyCode::Down => {
-                                        let delta = if key_event.modifiers.contains(KeyModifiers::SHIFT) {
-                                            -1
-                                        } else {
-                                            1
-                                        };
-                                        state.popup = resize_bottom_edge(area, state.popup, delta);
-                                    }
-                                    KeyCode::Char('h') => {
-                                        state.popup = resize_left_edge(area, state.popup, -1);
-                                    }
-                                    KeyCode::Char('H') => {
-                                        state.popup = resize_left_edge(area, state.popup, 1);
-                                    }
-                                    KeyCode::Char('j') => {
-                                        state.popup = resize_bottom_edge(area, state.popup, 1);
-                                    }
-                                    KeyCode::Char('J') => {
-                                        state.popup = resize_bottom_edge(area, state.popup, -1);
-                                    }
-                                    KeyCode::Char('k') => {
-                                        state.popup = resize_top_edge(area, state.popup, -1);
-                                    }
-                                    KeyCode::Char('K') => {
-                                        state.popup = resize_top_edge(area, state.popup, 1);
-                                    }
-                                    KeyCode::Char('l') => {
-                                        state.popup = resize_right_edge(area, state.popup, 1);
-                                    }
-                                    KeyCode::Char('L') => {
-                                        state.popup = resize_right_edge(area, state.popup, -1);
-                                    }
-                                    KeyCode::Char('=') | KeyCode::Char('+') => {
-                                        state.popup = resize_all_edges(area, state.popup, 1);
-                                    }
-                                    KeyCode::Char('-') => {
-                                        state.popup = resize_all_edges(area, state.popup, -1);
-                                    }
-                                    KeyCode::Esc | KeyCode::Enter => {
-                                        state.command_state = OverlayCommandState::PassThrough;
-                                    }
-                                    _ => {}
-                                }
                                 }
                                 tui.frame_requester().schedule_frame();
                             }
@@ -596,12 +641,12 @@ impl App {
                     self.render_transcript_once(tui);
                 }
                 self.chat_widget.maybe_post_pending_notification(tui);
-                let skip_draw_for_background_paste_burst = self
-                    .chat_widget
-                    .handle_paste_burst_tick(tui.frame_requester())
-                    && self.fork_session_overlay.as_ref().is_some_and(|state| {
-                        state.focused_pane == OverlayFocusedPane::Background
-                    });
+                let skip_draw_for_background_paste_burst =
+                    self.chat_widget
+                        .handle_paste_burst_tick(tui.frame_requester())
+                        && self.fork_session_overlay.as_ref().is_some_and(|state| {
+                            state.focused_pane == OverlayFocusedPane::Background
+                        });
                 if skip_draw_for_background_paste_burst {
                     return Ok(());
                 }
@@ -639,29 +684,6 @@ impl App {
         Ok(())
     }
 
-    fn visible_history_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-        let mut has_lines = false;
-
-        for cell in &self.transcript_cells {
-            let mut display = cell.display_lines(width);
-            if display.is_empty() {
-                continue;
-            }
-            if !cell.is_stream_continuation() {
-                if has_lines {
-                    lines.push(Line::from(""));
-                } else {
-                    has_lines = true;
-                }
-            }
-            lines.append(&mut display);
-        }
-
-        lines.extend(self.deferred_history_lines.iter().cloned());
-        lines
-    }
-
     fn background_history_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
         let header_lines = self.clear_ui_header_lines(width);
@@ -678,7 +700,7 @@ impl App {
             lines.extend(header_lines);
         }
 
-        let mut history_lines = self.visible_history_lines(width);
+        let mut history_lines = self.transcript_history_lines(width);
         if !lines.is_empty() && !history_lines.is_empty() {
             lines.push(Line::from(""));
         }
@@ -689,22 +711,27 @@ impl App {
     fn render_fork_session_background(&self, frame: &mut Frame<'_>) -> Option<(u16, u16)> {
         let area = frame.area();
         Clear.render(area, frame.buffer);
-        let height = self.chat_widget.desired_height(area.width).min(area.height).max(1);
+        let height = self
+            .chat_widget
+            .desired_height(area.width)
+            .min(area.height)
+            .max(1);
         let background_viewport = Rect::new(area.x, area.y, area.width, height);
-        let cursor = self
+        let background_focused = self
             .fork_session_overlay
             .as_ref()
-            .and_then(|state| match state.focused_pane {
-                OverlayFocusedPane::Background => self.chat_widget.cursor_pos(background_viewport),
-                OverlayFocusedPane::Popup => None,
-            });
+            .is_some_and(|state| state.focused_pane == OverlayFocusedPane::Background);
 
         let Ok(mut terminal) = crate::custom_terminal::Terminal::with_options(VT100Backend::new(
             area.width,
             area.height,
         )) else {
             self.chat_widget.render(background_viewport, frame.buffer);
-            return cursor;
+            return if background_focused {
+                self.chat_widget.cursor_pos(background_viewport)
+            } else {
+                None
+            };
         };
         terminal.set_viewport_area(background_viewport);
 
@@ -713,9 +740,14 @@ impl App {
             let _ = insert_history_lines(&mut terminal, history_lines);
         }
 
+        let mut cursor = None;
         let _ = terminal.draw(|offscreen_frame| {
-            self.chat_widget.render(offscreen_frame.area(), offscreen_frame.buffer);
-            if let Some((x, y)) = self.chat_widget.cursor_pos(offscreen_frame.area()) {
+            self.chat_widget
+                .render(offscreen_frame.area(), offscreen_frame.buffer);
+            if background_focused {
+                cursor = self.chat_widget.cursor_pos(offscreen_frame.area());
+            }
+            if let Some((x, y)) = cursor {
                 offscreen_frame.set_cursor_position((x, y));
             }
         });
@@ -969,6 +1001,40 @@ mod tests {
     }
 
     #[test]
+    fn focus_toggle_shortcut_matches_control_o() {
+        assert!(focus_toggle_shortcut(KeyEvent::new(
+            KeyCode::Char('o'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(focus_toggle_shortcut(KeyEvent::new(
+            KeyCode::Char('O'),
+            KeyModifiers::CONTROL,
+        )));
+        assert!(!focus_toggle_shortcut(KeyEvent::new(
+            KeyCode::Char('o'),
+            KeyModifiers::NONE,
+        )));
+    }
+
+    #[tokio::test]
+    async fn transcript_history_lines_preserve_blank_lines_between_cells() {
+        let mut app = make_test_app().await;
+        app.transcript_cells = vec![
+            Arc::new(crate::history_cell::PlainHistoryCell::new(vec![
+                Line::from("first"),
+            ])),
+            Arc::new(crate::history_cell::PlainHistoryCell::new(vec![
+                Line::from("second"),
+            ])),
+        ];
+
+        assert_eq!(
+            app.transcript_history_lines(80),
+            vec![Line::from("first"), Line::from(""), Line::from("second")]
+        );
+    }
+
+    #[test]
     fn resize_popup_rect_respects_min_and_max_bounds() {
         let area = Rect::new(0, 0, 100, 28);
         let popup = default_popup_rect(area);
@@ -1072,7 +1138,103 @@ ready for a fresh turn\r\n",
         let _ = app.render_fork_session_background(&mut frame);
         let _ = app.render_fork_session_overlay_frame(&mut frame);
 
-        insta::assert_snapshot!("fork_session_overlay_popup_background_focus", snapshot_buffer(&buf));
+        insta::assert_snapshot!(
+            "fork_session_overlay_popup_background_focus",
+            snapshot_buffer(&buf)
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_session_overlay_background_focus_uses_post_history_cursor_position() {
+        let mut app = make_test_app().await;
+        app.transcript_cells = vec![
+            Arc::new(crate::history_cell::new_user_prompt(
+                "background session".to_string(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            )),
+            Arc::new(crate::history_cell::PlainHistoryCell::new(
+                (1..=14).map(|n| n.to_string().into()).collect(),
+            )),
+        ];
+        app.chat_widget.set_composer_text(
+            "Write tests for cursor focus".to_string(),
+            Vec::new(),
+            Vec::new(),
+        );
+        app.fork_session_overlay = Some(ForkSessionOverlayState {
+            terminal: ForkSessionTerminal::for_test(vt100::Parser::new(1, 1, 0), None),
+            popup: default_popup_rect(Rect::new(0, 0, 80, 18)),
+            command_state: OverlayCommandState::PassThrough,
+            focused_pane: OverlayFocusedPane::Background,
+        });
+
+        let area = Rect::new(0, 0, 80, 18);
+        let mut buf = Buffer::empty(area);
+        let mut frame = Frame {
+            cursor_position: None,
+            viewport_area: area,
+            buffer: &mut buf,
+        };
+
+        let actual_cursor = app.render_fork_session_background(&mut frame);
+
+        let height = app
+            .chat_widget
+            .desired_height(area.width)
+            .min(area.height)
+            .max(1);
+        let background_viewport = Rect::new(area.x, area.y, area.width, height);
+        let mut terminal = crate::custom_terminal::Terminal::with_options(VT100Backend::new(
+            area.width,
+            area.height,
+        ))
+        .expect("create vt100 terminal");
+        terminal.set_viewport_area(background_viewport);
+        let history_lines = app.background_history_lines(area.width);
+        insert_history_lines(&mut terminal, history_lines).expect("insert history");
+        let mut expected_cursor = None;
+        terminal
+            .draw(|offscreen_frame| {
+                app.chat_widget
+                    .render(offscreen_frame.area(), offscreen_frame.buffer);
+                expected_cursor = app.chat_widget.cursor_pos(offscreen_frame.area());
+            })
+            .expect("draw background");
+
+        assert_eq!(actual_cursor, expected_cursor);
+    }
+
+    #[tokio::test]
+    async fn fork_session_overlay_background_ignores_deferred_history_lines_snapshot() {
+        let mut app = make_test_app().await;
+        app.transcript_cells = vec![Arc::new(crate::history_cell::new_user_prompt(
+            "background session".to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))];
+        app.deferred_history_lines = vec![
+            Line::from(""),
+            Line::from("> duplicated buffered line"),
+            Line::from("duplicated buffered output"),
+        ];
+
+        let area = Rect::new(0, 0, 80, 14);
+        let mut buf = Buffer::empty(area);
+        let mut frame = Frame {
+            cursor_position: None,
+            viewport_area: area,
+            buffer: &mut buf,
+        };
+
+        let _ = app.render_fork_session_background(&mut frame);
+
+        insta::assert_snapshot!(
+            "fork_session_overlay_background_ignores_deferred_history_lines",
+            snapshot_buffer(&buf)
+        );
     }
 
     #[tokio::test]

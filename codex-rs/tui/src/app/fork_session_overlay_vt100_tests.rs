@@ -1,7 +1,7 @@
-use super::*;
 use super::super::FeedbackAudience;
 use super::super::WindowsSandboxState;
 use super::super::agent_navigation::AgentNavigationState;
+use super::*;
 use crate::app::App;
 use crate::app_backtrack::BacktrackState;
 use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
@@ -41,9 +41,8 @@ async fn make_test_app() -> App {
             config.model_provider.clone(),
         ),
     );
-    let auth_manager = codex_core::test_support::auth_manager_from_auth(
-        CodexAuth::from_api_key("Test API Key"),
-    );
+    let auth_manager =
+        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
     let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
     let model = codex_core::test_support::get_model_offline(config.model.as_deref());
     let session_telemetry = SessionTelemetry::new(
@@ -168,8 +167,11 @@ async fn fork_session_overlay_open_from_inline_viewport_snapshot() {
     let height = 28;
     let mut app = make_test_app().await;
     configure_chat_widget(&mut app);
-    app.chat_widget
-        .set_composer_text("Summarize recent commits".to_string(), Vec::new(), Vec::new());
+    app.chat_widget.set_composer_text(
+        "Summarize recent commits".to_string(),
+        Vec::new(),
+        Vec::new(),
+    );
     app.transcript_cells = vec![
         Arc::new(history_cell::new_user_prompt(
             "count to 10".to_string(),

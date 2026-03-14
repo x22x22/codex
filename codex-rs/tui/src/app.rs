@@ -1472,7 +1472,11 @@ impl App {
         let width = tui.terminal.last_known_screen_size.width;
         let header_lines = self.clear_ui_header_lines(width);
         if !header_lines.is_empty() {
-            tui.insert_history_lines(header_lines);
+            if self.overlay.is_some() {
+                self.deferred_history_lines.extend(header_lines);
+            } else if self.fork_session_overlay.is_none() {
+                tui.insert_history_lines(header_lines);
+            }
             self.has_emitted_history_lines = true;
         }
     }
@@ -4173,8 +4177,11 @@ impl App {
                     }
                     if self.overlay.is_some() {
                         self.deferred_history_lines.extend(display);
-                    } else {
+                    } else if self.fork_session_overlay.is_none() {
                         tui.insert_history_lines(display);
+                    } else {
+                        // While the fork overlay is open, rebuild the background from
+                        // transcript state instead of mutating the live terminal.
                     }
                 }
             }

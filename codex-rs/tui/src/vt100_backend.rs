@@ -4,8 +4,8 @@ use std::io::Write;
 
 use ratatui::backend::Backend;
 use ratatui::backend::ClearType;
-use ratatui::backend::WindowSize;
 use ratatui::backend::CrosstermBackend;
+use ratatui::backend::WindowSize;
 use ratatui::buffer::Cell;
 use ratatui::layout::Position;
 use ratatui::layout::Size;
@@ -99,11 +99,7 @@ impl Backend for VT100Backend {
         self.crossterm_backend.writer_mut().flush()
     }
 
-    fn scroll_region_up(
-        &mut self,
-        region: std::ops::Range<u16>,
-        scroll_by: u16,
-    ) -> io::Result<()> {
+    fn scroll_region_up(&mut self, region: std::ops::Range<u16>, scroll_by: u16) -> io::Result<()> {
         self.crossterm_backend.scroll_region_up(region, scroll_by)
     }
 
