@@ -48,7 +48,8 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 
 - Make the generic permissions-popup helper recognize `Read Only`, which is a real preset on Windows.
 - Replace Windows-specific hard-coded navigation counts with label-driven movement in the permission history snapshot tests.
-- Rationale: commit `8bc3d489a` fixed the cross-platform `(current)` suffix issue, but `rust-ci` still failed on both Windows test lanes. The remaining Windows-only difference is that the permissions popup includes `Read Only` and selection wraps, so hard-coded extra key presses can land on the wrong preset even when the product behavior is correct.
+- Replace the remaining Windows-only extra navigation in the full-access confirmation/history test, and use the same label-driven movement in the adjacent Smart Approvals popup tests.
+- Rationale: commit `e96d895c9` still failed on both Windows `Tests` jobs in run `23080608881`. The remaining common pattern is Windows-only popup navigation that assumes a fixed number of `Up`/`Down` presses even though the Windows menu includes `Read Only` and selection wraps.
 
 ## Constraints
 
@@ -69,3 +70,4 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 | `fc98d21ad` | Select Smart Approvals in session-configured popup tests | failed | `Bazel (experimental)` failed on run `23079852646` across macOS and Linux. Investigation narrowed the likely issue to the overly broad `selected_popup_line()` helper introduced in this commit. |
 | `a30e8e2ec` | Narrow permissions popup selection helper | failed | `Bazel (experimental)` still failed on Linux in run `23080049381`. The helper narrowing was necessary, but Linux snapshots showed the generic `(current)` assertions were still too strict for the default/full-access permission history tests. |
 | `8bc3d489a` | Relax popup current-label assertions | failed | `rust-ci` failed on run `23080137075` in both Windows test jobs after Linux and Bazel turned green. The remaining Windows-only issue is likely the `Read Only` preset and wrapping popup navigation in the generic permission history tests. |
+| `e96d895c9` | Stabilize Windows permissions popup navigation | failed | `rust-ci` failed on run `23080608881` in both Windows test jobs again. The history snapshot tests were fixed, but another Windows-only extra `Down` remained in `permissions_full_access_history_cell_emitted_only_after_confirmation`, and adjacent popup-selection tests still relied on fixed-step navigation. |

@@ -6615,6 +6615,19 @@ fn selected_permissions_popup_line(popup: &str) -> &str {
         })
 }
 
+fn move_permissions_popup_selection_to(chat: &mut ChatWidget, label: &str, direction: KeyCode) {
+    for _ in 0..4 {
+        let popup = render_bottom_popup(chat, 120);
+        if selected_permissions_popup_line(&popup).contains(label) {
+            return;
+        }
+        chat.handle_key_event(KeyEvent::from(direction));
+    }
+
+    let popup = render_bottom_popup(chat, 120);
+    panic!("expected permissions popup to select {label}: {popup}");
+}
+
 #[tokio::test]
 async fn apps_popup_stays_loading_until_final_snapshot_updates() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -8386,13 +8399,7 @@ async fn permissions_selection_history_snapshot_after_mode_switch() {
         selected_permissions_popup_line(&popup).contains("Default"),
         "expected permissions popup to open with Default selected: {popup}"
     );
-    for _ in 0..3 {
-        let popup = render_bottom_popup(&chat, 120);
-        if selected_permissions_popup_line(&popup).contains("Full Access") {
-            break;
-        }
-        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    }
+    move_permissions_popup_selection_to(&mut chat, "Full Access", KeyCode::Down);
     let popup = render_bottom_popup(&chat, 120);
     assert!(
         selected_permissions_popup_line(&popup).contains("Full Access"),
@@ -8434,13 +8441,7 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
         selected_permissions_popup_line(&popup).contains("Full Access"),
         "expected permissions popup to open with Full Access selected: {popup}"
     );
-    for _ in 0..3 {
-        let popup = render_bottom_popup(&chat, 120);
-        if selected_permissions_popup_line(&popup).contains("Default") {
-            break;
-        }
-        chat.handle_key_event(KeyEvent::from(KeyCode::Up));
-    }
+    move_permissions_popup_selection_to(&mut chat, "Default", KeyCode::Up);
     let popup = render_bottom_popup(&chat, 120);
     assert!(
         selected_permissions_popup_line(&popup).contains("Default"),
@@ -8684,7 +8685,7 @@ async fn permissions_selection_can_disable_smart_approvals() {
         "expected permissions popup to open with Smart Approvals selected: {popup}"
     );
 
-    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
+    move_permissions_popup_selection_to(&mut chat, "Default", KeyCode::Up);
     let popup = render_bottom_popup(&chat, 120);
     assert!(
         popup
@@ -8741,7 +8742,7 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
         "expected permissions popup to open with the current preset selected: {popup}"
     );
 
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    move_permissions_popup_selection_to(&mut chat, "Smart Approvals", KeyCode::Down);
     let popup = render_bottom_popup(&chat, 120);
     assert!(
         popup
@@ -8787,9 +8788,7 @@ async fn permissions_full_access_history_cell_emitted_only_after_confirmation() 
     chat.config.notices.hide_full_access_warning = None;
 
     chat.open_permissions_popup();
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    #[cfg(target_os = "windows")]
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    move_permissions_popup_selection_to(&mut chat, "Full Access", KeyCode::Down);
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let mut open_confirmation_event = None;
