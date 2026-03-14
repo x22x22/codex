@@ -6600,11 +6600,18 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     lines.join("\n")
 }
 
-fn selected_popup_line(popup: &str) -> &str {
+fn selected_permissions_popup_line(popup: &str) -> &str {
     popup
         .lines()
-        .find(|line| line.contains('›'))
-        .expect("expected popup to have a selected row")
+        .find(|line| {
+            line.contains('›')
+                && (line.contains("Default")
+                    || line.contains("Smart Approvals")
+                    || line.contains("Full Access"))
+        })
+        .unwrap_or_else(|| {
+            panic!("expected permissions popup to have a selected preset row: {popup}")
+        })
 }
 
 #[tokio::test]
@@ -8338,13 +8345,13 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_popup_line(&popup).contains("(current)"),
+        selected_permissions_popup_line(&popup).contains("(current)"),
         "expected permissions popup to open with the current preset selected: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        !selected_popup_line(&popup).contains("(current)"),
+        !selected_permissions_popup_line(&popup).contains("(current)"),
         "expected moving down to change the selected preset before confirmation: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8375,7 +8382,7 @@ async fn permissions_selection_history_snapshot_after_mode_switch() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_popup_line(&popup).contains("(current)"),
+        selected_permissions_popup_line(&popup).contains("(current)"),
         "expected permissions popup to open with the current preset selected: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
@@ -8383,7 +8390,7 @@ async fn permissions_selection_history_snapshot_after_mode_switch() {
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_popup_line(&popup).contains("Full Access"),
+        selected_permissions_popup_line(&popup).contains("Full Access"),
         "expected navigation to land on Full Access before confirmation: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8419,7 +8426,7 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_popup_line(&popup).contains("Full Access (current)"),
+        selected_permissions_popup_line(&popup).contains("Full Access (current)"),
         "expected permissions popup to open with Full Access selected: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Up));
@@ -8428,7 +8435,7 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
     }
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_popup_line(&popup).contains("Default"),
+        selected_permissions_popup_line(&popup).contains("Default"),
         "expected navigation to land on Default before confirmation: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8471,7 +8478,7 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_popup_line(&popup).contains("(current)"),
+        selected_permissions_popup_line(&popup).contains("(current)"),
         "expected permissions popup to open with the current preset selected: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8579,7 +8586,7 @@ async fn permissions_selection_marks_smart_approvals_current_after_session_confi
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        selected_popup_line(&popup).contains("Smart Approvals (current)"),
+        selected_permissions_popup_line(&popup).contains("Smart Approvals (current)"),
         "expected SessionConfigured sync to select Smart Approvals in the popup: {popup}"
     );
 }
@@ -8633,7 +8640,7 @@ async fn permissions_selection_marks_smart_approvals_current_with_custom_workspa
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        selected_popup_line(&popup).contains("Smart Approvals (current)"),
+        selected_permissions_popup_line(&popup).contains("Smart Approvals (current)"),
         "expected custom workspace-write details to keep Smart Approvals selected: {popup}"
     );
 }
