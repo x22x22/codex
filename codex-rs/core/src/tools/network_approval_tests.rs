@@ -1,9 +1,47 @@
 use super::*;
+use crate::codex::make_session_and_context_with_rx;
+use crate::protocol::EventMsg;
+use crate::protocol::TurnAbortReason;
+use crate::state::TaskKind;
+use crate::tasks::SessionTask;
+use crate::tasks::SessionTaskContext;
+use async_trait::async_trait;
 use codex_network_proxy::BlockedRequestArgs;
+use codex_network_proxy::NetworkPolicyRequest;
+use codex_network_proxy::NetworkPolicyRequestArgs;
+use codex_network_proxy::NetworkProtocol;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
+use codex_protocol::user_input::UserInput;
 use pretty_assertions::assert_eq;
+use std::time::Duration;
+use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
+
+struct WaitForCancellationTask;
+
+#[async_trait]
+impl SessionTask for WaitForCancellationTask {
+    fn kind(&self) -> TaskKind {
+        TaskKind::Regular
+    }
+
+    fn span_name(&self) -> &'static str {
+        "network-approval-test"
+    }
+
+    async fn run(
+        self: Arc<Self>,
+        _session: Arc<SessionTaskContext>,
+        _ctx: Arc<crate::codex::TurnContext>,
+        _input: Vec<UserInput>,
+        cancellation_token: CancellationToken,
+    ) -> Option<String> {
+        cancellation_token.cancelled().await;
+        None
+    }
+}
 
 #[tokio::test]
 async fn pending_approvals_are_deduped_per_host_protocol_and_port() {
@@ -156,6 +194,79 @@ fn network_review_rejects_command_and_execpolicy_overrides() {
         }),
         Some(PendingApprovalDecision::Deny)
     );
+}
+
+#[tokio::test]
+async fn inline_network_review_rejects_command_override_at_runtime() {
+    let service = Arc::new(NetworkApprovalService::default());
+    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
+    service.register_call("registration-1".to_string()).await;
+    session
+        .spawn_task(
+            Arc::clone(&turn_context),
+            vec![UserInput::Text {
+                text: "need network".to_string(),
+                text_elements: Vec::new(),
+            }],
+            WaitForCancellationTask,
+        )
+        .await;
+
+    let request = NetworkPolicyRequest::new(NetworkPolicyRequestArgs {
+        protocol: NetworkProtocol::Http,
+        host: "example.com".to_string(),
+        port: 80,
+        client_addr: None,
+        method: Some("GET".to_string()),
+        command: None,
+        exec_policy_hint: None,
+    });
+
+    let handle = tokio::spawn({
+        let service = Arc::clone(&service);
+        let session = Arc::clone(&session);
+        async move { service.handle_inline_policy_request(session, request).await }
+    });
+
+    let approval_request = loop {
+        let event = timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for approval request")
+            .expect("approval request missing");
+        if let EventMsg::ExecApprovalRequest(request) = event.msg {
+            break request;
+        }
+    };
+
+    assert_eq!(
+        approval_request.command,
+        vec![
+            "network-access".to_string(),
+            "http://example.com:80".to_string(),
+        ]
+    );
+
+    session
+        .notify_approval(
+            &approval_request.call_id,
+            ReviewDecision::ApprovedOverrideCommand {
+                command: vec!["echo".to_string(), "override".to_string()],
+            },
+        )
+        .await;
+
+    let decision = timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("timed out waiting for inline network decision")
+        .expect("inline network decision join error");
+
+    assert_eq!(decision, NetworkDecision::deny("not_allowed"));
+    assert_eq!(
+        service.take_call_outcome("registration-1").await,
+        Some(NetworkApprovalOutcome::DeniedByUser)
+    );
+
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
 }
 
 fn denied_blocked_request(host: &str) -> BlockedRequest {

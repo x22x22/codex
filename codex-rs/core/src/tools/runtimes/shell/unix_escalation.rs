@@ -549,7 +549,7 @@ impl CoreShellActionProvider {
                         }
                         ReviewDecision::ApprovedOverrideCommand { .. } => {
                             EscalationDecision::deny(Some(
-                                "command override is not supported for execve approvals"
+                                "Command override is not supported for execve approvals"
                                     .to_string(),
                             ))
                         }
