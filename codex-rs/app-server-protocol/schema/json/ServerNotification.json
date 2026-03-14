@@ -1056,6 +1056,61 @@
       },
       "type": "object"
     },
+    "GuardianApprovalReview": {
+      "description": "[UNSTABLE] Temporary guardian approval review payload used by `item/autoApprovalReview/*` notifications. This shape is expected to change soon.",
+      "properties": {
+        "rationale": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "riskLevel": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardianRiskLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "riskScore": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "status": {
+          "$ref": "#/definitions/GuardianApprovalReviewStatus"
+        }
+      },
+      "required": [
+        "status"
+      ],
+      "type": "object"
+    },
+    "GuardianApprovalReviewStatus": {
+      "description": "[UNSTABLE] Lifecycle state for a guardian approval review.",
+      "enum": [
+        "inProgress",
+        "approved",
+        "denied",
+        "aborted"
+      ],
+      "type": "string"
+    },
+    "GuardianRiskLevel": {
+      "description": "[UNSTABLE] Risk level assigned by guardian approval review.",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "type": "string"
+    },
     "HookCompletedNotification": {
       "properties": {
         "run": {
@@ -1253,19 +1308,54 @@
       ],
       "type": "object"
     },
-    "ItemMetadata": {
+    "ItemGuardianApprovalReviewCompletedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
       "properties": {
-        "user_message_type": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/UserMessageType"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "action": true,
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
         }
       },
+      "required": [
+        "review",
+        "targetItemId",
+        "threadId",
+        "turnId"
+      ],
+      "type": "object"
+    },
+    "ItemGuardianApprovalReviewStartedNotification": {
+      "description": "[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "properties": {
+        "action": true,
+        "review": {
+          "$ref": "#/definitions/GuardianApprovalReview"
+        },
+        "targetItemId": {
+          "type": "string"
+        },
+        "threadId": {
+          "type": "string"
+        },
+        "turnId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "review",
+        "targetItemId",
+        "threadId",
+        "turnId"
+      ],
       "type": "object"
     },
     "ItemStartedNotification": {
@@ -2061,16 +2151,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "enum": [
                 "userMessage"
@@ -2091,16 +2171,6 @@
           "properties": {
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "phase": {
               "anyOf": [
@@ -2138,16 +2208,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "text": {
               "type": "string"
             },
@@ -2178,16 +2238,6 @@
             },
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "summary": {
               "default": [],
@@ -2254,16 +2304,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "processId": {
               "description": "Identifier for the underlying PTY process (when available).",
               "type": [
@@ -2303,16 +2343,6 @@
             },
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "status": {
               "$ref": "#/definitions/PatchApplyStatus"
@@ -2357,16 +2387,6 @@
             },
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "result": {
               "anyOf": [
@@ -2429,16 +2449,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "status": {
               "$ref": "#/definitions/DynamicToolCallStatus"
             },
@@ -2481,16 +2491,6 @@
             "id": {
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "model": {
               "description": "Model requested for the spawned agent, when applicable.",
@@ -2579,16 +2579,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "query": {
               "type": "string"
             },
@@ -2613,16 +2603,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "path": {
               "type": "string"
             },
@@ -2646,16 +2626,6 @@
           "properties": {
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "result": {
               "type": "string"
@@ -2691,16 +2661,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "review": {
               "type": "string"
             },
@@ -2725,16 +2685,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "review": {
               "type": "string"
             },
@@ -2758,16 +2708,6 @@
           "properties": {
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "type": {
               "enum": [
@@ -3394,14 +3334,6 @@
         }
       ]
     },
-    "UserMessageType": {
-      "enum": [
-        "prompt",
-        "prompt_steering",
-        "prompt_queued"
-      ],
-      "type": "string"
-    },
     "WebSearchAction": {
       "oneOf": [
         {
@@ -3877,6 +3809,46 @@
         "params"
       ],
       "title": "Item/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/autoApprovalReview/started"
+          ],
+          "title": "Item/autoApprovalReview/startedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ItemGuardianApprovalReviewStartedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/autoApprovalReview/startedNotification",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "method": {
+          "enum": [
+            "item/autoApprovalReview/completed"
+          ],
+          "title": "Item/autoApprovalReview/completedNotificationMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/ItemGuardianApprovalReviewCompletedNotification"
+        }
+      },
+      "required": [
+        "method",
+        "params"
+      ],
+      "title": "Item/autoApprovalReview/completedNotification",
       "type": "object"
     },
     {

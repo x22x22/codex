@@ -5,6 +5,14 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "ApprovalsReviewer": {
+      "description": "Configures who approval requests are routed to for review. Examples include sandbox escapes, blocked network access, MCP approval prompts, and ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully prompted subagent to gather relevant context and apply a risk-based decision framework before approving or denying the request.",
+      "enum": [
+        "user",
+        "guardian_subagent"
+      ],
+      "type": "string"
+    },
     "AskForApproval": {
       "oneOf": [
         {
@@ -19,7 +27,7 @@
         {
           "additionalProperties": false,
           "properties": {
-            "reject": {
+            "granular": {
               "properties": {
                 "mcp_elicitations": {
                   "type": "boolean"
@@ -48,9 +56,9 @@
             }
           },
           "required": [
-            "reject"
+            "granular"
           ],
-          "title": "RejectAskForApproval",
+          "title": "GranularAskForApproval",
           "type": "object"
         }
       ]
@@ -442,21 +450,6 @@
           "type": [
             "string",
             "null"
-          ]
-        }
-      },
-      "type": "object"
-    },
-    "ItemMetadata": {
-      "properties": {
-        "user_message_type": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/UserMessageType"
-            },
-            {
-              "type": "null"
-            }
           ]
         }
       },
@@ -1023,16 +1016,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "type": {
               "enum": [
                 "userMessage"
@@ -1053,16 +1036,6 @@
           "properties": {
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "phase": {
               "anyOf": [
@@ -1100,16 +1073,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "text": {
               "type": "string"
             },
@@ -1140,16 +1103,6 @@
             },
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "summary": {
               "default": [],
@@ -1216,16 +1169,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "processId": {
               "description": "Identifier for the underlying PTY process (when available).",
               "type": [
@@ -1265,16 +1208,6 @@
             },
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "status": {
               "$ref": "#/definitions/PatchApplyStatus"
@@ -1319,16 +1252,6 @@
             },
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "result": {
               "anyOf": [
@@ -1391,16 +1314,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "status": {
               "$ref": "#/definitions/DynamicToolCallStatus"
             },
@@ -1443,16 +1356,6 @@
             "id": {
               "description": "Unique identifier for this collab tool call.",
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "model": {
               "description": "Model requested for the spawned agent, when applicable.",
@@ -1541,16 +1444,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "query": {
               "type": "string"
             },
@@ -1575,16 +1468,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "path": {
               "type": "string"
             },
@@ -1608,16 +1491,6 @@
           "properties": {
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "result": {
               "type": "string"
@@ -1653,16 +1526,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "review": {
               "type": "string"
             },
@@ -1687,16 +1550,6 @@
             "id": {
               "type": "string"
             },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "review": {
               "type": "string"
             },
@@ -1720,16 +1573,6 @@
           "properties": {
             "id": {
               "type": "string"
-            },
-            "metadata": {
-              "anyOf": [
-                {
-                  "$ref": "#/definitions/ItemMetadata"
-                },
-                {
-                  "type": "null"
-                }
-              ]
             },
             "type": {
               "enum": [
@@ -2014,14 +1857,6 @@
         }
       ]
     },
-    "UserMessageType": {
-      "enum": [
-        "prompt",
-        "prompt_steering",
-        "prompt_queued"
-      ],
-      "type": "string"
-    },
     "WebSearchAction": {
       "oneOf": [
         {
@@ -2128,6 +1963,14 @@
     "approvalPolicy": {
       "$ref": "#/definitions/AskForApproval"
     },
+    "approvalsReviewer": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ApprovalsReviewer"
+        }
+      ],
+      "description": "Reviewer currently used for approval requests on this thread."
+    },
     "cwd": {
       "type": "string"
     },
@@ -2166,6 +2009,7 @@
   },
   "required": [
     "approvalPolicy",
+    "approvalsReviewer",
     "cwd",
     "model",
     "modelProvider",

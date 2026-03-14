@@ -12,10 +12,12 @@ use crate::protocol::Op;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionSource;
 use crate::protocol::SubAgentSource;
-use crate::tools::context::FunctionToolOutput;
+use crate::tools::context::ToolOutput;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_protocol::ThreadId;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputBody;
+use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::RolloutItem;
@@ -59,12 +61,30 @@ fn thread_manager() -> ThreadManager {
     )
 }
 
-fn expect_text_output(output: FunctionToolOutput) -> (String, Option<bool>) {
-    (
-        codex_protocol::models::function_call_output_content_items_to_text(&output.body)
-            .unwrap_or_default(),
-        output.success,
-    )
+fn expect_text_output<T>(output: T) -> (String, Option<bool>)
+where
+    T: ToolOutput,
+{
+    let response = output.to_response_item(
+        "call-1",
+        &ToolPayload::Function {
+            arguments: "{}".to_string(),
+        },
+    );
+    match response {
+        ResponseInputItem::FunctionCallOutput { output, .. }
+        | ResponseInputItem::CustomToolCallOutput { output, .. } => {
+            let content = match output.body {
+                FunctionCallOutputBody::Text(text) => text,
+                FunctionCallOutputBody::ContentItems(items) => {
+                    codex_protocol::models::function_call_output_content_items_to_text(&items)
+                        .unwrap_or_default()
+                }
+            };
+            (content, output.success)
+        }
+        other => panic!("expected function output, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -78,7 +98,7 @@ async fn handler_rejects_non_function_payloads() {
             input: "hello".to_string(),
         },
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
         panic!("payload should be rejected");
     };
     assert_eq!(
@@ -86,24 +106,6 @@ async fn handler_rejects_non_function_payloads() {
         FunctionCallError::RespondToModel(
             "collab handler received unsupported payload".to_string()
         )
-    );
-}
-
-#[tokio::test]
-async fn handler_rejects_unknown_tool() {
-    let (session, turn) = make_session_and_context().await;
-    let invocation = invocation(
-        Arc::new(session),
-        Arc::new(turn),
-        "unknown_tool",
-        function_payload(json!({})),
-    );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
-        panic!("tool should be rejected");
-    };
-    assert_eq!(
-        err,
-        FunctionCallError::RespondToModel("unsupported collab tool unknown_tool".to_string())
     );
 }
 
@@ -116,7 +118,7 @@ async fn spawn_agent_rejects_empty_message() {
         "spawn_agent",
         function_payload(json!({"message": "   "})),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
         panic!("empty message should be rejected");
     };
     assert_eq!(
@@ -137,7 +139,7 @@ async fn spawn_agent_rejects_when_message_and_items_are_both_set() {
             "items": [{"type": "mention", "name": "drive", "path": "app://drive"}]
         })),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
         panic!("message+items should be rejected");
     };
     assert_eq!(
@@ -183,7 +185,7 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
             "agent_type": "explorer"
         })),
     );
-    let output = MultiAgentHandler
+    let output = SpawnAgentHandler
         .handle(invocation)
         .await
         .expect("spawn_agent should succeed");
@@ -216,7 +218,7 @@ async fn spawn_agent_errors_when_manager_dropped() {
         "spawn_agent",
         function_payload(json!({"message": "hello"})),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
         panic!("spawn should fail without a manager");
     };
     assert_eq!(
@@ -276,7 +278,7 @@ async fn spawn_agent_reapplies_runtime_sandbox_after_role_config() {
             "agent_type": "explorer"
         })),
     );
-    let output = MultiAgentHandler
+    let output = SpawnAgentHandler
         .handle(invocation)
         .await
         .expect("spawn_agent should succeed");
@@ -321,7 +323,7 @@ async fn spawn_agent_rejects_when_depth_limit_exceeded() {
         "spawn_agent",
         function_payload(json!({"message": "hello"})),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = SpawnAgentHandler.handle(invocation).await else {
         panic!("spawn should fail when depth limit exceeded");
     };
     assert_eq!(
@@ -360,7 +362,7 @@ async fn spawn_agent_allows_depth_up_to_configured_max_depth() {
         "spawn_agent",
         function_payload(json!({"message": "hello"})),
     );
-    let output = MultiAgentHandler
+    let output = SpawnAgentHandler
         .handle(invocation)
         .await
         .expect("spawn should succeed within configured depth");
@@ -386,7 +388,7 @@ async fn send_input_rejects_empty_message() {
         "send_input",
         function_payload(json!({"id": ThreadId::new().to_string(), "message": ""})),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = SendInputHandler.handle(invocation).await else {
         panic!("empty message should be rejected");
     };
     assert_eq!(
@@ -408,7 +410,7 @@ async fn send_input_rejects_when_message_and_items_are_both_set() {
             "items": [{"type": "mention", "name": "drive", "path": "app://drive"}]
         })),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = SendInputHandler.handle(invocation).await else {
         panic!("message+items should be rejected");
     };
     assert_eq!(
@@ -428,7 +430,7 @@ async fn send_input_rejects_invalid_id() {
         "send_input",
         function_payload(json!({"id": "not-a-uuid", "message": "hi"})),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = SendInputHandler.handle(invocation).await else {
         panic!("invalid id should be rejected");
     };
     let FunctionCallError::RespondToModel(msg) = err else {
@@ -449,7 +451,7 @@ async fn send_input_reports_missing_agent() {
         "send_input",
         function_payload(json!({"id": agent_id.to_string(), "message": "hi"})),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = SendInputHandler.handle(invocation).await else {
         panic!("missing agent should be reported");
     };
     assert_eq!(
@@ -476,7 +478,7 @@ async fn send_input_interrupts_before_prompt() {
             "interrupt": true
         })),
     );
-    MultiAgentHandler
+    SendInputHandler
         .handle(invocation)
         .await
         .expect("send_input should succeed");
@@ -517,7 +519,7 @@ async fn send_input_accepts_structured_items() {
             ]
         })),
     );
-    MultiAgentHandler
+    SendInputHandler
         .handle(invocation)
         .await
         .expect("send_input should succeed");
@@ -557,7 +559,7 @@ async fn resume_agent_rejects_invalid_id() {
         "resume_agent",
         function_payload(json!({"id": "not-a-uuid"})),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = ResumeAgentHandler.handle(invocation).await else {
         panic!("invalid id should be rejected");
     };
     let FunctionCallError::RespondToModel(msg) = err else {
@@ -578,7 +580,7 @@ async fn resume_agent_reports_missing_agent() {
         "resume_agent",
         function_payload(json!({"id": agent_id.to_string()})),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = ResumeAgentHandler.handle(invocation).await else {
         panic!("missing agent should be reported");
     };
     assert_eq!(
@@ -603,7 +605,7 @@ async fn resume_agent_noops_for_active_agent() {
         function_payload(json!({"id": agent_id.to_string()})),
     );
 
-    let output = MultiAgentHandler
+    let output = ResumeAgentHandler
         .handle(invocation)
         .await
         .expect("resume_agent should succeed");
@@ -667,7 +669,7 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
         "resume_agent",
         function_payload(json!({"id": agent_id.to_string()})),
     );
-    let output = MultiAgentHandler
+    let output = ResumeAgentHandler
         .handle(resume_invocation)
         .await
         .expect("resume_agent should succeed");
@@ -683,7 +685,7 @@ async fn resume_agent_restores_closed_agent_and_accepts_send_input() {
         "send_input",
         function_payload(json!({"id": agent_id.to_string(), "message": "hello"})),
     );
-    let output = MultiAgentHandler
+    let output = SendInputHandler
         .handle(send_invocation)
         .await
         .expect("send_input should succeed after resume");
@@ -724,7 +726,7 @@ async fn resume_agent_rejects_when_depth_limit_exceeded() {
         "resume_agent",
         function_payload(json!({"id": ThreadId::new().to_string()})),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = ResumeAgentHandler.handle(invocation).await else {
         panic!("resume should fail when depth limit exceeded");
     };
     assert_eq!(
@@ -736,18 +738,18 @@ async fn resume_agent_rejects_when_depth_limit_exceeded() {
 }
 
 #[tokio::test]
-async fn wait_rejects_non_positive_timeout() {
+async fn wait_agent_rejects_non_positive_timeout() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({
             "ids": [ThreadId::new().to_string()],
             "timeout_ms": 0
         })),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler.handle(invocation).await else {
         panic!("non-positive timeout should be rejected");
     };
     assert_eq!(
@@ -757,15 +759,15 @@ async fn wait_rejects_non_positive_timeout() {
 }
 
 #[tokio::test]
-async fn wait_rejects_invalid_id() {
+async fn wait_agent_rejects_invalid_id() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({"ids": ["invalid"]})),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler.handle(invocation).await else {
         panic!("invalid id should be rejected");
     };
     let FunctionCallError::RespondToModel(msg) = err else {
@@ -775,15 +777,15 @@ async fn wait_rejects_invalid_id() {
 }
 
 #[tokio::test]
-async fn wait_rejects_empty_ids() {
+async fn wait_agent_rejects_empty_ids() {
     let (session, turn) = make_session_and_context().await;
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({"ids": []})),
     );
-    let Err(err) = MultiAgentHandler.handle(invocation).await else {
+    let Err(err) = WaitAgentHandler.handle(invocation).await else {
         panic!("empty ids should be rejected");
     };
     assert_eq!(
@@ -793,7 +795,7 @@ async fn wait_rejects_empty_ids() {
 }
 
 #[tokio::test]
-async fn wait_returns_not_found_for_missing_agents() {
+async fn wait_agent_returns_not_found_for_missing_agents() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
@@ -802,22 +804,22 @@ async fn wait_returns_not_found_for_missing_agents() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({
             "ids": [id_a.to_string(), id_b.to_string()],
             "timeout_ms": 1000
         })),
     );
-    let output = MultiAgentHandler
+    let output = WaitAgentHandler
         .handle(invocation)
         .await
-        .expect("wait should succeed");
+        .expect("wait_agent should succeed");
     let (content, success) = expect_text_output(output);
-    let result: wait::WaitResult =
-        serde_json::from_str(&content).expect("wait result should be json");
+    let result: wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
     assert_eq!(
         result,
-        wait::WaitResult {
+        wait::WaitAgentResult {
             status: HashMap::from([(id_a, AgentStatus::NotFound), (id_b, AgentStatus::NotFound),]),
             timed_out: false
         }
@@ -826,7 +828,7 @@ async fn wait_returns_not_found_for_missing_agents() {
 }
 
 #[tokio::test]
-async fn wait_times_out_when_status_is_not_final() {
+async fn wait_agent_times_out_when_status_is_not_final() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
@@ -836,22 +838,22 @@ async fn wait_times_out_when_status_is_not_final() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({
             "ids": [agent_id.to_string()],
             "timeout_ms": MIN_WAIT_TIMEOUT_MS
         })),
     );
-    let output = MultiAgentHandler
+    let output = WaitAgentHandler
         .handle(invocation)
         .await
-        .expect("wait should succeed");
+        .expect("wait_agent should succeed");
     let (content, success) = expect_text_output(output);
-    let result: wait::WaitResult =
-        serde_json::from_str(&content).expect("wait result should be json");
+    let result: wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
     assert_eq!(
         result,
-        wait::WaitResult {
+        wait::WaitAgentResult {
             status: HashMap::new(),
             timed_out: true
         }
@@ -866,7 +868,7 @@ async fn wait_times_out_when_status_is_not_final() {
 }
 
 #[tokio::test]
-async fn wait_clamps_short_timeouts_to_minimum() {
+async fn wait_agent_clamps_short_timeouts_to_minimum() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
@@ -876,7 +878,7 @@ async fn wait_clamps_short_timeouts_to_minimum() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({
             "ids": [agent_id.to_string()],
             "timeout_ms": 10
@@ -885,12 +887,12 @@ async fn wait_clamps_short_timeouts_to_minimum() {
 
     let early = timeout(
         Duration::from_millis(50),
-        MultiAgentHandler.handle(invocation),
+        WaitAgentHandler.handle(invocation),
     )
     .await;
     assert!(
         early.is_err(),
-        "wait should not return before the minimum timeout clamp"
+        "wait_agent should not return before the minimum timeout clamp"
     );
 
     let _ = thread
@@ -901,7 +903,7 @@ async fn wait_clamps_short_timeouts_to_minimum() {
 }
 
 #[tokio::test]
-async fn wait_returns_final_status_without_timeout() {
+async fn wait_agent_returns_final_status_without_timeout() {
     let (mut session, turn) = make_session_and_context().await;
     let manager = thread_manager();
     session.services.agent_control = manager.agent_control();
@@ -926,22 +928,22 @@ async fn wait_returns_final_status_without_timeout() {
     let invocation = invocation(
         Arc::new(session),
         Arc::new(turn),
-        "wait",
+        "wait_agent",
         function_payload(json!({
             "ids": [agent_id.to_string()],
             "timeout_ms": 1000
         })),
     );
-    let output = MultiAgentHandler
+    let output = WaitAgentHandler
         .handle(invocation)
         .await
-        .expect("wait should succeed");
+        .expect("wait_agent should succeed");
     let (content, success) = expect_text_output(output);
-    let result: wait::WaitResult =
-        serde_json::from_str(&content).expect("wait result should be json");
+    let result: wait::WaitAgentResult =
+        serde_json::from_str(&content).expect("wait_agent result should be json");
     assert_eq!(
         result,
-        wait::WaitResult {
+        wait::WaitAgentResult {
             status: HashMap::from([(agent_id, AgentStatus::Shutdown)]),
             timed_out: false
         }
@@ -965,7 +967,7 @@ async fn close_agent_submits_shutdown_and_returns_status() {
         "close_agent",
         function_payload(json!({"id": agent_id.to_string()})),
     );
-    let output = MultiAgentHandler
+    let output = CloseAgentHandler
         .handle(invocation)
         .await
         .expect("close_agent should succeed");

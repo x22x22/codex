@@ -1380,6 +1380,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             cwd: Some(first_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
+            approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![first_cwd.try_into()?],
                 read_only_access: codex_app_server_protocol::ReadOnlyAccess::FullAccess,
@@ -1418,6 +1419,7 @@ async fn turn_start_updates_sandbox_and_cwd_between_turns_v2() -> Result<()> {
             }],
             cwd: Some(second_cwd.clone()),
             approval_policy: Some(codex_app_server_protocol::AskForApproval::Never),
+            approvals_reviewer: None,
             sandbox_policy: Some(codex_app_server_protocol::SandboxPolicy::DangerFullAccess),
             model: Some("mock-model".to_string()),
             effort: Some(ReasoningEffort::Medium),
@@ -1553,7 +1555,6 @@ async fn turn_start_file_change_approval_v2() -> Result<()> {
         ref id,
         status,
         ref changes,
-        ..
     } = started_file_change
     else {
         unreachable!("loop ensures we break on file change items");
@@ -1781,7 +1782,6 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
             model: Some(REQUESTED_MODEL.to_string()),
             reasoning_effort: Some(REQUESTED_REASONING_EFFORT),
             agents_states: HashMap::new(),
-            metadata: None,
         }
     );
 
@@ -1810,7 +1810,6 @@ async fn turn_start_emits_spawn_agent_item_with_model_metadata_v2() -> Result<()
         model,
         reasoning_effort,
         agents_states,
-        metadata: _,
     } = spawn_completed
     else {
         unreachable!("loop ensures we break on collab agent tool call items");
@@ -2128,7 +2127,6 @@ async fn turn_start_file_change_approval_decline_v2() -> Result<()> {
         ref id,
         status,
         ref changes,
-        ..
     } = started_file_change
     else {
         unreachable!("loop ensures we break on file change items");

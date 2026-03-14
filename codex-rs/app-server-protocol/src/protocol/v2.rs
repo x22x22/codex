@@ -13,6 +13,7 @@ use codex_protocol::approvals::NetworkApprovalContext as CoreNetworkApprovalCont
 use codex_protocol::approvals::NetworkApprovalProtocol as CoreNetworkApprovalProtocol;
 use codex_protocol::approvals::NetworkPolicyAmendment as CoreNetworkPolicyAmendment;
 use codex_protocol::approvals::NetworkPolicyRuleAction as CoreNetworkPolicyRuleAction;
+use codex_protocol::config_types::ApprovalsReviewer as CoreApprovalsReviewer;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask as CoreCollaborationModeMask;
 use codex_protocol::config_types::ForcedLoginMethod;
@@ -26,8 +27,6 @@ use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
-use codex_protocol::items::TurnItemMetadata as CoreTurnItemMetadata;
-use codex_protocol::items::UserMessageType as CoreUserMessageType;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
@@ -52,6 +51,8 @@ use codex_protocol::protocol::AskForApproval as CoreAskForApproval;
 use codex_protocol::protocol::CodexErrorInfo as CoreCodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot as CoreCreditsSnapshot;
 use codex_protocol::protocol::ExecCommandStatus as CoreExecCommandStatus;
+use codex_protocol::protocol::GranularApprovalConfig as CoreGranularApprovalConfig;
+use codex_protocol::protocol::GuardianRiskLevel as CoreGuardianRiskLevel;
 use codex_protocol::protocol::HookEventName as CoreHookEventName;
 use codex_protocol::protocol::HookExecutionMode as CoreHookExecutionMode;
 use codex_protocol::protocol::HookHandlerType as CoreHookHandlerType;
@@ -67,7 +68,6 @@ use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 use codex_protocol::protocol::RateLimitWindow as CoreRateLimitWindow;
 use codex_protocol::protocol::ReadOnlyAccess as CoreReadOnlyAccess;
 use codex_protocol::protocol::RealtimeAudioFrame as CoreRealtimeAudioFrame;
-use codex_protocol::protocol::RejectConfig as CoreRejectConfig;
 use codex_protocol::protocol::ReviewDecision as CoreReviewDecision;
 use codex_protocol::protocol::SessionSource as CoreSessionSource;
 use codex_protocol::protocol::SkillDependencies as CoreSkillDependencies;
@@ -203,8 +203,8 @@ pub enum AskForApproval {
     UnlessTrusted,
     OnFailure,
     OnRequest,
-    #[experimental("askForApproval.reject")]
-    Reject {
+    #[experimental("askForApproval.granular")]
+    Granular {
         sandbox_approval: bool,
         rules: bool,
         #[serde(default)]
@@ -222,13 +222,13 @@ impl AskForApproval {
             AskForApproval::UnlessTrusted => CoreAskForApproval::UnlessTrusted,
             AskForApproval::OnFailure => CoreAskForApproval::OnFailure,
             AskForApproval::OnRequest => CoreAskForApproval::OnRequest,
-            AskForApproval::Reject {
+            AskForApproval::Granular {
                 sandbox_approval,
                 rules,
                 skill_approval,
                 request_permissions,
                 mcp_elicitations,
-            } => CoreAskForApproval::Reject(CoreRejectConfig {
+            } => CoreAskForApproval::Granular(CoreGranularApprovalConfig {
                 sandbox_approval,
                 rules,
                 skill_approval,
@@ -246,14 +246,45 @@ impl From<CoreAskForApproval> for AskForApproval {
             CoreAskForApproval::UnlessTrusted => AskForApproval::UnlessTrusted,
             CoreAskForApproval::OnFailure => AskForApproval::OnFailure,
             CoreAskForApproval::OnRequest => AskForApproval::OnRequest,
-            CoreAskForApproval::Reject(reject_config) => AskForApproval::Reject {
-                sandbox_approval: reject_config.sandbox_approval,
-                rules: reject_config.rules,
-                skill_approval: reject_config.skill_approval,
-                request_permissions: reject_config.request_permissions,
-                mcp_elicitations: reject_config.mcp_elicitations,
+            CoreAskForApproval::Granular(granular_config) => AskForApproval::Granular {
+                sandbox_approval: granular_config.sandbox_approval,
+                rules: granular_config.rules,
+                skill_approval: granular_config.skill_approval,
+                request_permissions: granular_config.request_permissions,
+                mcp_elicitations: granular_config.mcp_elicitations,
             },
             CoreAskForApproval::Never => AskForApproval::Never,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case", export_to = "v2/")]
+/// Configures who approval requests are routed to for review. Examples
+/// include sandbox escapes, blocked network access, MCP approval prompts, and
+/// ARC escalations. Defaults to `user`. `guardian_subagent` uses a carefully
+/// prompted subagent to gather relevant context and apply a risk-based
+/// decision framework before approving or denying the request.
+pub enum ApprovalsReviewer {
+    User,
+    GuardianSubagent,
+}
+
+impl ApprovalsReviewer {
+    pub fn to_core(self) -> CoreApprovalsReviewer {
+        match self {
+            ApprovalsReviewer::User => CoreApprovalsReviewer::User,
+            ApprovalsReviewer::GuardianSubagent => CoreApprovalsReviewer::GuardianSubagent,
+        }
+    }
+}
+
+impl From<CoreApprovalsReviewer> for ApprovalsReviewer {
+    fn from(value: CoreApprovalsReviewer) -> Self {
+        match value {
+            CoreApprovalsReviewer::User => ApprovalsReviewer::User,
+            CoreApprovalsReviewer::GuardianSubagent => ApprovalsReviewer::GuardianSubagent,
         }
     }
 }
@@ -521,6 +552,11 @@ pub struct ProfileV2 {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
+    /// [UNSTABLE] Optional profile-level override for where approval requests
+    /// are routed for review. If omitted, the enclosing config default is
+    /// used.
+    #[experimental("config/read.approvalsReviewer")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub service_tier: Option<ServiceTier>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
@@ -620,6 +656,10 @@ pub struct Config {
     pub model_provider: Option<String>,
     #[experimental(nested)]
     pub approval_policy: Option<AskForApproval>,
+    /// [UNSTABLE] Optional default for where approval requests are routed for
+    /// review.
+    #[experimental("config/read.approvalsReviewer")]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     pub sandbox_mode: Option<SandboxMode>,
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
     pub forced_chatgpt_workspace_id: Option<String>,
@@ -1981,7 +2021,7 @@ pub struct AppInfo {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// EXPERIMENTAL - app metadata summary for plugin-install responses.
+/// EXPERIMENTAL - app metadata summary for plugin responses.
 pub struct AppSummary {
     pub id: String,
     pub name: String,
@@ -2069,6 +2109,157 @@ pub struct FeedbackUploadParams {
 pub struct FeedbackUploadResponse {
     pub thread_id: String,
 }
+
+/// Read a file from the host filesystem.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileParams {
+    /// Absolute path to read.
+    pub path: AbsolutePathBuf,
+}
+
+/// Base64-encoded file contents returned by `fs/readFile`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadFileResponse {
+    /// File contents encoded as base64.
+    pub data_base64: String,
+}
+
+/// Write a file on the host filesystem.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileParams {
+    /// Absolute path to write.
+    pub path: AbsolutePathBuf,
+    /// File contents encoded as base64.
+    pub data_base64: String,
+}
+
+/// Successful response for `fs/writeFile`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsWriteFileResponse {}
+
+/// Create a directory on the host filesystem.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsCreateDirectoryParams {
+    /// Absolute directory path to create.
+    pub path: AbsolutePathBuf,
+    /// Whether parent directories should also be created. Defaults to `true`.
+    #[ts(optional = nullable)]
+    pub recursive: Option<bool>,
+}
+
+/// Successful response for `fs/createDirectory`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsCreateDirectoryResponse {}
+
+/// Request metadata for an absolute path.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsGetMetadataParams {
+    /// Absolute path to inspect.
+    pub path: AbsolutePathBuf,
+}
+
+/// Metadata returned by `fs/getMetadata`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsGetMetadataResponse {
+    /// Whether the path currently resolves to a directory.
+    pub is_directory: bool,
+    /// Whether the path currently resolves to a regular file.
+    pub is_file: bool,
+    /// File creation time in Unix milliseconds when available, otherwise `0`.
+    #[ts(type = "number")]
+    pub created_at_ms: i64,
+    /// File modification time in Unix milliseconds when available, otherwise `0`.
+    #[ts(type = "number")]
+    pub modified_at_ms: i64,
+}
+
+/// List direct child names for a directory.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadDirectoryParams {
+    /// Absolute directory path to read.
+    pub path: AbsolutePathBuf,
+}
+
+/// A directory entry returned by `fs/readDirectory`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadDirectoryEntry {
+    /// Direct child entry name only, not an absolute or relative path.
+    pub file_name: String,
+    /// Whether this entry resolves to a directory.
+    pub is_directory: bool,
+    /// Whether this entry resolves to a regular file.
+    pub is_file: bool,
+}
+
+/// Directory entries returned by `fs/readDirectory`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsReadDirectoryResponse {
+    /// Direct child entries in the requested directory.
+    pub entries: Vec<FsReadDirectoryEntry>,
+}
+
+/// Remove a file or directory tree from the host filesystem.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsRemoveParams {
+    /// Absolute path to remove.
+    pub path: AbsolutePathBuf,
+    /// Whether directory removal should recurse. Defaults to `true`.
+    #[ts(optional = nullable)]
+    pub recursive: Option<bool>,
+    /// Whether missing paths should be ignored. Defaults to `true`.
+    #[ts(optional = nullable)]
+    pub force: Option<bool>,
+}
+
+/// Successful response for `fs/remove`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsRemoveResponse {}
+
+/// Copy a file or directory tree on the host filesystem.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsCopyParams {
+    /// Absolute source path.
+    pub source_path: AbsolutePathBuf,
+    /// Absolute destination path.
+    pub destination_path: AbsolutePathBuf,
+    /// Required for directory copies; ignored for file copies.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub recursive: bool,
+}
+
+/// Successful response for `fs/copy`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct FsCopyResponse {}
 
 /// PTY size in character cells for `command/exec` PTY sessions.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
@@ -2273,6 +2464,10 @@ pub struct ThreadStartParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for review on this thread
+    /// and subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
@@ -2335,6 +2530,8 @@ pub struct ThreadStartResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
+    /// Reviewer currently used for approval requests on this thread.
+    pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -2387,6 +2584,10 @@ pub struct ThreadResumeParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for review on this thread
+    /// and subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
@@ -2415,6 +2616,8 @@ pub struct ThreadResumeResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
+    /// Reviewer currently used for approval requests on this thread.
+    pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -2458,6 +2661,10 @@ pub struct ThreadForkParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for review on this thread
+    /// and subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     #[ts(optional = nullable)]
     pub sandbox: Option<SandboxMode>,
     #[ts(optional = nullable)]
@@ -2486,6 +2693,8 @@ pub struct ThreadForkResponse {
     pub cwd: PathBuf,
     #[experimental(nested)]
     pub approval_policy: AskForApproval,
+    /// Reviewer currently used for approval requests on this thread.
+    pub approvals_reviewer: ApprovalsReviewer,
     pub sandbox: SandboxPolicy,
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -2886,6 +3095,21 @@ pub struct PluginListResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
+pub struct PluginReadParams {
+    pub marketplace_path: AbsolutePathBuf,
+    pub plugin_name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginReadResponse {
+    pub plugin: PluginDetail,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
 pub struct SkillsRemoteReadParams {
     #[serde(default)]
     pub hazelnut_scope: HazelnutScope,
@@ -3092,6 +3316,30 @@ pub struct PluginSummary {
     pub install_policy: PluginInstallPolicy,
     pub auth_policy: PluginAuthPolicy,
     pub interface: Option<PluginInterface>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PluginDetail {
+    pub marketplace_name: String,
+    pub marketplace_path: AbsolutePathBuf,
+    pub summary: PluginSummary,
+    pub description: Option<String>,
+    pub skills: Vec<SkillSummary>,
+    pub apps: Vec<AppSummary>,
+    pub mcp_servers: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct SkillSummary {
+    pub name: String,
+    pub description: String,
+    pub short_description: Option<String>,
+    pub interface: Option<SkillInterface>,
+    pub path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3570,6 +3818,10 @@ pub struct TurnStartParams {
     #[experimental(nested)]
     #[ts(optional = nullable)]
     pub approval_policy: Option<AskForApproval>,
+    /// Override where approval requests are routed for review on this turn and
+    /// subsequent turns.
+    #[ts(optional = nullable)]
+    pub approvals_reviewer: Option<ApprovalsReviewer>,
     /// Override the sandbox policy for this turn and subsequent turns.
     #[ts(optional = nullable)]
     pub sandbox_policy: Option<SandboxPolicy>,
@@ -3796,41 +4048,6 @@ pub enum UserInput {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(rename_all = "snake_case", export_to = "v2/")]
-pub enum UserMessageType {
-    Prompt,
-    PromptSteering,
-    PromptQueued,
-}
-
-impl From<CoreUserMessageType> for UserMessageType {
-    fn from(value: CoreUserMessageType) -> Self {
-        match value {
-            CoreUserMessageType::Prompt => UserMessageType::Prompt,
-            CoreUserMessageType::PromptSteering => UserMessageType::PromptSteering,
-            CoreUserMessageType::PromptQueued => UserMessageType::PromptQueued,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
-#[ts(export_to = "v2/")]
-pub struct ItemMetadata {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub user_message_type: Option<UserMessageType>,
-}
-
-impl From<CoreTurnItemMetadata> for ItemMetadata {
-    fn from(value: CoreTurnItemMetadata) -> Self {
-        Self {
-            user_message_type: value.user_message_type.map(Into::into),
-        }
-    }
-}
-
 impl UserInput {
     pub fn into_core(self) -> CoreUserInput {
         match self {
@@ -3887,13 +4104,7 @@ impl UserInput {
 pub enum ThreadItem {
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    UserMessage {
-        id: String,
-        content: Vec<UserInput>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
-    },
+    UserMessage { id: String, content: Vec<UserInput> },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     AgentMessage {
@@ -3901,21 +4112,12 @@ pub enum ThreadItem {
         text: String,
         #[serde(default)]
         phase: Option<MessagePhase>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     /// EXPERIMENTAL - proposed plan item content. The completed plan item is
     /// authoritative and may not match the concatenation of `PlanDelta` text.
-    Plan {
-        id: String,
-        text: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
-    },
+    Plan { id: String, text: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     Reasoning {
@@ -3924,9 +4126,6 @@ pub enum ThreadItem {
         summary: Vec<String>,
         #[serde(default)]
         content: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -3950,9 +4149,6 @@ pub enum ThreadItem {
         /// The duration of the command execution in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -3960,9 +4156,6 @@ pub enum ThreadItem {
         id: String,
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -3977,9 +4170,6 @@ pub enum ThreadItem {
         /// The duration of the MCP tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -3993,9 +4183,6 @@ pub enum ThreadItem {
         /// The duration of the dynamic tool call in milliseconds.
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4019,9 +4206,6 @@ pub enum ThreadItem {
         reasoning_effort: Option<ReasoningEffort>,
         /// Last known status of the target agents, when available.
         agents_states: HashMap<String, CollabAgentState>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4029,19 +4213,10 @@ pub enum ThreadItem {
         id: String,
         query: String,
         action: Option<WebSearchAction>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ImageView {
-        id: String,
-        path: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
-    },
+    ImageView { id: String, path: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
     ImageGeneration {
@@ -4049,36 +4224,16 @@ pub enum ThreadItem {
         status: String,
         revised_prompt: Option<String>,
         result: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    EnteredReviewMode {
-        id: String,
-        review: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
-    },
+    EnteredReviewMode { id: String, review: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ExitedReviewMode {
-        id: String,
-        review: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
-    },
+    ExitedReviewMode { id: String, review: String },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
-    ContextCompaction {
-        id: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
-        metadata: Option<ItemMetadata>,
-    },
+    ContextCompaction { id: String },
 }
 
 impl ThreadItem {
@@ -4101,6 +4256,53 @@ impl ThreadItem {
             | ThreadItem::ContextCompaction { id, .. } => id,
         }
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Lifecycle state for a guardian approval review.
+pub enum GuardianApprovalReviewStatus {
+    InProgress,
+    Approved,
+    Denied,
+    Aborted,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Risk level assigned by guardian approval review.
+pub enum GuardianRiskLevel {
+    Low,
+    Medium,
+    High,
+}
+
+impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
+    fn from(value: CoreGuardianRiskLevel) -> Self {
+        match value {
+            CoreGuardianRiskLevel::Low => Self::Low,
+            CoreGuardianRiskLevel::Medium => Self::Medium,
+            CoreGuardianRiskLevel::High => Self::High,
+        }
+    }
+}
+
+/// [UNSTABLE] Temporary guardian approval review payload used by
+/// `item/autoApprovalReview/*` notifications. This shape is expected to change
+/// soon.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct GuardianApprovalReview {
+    pub status: GuardianApprovalReviewStatus,
+    #[serde(alias = "risk_score")]
+    #[ts(type = "number | null")]
+    pub risk_score: Option<u8>,
+    #[serde(alias = "risk_level")]
+    pub risk_level: Option<GuardianRiskLevel>,
+    pub rationale: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -4146,7 +4348,6 @@ impl From<CoreTurnItem> for ThreadItem {
             CoreTurnItem::UserMessage(user) => ThreadItem::UserMessage {
                 id: user.id,
                 content: user.content.into_iter().map(UserInput::from).collect(),
-                metadata: user.metadata.map(Into::into),
             },
             CoreTurnItem::AgentMessage(agent) => {
                 let text = agent
@@ -4160,37 +4361,31 @@ impl From<CoreTurnItem> for ThreadItem {
                     id: agent.id,
                     text,
                     phase: agent.phase,
-                    metadata: agent.metadata.map(Into::into),
                 }
             }
             CoreTurnItem::Plan(plan) => ThreadItem::Plan {
                 id: plan.id,
                 text: plan.text,
-                metadata: plan.metadata.map(Into::into),
             },
             CoreTurnItem::Reasoning(reasoning) => ThreadItem::Reasoning {
                 id: reasoning.id,
                 summary: reasoning.summary_text,
                 content: reasoning.raw_content,
-                metadata: reasoning.metadata.map(Into::into),
             },
             CoreTurnItem::WebSearch(search) => ThreadItem::WebSearch {
                 id: search.id,
                 query: search.query,
                 action: Some(WebSearchAction::from(search.action)),
-                metadata: search.metadata.map(Into::into),
             },
             CoreTurnItem::ImageGeneration(image) => ThreadItem::ImageGeneration {
                 id: image.id,
                 status: image.status,
                 revised_prompt: image.revised_prompt,
                 result: image.result,
-                metadata: image.metadata.map(Into::into),
             },
-            CoreTurnItem::ContextCompaction(compaction) => ThreadItem::ContextCompaction {
-                id: compaction.id,
-                metadata: compaction.metadata.map(Into::into),
-            },
+            CoreTurnItem::ContextCompaction(compaction) => {
+                ThreadItem::ContextCompaction { id: compaction.id }
+            }
         }
     }
 }
@@ -4539,6 +4734,40 @@ pub struct ItemStartedNotification {
     pub item: ThreadItem,
     pub thread_id: String,
     pub turn_id: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Temporary notification payload for guardian automatic approval
+/// review. This shape is expected to change soon.
+///
+/// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
+/// lifecycle instead of sending separate standalone review notifications so the
+/// app-server API can persist and replay review state via `thread/read`.
+pub struct ItemGuardianApprovalReviewStartedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub target_item_id: String,
+    pub review: GuardianApprovalReview,
+    pub action: Option<JsonValue>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// [UNSTABLE] Temporary notification payload for guardian automatic approval
+/// review. This shape is expected to change soon.
+///
+/// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
+/// lifecycle instead of sending separate standalone review notifications so the
+/// app-server API can persist and replay review state via `thread/read`.
+pub struct ItemGuardianApprovalReviewCompletedNotification {
+    pub thread_id: String,
+    pub turn_id: String,
+    pub target_item_id: String,
+    pub review: GuardianApprovalReview,
+    pub action: Option<JsonValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -5602,13 +5831,22 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
 
-    fn test_absolute_path() -> AbsolutePathBuf {
-        let path = if cfg!(windows) {
-            r"C:\readable"
+    fn absolute_path_string(path: &str) -> String {
+        let trimmed = path.trim_start_matches('/');
+        if cfg!(windows) {
+            format!(r"C:\{}", trimmed.replace('/', "\\"))
         } else {
-            "/readable"
-        };
-        AbsolutePathBuf::from_absolute_path(path).expect("path must be absolute")
+            format!("/{trimmed}")
+        }
+    }
+
+    fn absolute_path(path: &str) -> AbsolutePathBuf {
+        AbsolutePathBuf::from_absolute_path(absolute_path_string(path))
+            .expect("path must be absolute")
+    }
+
+    fn test_absolute_path() -> AbsolutePathBuf {
+        absolute_path("readable")
     }
 
     #[test]
@@ -5959,6 +6197,134 @@ mod tests {
     }
 
     #[test]
+    fn fs_get_metadata_response_round_trips_minimal_fields() {
+        let response = FsGetMetadataResponse {
+            is_directory: false,
+            is_file: true,
+            created_at_ms: 123,
+            modified_at_ms: 456,
+        };
+
+        let value = serde_json::to_value(&response).expect("serialize fs/getMetadata response");
+        assert_eq!(
+            value,
+            json!({
+                "isDirectory": false,
+                "isFile": true,
+                "createdAtMs": 123,
+                "modifiedAtMs": 456,
+            })
+        );
+
+        let decoded = serde_json::from_value::<FsGetMetadataResponse>(value)
+            .expect("deserialize fs/getMetadata response");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn fs_read_file_response_round_trips_base64_data() {
+        let response = FsReadFileResponse {
+            data_base64: "aGVsbG8=".to_string(),
+        };
+
+        let value = serde_json::to_value(&response).expect("serialize fs/readFile response");
+        assert_eq!(
+            value,
+            json!({
+                "dataBase64": "aGVsbG8=",
+            })
+        );
+
+        let decoded = serde_json::from_value::<FsReadFileResponse>(value)
+            .expect("deserialize fs/readFile response");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn fs_read_file_params_round_trip() {
+        let params = FsReadFileParams {
+            path: absolute_path("tmp/example.txt"),
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize fs/readFile params");
+        assert_eq!(
+            value,
+            json!({
+                "path": absolute_path_string("tmp/example.txt"),
+            })
+        );
+
+        let decoded = serde_json::from_value::<FsReadFileParams>(value)
+            .expect("deserialize fs/readFile params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn fs_create_directory_params_round_trip_with_default_recursive() {
+        let params = FsCreateDirectoryParams {
+            path: absolute_path("tmp/example"),
+            recursive: None,
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize fs/createDirectory params");
+        assert_eq!(
+            value,
+            json!({
+                "path": absolute_path_string("tmp/example"),
+                "recursive": null,
+            })
+        );
+
+        let decoded = serde_json::from_value::<FsCreateDirectoryParams>(value)
+            .expect("deserialize fs/createDirectory params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn fs_write_file_params_round_trip_with_base64_data() {
+        let params = FsWriteFileParams {
+            path: absolute_path("tmp/example.bin"),
+            data_base64: "AAE=".to_string(),
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize fs/writeFile params");
+        assert_eq!(
+            value,
+            json!({
+                "path": absolute_path_string("tmp/example.bin"),
+                "dataBase64": "AAE=",
+            })
+        );
+
+        let decoded = serde_json::from_value::<FsWriteFileParams>(value)
+            .expect("deserialize fs/writeFile params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn fs_copy_params_round_trip_with_recursive_directory_copy() {
+        let params = FsCopyParams {
+            source_path: absolute_path("tmp/source"),
+            destination_path: absolute_path("tmp/destination"),
+            recursive: true,
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize fs/copy params");
+        assert_eq!(
+            value,
+            json!({
+                "sourcePath": absolute_path_string("tmp/source"),
+                "destinationPath": absolute_path_string("tmp/destination"),
+                "recursive": true,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<FsCopyParams>(value).expect("deserialize fs/copy params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
     fn command_exec_params_default_optional_streaming_flags() {
         let params = serde_json::from_value::<CommandExecParams>(json!({
             "command": ["ls", "-la"],
@@ -6298,8 +6664,8 @@ mod tests {
     }
 
     #[test]
-    fn ask_for_approval_reject_round_trips_request_permissions_flag() {
-        let v2_policy = AskForApproval::Reject {
+    fn ask_for_approval_granular_round_trips_request_permissions_flag() {
+        let v2_policy = AskForApproval::Granular {
             sandbox_approval: true,
             rules: false,
             skill_approval: false,
@@ -6310,7 +6676,7 @@ mod tests {
         let core_policy = v2_policy.to_core();
         assert_eq!(
             core_policy,
-            CoreAskForApproval::Reject(CoreRejectConfig {
+            CoreAskForApproval::Granular(CoreGranularApprovalConfig {
                 sandbox_approval: true,
                 rules: false,
                 skill_approval: false,
@@ -6324,19 +6690,19 @@ mod tests {
     }
 
     #[test]
-    fn ask_for_approval_reject_defaults_missing_optional_flags_to_false() {
+    fn ask_for_approval_granular_defaults_missing_optional_flags_to_false() {
         let decoded = serde_json::from_value::<AskForApproval>(serde_json::json!({
-            "reject": {
+            "granular": {
                 "sandbox_approval": true,
                 "rules": false,
                 "mcp_elicitations": true,
             }
         }))
-        .expect("legacy reject approval policy should deserialize");
+        .expect("granular approval policy should deserialize");
 
         assert_eq!(
             decoded,
-            AskForApproval::Reject {
+            AskForApproval::Granular {
                 sandbox_approval: true,
                 rules: false,
                 skill_approval: false,
@@ -6347,9 +6713,9 @@ mod tests {
     }
 
     #[test]
-    fn ask_for_approval_reject_is_marked_experimental() {
+    fn ask_for_approval_granular_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
-            &AskForApproval::Reject {
+            &AskForApproval::Granular {
                 sandbox_approval: true,
                 rules: false,
                 skill_approval: false,
@@ -6358,7 +6724,7 @@ mod tests {
             },
         );
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
         assert_eq!(
             crate::experimental_api::ExperimentalApi::experimental_reason(
                 &AskForApproval::OnRequest,
@@ -6368,17 +6734,18 @@ mod tests {
     }
 
     #[test]
-    fn profile_v2_reject_approval_policy_is_marked_experimental() {
+    fn profile_v2_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&ProfileV2 {
             model: None,
             model_provider: None,
-            approval_policy: Some(AskForApproval::Reject {
+            approval_policy: Some(AskForApproval::Granular {
                 sandbox_approval: true,
                 rules: false,
                 skill_approval: false,
                 request_permissions: true,
                 mcp_elicitations: false,
             }),
+            approvals_reviewer: None,
             service_tier: None,
             model_reasoning_effort: None,
             model_reasoning_summary: None,
@@ -6389,24 +6756,25 @@ mod tests {
             additional: HashMap::new(),
         });
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn config_reject_approval_policy_is_marked_experimental() {
+    fn config_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
             model: None,
             review_model: None,
             model_context_window: None,
             model_auto_compact_token_limit: None,
             model_provider: None,
-            approval_policy: Some(AskForApproval::Reject {
+            approval_policy: Some(AskForApproval::Granular {
                 sandbox_approval: false,
                 rules: true,
                 skill_approval: false,
                 request_permissions: false,
                 mcp_elicitations: true,
             }),
+            approvals_reviewer: None,
             sandbox_mode: None,
             sandbox_workspace_write: None,
             forced_chatgpt_workspace_id: None,
@@ -6427,11 +6795,11 @@ mod tests {
             additional: HashMap::new(),
         });
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn config_nested_profile_reject_approval_policy_is_marked_experimental() {
+    fn config_approvals_reviewer_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
             model: None,
             review_model: None,
@@ -6439,6 +6807,40 @@ mod tests {
             model_auto_compact_token_limit: None,
             model_provider: None,
             approval_policy: None,
+            approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+            sandbox_mode: None,
+            sandbox_workspace_write: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
+            web_search: None,
+            tools: None,
+            profile: None,
+            profiles: HashMap::new(),
+            instructions: None,
+            developer_instructions: None,
+            compact_prompt: None,
+            model_reasoning_effort: None,
+            model_reasoning_summary: None,
+            model_verbosity: None,
+            service_tier: None,
+            analytics: None,
+            apps: None,
+            additional: HashMap::new(),
+        });
+
+        assert_eq!(reason, Some("config/read.approvalsReviewer"));
+    }
+
+    #[test]
+    fn config_nested_profile_granular_approval_policy_is_marked_experimental() {
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
+            model: None,
+            review_model: None,
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
+            model_provider: None,
+            approval_policy: None,
+            approvals_reviewer: None,
             sandbox_mode: None,
             sandbox_workspace_write: None,
             forced_chatgpt_workspace_id: None,
@@ -6451,13 +6853,14 @@ mod tests {
                 ProfileV2 {
                     model: None,
                     model_provider: None,
-                    approval_policy: Some(AskForApproval::Reject {
+                    approval_policy: Some(AskForApproval::Granular {
                         sandbox_approval: true,
                         rules: false,
                         skill_approval: false,
                         request_permissions: false,
                         mcp_elicitations: true,
                     }),
+                    approvals_reviewer: None,
                     service_tier: None,
                     model_reasoning_effort: None,
                     model_reasoning_summary: None,
@@ -6480,14 +6883,63 @@ mod tests {
             additional: HashMap::new(),
         });
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn config_requirements_reject_allowed_approval_policy_is_marked_experimental() {
+    fn config_nested_profile_approvals_reviewer_is_marked_experimental() {
+        let reason = crate::experimental_api::ExperimentalApi::experimental_reason(&Config {
+            model: None,
+            review_model: None,
+            model_context_window: None,
+            model_auto_compact_token_limit: None,
+            model_provider: None,
+            approval_policy: None,
+            approvals_reviewer: None,
+            sandbox_mode: None,
+            sandbox_workspace_write: None,
+            forced_chatgpt_workspace_id: None,
+            forced_login_method: None,
+            web_search: None,
+            tools: None,
+            profile: None,
+            profiles: HashMap::from([(
+                "default".to_string(),
+                ProfileV2 {
+                    model: None,
+                    model_provider: None,
+                    approval_policy: None,
+                    approvals_reviewer: Some(ApprovalsReviewer::GuardianSubagent),
+                    service_tier: None,
+                    model_reasoning_effort: None,
+                    model_reasoning_summary: None,
+                    model_verbosity: None,
+                    web_search: None,
+                    tools: None,
+                    chatgpt_base_url: None,
+                    additional: HashMap::new(),
+                },
+            )]),
+            instructions: None,
+            developer_instructions: None,
+            compact_prompt: None,
+            model_reasoning_effort: None,
+            model_reasoning_summary: None,
+            model_verbosity: None,
+            service_tier: None,
+            analytics: None,
+            apps: None,
+            additional: HashMap::new(),
+        });
+
+        assert_eq!(reason, Some("config/read.approvalsReviewer"));
+    }
+
+    #[test]
+    fn config_requirements_granular_allowed_approval_policy_is_marked_experimental() {
         let reason =
             crate::experimental_api::ExperimentalApi::experimental_reason(&ConfigRequirements {
-                allowed_approval_policies: Some(vec![AskForApproval::Reject {
+                allowed_approval_policies: Some(vec![AskForApproval::Granular {
                     sandbox_approval: true,
                     rules: true,
                     skill_approval: false,
@@ -6501,16 +6953,16 @@ mod tests {
                 network: None,
             });
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn client_request_thread_start_reject_approval_policy_is_marked_experimental() {
+    fn client_request_thread_start_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
             &crate::ClientRequest::ThreadStart {
                 request_id: crate::RequestId::Integer(1),
                 params: ThreadStartParams {
-                    approval_policy: Some(AskForApproval::Reject {
+                    approval_policy: Some(AskForApproval::Granular {
                         sandbox_approval: true,
                         rules: false,
                         skill_approval: false,
@@ -6522,17 +6974,17 @@ mod tests {
             },
         );
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn client_request_thread_resume_reject_approval_policy_is_marked_experimental() {
+    fn client_request_thread_resume_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
             &crate::ClientRequest::ThreadResume {
                 request_id: crate::RequestId::Integer(2),
                 params: ThreadResumeParams {
                     thread_id: "thr_123".to_string(),
-                    approval_policy: Some(AskForApproval::Reject {
+                    approval_policy: Some(AskForApproval::Granular {
                         sandbox_approval: false,
                         rules: true,
                         skill_approval: false,
@@ -6544,17 +6996,17 @@ mod tests {
             },
         );
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn client_request_thread_fork_reject_approval_policy_is_marked_experimental() {
+    fn client_request_thread_fork_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
             &crate::ClientRequest::ThreadFork {
                 request_id: crate::RequestId::Integer(3),
                 params: ThreadForkParams {
                     thread_id: "thr_456".to_string(),
-                    approval_policy: Some(AskForApproval::Reject {
+                    approval_policy: Some(AskForApproval::Granular {
                         sandbox_approval: true,
                         rules: false,
                         skill_approval: false,
@@ -6566,18 +7018,18 @@ mod tests {
             },
         );
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
-    fn client_request_turn_start_reject_approval_policy_is_marked_experimental() {
+    fn client_request_turn_start_granular_approval_policy_is_marked_experimental() {
         let reason = crate::experimental_api::ExperimentalApi::experimental_reason(
             &crate::ClientRequest::TurnStart {
                 request_id: crate::RequestId::Integer(4),
                 params: TurnStartParams {
                     thread_id: "thr_123".to_string(),
                     input: Vec::new(),
-                    approval_policy: Some(AskForApproval::Reject {
+                    approval_policy: Some(AskForApproval::Granular {
                         sandbox_approval: false,
                         rules: true,
                         skill_approval: false,
@@ -6589,7 +7041,7 @@ mod tests {
             },
         );
 
-        assert_eq!(reason, Some("askForApproval.reject"));
+        assert_eq!(reason, Some("askForApproval.granular"));
     }
 
     #[test]
@@ -6894,6 +7346,46 @@ mod tests {
     }
 
     #[test]
+    fn automatic_approval_review_deserializes_legacy_snake_case_risk_fields() {
+        let review: GuardianApprovalReview = serde_json::from_value(json!({
+            "status": "denied",
+            "risk_score": 91,
+            "risk_level": "high",
+            "rationale": "too risky"
+        }))
+        .expect("legacy snake_case automatic review should deserialize");
+        assert_eq!(
+            review,
+            GuardianApprovalReview {
+                status: GuardianApprovalReviewStatus::Denied,
+                risk_score: Some(91),
+                risk_level: Some(GuardianRiskLevel::High),
+                rationale: Some("too risky".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn automatic_approval_review_deserializes_aborted_status() {
+        let review: GuardianApprovalReview = serde_json::from_value(json!({
+            "status": "aborted",
+            "riskScore": null,
+            "riskLevel": null,
+            "rationale": null
+        }))
+        .expect("aborted automatic review should deserialize");
+        assert_eq!(
+            review,
+            GuardianApprovalReview {
+                status: GuardianApprovalReviewStatus::Aborted,
+                risk_score: None,
+                risk_level: None,
+                rationale: None,
+            }
+        );
+    }
+
+    #[test]
     fn core_turn_item_into_thread_item_converts_supported_variants() {
         let user_item = TurnItem::UserMessage(UserMessageItem {
             id: "user-1".to_string(),
@@ -6917,7 +7409,6 @@ mod tests {
                     path: "app://demo-app".to_string(),
                 },
             ],
-            metadata: None,
         });
 
         assert_eq!(
@@ -6944,7 +7435,6 @@ mod tests {
                         path: "app://demo-app".to_string(),
                     },
                 ],
-                metadata: None,
             }
         );
 
@@ -6959,7 +7449,6 @@ mod tests {
                 },
             ],
             phase: None,
-            metadata: None,
         });
 
         assert_eq!(
@@ -6968,7 +7457,6 @@ mod tests {
                 id: "agent-1".to_string(),
                 text: "Hello world".to_string(),
                 phase: None,
-                metadata: None,
             }
         );
 
@@ -6978,7 +7466,6 @@ mod tests {
                 text: "final".to_string(),
             }],
             phase: Some(MessagePhase::FinalAnswer),
-            metadata: None,
         });
 
         assert_eq!(
@@ -6987,7 +7474,6 @@ mod tests {
                 id: "agent-2".to_string(),
                 text: "final".to_string(),
                 phase: Some(MessagePhase::FinalAnswer),
-                metadata: None,
             }
         );
 
@@ -6995,7 +7481,6 @@ mod tests {
             id: "reasoning-1".to_string(),
             summary_text: vec!["line one".to_string(), "line two".to_string()],
             raw_content: vec![],
-            metadata: None,
         });
 
         assert_eq!(
@@ -7004,7 +7489,6 @@ mod tests {
                 id: "reasoning-1".to_string(),
                 summary: vec!["line one".to_string(), "line two".to_string()],
                 content: vec![],
-                metadata: None,
             }
         );
 
@@ -7015,7 +7499,6 @@ mod tests {
                 query: Some("docs".to_string()),
                 queries: None,
             },
-            metadata: None,
         });
 
         assert_eq!(
@@ -7027,7 +7510,6 @@ mod tests {
                     query: Some("docs".to_string()),
                     queries: None,
                 }),
-                metadata: None,
             }
         );
     }
@@ -7209,6 +7691,7 @@ mod tests {
             input: vec![],
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox_policy: None,
             model: None,
             service_tier: None,

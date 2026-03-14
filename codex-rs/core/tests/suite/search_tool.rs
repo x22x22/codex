@@ -5,6 +5,7 @@ use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::features::Feature;
+use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::McpInvocation;
@@ -33,10 +34,10 @@ const SEARCH_TOOL_DESCRIPTION_SNIPPETS: [&str; 1] = [
     "Tools of the apps (Calendar) are hidden until you search for them with this tool (`tool_search`).",
 ];
 const TOOL_SEARCH_TOOL_NAME: &str = "tool_search";
-const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar-create-event";
-const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar-list-events";
+const CALENDAR_CREATE_TOOL: &str = "mcp__codex_apps__calendar_create_event";
+const CALENDAR_LIST_TOOL: &str = "mcp__codex_apps__calendar_list_events";
 const SEARCH_CALENDAR_NAMESPACE: &str = "mcp__codex_apps__calendar";
-const SEARCH_CALENDAR_CREATE_TOOL: &str = "-create-event";
+const SEARCH_CALENDAR_CREATE_TOOL: &str = "_create_event";
 
 fn tool_names(body: &Value) -> Vec<String> {
     body.get("tools")
@@ -93,6 +94,17 @@ fn configure_apps(config: &mut Config, apps_base_url: &str) {
         .disable(Feature::AppsMcpGateway)
         .expect("test config should allow feature update");
     config.chatgpt_base_url = apps_base_url.to_string();
+    config.model = Some("gpt-5-codex".to_string());
+
+    let mut model_catalog: ModelsResponse =
+        serde_json::from_str(include_str!("../../models.json")).expect("valid models.json");
+    let model = model_catalog
+        .models
+        .iter_mut()
+        .find(|model| model.slug == "gpt-5-codex")
+        .expect("gpt-5-codex exists in bundled models.json");
+    model.supports_search_tool = true;
+    config.model_catalog = Some(model_catalog);
 }
 
 fn configured_builder(apps_base_url: String) -> TestCodexBuilder {
