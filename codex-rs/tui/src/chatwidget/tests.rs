@@ -6615,10 +6615,26 @@ fn selected_permissions_popup_line(popup: &str) -> &str {
         })
 }
 
+fn selected_permissions_popup_name(popup: &str) -> &'static str {
+    selected_permissions_popup_line(popup)
+        .trim_start()
+        .strip_prefix('›')
+        .map(str::trim_start)
+        .and_then(|line| line.split_once(". ").map(|(_, rest)| rest))
+        .and_then(|line| {
+            ["Read Only", "Default", "Smart Approvals", "Full Access"]
+                .into_iter()
+                .find(|label| line.starts_with(label))
+        })
+        .unwrap_or_else(|| {
+            panic!("expected permissions popup row to start with a preset label: {popup}")
+        })
+}
+
 fn move_permissions_popup_selection_to(chat: &mut ChatWidget, label: &str, direction: KeyCode) {
     for _ in 0..4 {
         let popup = render_bottom_popup(chat, 120);
-        if selected_permissions_popup_line(&popup).contains(label) {
+        if selected_permissions_popup_name(&popup) == label {
             return;
         }
         chat.handle_key_event(KeyEvent::from(direction));

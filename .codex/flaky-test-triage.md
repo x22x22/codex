@@ -49,6 +49,7 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 - Make the generic permissions-popup helper recognize `Read Only`, which is a real preset on Windows.
 - Replace Windows-specific hard-coded navigation counts with label-driven movement in the permission history snapshot tests.
 - Replace the remaining Windows-only extra navigation in the full-access confirmation/history test, and use the same label-driven movement in the adjacent Smart Approvals popup tests.
+- Follow-up on `87941e5d7`: the helper compared the entire selected row with `contains(label)`, which made `Smart Approvals` look like `Default` because its description text says "Same workspace-write permissions as Default...". Tighten the helper to match the selected preset name at the start of the row instead of any substring in the rendered line.
 - Rationale: commit `e96d895c9` still failed on both Windows `Tests` jobs in run `23080608881`. The remaining common pattern is Windows-only popup navigation that assumes a fixed number of `Up`/`Down` presses even though the Windows menu includes `Read Only` and selection wraps.
 
 ## Constraints
