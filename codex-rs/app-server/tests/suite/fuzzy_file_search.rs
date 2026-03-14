@@ -29,6 +29,7 @@ use codex_protocol::protocol::SessionSource;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -68,6 +69,7 @@ struct McpProcess {
     client: Option<InProcessClientHandle>,
     next_request_id: i64,
     pending_requests: HashMap<i64, PendingRequest>,
+    buffered_notifications: VecDeque<JSONRPCNotification>,
     start_args: Option<InProcessStartArgs>,
 }
 
@@ -85,6 +87,7 @@ impl McpProcess {
             client: None,
             next_request_id: 1,
             pending_requests: HashMap::new(),
+            buffered_notifications: VecDeque::new(),
             start_args: Some(InProcessStartArgs {
                 arg0_paths: Arg0DispatchPaths::default(),
                 config,
@@ -273,12 +276,37 @@ impl McpProcess {
         &mut self,
         method: &str,
     ) -> Result<JSONRPCNotification> {
+        self.read_stream_until_matching_notification(method, |notification| {
+            Ok(notification.method == method)
+        })
+        .await
+    }
+
+    async fn read_stream_until_matching_notification<P>(
+        &mut self,
+        description: &str,
+        mut matches: P,
+    ) -> Result<JSONRPCNotification>
+    where
+        P: FnMut(&JSONRPCNotification) -> Result<bool>,
+    {
+        let mut index = 0;
+        while index < self.buffered_notifications.len() {
+            if matches(&self.buffered_notifications[index])? {
+                if let Some(notification) = self.buffered_notifications.remove(index) {
+                    return Ok(notification);
+                }
+                anyhow::bail!("buffered notification disappeared while waiting for {description}");
+            }
+            index += 1;
+        }
+
         loop {
             let event = self
                 .client_mut()?
                 .next_event()
                 .await
-                .ok_or_else(|| anyhow!("app-server closed before emitting {method}"))?;
+                .ok_or_else(|| anyhow!("app-server closed before emitting {description}"))?;
 
             let notification = match event {
                 InProcessServerEvent::ServerNotification(notification) => {
@@ -286,19 +314,29 @@ impl McpProcess {
                 }
                 InProcessServerEvent::LegacyNotification(notification) => notification,
                 InProcessServerEvent::Lagged { skipped } => {
-                    anyhow::bail!("missed {skipped} app-server events while waiting for {method}")
+                    anyhow::bail!(
+                        "missed {skipped} app-server events while waiting for {description}"
+                    )
                 }
                 InProcessServerEvent::ServerRequest(request) => {
                     anyhow::bail!(
-                        "unexpected server request while waiting for {method}: {request:?}"
+                        "unexpected server request while waiting for {description}: {request:?}"
                     )
                 }
             };
 
-            if notification.method == method {
+            if matches(&notification)? {
                 return Ok(notification);
             }
+            self.buffered_notifications.push_back(notification);
         }
+    }
+
+    fn buffered_notification_methods(&self) -> Vec<String> {
+        self.buffered_notifications
+            .iter()
+            .map(|notification| notification.method.clone())
+            .collect()
     }
 
     fn client_mut(&mut self) -> Result<&mut InProcessClientHandle> {
@@ -372,54 +410,81 @@ async fn wait_for_session_updated(
     query: &str,
     file_expectation: FileExpectation,
 ) -> Result<FuzzyFileSearchSessionUpdatedNotification> {
-    for _ in 0..20 {
-        let notification = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message(SESSION_UPDATED_METHOD),
-        )
-        .await??;
-        let params = notification
-            .params
-            .ok_or_else(|| anyhow!("missing notification params"))?;
-        let payload = serde_json::from_value::<FuzzyFileSearchSessionUpdatedNotification>(params)?;
-        if payload.session_id != session_id || payload.query != query {
-            continue;
+    let description = format!("session update for sessionId={session_id}, query={query}");
+    let notification = match timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_matching_notification(&description, |notification| {
+            if notification.method != SESSION_UPDATED_METHOD {
+                return Ok(false);
+            }
+            let params = notification
+                .params
+                .clone()
+                .ok_or_else(|| anyhow!("missing notification params"))?;
+            let payload =
+                serde_json::from_value::<FuzzyFileSearchSessionUpdatedNotification>(params)?;
+            let files_match = match file_expectation {
+                FileExpectation::Any => true,
+                FileExpectation::Empty => payload.files.is_empty(),
+                FileExpectation::NonEmpty => !payload.files.is_empty(),
+            };
+            Ok(payload.session_id == session_id && payload.query == query && files_match)
+        }),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            anyhow::bail!(
+                "timed out waiting for {description}; buffered notifications={:?}",
+                mcp.buffered_notification_methods()
+            )
         }
-        let files_match = match file_expectation {
-            FileExpectation::Any => true,
-            FileExpectation::Empty => payload.files.is_empty(),
-            FileExpectation::NonEmpty => !payload.files.is_empty(),
-        };
-        if files_match {
-            return Ok(payload);
-        }
-    }
-    anyhow::bail!(
-        "did not receive expected session update for sessionId={session_id}, query={query}"
-    );
+    };
+    let params = notification
+        .params
+        .ok_or_else(|| anyhow!("missing notification params"))?;
+    Ok(serde_json::from_value::<
+        FuzzyFileSearchSessionUpdatedNotification,
+    >(params)?)
 }
 
 async fn wait_for_session_completed(
     mcp: &mut McpProcess,
     session_id: &str,
 ) -> Result<FuzzyFileSearchSessionCompletedNotification> {
-    for _ in 0..20 {
-        let notification = timeout(
-            DEFAULT_READ_TIMEOUT,
-            mcp.read_stream_until_notification_message(SESSION_COMPLETED_METHOD),
-        )
-        .await??;
-        let params = notification
-            .params
-            .ok_or_else(|| anyhow!("missing notification params"))?;
-        let payload =
-            serde_json::from_value::<FuzzyFileSearchSessionCompletedNotification>(params)?;
-        if payload.session_id == session_id {
-            return Ok(payload);
+    let description = format!("session completion for sessionId={session_id}");
+    let notification = match timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_matching_notification(&description, |notification| {
+            if notification.method != SESSION_COMPLETED_METHOD {
+                return Ok(false);
+            }
+            let params = notification
+                .params
+                .clone()
+                .ok_or_else(|| anyhow!("missing notification params"))?;
+            let payload =
+                serde_json::from_value::<FuzzyFileSearchSessionCompletedNotification>(params)?;
+            Ok(payload.session_id == session_id)
+        }),
+    )
+    .await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            anyhow::bail!(
+                "timed out waiting for {description}; buffered notifications={:?}",
+                mcp.buffered_notification_methods()
+            )
         }
-    }
-
-    anyhow::bail!("did not receive expected session completion for sessionId={session_id}");
+    };
+    let params = notification
+        .params
+        .ok_or_else(|| anyhow!("missing notification params"))?;
+    Ok(serde_json::from_value::<
+        FuzzyFileSearchSessionCompletedNotification,
+    >(params)?)
 }
 
 async fn assert_update_request_fails_for_missing_session(
