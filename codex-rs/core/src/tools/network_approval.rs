@@ -123,10 +123,11 @@ fn pending_decision_for_network_review(
     review_decision: &ReviewDecision,
 ) -> Option<PendingApprovalDecision> {
     match review_decision {
-        ReviewDecision::Approved => Some(PendingApprovalDecision::AllowOnce),
+        ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+            Some(PendingApprovalDecision::AllowOnce)
+        }
         ReviewDecision::ApprovedForSession => Some(PendingApprovalDecision::AllowForSession),
         ReviewDecision::ApprovedOverrideCommand { .. }
-        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::Denied
         | ReviewDecision::Abort => Some(PendingApprovalDecision::Deny),
         ReviewDecision::NetworkPolicyAmendment { .. } => None,

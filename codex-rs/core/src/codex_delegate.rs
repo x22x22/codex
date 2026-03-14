@@ -700,9 +700,9 @@ async fn maybe_auto_review_mcp_request_user_input(
         ReviewDecision::Approved
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => MCP_TOOL_APPROVAL_ACCEPT.to_string(),
-        ReviewDecision::Denied | ReviewDecision::Abort => {
-            MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC.to_string()
-        }
+        ReviewDecision::ApprovedOverrideCommand { .. }
+        | ReviewDecision::Denied
+        | ReviewDecision::Abort => MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC.to_string(),
     };
     Some(RequestUserInputResponse {
         answers: HashMap::from([(

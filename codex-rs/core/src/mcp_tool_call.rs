@@ -687,11 +687,12 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
 fn mcp_tool_approval_decision_from_guardian(decision: ReviewDecision) -> McpToolApprovalDecision {
     match decision {
         ReviewDecision::Approved
-        | ReviewDecision::ApprovedOverrideCommand { .. }
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => McpToolApprovalDecision::Accept,
         ReviewDecision::ApprovedForSession => McpToolApprovalDecision::AcceptForSession,
-        ReviewDecision::Denied | ReviewDecision::Abort => McpToolApprovalDecision::Decline,
+        ReviewDecision::ApprovedOverrideCommand { .. }
+        | ReviewDecision::Denied
+        | ReviewDecision::Abort => McpToolApprovalDecision::Decline,
     }
 }
 

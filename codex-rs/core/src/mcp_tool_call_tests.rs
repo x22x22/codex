@@ -603,6 +603,12 @@ fn guardian_review_decision_maps_to_mcp_tool_decision() {
         McpToolApprovalDecision::Accept
     );
     assert_eq!(
+        mcp_tool_approval_decision_from_guardian(ReviewDecision::ApprovedOverrideCommand {
+            command: vec!["echo".to_string(), "override".to_string()],
+        }),
+        McpToolApprovalDecision::Decline
+    );
+    assert_eq!(
         mcp_tool_approval_decision_from_guardian(ReviewDecision::Denied),
         McpToolApprovalDecision::Decline
     );

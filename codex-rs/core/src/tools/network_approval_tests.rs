@@ -178,7 +178,7 @@ fn only_never_policy_disables_network_approval_flow() {
 }
 
 #[test]
-fn network_review_rejects_command_and_execpolicy_overrides() {
+fn network_review_rejects_command_override_but_allows_execpolicy_amendment() {
     assert_eq!(
         pending_decision_for_network_review(&ReviewDecision::ApprovedOverrideCommand {
             command: vec!["echo".to_string(), "override".to_string()],
@@ -192,7 +192,7 @@ fn network_review_rejects_command_and_execpolicy_overrides() {
                 "override".to_string(),
             ]),
         }),
-        Some(PendingApprovalDecision::Deny)
+        Some(PendingApprovalDecision::AllowOnce)
     );
 }
 
@@ -200,7 +200,9 @@ fn network_review_rejects_command_and_execpolicy_overrides() {
 async fn inline_network_review_rejects_command_override_at_runtime() {
     let service = Arc::new(NetworkApprovalService::default());
     let (session, turn_context, rx) = make_session_and_context_with_rx().await;
-    service.register_call("registration-1".to_string()).await;
+    service
+        .register_call("registration-1".to_string(), "turn-1".to_string())
+        .await;
     session
         .spawn_task(
             Arc::clone(&turn_context),
