@@ -103,6 +103,14 @@ jobs:
             '@llvm//runtimes/libcxx:libcxx.static'
             '@llvm//runtimes/libcxx:libcxxabi.static'
             '@llvm//runtimes/libunwind:libunwind.static'
+            '@llvm//runtimes:resource_directory'
+            '@llvm//runtimes:crt_objects_directory_linux'
+            '@llvm//runtimes/libcxx:libcxx_library_search_directory'
+            '@llvm//runtimes/libunwind:libunwind_library_search_directory'
+            '@llvm//runtimes/musl:musl_library_search_directory'
+            '@llvm//runtimes/libcxx:libcxx_headers_include_search_directory'
+            '@llvm//runtimes/libcxx:libcxxabi_headers_include_search_directory'
+            '@llvm//runtimes/musl:musl_headers_include_search_directory'
           )
 
           bazel_args=(

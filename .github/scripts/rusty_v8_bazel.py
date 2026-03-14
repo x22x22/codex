@@ -28,6 +28,16 @@ RUNTIME_LIB_LABELS = {
     "libcxxabi": "@llvm//runtimes/libcxx:libcxxabi.static",
     "libunwind": "@llvm//runtimes/libunwind:libunwind.static",
 }
+VALIDATE_BUNDLE_SUPPORT_LABELS = {
+    "resource_dir": "@llvm//runtimes:resource_directory",
+    "crt_objects_dir": "@llvm//runtimes:crt_objects_directory_linux",
+    "libcxx_library_dir": "@llvm//runtimes/libcxx:libcxx_library_search_directory",
+    "libunwind_library_dir": "@llvm//runtimes/libunwind:libunwind_library_search_directory",
+    "musl_library_dir": "@llvm//runtimes/musl:musl_library_search_directory",
+    "libcxx_headers_dir": "@llvm//runtimes/libcxx:libcxx_headers_include_search_directory",
+    "libcxxabi_headers_dir": "@llvm//runtimes/libcxx:libcxxabi_headers_include_search_directory",
+    "musl_headers_dir": "@llvm//runtimes/musl:musl_headers_include_search_directory",
+}
 V8_CACHE_KEY_INPUT_PATTERNS = [
     ".bazelrc",
     ".bazelversion",
@@ -121,8 +131,11 @@ def find_single_path(pattern: str, description: str) -> Path:
     return matches[-1]
 
 
-def platform_bin_dir(platform: str) -> Path:
-    return bazel_execroot() / "bazel-out" / f"{platform}-fastbuild" / "bin"
+def bazel_output_path(platform: str, label: str, description: str) -> Path:
+    return first_existing_path(
+        bazel_output_files(platform, [label]),
+        description,
+    )
 
 
 def toolchain_dir() -> Path:
@@ -145,11 +158,6 @@ def kernel_headers_dir(target: str) -> Path:
     raise SystemExit(f"could not find kernel headers dir for {target}")
 
 
-def musl_generated_include_dir(platform: str, target: str) -> Path:
-    arch = target.split("-", 1)[0]
-    return platform_bin_dir(platform) / "external/llvm++musl+musl_libc/generated" / arch / "includes"
-
-
 def static_runtime_libs(platform: str) -> tuple[Path, Path, Path]:
     outputs = bazel_output_files(platform, list(RUNTIME_LIB_LABELS.values()))
     return (
@@ -166,6 +174,13 @@ def static_runtime_libs(platform: str) -> tuple[Path, Path, Path]:
             "libunwind static archive",
         ),
     )
+
+
+def validate_bundle_support_paths(platform: str) -> dict[str, Path]:
+    return {
+        key: bazel_output_path(platform, label, f"{key} output")
+        for key, label in VALIDATE_BUNDLE_SUPPORT_LABELS.items()
+    }
 
 
 def v8_crate_dir() -> Path:
@@ -358,10 +373,9 @@ def write_bundle_archive(
 
 
 def validate_bundle(platform: str, target: str, bundle_path: Path) -> None:
-    bin_dir = platform_bin_dir(platform)
+    support_paths = validate_bundle_support_paths(platform)
     toolchain = toolchain_dir()
     kernel_headers = kernel_headers_dir(target)
-    musl_includes = musl_generated_include_dir(platform, target)
     compiler_rt = bazel_cache_root() / "external/llvm++llvm_source+compiler-rt/include"
     with tempfile.TemporaryDirectory(prefix="rusty-v8-bundle-") as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -383,20 +397,20 @@ def validate_bundle(platform: str, target: str, bundle_path: Path) -> None:
             "-nostdlib++",
             "--unwindlib=none",
             "-resource-dir",
-            str(bin_dir / "external/llvm+/runtimes/resource_directory"),
-            "-B" + str(bin_dir / "external/llvm+/runtimes/crt_objects_directory_linux"),
-            "-L" + str(bin_dir / "external/llvm+/runtimes/libcxx/libcxx_library_search_directory"),
-            "-L" + str(bin_dir / "external/llvm+/runtimes/libunwind/libunwind_library_search_directory"),
-            "-L" + str(bin_dir / "external/llvm+/runtimes/musl/musl_library_search_directory"),
+            str(support_paths["resource_dir"]),
+            "-B" + str(support_paths["crt_objects_dir"]),
+            "-L" + str(support_paths["libcxx_library_dir"]),
+            "-L" + str(support_paths["libunwind_library_dir"]),
+            "-L" + str(support_paths["musl_library_dir"]),
             "-nostdlibinc",
             "-isystem",
-            str(bin_dir / "external/llvm++llvm_source+libcxx/libcxx_headers_include_search_directory"),
+            str(support_paths["libcxx_headers_dir"]),
             "-isystem",
-            str(bin_dir / "external/llvm++llvm_source+libcxxabi/libcxxabi_headers_include_search_directory"),
+            str(support_paths["libcxxabi_headers_dir"]),
             "-isystem",
             str(kernel_headers),
             "-isystem",
-            str(musl_includes),
+            str(support_paths["musl_headers_dir"]),
             "-isystem",
             str(compiler_rt),
             "-Xclang",
