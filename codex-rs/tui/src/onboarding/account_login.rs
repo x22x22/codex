@@ -17,7 +17,6 @@ pub(crate) enum AuthCommand {
     StartApiKey { api_key: String },
     StartChatgpt,
     CancelChatgpt { login_id: String },
-    ReloadManagedChatgptAuth,
     DeviceCodeFailed { message: String },
 }
 

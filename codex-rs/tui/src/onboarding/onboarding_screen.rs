@@ -576,19 +576,6 @@ async fn handle_auth_command(
                 tracing::warn!("failed to cancel onboarding login: {err}");
             }
         }
-        AuthCommand::ReloadManagedChatgptAuth => {
-            app_server.reload_auth_from_storage();
-            match account_api.read_account(app_server).await {
-                Ok(response) => {
-                    if let Some(auth_widget) = onboarding_screen.auth_widget_mut() {
-                        auth_widget.apply_account(response.account.as_ref());
-                    }
-                }
-                Err(err) => {
-                    tracing::warn!("failed to refresh managed auth after device code login: {err}")
-                }
-            }
-        }
         AuthCommand::DeviceCodeFailed { message } => {
             if let Some(auth_widget) = onboarding_screen.auth_widget_mut() {
                 auth_widget.show_device_code_login_error(message);

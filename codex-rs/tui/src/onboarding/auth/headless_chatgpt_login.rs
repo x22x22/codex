@@ -63,14 +63,12 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, opts: Se
             result = complete_device_code_login(opts, device_code) => {
                 match result {
                     Ok(()) => {
-                        if set_device_code_state_for_active_attempt(
+                        let _ = set_device_code_state_for_active_attempt(
                             &sign_in_state,
                             &request_frame,
                             &cancel,
                             SignInState::ChatGptSuccessMessage,
-                        ) {
-                            let _ = auth_command_tx.send(AuthCommand::ReloadManagedChatgptAuth);
-                        }
+                        );
                     }
                     Err(err) => {
                         if set_device_code_state_for_active_attempt(
