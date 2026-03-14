@@ -197,6 +197,44 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
 }
 
 #[test]
+fn reserializes_shell_outputs_preserve_executed_command_when_present() {
+    let raw_output = r#"{"output":"override-ok","metadata":{"exit_code":0,"duration_seconds":0.5},"executed_command":["/bin/echo","override-ok"]}"#;
+    let expected_output = "Exit code: 0\nWall time: 0.5 seconds\nExecuted command: /bin/echo override-ok\nOutput:\noverride-ok";
+    let mut items = vec![
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-1".to_string(),
+            output: FunctionCallOutputPayload::from_text(raw_output.to_string()),
+        },
+    ];
+
+    reserialize_shell_outputs(&mut items);
+
+    assert_eq!(
+        items,
+        vec![
+            ResponseItem::FunctionCall {
+                id: None,
+                name: "shell".to_string(),
+                namespace: None,
+                arguments: "{}".to_string(),
+                call_id: "call-1".to_string(),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text(expected_output.to_string()),
+            },
+        ]
+    );
+}
+
+#[test]
 fn tool_search_output_namespace_serializes_with_deferred_child_tools() {
     let namespace = tools::ToolSearchOutputTool::Namespace(tools::ResponsesApiNamespace {
         name: "mcp__codex_apps__calendar".to_string(),

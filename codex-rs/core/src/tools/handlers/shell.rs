@@ -474,8 +474,11 @@ impl ShellHandler {
             )
             .await
             .map(|result| result.output);
+        let effective_command = effective_command.lock().await.clone();
+        let is_command_overridden = effective_command != exec_params.command;
         let emitter = ToolEmitter::shell(
-            effective_command.lock().await.clone(),
+            effective_command,
+            is_command_overridden,
             exec_params.cwd.clone(),
             source,
             freeform,

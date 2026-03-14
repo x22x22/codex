@@ -223,6 +223,7 @@ fn default_runtime_manager(codex_home: std::path::PathBuf) -> ArtifactRuntimeMan
 async fn emit_exec_begin(session: &Session, turn: &TurnContext, call_id: &str) {
     let emitter = ToolEmitter::shell(
         vec![ARTIFACTS_TOOL_NAME.to_string()],
+        false,
         turn.cwd.clone(),
         ExecCommandSource::Agent,
         true,
@@ -249,6 +250,7 @@ async fn emit_exec_end(
     };
     let emitter = ToolEmitter::shell(
         vec![ARTIFACTS_TOOL_NAME.to_string()],
+        false,
         turn.cwd.clone(),
         ExecCommandSource::Agent,
         true,

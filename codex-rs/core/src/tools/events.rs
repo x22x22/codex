@@ -90,6 +90,7 @@ pub(crate) async fn emit_exec_command_begin(
 pub(crate) enum ToolEmitter {
     Shell {
         command: Vec<String>,
+        is_command_overridden: bool,
         cwd: PathBuf,
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
@@ -111,6 +112,7 @@ pub(crate) enum ToolEmitter {
 impl ToolEmitter {
     pub fn shell(
         command: Vec<String>,
+        is_command_overridden: bool,
         cwd: PathBuf,
         source: ExecCommandSource,
         freeform: bool,
@@ -118,6 +120,7 @@ impl ToolEmitter {
         let parsed_cmd = parse_command(&command);
         Self::Shell {
             command,
+            is_command_overridden,
             cwd,
             source,
             parsed_cmd,
@@ -153,6 +156,7 @@ impl ToolEmitter {
             (
                 Self::Shell {
                     command,
+                    is_command_overridden: _,
                     cwd,
                     source,
                     parsed_cmd,
@@ -292,7 +296,20 @@ impl ToolEmitter {
             Self::Shell { freeform: true, .. } => {
                 super::format_exec_output_for_model_freeform(output, ctx.turn.truncation_policy)
             }
-            _ => super::format_exec_output_for_model_structured(output, ctx.turn.truncation_policy),
+            Self::Shell {
+                command,
+                is_command_overridden,
+                ..
+            } => super::format_exec_output_for_model_structured(
+                output,
+                ctx.turn.truncation_policy,
+                is_command_overridden.then_some(command.as_slice()),
+            ),
+            _ => super::format_exec_output_for_model_structured(
+                output,
+                ctx.turn.truncation_policy,
+                None,
+            ),
         }
     }
 

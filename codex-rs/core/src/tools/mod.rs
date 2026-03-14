@@ -32,6 +32,7 @@ pub(crate) const TELEMETRY_PREVIEW_TRUNCATION_NOTICE: &str =
 pub fn format_exec_output_for_model_structured(
     exec_output: &ExecToolCallOutput,
     truncation_policy: TruncationPolicy,
+    executed_command: Option<&[String]>,
 ) -> String {
     let ExecToolCallOutput {
         exit_code,
@@ -49,6 +50,8 @@ pub fn format_exec_output_for_model_structured(
     struct ExecOutput<'a> {
         output: &'a str,
         metadata: ExecMetadata,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        executed_command: Option<&'a [String]>,
     }
 
     // round to 1 decimal place
@@ -62,6 +65,7 @@ pub fn format_exec_output_for_model_structured(
             exit_code: *exit_code,
             duration_seconds,
         },
+        executed_command,
     };
 
     #[expect(clippy::expect_used)]
@@ -115,5 +119,31 @@ fn build_content_with_timeout(exec_output: &ExecToolCallOutput) -> String {
         )
     } else {
         exec_output.aggregated_output.text.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn format_exec_output_for_model_structured_includes_executed_command_when_present() {
+        let exec_output = ExecToolCallOutput {
+            aggregated_output: crate::exec::StreamOutput::new("override-ok\n".to_string()),
+            duration: Duration::from_millis(100),
+            ..ExecToolCallOutput::default()
+        };
+
+        let formatted = format_exec_output_for_model_structured(
+            &exec_output,
+            TruncationPolicy::Bytes(1024),
+            Some(&["/bin/echo".to_string(), "override-ok".to_string()]),
+        );
+
+        assert_eq!(
+            formatted,
+            r#"{"output":"override-ok\n","metadata":{"exit_code":0,"duration_seconds":0.1},"executed_command":["/bin/echo","override-ok"]}"#
+        );
     }
 }

@@ -111,6 +111,7 @@ fn is_shell_tool_name(name: &str) -> bool {
 struct ExecOutputJson {
     output: String,
     metadata: ExecOutputMetadataJson,
+    executed_command: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +132,9 @@ fn build_structured_output(parsed: &ExecOutputJson) -> String {
         "Wall time: {} seconds",
         parsed.metadata.duration_seconds
     ));
+    if let Some(executed_command) = parsed.executed_command.as_ref() {
+        sections.push(format!("Executed command: {}", executed_command.join(" ")));
+    }
 
     let mut output = parsed.output.clone();
     if let Some((stripped, total_lines)) = strip_total_output_header(&parsed.output) {

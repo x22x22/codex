@@ -228,6 +228,7 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         let base_command = ctx.command_override.as_ref().unwrap_or(&req.command);
         crate::tools::events::ToolEmitter::shell(
             base_command.to_vec(),
+            false,
             req.cwd.clone(),
             ExecCommandSource::Agent,
             false,
