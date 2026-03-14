@@ -42,7 +42,7 @@ use super::rate_limits::format_status_limit_summary;
 use super::rate_limits::render_status_limit_progress_bar;
 use crate::wrapping::RtOptions;
 use crate::wrapping::adaptive_wrap_lines;
-use codex_core::AuthManager;
+use codex_app_server_protocol::Account;
 
 #[derive(Debug, Clone)]
 struct StatusContextWindowData {
@@ -80,7 +80,7 @@ struct StatusHistoryCell {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output(
     config: &Config,
-    auth_manager: &AuthManager,
+    account: Option<&Account>,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
@@ -96,7 +96,7 @@ pub(crate) fn new_status_output(
     let snapshots = rate_limits.map(std::slice::from_ref).unwrap_or_default();
     new_status_output_with_rate_limits(
         config,
-        auth_manager,
+        account,
         token_info,
         total_usage,
         session_id,
@@ -114,7 +114,7 @@ pub(crate) fn new_status_output(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn new_status_output_with_rate_limits(
     config: &Config,
-    auth_manager: &AuthManager,
+    account: Option<&Account>,
     token_info: Option<&TokenUsageInfo>,
     total_usage: &TokenUsage,
     session_id: &Option<ThreadId>,
@@ -130,7 +130,7 @@ pub(crate) fn new_status_output_with_rate_limits(
     let command = PlainHistoryCell::new(vec!["/status".magenta().into()]);
     let card = StatusHistoryCell::new(
         config,
-        auth_manager,
+        account,
         token_info,
         total_usage,
         session_id,
@@ -151,7 +151,7 @@ impl StatusHistoryCell {
     #[allow(clippy::too_many_arguments)]
     fn new(
         config: &Config,
-        auth_manager: &AuthManager,
+        account: Option<&Account>,
         token_info: Option<&TokenUsageInfo>,
         total_usage: &TokenUsage,
         session_id: &Option<ThreadId>,
@@ -227,7 +227,7 @@ impl StatusHistoryCell {
         };
         let agents_summary = compose_agents_summary(config);
         let model_provider = format_model_provider(config);
-        let account = compose_account_display(auth_manager, plan_type);
+        let account = compose_account_display(account, plan_type);
         let session_id = session_id.as_ref().map(std::string::ToString::to_string);
         let forked_from = forked_from.map(|id| id.to_string());
         let default_usage = TokenUsage::default();

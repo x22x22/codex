@@ -1,3 +1,4 @@
+use crate::account_state::feedback_audience_from_account;
 use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event::ExitMode;
@@ -10,6 +11,8 @@ use crate::bottom_pane::FeedbackAudience;
 use crate::bottom_pane::McpServerElicitationFormRequest;
 use crate::bottom_pane::SelectionItem;
 use crate::bottom_pane::SelectionViewParams;
+use crate::bottom_pane::feedback_upload_classification;
+use crate::bottom_pane::feedback_upload_success_lines;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
@@ -42,7 +45,6 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::RequestId;
-use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -661,7 +663,6 @@ pub(crate) struct App {
     pub(crate) session_telemetry: SessionTelemetry,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
-    pub(crate) auth_manager: Arc<AuthManager>,
     available_models: Vec<ModelPreset>,
     available_collaboration_modes: Vec<CollaborationModeMask>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
@@ -774,7 +775,7 @@ impl App {
             // Fork/resume bootstraps here don't carry any prefilled message content.
             initial_user_message: None,
             enhanced_keys_supported: self.enhanced_keys_supported,
-            auth_manager: self.auth_manager.clone(),
+            account: self.chat_widget.account().cloned(),
             available_models: self.available_models.clone(),
             available_collaboration_modes: self.available_collaboration_modes.clone(),
             feedback: self.feedback.clone(),
@@ -1802,7 +1803,7 @@ impl App {
             // New sessions start without prefilled message content.
             initial_user_message: None,
             enhanced_keys_supported: self.enhanced_keys_supported,
-            auth_manager: self.auth_manager.clone(),
+            account: self.chat_widget.account().cloned(),
             available_models: self.available_models.clone(),
             available_collaboration_modes: self.available_collaboration_modes.clone(),
             feedback: self.feedback.clone(),
@@ -1962,7 +1963,6 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
-        let auth_manager = app_server.auth_manager();
         let available_models = App::list_models_via_app_server(&app_server)
             .await
             .map_err(|err| color_eyre::eyre::eyre!(err))?;
@@ -2019,14 +2019,7 @@ impl App {
             codex_app_server_protocol::Account::ApiKey {} => TelemetryAuthMode::ApiKey,
             codex_app_server_protocol::Account::Chatgpt { .. } => TelemetryAuthMode::Chatgpt,
         });
-        let feedback_audience = if account_email
-            .as_deref()
-            .is_some_and(|email| email.ends_with("@openai.com"))
-        {
-            FeedbackAudience::OpenAiEmployee
-        } else {
-            FeedbackAudience::External
-        };
+        let feedback_audience = feedback_audience_from_account(account.as_ref());
         let session_telemetry = SessionTelemetry::new(
             ThreadId::new(),
             model.as_str(),
@@ -2071,7 +2064,7 @@ impl App {
                 Vec::new(),
             ),
             enhanced_keys_supported,
-            auth_manager: auth_manager.clone(),
+            account: account.clone(),
             available_models: available_models.clone(),
             available_collaboration_modes: available_collaboration_modes.clone(),
             feedback: feedback.clone(),
@@ -2095,7 +2088,6 @@ impl App {
             session_telemetry: session_telemetry.clone(),
             app_event_tx,
             chat_widget,
-            auth_manager: auth_manager.clone(),
             available_models,
             available_collaboration_modes,
             config,
@@ -2710,7 +2702,15 @@ impl App {
                 self.open_url_in_browser(url);
             }
             AppEvent::RefreshConnectors { force_refetch } => {
-                self.chat_widget.refresh_connectors(force_refetch);
+                let thread_id = self
+                    .active_thread_id
+                    .or(self.chat_widget.thread_id())
+                    .map(|thread_id| thread_id.to_string());
+                let result = Self::list_apps_via_app_server(app_server, thread_id, force_refetch)
+                    .await
+                    .map(|connectors| crate::app_event::ConnectorsSnapshot { connectors })
+                    .map_err(|err| format!("Failed to load apps: {err}"));
+                self.chat_widget.on_connectors_loaded(result, true);
             }
             AppEvent::StartFileSearch(query) => {
                 self.file_search.on_user_query(query);
@@ -2721,8 +2721,69 @@ impl App {
             AppEvent::RateLimitSnapshotFetched(snapshot) => {
                 self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
             }
+            AppEvent::RefreshRateLimits => {
+                match Self::read_account_rate_limits_via_app_server(app_server).await {
+                    Ok(response) => {
+                        self.chat_widget.on_rate_limit_snapshot(None);
+                        if let Some(rate_limits_by_limit_id) = response.rate_limits_by_limit_id {
+                            for snapshot in rate_limits_by_limit_id.into_values() {
+                                self.chat_widget.on_rate_limit_snapshot(Some(
+                                    app_server_adapter::rate_limit_snapshot_from_api(snapshot),
+                                ));
+                            }
+                        } else {
+                            self.chat_widget.on_rate_limit_snapshot(Some(
+                                app_server_adapter::rate_limit_snapshot_from_api(
+                                    response.rate_limits,
+                                ),
+                            ));
+                        }
+                    }
+                    Err(err) => {
+                        tracing::debug!(error = %err, "failed to refresh rate limits via app-server");
+                    }
+                }
+            }
             AppEvent::ConnectorsLoaded { result, is_final } => {
                 self.chat_widget.on_connectors_loaded(result, is_final);
+            }
+            AppEvent::UploadFeedback {
+                category,
+                thread_id,
+                note,
+                include_logs,
+                rollout_path,
+                feedback_audience,
+            } => {
+                match Self::upload_feedback_via_app_server(
+                    app_server,
+                    self.next_app_server_request_id(),
+                    feedback_upload_classification(category).to_string(),
+                    note,
+                    thread_id.map(|thread_id| thread_id.to_string()),
+                    include_logs,
+                    include_logs.then(|| rollout_path.into_iter().collect()),
+                )
+                .await
+                {
+                    Ok(thread_id) => {
+                        self.chat_widget
+                            .add_to_history(history_cell::PlainHistoryCell::new(
+                                feedback_upload_success_lines(
+                                    category,
+                                    include_logs,
+                                    &thread_id,
+                                    feedback_audience,
+                                ),
+                            ));
+                    }
+                    Err(err) => {
+                        self.chat_widget
+                            .add_to_history(history_cell::new_error_event(format!(
+                                "Failed to upload feedback: {err}"
+                            )));
+                    }
+                }
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.on_update_reasoning_effort(effort);
@@ -6341,9 +6402,6 @@ smart_approvals = true
         let available_collaboration_modes = thread_manager
             .get_models_manager()
             .list_collaboration_modes();
-        let auth_manager = codex_core::test_support::auth_manager_from_auth(
-            CodexAuth::from_api_key("Test API Key"),
-        );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
@@ -6352,7 +6410,6 @@ smart_approvals = true
             session_telemetry,
             app_event_tx,
             chat_widget,
-            auth_manager,
             available_models,
             available_collaboration_modes,
             config,
@@ -6417,9 +6474,6 @@ smart_approvals = true
         let available_collaboration_modes = thread_manager
             .get_models_manager()
             .list_collaboration_modes();
-        let auth_manager = codex_core::test_support::auth_manager_from_auth(
-            CodexAuth::from_api_key("Test API Key"),
-        );
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         let model = codex_core::test_support::get_model_offline(config.model.as_deref());
         let session_telemetry = test_session_telemetry(&config, model.as_str());
@@ -6429,7 +6483,6 @@ smart_approvals = true
                 session_telemetry,
                 app_event_tx,
                 chat_widget,
-                auth_manager,
                 available_models,
                 available_collaboration_modes,
                 config,

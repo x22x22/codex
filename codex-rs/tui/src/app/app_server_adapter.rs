@@ -4,13 +4,18 @@ use std::path::PathBuf;
 use super::App;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessServerEvent;
+use codex_app_server_protocol::AppsListParams;
+use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::CollaborationModeListParams;
 use codex_app_server_protocol::CollaborationModeListResponse;
 use codex_app_server_protocol::CommandExecutionRequestApprovalResponse;
+use codex_app_server_protocol::FeedbackUploadParams;
+use codex_app_server_protocol::FeedbackUploadResponse;
 use codex_app_server_protocol::FileChangeApprovalDecision;
 use codex_app_server_protocol::FileChangeRequestApprovalResponse;
 use codex_app_server_protocol::GetAccountParams;
+use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCNotification;
@@ -134,6 +139,69 @@ impl App {
         )
         .await?;
         Ok(response.account)
+    }
+
+    pub(super) async fn read_account_rate_limits_via_app_server(
+        app_server_client: &InProcessAppServerClient,
+    ) -> Result<GetAccountRateLimitsResponse, String> {
+        send_request_with_response(
+            app_server_client,
+            ClientRequest::GetAccountRateLimits {
+                request_id: RequestId::Integer(0),
+                params: None,
+            },
+            "account/rateLimits/read",
+        )
+        .await
+    }
+
+    pub(super) async fn list_apps_via_app_server(
+        app_server_client: &InProcessAppServerClient,
+        thread_id: Option<String>,
+        force_refetch: bool,
+    ) -> Result<Vec<codex_app_server_protocol::AppInfo>, String> {
+        let response: AppsListResponse = send_request_with_response(
+            app_server_client,
+            ClientRequest::AppsList {
+                request_id: RequestId::Integer(0),
+                params: AppsListParams {
+                    cursor: None,
+                    limit: None,
+                    thread_id,
+                    force_refetch,
+                },
+            },
+            "app/list",
+        )
+        .await?;
+        Ok(response.data)
+    }
+
+    pub(super) async fn upload_feedback_via_app_server(
+        app_server_client: &InProcessAppServerClient,
+        request_id: RequestId,
+        classification: String,
+        reason: Option<String>,
+        thread_id: Option<String>,
+        include_logs: bool,
+        extra_log_files: Option<Vec<PathBuf>>,
+    ) -> Result<String, String> {
+        let response: FeedbackUploadResponse = send_request_with_response(
+            app_server_client,
+            ClientRequest::FeedbackUpload {
+                request_id,
+                params: FeedbackUploadParams {
+                    classification,
+                    reason,
+                    thread_id,
+                    include_logs,
+                    extra_log_files,
+                },
+            },
+            "feedback/upload",
+        )
+        .await?;
+        Ok(response.thread_id)
     }
 
     pub(super) fn next_app_server_request_id(&mut self) -> RequestId {
@@ -718,7 +786,7 @@ impl App {
 
     async fn handle_server_notification(
         &mut self,
-        _app_server_client: &InProcessAppServerClient,
+        app_server_client: &InProcessAppServerClient,
         notification: ServerNotification,
     ) {
         match notification {
@@ -761,6 +829,33 @@ impl App {
                         session.thread_name = payload.thread_name.clone();
                     }
                 }
+            }
+            ServerNotification::AccountUpdated(_) => {
+                match Self::read_account_via_app_server(app_server_client).await {
+                    Ok(account) => {
+                        self.feedback_audience =
+                            crate::account_state::feedback_audience_from_account(account.as_ref());
+                        self.chat_widget.set_account(account);
+                        self.refresh_status_line();
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to refresh account via app-server");
+                    }
+                }
+            }
+            ServerNotification::AccountRateLimitsUpdated(payload) => {
+                self.chat_widget
+                    .on_rate_limit_snapshot(Some(rate_limit_snapshot_from_api(
+                        payload.rate_limits,
+                    )));
+            }
+            ServerNotification::AppListUpdated(payload) => {
+                self.chat_widget.on_connectors_loaded(
+                    Ok(crate::app_event::ConnectorsSnapshot {
+                        connectors: payload.data,
+                    }),
+                    true,
+                );
             }
             _ => {}
         }
@@ -1172,6 +1267,39 @@ fn collaboration_mode_mask_from_api(
         model: mask.model,
         reasoning_effort: mask.reasoning_effort,
         developer_instructions: None,
+    }
+}
+
+pub(super) fn rate_limit_snapshot_from_api(
+    snapshot: codex_app_server_protocol::RateLimitSnapshot,
+) -> codex_protocol::protocol::RateLimitSnapshot {
+    codex_protocol::protocol::RateLimitSnapshot {
+        limit_id: snapshot.limit_id,
+        limit_name: snapshot.limit_name,
+        primary: snapshot.primary.map(rate_limit_window_from_api),
+        secondary: snapshot.secondary.map(rate_limit_window_from_api),
+        credits: snapshot.credits.map(credits_snapshot_from_api),
+        plan_type: snapshot.plan_type,
+    }
+}
+
+fn rate_limit_window_from_api(
+    window: codex_app_server_protocol::RateLimitWindow,
+) -> codex_protocol::protocol::RateLimitWindow {
+    codex_protocol::protocol::RateLimitWindow {
+        used_percent: f64::from(window.used_percent),
+        window_minutes: window.window_duration_mins,
+        resets_at: window.resets_at,
+    }
+}
+
+fn credits_snapshot_from_api(
+    credits: codex_app_server_protocol::CreditsSnapshot,
+) -> codex_protocol::protocol::CreditsSnapshot {
+    codex_protocol::protocol::CreditsSnapshot {
+        has_credits: credits.has_credits,
+        unlimited: credits.unlimited,
+        balance: credits.balance,
     }
 }
 

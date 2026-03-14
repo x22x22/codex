@@ -131,6 +131,9 @@ pub(crate) enum AppEvent {
     /// Result of refreshing rate limits
     RateLimitSnapshotFetched(RateLimitSnapshot),
 
+    /// Request a fresh account rate-limit read via app-server.
+    RefreshRateLimits,
+
     /// Result of prefetching connectors.
     ConnectorsLoaded {
         result: Result<ConnectorsSnapshot, String>,
@@ -430,6 +433,15 @@ pub(crate) enum AppEvent {
     OpenFeedbackNote {
         category: FeedbackCategory,
         include_logs: bool,
+    },
+
+    UploadFeedback {
+        category: FeedbackCategory,
+        thread_id: Option<ThreadId>,
+        note: Option<String>,
+        include_logs: bool,
+        rollout_path: Option<PathBuf>,
+        feedback_audience: crate::bottom_pane::FeedbackAudience,
     },
 
     /// Open the upload consent popup for feedback after selecting a category.

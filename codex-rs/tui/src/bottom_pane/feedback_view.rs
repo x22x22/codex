@@ -19,9 +19,8 @@ use ratatui::widgets::Widget;
 use crate::app_event::AppEvent;
 use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
-use crate::history_cell;
 use crate::render::renderable::Renderable;
-use codex_protocol::protocol::SessionSource;
+use codex_protocol::ThreadId;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -48,7 +47,7 @@ pub(crate) enum FeedbackAudience {
 /// both logs and rollout with classification + metadata.
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
-    snapshot: codex_feedback::FeedbackSnapshot,
+    thread_id: Option<ThreadId>,
     rollout_path: Option<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
@@ -63,7 +62,7 @@ pub(crate) struct FeedbackNoteView {
 impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
-        snapshot: codex_feedback::FeedbackSnapshot,
+        thread_id: Option<ThreadId>,
         rollout_path: Option<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,
@@ -71,7 +70,7 @@ impl FeedbackNoteView {
     ) -> Self {
         Self {
             category,
-            snapshot,
+            thread_id,
             rollout_path,
             app_event_tx,
             include_logs,
@@ -84,90 +83,14 @@ impl FeedbackNoteView {
 
     fn submit(&mut self) {
         let note = self.textarea.text().trim().to_string();
-        let reason_opt = if note.is_empty() {
-            None
-        } else {
-            Some(note.as_str())
-        };
-        let attachment_paths = if self.include_logs {
-            self.rollout_path.iter().cloned().collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
-        let classification = feedback_classification(self.category);
-
-        let mut thread_id = self.snapshot.thread_id.clone();
-
-        let result = self.snapshot.upload_feedback(
-            classification,
-            reason_opt,
-            self.include_logs,
-            &attachment_paths,
-            Some(SessionSource::Cli),
-            None,
-        );
-
-        match result {
-            Ok(()) => {
-                let prefix = if self.include_logs {
-                    "• Feedback uploaded."
-                } else {
-                    "• Feedback recorded (no logs)."
-                };
-                let issue_url =
-                    issue_url_for_category(self.category, &thread_id, self.feedback_audience);
-                let mut lines = vec![Line::from(match issue_url.as_ref() {
-                    Some(_) if self.feedback_audience == FeedbackAudience::OpenAiEmployee => {
-                        format!("{prefix} Please report this in #codex-feedback:")
-                    }
-                    Some(_) => format!("{prefix} Please open an issue using the following URL:"),
-                    None => format!("{prefix} Thanks for the feedback!"),
-                })];
-                match issue_url {
-                    Some(url) if self.feedback_audience == FeedbackAudience::OpenAiEmployee => {
-                        lines.extend([
-                            "".into(),
-                            Line::from(vec!["  ".into(), url.cyan().underlined()]),
-                            "".into(),
-                            Line::from("  Share this and add some info about your problem:"),
-                            Line::from(vec![
-                                "    ".into(),
-                                format!("https://go/codex-feedback/{thread_id}").bold(),
-                            ]),
-                        ]);
-                    }
-                    Some(url) => {
-                        lines.extend([
-                            "".into(),
-                            Line::from(vec!["  ".into(), url.cyan().underlined()]),
-                            "".into(),
-                            Line::from(vec![
-                                "  Or mention your thread ID ".into(),
-                                std::mem::take(&mut thread_id).bold(),
-                                " in an existing issue.".into(),
-                            ]),
-                        ]);
-                    }
-                    None => {
-                        lines.extend([
-                            "".into(),
-                            Line::from(vec![
-                                "  Thread ID: ".into(),
-                                std::mem::take(&mut thread_id).bold(),
-                            ]),
-                        ]);
-                    }
-                }
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::PlainHistoryCell::new(lines),
-                )));
-            }
-            Err(e) => {
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_error_event(format!("Failed to upload feedback: {e}")),
-                )));
-            }
-        }
+        self.app_event_tx.send(AppEvent::UploadFeedback {
+            category: self.category,
+            thread_id: self.thread_id,
+            note: (!note.is_empty()).then_some(note),
+            include_logs: self.include_logs,
+            rollout_path: self.rollout_path.clone(),
+            feedback_audience: self.feedback_audience,
+        });
         self.complete = true;
     }
 }
@@ -390,6 +313,64 @@ fn feedback_classification(category: FeedbackCategory) -> &'static str {
         FeedbackCategory::SafetyCheck => "safety_check",
         FeedbackCategory::Other => "other",
     }
+}
+
+pub(crate) fn feedback_upload_classification(category: FeedbackCategory) -> &'static str {
+    feedback_classification(category)
+}
+
+pub(crate) fn feedback_upload_success_lines(
+    category: FeedbackCategory,
+    include_logs: bool,
+    thread_id: &str,
+    feedback_audience: FeedbackAudience,
+) -> Vec<Line<'static>> {
+    let prefix = if include_logs {
+        "• Feedback uploaded."
+    } else {
+        "• Feedback recorded (no logs)."
+    };
+    let issue_url = issue_url_for_category(category, thread_id, feedback_audience);
+    let mut lines = vec![Line::from(match issue_url.as_ref() {
+        Some(_) if feedback_audience == FeedbackAudience::OpenAiEmployee => {
+            format!("{prefix} Please report this in #codex-feedback:")
+        }
+        Some(_) => format!("{prefix} Please open an issue using the following URL:"),
+        None => format!("{prefix} Thanks for the feedback!"),
+    })];
+    match issue_url {
+        Some(url) if feedback_audience == FeedbackAudience::OpenAiEmployee => {
+            lines.extend([
+                "".into(),
+                Line::from(vec!["  ".into(), url.cyan().underlined()]),
+                "".into(),
+                Line::from("  Share this and add some info about your problem:"),
+                Line::from(vec![
+                    "    ".into(),
+                    format!("https://go/codex-feedback/{thread_id}").bold(),
+                ]),
+            ]);
+        }
+        Some(url) => {
+            lines.extend([
+                "".into(),
+                Line::from(vec!["  ".into(), url.cyan().underlined()]),
+                "".into(),
+                Line::from(vec![
+                    "  Or mention your thread ID ".into(),
+                    thread_id.to_string().bold(),
+                    " in an existing issue.".into(),
+                ]),
+            ]);
+        }
+        None => {
+            lines.extend([
+                "".into(),
+                Line::from(vec!["  Thread ID: ".into(), thread_id.to_string().bold()]),
+            ]);
+        }
+    }
+    lines
 }
 
 fn issue_url_for_category(
@@ -628,15 +609,7 @@ mod tests {
     fn make_view(category: FeedbackCategory) -> FeedbackNoteView {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let snapshot = codex_feedback::CodexFeedback::new().snapshot(None);
-        FeedbackNoteView::new(
-            category,
-            snapshot,
-            None,
-            tx,
-            true,
-            FeedbackAudience::External,
-        )
+        FeedbackNoteView::new(category, None, None, tx, true, FeedbackAudience::External)
     }
 
     #[test]
@@ -678,7 +651,7 @@ mod tests {
     fn feedback_view_with_connectivity_diagnostics() {
         let (tx_raw, _rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let diagnostics = FeedbackDiagnostics::new(vec![
+        let _diagnostics = FeedbackDiagnostics::new(vec![
             FeedbackDiagnostic {
                 headline: "Proxy environment variables are set and may affect connectivity."
                     .to_string(),
@@ -689,12 +662,9 @@ mod tests {
                 details: vec!["OPENAI_BASE_URL = https://example.com/v1".to_string()],
             },
         ]);
-        let snapshot = codex_feedback::CodexFeedback::new()
-            .snapshot(None)
-            .with_feedback_diagnostics(diagnostics);
         let view = FeedbackNoteView::new(
             FeedbackCategory::Bug,
-            snapshot,
+            None,
             None,
             tx,
             false,

@@ -65,6 +65,7 @@ use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
+mod account_state;
 mod additional_dirs;
 mod app;
 mod app_backtrack;

@@ -51,7 +51,6 @@ use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::text_formatting::proper_join;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_backend_client::Client as BackendClient;
 use codex_chatgpt::connectors;
 use codex_core::config::Config;
 use codex_core::config::Constrained;
@@ -211,6 +210,9 @@ fn queued_message_edit_binding_for_terminal(terminal_name: TerminalName) -> KeyB
     }
 }
 
+use crate::account_state::account_is_chatgpt;
+use crate::account_state::account_plan_type;
+use crate::account_state::feedback_audience_from_account;
 use crate::app_event::AppEvent;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
@@ -292,8 +294,7 @@ use crate::streaming::controller::PlanStreamController;
 use crate::streaming::controller::StreamController;
 
 use chrono::Local;
-use codex_core::AuthManager;
-use codex_core::CodexAuth;
+use codex_app_server_protocol::Account;
 use codex_core::ThreadManager;
 use codex_file_search::FileMatch;
 use codex_protocol::openai_models::InputModality;
@@ -474,7 +475,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) initial_user_message: Option<UserMessage>,
     pub(crate) enhanced_keys_supported: bool,
-    pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) account: Option<Account>,
     pub(crate) available_models: Vec<ModelPreset>,
     pub(crate) available_collaboration_modes: Vec<CollaborationModeMask>,
     pub(crate) feedback: codex_feedback::CodexFeedback,
@@ -653,7 +654,7 @@ pub(crate) struct ChatWidget {
     current_collaboration_mode: CollaborationMode,
     /// The currently active collaboration mask, if any.
     active_collaboration_mask: Option<CollaborationModeMask>,
-    auth_manager: Arc<AuthManager>,
+    account: Option<Account>,
     available_models: Vec<ModelPreset>,
     available_collaboration_modes: Vec<CollaborationModeMask>,
     session_telemetry: SessionTelemetry,
@@ -1412,9 +1413,7 @@ impl ChatWidget {
             event,
             self.show_welcome_banner,
             startup_tooltip_override,
-            self.auth_manager
-                .auth_cached()
-                .and_then(|auth| auth.account_plan_type()),
+            account_plan_type(self.account.as_ref()),
             show_fast_status,
         );
         self.apply_session_info_cell(session_info_cell);
@@ -1497,27 +1496,57 @@ impl ChatWidget {
         self.bottom_pane.set_skills(skills);
     }
 
+    pub(crate) fn account(&self) -> Option<&Account> {
+        self.account.as_ref()
+    }
+
+    pub(crate) fn set_account(&mut self, account: Option<Account>) {
+        let connectors_were_enabled = self.connectors_enabled();
+        let should_prefetch_rate_limits = self.should_prefetch_rate_limits();
+        let account_changed = self.account != account;
+
+        self.feedback_audience = feedback_audience_from_account(account.as_ref());
+        self.plan_type = account_plan_type(account.as_ref()).or(self.plan_type);
+        self.account = account;
+
+        let connectors_enabled = self.connectors_enabled();
+        self.bottom_pane.set_connectors_enabled(connectors_enabled);
+        self.sync_fast_command_enabled();
+
+        if connectors_enabled {
+            if account_changed || !connectors_were_enabled {
+                self.refresh_connectors(account_changed);
+            }
+        } else {
+            self.connectors_cache = ConnectorsCacheState::default();
+            self.connectors_partial_snapshot = None;
+            self.bottom_pane.set_connectors_snapshot(None);
+        }
+
+        if self.should_prefetch_rate_limits() {
+            if account_changed || !should_prefetch_rate_limits {
+                self.prefetch_rate_limits();
+            }
+        } else {
+            self.stop_rate_limit_poller();
+            self.on_rate_limit_snapshot(None);
+        }
+
+        self.request_redraw();
+    }
+
     pub(crate) fn open_feedback_note(
         &mut self,
         category: crate::app_event::FeedbackCategory,
         include_logs: bool,
     ) {
-        if let Some(chatgpt_user_id) = self
-            .auth_manager
-            .auth_cached()
-            .and_then(|auth| auth.get_chatgpt_user_id())
-        {
-            tracing::info!(target: "feedback_tags", chatgpt_user_id);
-        }
-        let snapshot = self.feedback.snapshot(self.thread_id);
-        self.show_feedback_note(category, include_logs, snapshot);
+        self.show_feedback_note(category, include_logs);
     }
 
     fn show_feedback_note(
         &mut self,
         category: crate::app_event::FeedbackCategory,
         include_logs: bool,
-        snapshot: codex_feedback::FeedbackSnapshot,
     ) {
         let rollout = if include_logs {
             self.current_rollout_path.clone()
@@ -1526,7 +1555,7 @@ impl ChatWidget {
         };
         let view = crate::bottom_pane::FeedbackNoteView::new(
             category,
-            snapshot,
+            self.thread_id,
             rollout,
             self.app_event_tx.clone(),
             include_logs,
@@ -1543,13 +1572,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
-        if let Some(chatgpt_user_id) = self
-            .auth_manager
-            .auth_cached()
-            .and_then(|auth| auth.get_chatgpt_user_id())
-        {
-            tracing::info!(target: "feedback_tags", chatgpt_user_id);
-        }
         let snapshot = self.feedback.snapshot(self.thread_id);
         let params = crate::bottom_pane::feedback_upload_consent_params(
             self.app_event_tx.clone(),
@@ -3520,7 +3542,7 @@ impl ChatWidget {
             app_event_tx,
             initial_user_message,
             enhanced_keys_supported,
-            auth_manager,
+            account,
             available_models,
             available_collaboration_modes,
             feedback,
@@ -3589,7 +3611,7 @@ impl ChatWidget {
             skills_initial_state: None,
             current_collaboration_mode,
             active_collaboration_mask,
-            auth_manager,
+            account,
             available_models,
             available_collaboration_modes,
             session_telemetry,
@@ -3712,7 +3734,7 @@ impl ChatWidget {
             app_event_tx,
             initial_user_message,
             enhanced_keys_supported,
-            auth_manager,
+            account,
             available_models,
             available_collaboration_modes,
             feedback,
@@ -3780,7 +3802,7 @@ impl ChatWidget {
             skills_initial_state: None,
             current_collaboration_mode,
             active_collaboration_mask,
-            auth_manager,
+            account,
             available_models,
             available_collaboration_modes,
             session_telemetry,
@@ -3895,7 +3917,7 @@ impl ChatWidget {
             app_event_tx,
             initial_user_message,
             enhanced_keys_supported,
-            auth_manager,
+            account,
             available_models,
             available_collaboration_modes,
             feedback,
@@ -3963,7 +3985,7 @@ impl ChatWidget {
             skills_initial_state: None,
             current_collaboration_mode,
             active_collaboration_mask,
-            auth_manager,
+            account,
             available_models,
             available_collaboration_modes,
             session_telemetry,
@@ -5697,7 +5719,7 @@ impl ChatWidget {
             .collect();
         self.add_to_history(crate::status::new_status_output_with_rate_limits(
             &self.config,
-            self.auth_manager.as_ref(),
+            self.account.as_ref(),
             token_info,
             total_usage,
             &self.thread_id,
@@ -6027,61 +6049,8 @@ impl ChatWidget {
         if !matches!(self.connectors_cache, ConnectorsCacheState::Ready(_)) {
             self.connectors_cache = ConnectorsCacheState::Loading;
         }
-
-        let config = self.config.clone();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let accessible_result =
-                match connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
-                    &config,
-                    force_refetch,
-                )
-                .await
-                {
-                    Ok(connectors) => connectors,
-                    Err(err) => {
-                        app_event_tx.send(AppEvent::ConnectorsLoaded {
-                            result: Err(format!("Failed to load apps: {err}")),
-                            is_final: true,
-                        });
-                        return;
-                    }
-                };
-            let should_schedule_force_refetch =
-                !force_refetch && !accessible_result.codex_apps_ready;
-            let accessible_connectors = accessible_result.connectors;
-
-            app_event_tx.send(AppEvent::ConnectorsLoaded {
-                result: Ok(ConnectorsSnapshot {
-                    connectors: accessible_connectors.clone(),
-                }),
-                is_final: false,
-            });
-
-            let result: Result<ConnectorsSnapshot, String> = async {
-                let all_connectors =
-                    connectors::list_all_connectors_with_options(&config, force_refetch).await?;
-                let connectors = connectors::merge_connectors_with_accessible(
-                    all_connectors,
-                    accessible_connectors,
-                    true,
-                );
-                Ok(ConnectorsSnapshot { connectors })
-            }
-            .await
-            .map_err(|err: anyhow::Error| format!("Failed to load apps: {err}"));
-
-            app_event_tx.send(AppEvent::ConnectorsLoaded {
-                result,
-                is_final: true,
-            });
-
-            if should_schedule_force_refetch {
-                app_event_tx.send(AppEvent::RefreshConnectors {
-                    force_refetch: true,
-                });
-            }
-        });
+        self.app_event_tx
+            .send(AppEvent::RefreshConnectors { force_refetch });
     }
 
     fn prefetch_rate_limits(&mut self) {
@@ -6091,21 +6060,13 @@ impl ChatWidget {
             return;
         }
 
-        let base_url = self.config.chatgpt_base_url.clone();
         let app_event_tx = self.app_event_tx.clone();
-        let auth_manager = Arc::clone(&self.auth_manager);
 
         let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(60));
 
             loop {
-                if let Some(auth) = auth_manager.auth().await
-                    && auth.is_chatgpt_auth()
-                {
-                    for snapshot in fetch_rate_limits(base_url.clone(), auth).await {
-                        app_event_tx.send(AppEvent::RateLimitSnapshotFetched(snapshot));
-                    }
-                }
+                app_event_tx.send(AppEvent::RefreshRateLimits);
                 interval.tick().await;
             }
         });
@@ -6114,14 +6075,7 @@ impl ChatWidget {
     }
 
     fn should_prefetch_rate_limits(&self) -> bool {
-        if !self.config.model_provider.requires_openai_auth {
-            return false;
-        }
-
-        self.auth_manager
-            .auth_cached()
-            .as_ref()
-            .is_some_and(CodexAuth::is_chatgpt_auth)
+        self.config.model_provider.requires_openai_auth && account_is_chatgpt(self.account.as_ref())
     }
 
     fn lower_cost_preset(&self) -> Option<ModelPreset> {
@@ -7957,11 +7911,7 @@ impl ChatWidget {
     ) -> bool {
         model == FAST_STATUS_MODEL
             && matches!(service_tier, Some(ServiceTier::Fast))
-            && self
-                .auth_manager
-                .auth_cached()
-                .as_ref()
-                .is_some_and(CodexAuth::is_chatgpt_auth)
+            && account_is_chatgpt(self.account.as_ref())
     }
 
     fn fast_mode_enabled(&self) -> bool {
@@ -8268,9 +8218,7 @@ impl ChatWidget {
     }
 
     fn connectors_enabled(&self) -> bool {
-        self.config
-            .features
-            .apps_enabled_cached(Some(self.auth_manager.as_ref()))
+        self.config.features.enabled(Feature::Apps) && account_is_chatgpt(self.account.as_ref())
     }
 
     fn connectors_for_mentions(&self) -> Option<&[connectors::AppInfo]> {
@@ -9418,22 +9366,6 @@ fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'st
     match event_name {
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
         codex_protocol::protocol::HookEventName::Stop => "Stop",
-    }
-}
-
-async fn fetch_rate_limits(base_url: String, auth: CodexAuth) -> Vec<RateLimitSnapshot> {
-    match BackendClient::from_auth(base_url, &auth) {
-        Ok(client) => match client.get_rate_limits_many().await {
-            Ok(snapshots) => snapshots,
-            Err(err) => {
-                debug!(error = ?err, "failed to fetch rate limits from /usage");
-                Vec::new()
-            }
-        },
-        Err(err) => {
-            debug!(error = ?err, "failed to construct backend client for rate limits");
-            Vec::new()
-        }
     }
 }
 

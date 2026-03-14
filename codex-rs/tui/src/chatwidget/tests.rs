@@ -1752,15 +1752,13 @@ async fn helpers_are_available_and_do_not_panic() {
             cfg.model_provider.clone(),
         ),
     );
-    let auth_manager =
-        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
         initial_user_message: None,
         enhanced_keys_supported: false,
-        auth_manager,
+        account: Some(codex_app_server_protocol::Account::ApiKey {}),
         available_models: thread_manager
             .get_models_manager()
             .try_list_models()
@@ -1844,7 +1842,7 @@ async fn make_chatwidget_manual(
     let codex_home = cfg.codex_home.clone();
     let models_manager = Arc::new(ModelsManager::new(
         codex_home,
-        auth_manager.clone(),
+        auth_manager,
         None,
         CollaborationModesConfig::default(),
     ));
@@ -1871,7 +1869,7 @@ async fn make_chatwidget_manual(
         config: cfg,
         current_collaboration_mode,
         active_collaboration_mask,
-        auth_manager,
+        account: Some(codex_app_server_protocol::Account::ApiKey {}),
         available_models,
         available_collaboration_modes,
         session_telemetry,
@@ -1988,12 +1986,16 @@ fn assert_no_submit_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) {
 }
 
 pub(crate) fn set_chatgpt_auth(chat: &mut ChatWidget) {
-    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
+    let auth_manager = codex_core::test_support::auth_manager_from_auth(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     );
+    chat.set_account(Some(codex_app_server_protocol::Account::Chatgpt {
+        email: "test@example.com".to_string(),
+        plan_type: codex_protocol::account::PlanType::Plus,
+    }));
     let models_manager = Arc::new(ModelsManager::new(
         chat.config.codex_home.clone(),
-        chat.auth_manager.clone(),
+        auth_manager,
         None,
         CollaborationModesConfig::default(),
     ));
@@ -2347,9 +2349,7 @@ async fn rate_limit_snapshots_keep_separate_entries_per_limit_id() {
 #[tokio::test]
 async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
     let (mut chat, _, _) = make_chatwidget_manual(Some(NUDGE_MODEL_SLUG)).await;
-    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-    );
+    set_chatgpt_auth(&mut chat);
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
 
@@ -2361,9 +2361,8 @@ async fn rate_limit_switch_prompt_skips_when_on_lower_cost_model() {
 
 #[tokio::test]
 async fn rate_limit_switch_prompt_skips_non_codex_limit() {
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
+    set_chatgpt_auth(&mut chat);
 
     chat.on_rate_limit_snapshot(Some(RateLimitSnapshot {
         limit_id: Some("codex_other".to_string()),
@@ -2386,9 +2385,8 @@ async fn rate_limit_switch_prompt_skips_non_codex_limit() {
 
 #[tokio::test]
 async fn rate_limit_switch_prompt_shows_once_per_session() {
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
+    set_chatgpt_auth(&mut chat);
 
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
     assert!(
@@ -2410,9 +2408,8 @@ async fn rate_limit_switch_prompt_shows_once_per_session() {
 
 #[tokio::test]
 async fn rate_limit_switch_prompt_respects_hidden_notice() {
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
+    set_chatgpt_auth(&mut chat);
     chat.config.notices.hide_rate_limit_model_nudge = Some(true);
 
     chat.on_rate_limit_snapshot(Some(snapshot(95.0)));
@@ -2425,9 +2422,8 @@ async fn rate_limit_switch_prompt_respects_hidden_notice() {
 
 #[tokio::test]
 async fn rate_limit_switch_prompt_defers_until_task_complete() {
-    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
     let (mut chat, _, _) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(auth);
+    set_chatgpt_auth(&mut chat);
 
     chat.bottom_pane.set_task_running(true);
     chat.on_rate_limit_snapshot(Some(snapshot(90.0)));
@@ -2447,9 +2443,7 @@ async fn rate_limit_switch_prompt_defers_until_task_complete() {
 #[tokio::test]
 async fn rate_limit_switch_prompt_popup_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-    );
+    set_chatgpt_auth(&mut chat);
 
     chat.on_rate_limit_snapshot(Some(snapshot(92.0)));
     chat.maybe_show_pending_rate_limit_prompt();
@@ -3250,9 +3244,7 @@ async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
 #[tokio::test]
 async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
-        CodexAuth::create_dummy_chatgpt_auth_for_testing(),
-    );
+    set_chatgpt_auth(&mut chat);
     chat.set_feature_enabled(Feature::CollaborationModes, true);
     let plan_mask =
         collaboration_modes::mask_for_kind(&chat.available_collaboration_modes, ModeKind::Plan)
@@ -5633,15 +5625,13 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
             cfg.model_provider.clone(),
         ),
     );
-    let auth_manager =
-        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
         enhanced_keys_supported: false,
-        auth_manager,
+        account: Some(codex_app_server_protocol::Account::ApiKey {}),
         available_models: thread_manager
             .get_models_manager()
             .try_list_models()
@@ -5689,15 +5679,13 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
             cfg.model_provider.clone(),
         ),
     );
-    let auth_manager =
-        codex_core::test_support::auth_manager_from_auth(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
         enhanced_keys_supported: false,
-        auth_manager,
+        account: Some(codex_app_server_protocol::Account::ApiKey {}),
         available_models: thread_manager
             .get_models_manager()
             .try_list_models()
