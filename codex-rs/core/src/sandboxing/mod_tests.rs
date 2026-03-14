@@ -425,8 +425,8 @@ fn effective_permissions_merge_macos_extensions_with_additional_permissions() {
                 "com.apple.Notes".to_string(),
             ]),
             macos_mach_services: vec![
-                "com.vendor.helper".to_string(),
                 "com.apple.logd".to_string(),
+                "com.vendor.helper".to_string(),
             ],
             macos_launch_services: true,
             macos_accessibility: true,
