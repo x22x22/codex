@@ -37,6 +37,11 @@ jobs:
       - name: Set up Bazel
         uses: bazelbuild/setup-bazelisk@v3
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.93.0
+        with:
+          targets: ${{ matrix.target }}
+
       - name: Build Bazel V8 musl artifacts
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
@@ -90,6 +95,32 @@ jobs:
             --platform "${PLATFORM}" \
             --target "${TARGET}" \
             --output-dir "${output_dir}"
+
+      - name: Validate staged bundle outside Bazel
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 .github/scripts/rusty_v8_bazel.py validate-bundle \
+            --platform "${PLATFORM}" \
+            --target "${TARGET}" \
+            --bundle-path "dist/${TARGET}/rusty_v8_bundle_${TARGET}.tar.gz"
+
+      - name: Validate staged bundle with Cargo
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 .github/scripts/rusty_v8_bazel.py validate-cargo \
+            --platform "${PLATFORM}" \
+            --target "${TARGET}" \
+            --bundle-path "dist/${TARGET}/rusty_v8_bundle_${TARGET}.tar.gz"
 
       - name: Upload staged artifacts
         uses: actions/upload-artifact@v7
