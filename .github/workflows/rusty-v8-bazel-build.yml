@@ -116,6 +116,7 @@ jobs:
           bazel_args=(
             build
             "--platforms=@llvm//platforms:${PLATFORM}"
+            --remote_download_toplevel
             "${lib_target}"
             "${binding_target}"
             "${runtime_targets[@]}"
