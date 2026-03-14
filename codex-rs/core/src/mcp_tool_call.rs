@@ -111,9 +111,11 @@ pub(crate) async fn handle_mcp_tool_call(
         )
         .await;
         let status = if result.is_ok() { "ok" } else { "error" };
-        turn_context
-            .session_telemetry
-            .counter("codex.mcp.call", 1, &[("status", status)]);
+        turn_context.session_telemetry.counter(
+            "codex.mcp.call",
+            /*inc=*/ 1,
+            &[("status", status)],
+        );
         return CallToolResult::from_result(result);
     }
 
@@ -214,9 +216,11 @@ pub(crate) async fn handle_mcp_tool_call(
         };
 
         let status = if result.is_ok() { "ok" } else { "error" };
-        turn_context
-            .session_telemetry
-            .counter("codex.mcp.call", 1, &[("status", status)]);
+        turn_context.session_telemetry.counter(
+            "codex.mcp.call",
+            /*inc=*/ 1,
+            &[("status", status)],
+        );
 
         return CallToolResult::from_result(result);
     }
@@ -260,9 +264,11 @@ pub(crate) async fn handle_mcp_tool_call(
     maybe_track_codex_app_used(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
 
     let status = if result.is_ok() { "ok" } else { "error" };
-    turn_context
-        .session_telemetry
-        .counter("codex.mcp.call", 1, &[("status", status)]);
+    turn_context.session_telemetry.counter(
+        "codex.mcp.call",
+        /*inc=*/ 1,
+        &[("status", status)],
+    );
 
     CallToolResult::from_result(result)
 }
@@ -495,7 +501,7 @@ async fn maybe_request_mcp_tool_approval(
             sess,
             turn_context,
             build_guardian_mcp_tool_review_request(invocation, metadata),
-            None,
+            /*retry_reason=*/ None,
         )
         .await;
         let decision = mcp_tool_approval_decision_from_guardian(decision);
