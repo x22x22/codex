@@ -2262,13 +2262,14 @@ impl App {
                         app.active_thread_rx.is_some()
                     ) => {
                         if let Some(event) = active {
-                            if let Err(err) = app.handle_active_thread_update(tui, event).await {
-                                break Err(err);
+                            match app.handle_active_thread_update(tui, event).await {
+                                Ok(control) => control,
+                                Err(err) => break Err(err),
                             }
                         } else {
                             app.clear_active_thread().await;
+                            AppRunControl::Continue
                         }
-                        AppRunControl::Continue
                     }
                     Some(event) = tui_events.next() => {
                         match app.handle_tui_event(tui, event).await {
@@ -2276,7 +2277,7 @@ impl App {
                             Err(err) => break Err(err),
                         }
                     }
-                    app_server_event = app_server.next_typed_event(), if listen_for_app_server_events => {
+                    app_server_event = app_server.next_event(), if listen_for_app_server_events => {
                         match app_server_event {
                             Some(event) => app.handle_app_server_event(&app_server, event).await,
                             None => {
@@ -3878,7 +3879,7 @@ impl App {
         &mut self,
         tui: &mut tui::Tui,
         update: ThreadUpdate,
-    ) -> Result<()> {
+    ) -> Result<AppRunControl> {
         // Capture this before any potential thread switch: we only want to clear
         // the exit marker when the currently active thread acknowledges shutdown.
         let pending_shutdown_exit_completed = matches!(&update, ThreadUpdate::ThreadClosed(_))
@@ -3910,19 +3911,20 @@ impl App {
                     "Agent thread {closed_thread_id} closed. Failed to switch back to main thread {primary_thread_id}.",
                 ));
             }
-            return Ok(());
+            return Ok(AppRunControl::Continue);
         }
 
         if pending_shutdown_exit_completed {
             // Clear only after seeing the shutdown completion for the tracked
             // thread, so unrelated shutdowns cannot consume this marker.
             self.pending_shutdown_exit_thread_id = None;
+            return Ok(AppRunControl::Exit(ExitReason::UserRequested));
         }
         self.handle_thread_update_now(update);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }
-        Ok(())
+        Ok(AppRunControl::Continue)
     }
 
     fn reasoning_label(reasoning_effort: Option<ReasoningEffortConfig>) -> &'static str {

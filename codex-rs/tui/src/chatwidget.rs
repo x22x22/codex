@@ -2953,6 +2953,13 @@ impl ChatWidget {
             .on_history_entry_response(log_id, offset, entry.map(|e| e.text));
     }
 
+    pub(crate) fn handle_get_history_entry_response_now(
+        &mut self,
+        event: codex_protocol::protocol::GetHistoryEntryResponseEvent,
+    ) {
+        self.on_get_history_entry_response(event);
+    }
+
     fn on_shutdown_complete(&mut self) {
         self.request_immediate_exit();
     }
@@ -8841,11 +8848,26 @@ impl ChatWidget {
         ));
     }
 
+    pub(crate) fn handle_list_mcp_tools_response_now(&mut self, ev: McpListToolsResponseEvent) {
+        self.on_list_mcp_tools(ev);
+    }
+
     fn on_list_custom_prompts(&mut self, ev: ListCustomPromptsResponseEvent) {
         let len = ev.custom_prompts.len();
         debug!("received {len} custom prompts");
         // Forward to bottom pane so the slash popup can show them now.
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
+    }
+
+    pub(crate) fn handle_list_custom_prompts_response_now(
+        &mut self,
+        ev: ListCustomPromptsResponseEvent,
+    ) {
+        self.on_list_custom_prompts(ev);
+    }
+
+    pub(crate) fn handle_warning_now(&mut self, message: String) {
+        self.on_warning(message);
     }
 
     pub(crate) fn handle_skills_list_response(&mut self, entries: &[SkillsListEntry]) {

@@ -274,6 +274,7 @@ pub struct InProcessAppServerClient {
     command_tx: mpsc::Sender<ClientCommand>,
     event_rx: mpsc::Receiver<InProcessServerEvent>,
     worker_handle: tokio::task::JoinHandle<()>,
+    shared_core: SharedCoreManagers,
 }
 
 impl InProcessAppServerClient {
@@ -437,6 +438,7 @@ impl InProcessAppServerClient {
             command_tx,
             event_rx,
             worker_handle,
+            shared_core,
         })
     }
 
@@ -602,6 +604,26 @@ impl InProcessAppServerClient {
         }
     }
 
+    /// Temporary escape hatch for legacy TUI operations that still have no
+    /// app-server RPC equivalent.
+    pub async fn submit_legacy_thread_op(
+        &self,
+        thread_id: codex_protocol::ThreadId,
+        op: codex_protocol::protocol::Op,
+    ) -> IoResult<()> {
+        let thread = self
+            .shared_core
+            .thread_manager
+            .get_thread(thread_id)
+            .await
+            .map_err(|err| IoError::other(format!("failed to get thread: {err}")))?;
+        thread
+            .submit(op)
+            .await
+            .map(|_| ())
+            .map_err(|err| IoError::other(format!("failed to submit legacy thread op: {err}")))
+    }
+
     /// Shuts down worker and in-process runtime with bounded wait.
     ///
     /// If graceful shutdown exceeds timeout, the worker task is aborted to
@@ -611,6 +633,7 @@ impl InProcessAppServerClient {
             command_tx,
             event_rx,
             worker_handle,
+            ..
         } = self;
         let mut worker_handle = worker_handle;
         // Drop the caller-facing receiver before asking the worker to shut
@@ -841,6 +864,22 @@ mod tests {
             command_tx,
             event_rx,
             worker_handle,
+            shared_core: InProcessClientStartArgs {
+                arg0_paths: Arg0DispatchPaths::default(),
+                config: Arc::new(build_test_config().await),
+                cli_overrides: Vec::new(),
+                loader_overrides: LoaderOverrides::default(),
+                feedback: CodexFeedback::new(),
+                config_warnings: Vec::new(),
+                session_source: SessionSource::Cli,
+                enable_codex_api_key_env: false,
+                client_name: "test-client".to_string(),
+                client_version: "0.0.0".to_string(),
+                experimental_api: false,
+                opt_out_notification_methods: Vec::new(),
+                channel_capacity: 1,
+            }
+            .shared_core_managers(),
         };
 
         let event = timeout(Duration::from_secs(2), client.next_event())
@@ -908,6 +947,22 @@ mod tests {
             command_tx,
             event_rx,
             worker_handle,
+            shared_core: InProcessClientStartArgs {
+                arg0_paths: Arg0DispatchPaths::default(),
+                config: Arc::new(build_test_config().await),
+                cli_overrides: Vec::new(),
+                loader_overrides: LoaderOverrides::default(),
+                feedback: CodexFeedback::new(),
+                config_warnings: Vec::new(),
+                session_source: SessionSource::Cli,
+                enable_codex_api_key_env: false,
+                client_name: "test-client".to_string(),
+                client_version: "0.0.0".to_string(),
+                experimental_api: false,
+                opt_out_notification_methods: Vec::new(),
+                channel_capacity: 1,
+            }
+            .shared_core_managers(),
         };
 
         let event = timeout(Duration::from_secs(2), client.next_typed_event())

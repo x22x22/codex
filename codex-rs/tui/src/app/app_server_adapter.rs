@@ -18,6 +18,7 @@ use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::McpServerRefreshResponse;
@@ -73,10 +74,14 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ErrorEvent;
+use codex_protocol::protocol::Event;
+use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
+use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -710,11 +715,12 @@ impl App {
             | Op::GetHistoryEntryRequest { .. }
             | Op::ListMcpTools => {
                 // TODO(app-server): migrate these legacy-only TUI features once app-server grows
-                // equivalent APIs. For now, keep the UI explicit instead of silently dropping them.
-                return Err(format!(
-                    "This TUI feature is not yet available over app-server: {}",
-                    legacy_op_name(&op)
-                ));
+                // equivalent APIs. Until then, keep routing the still-emitted TUI ops through the
+                // shared in-process thread runtime so existing behavior does not regress.
+                app_server_client
+                    .submit_legacy_thread_op(thread_id, op)
+                    .await
+                    .map_err(|err| format!("failed to submit legacy TUI op: {err}"))?;
             }
             Op::ListRemoteSkills { .. } | Op::DownloadRemoteSkill { .. } | Op::ListModels => {
                 return Err(format!(
@@ -1016,6 +1022,9 @@ impl App {
                 self.handle_server_notification(app_server_client, notification)
                     .await;
             }
+            InProcessServerEvent::LegacyNotification(notification) => {
+                self.handle_legacy_notification(notification);
+            }
             InProcessServerEvent::ServerRequest(request) => {
                 self.note_server_request(&request);
                 match request.clone() {
@@ -1078,7 +1087,40 @@ impl App {
                     tracing::warn!("{err}");
                 }
             }
-            _ => unreachable!("legacy notifications are filtered by next_typed_event"),
+        }
+    }
+
+    fn handle_legacy_notification(&mut self, notification: JSONRPCNotification) {
+        let Some(params) = notification.params else {
+            return;
+        };
+        let Ok(event) = serde_json::from_value::<Event>(params) else {
+            tracing::debug!(
+                method = notification.method,
+                "failed to decode legacy notification"
+            );
+            return;
+        };
+
+        match event.msg {
+            EventMsg::GetHistoryEntryResponse(event) => {
+                self.chat_widget
+                    .handle_get_history_entry_response_now(event);
+            }
+            EventMsg::ListCustomPromptsResponse(event) => {
+                self.chat_widget
+                    .handle_list_custom_prompts_response_now(event);
+            }
+            EventMsg::McpListToolsResponse(event) => {
+                self.chat_widget.handle_list_mcp_tools_response_now(event);
+            }
+            EventMsg::Warning(WarningEvent { message }) => {
+                self.chat_widget.handle_warning_now(message);
+            }
+            EventMsg::Error(ErrorEvent { message, .. }) => {
+                self.chat_widget.add_error_message(message);
+            }
+            _ => {}
         }
     }
 
