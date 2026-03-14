@@ -99,12 +99,18 @@ jobs:
           target_suffix="${TARGET//-/_}"
           lib_target="//third_party/v8:v8_${version_suffix}_${target_suffix}"
           binding_target="//third_party/v8:src_binding_release_${target_suffix}"
+          runtime_targets=(
+            '@llvm//runtimes/libcxx:libcxx.static'
+            '@llvm//runtimes/libcxx:libcxxabi.static'
+            '@llvm//runtimes/libunwind:libunwind.static'
+          )
 
           bazel_args=(
             build
             "--platforms=@llvm//platforms:${PLATFORM}"
             "${lib_target}"
             "${binding_target}"
+            "${runtime_targets[@]}"
             '--remote_download_regex=.*third_party/v8/libv8_.*\.a$'
             '--remote_download_regex=.*third_party/v8/src_binding_release_.*\.rs$'
             '--remote_download_regex=.*liblibcxx\.static\.a$'

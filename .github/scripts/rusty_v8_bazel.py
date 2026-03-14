@@ -23,6 +23,11 @@ RUNTIME_LIB_FILENAMES = {
     "libcxxabi": "liblibcxxabi.static.a",
     "libunwind": "liblibunwind.static.a",
 }
+RUNTIME_LIB_LABELS = {
+    "libcxx": "@llvm//runtimes/libcxx:libcxx.static",
+    "libcxxabi": "@llvm//runtimes/libcxx:libcxxabi.static",
+    "libunwind": "@llvm//runtimes/libunwind:libunwind.static",
+}
 V8_CACHE_KEY_INPUT_PATTERNS = [
     ".bazelrc",
     ".bazelversion",
@@ -120,13 +125,6 @@ def platform_bin_dir(platform: str) -> Path:
     return bazel_execroot() / "bazel-out" / f"{platform}-fastbuild" / "bin"
 
 
-def platform_st_bin_dir(platform: str) -> Path:
-    matches = sorted((bazel_execroot() / "bazel-out").glob(f"{platform}-fastbuild-ST-*/bin"))
-    if not matches:
-        raise SystemExit(f"could not find ST bin dir for {platform}")
-    return matches[-1]
-
-
 def toolchain_dir() -> Path:
     return find_single_path(
         "external/llvm++http_archive+llvm-toolchain-minimal-*",
@@ -153,14 +151,20 @@ def musl_generated_include_dir(platform: str, target: str) -> Path:
 
 
 def static_runtime_libs(platform: str) -> tuple[Path, Path, Path]:
-    st_bin = platform_st_bin_dir(platform)
-    libcxx = st_bin / f"external/llvm++llvm_source+libcxx/libcxx.static_/{RUNTIME_LIB_FILENAMES['libcxx']}"
-    libcxxabi = st_bin / f"external/llvm++llvm_source+libcxxabi/libcxxabi.static_/{RUNTIME_LIB_FILENAMES['libcxxabi']}"
-    libunwind = st_bin / f"external/llvm++llvm_source+libunwind/libunwind.static_/{RUNTIME_LIB_FILENAMES['libunwind']}"
+    outputs = bazel_output_files(platform, list(RUNTIME_LIB_LABELS.values()))
     return (
-        first_existing_path([libcxx], "libcxx static archive"),
-        first_existing_path([libcxxabi], "libcxxabi static archive"),
-        first_existing_path([libunwind], "libunwind static archive"),
+        first_existing_path(
+            [path for path in outputs if path.name == RUNTIME_LIB_FILENAMES["libcxx"]],
+            "libcxx static archive",
+        ),
+        first_existing_path(
+            [path for path in outputs if path.name == RUNTIME_LIB_FILENAMES["libcxxabi"]],
+            "libcxxabi static archive",
+        ),
+        first_existing_path(
+            [path for path in outputs if path.name == RUNTIME_LIB_FILENAMES["libunwind"]],
+            "libunwind static archive",
+        ),
     )
 
 
