@@ -154,12 +154,15 @@ mod agent_navigation;
 mod app_server_adapter;
 mod app_server_requests;
 mod loaded_threads;
+mod fork_session_overlay;
+mod fork_session_terminal;
 mod pending_interactive_replay;
 
 use self::agent_navigation::AgentNavigationDirection;
 use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
+use self::fork_session_overlay::ForkSessionOverlayState;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -952,6 +955,7 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
+    pub(crate) fork_session_overlay: Option<ForkSessionOverlayState>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
     has_emitted_history_lines: bool,
 
@@ -1504,6 +1508,7 @@ impl App {
 
     fn reset_app_ui_state_after_clear(&mut self) {
         self.overlay = None;
+        self.fork_session_overlay = None;
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
@@ -3172,6 +3177,7 @@ impl App {
 
     fn reset_for_thread_switch(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.overlay = None;
+        self.fork_session_overlay = None;
         self.transcript_cells.clear();
         self.deferred_history_lines.clear();
         self.has_emitted_history_lines = false;
@@ -3193,6 +3199,7 @@ impl App {
         self.primary_session_configured = None;
         self.pending_primary_events.clear();
         self.pending_app_server_requests.clear();
+        self.fork_session_overlay = None;
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -3701,6 +3708,7 @@ impl App {
             enhanced_keys_supported,
             transcript_cells: Vec::new(),
             overlay: None,
+            fork_session_overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
@@ -3891,6 +3899,9 @@ impl App {
 
         if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
+        } else if self.fork_session_overlay.is_some() {
+            self.handle_fork_session_overlay_tui_event(tui, event)
+                .await?;
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -3946,17 +3957,38 @@ impl App {
     ) -> Result<AppRunControl> {
         match event {
             AppEvent::NewSession => {
+                if self.fork_session_overlay.is_some() {
+                    self.chat_widget.add_error_message(
+                        "Press Ctrl+] then q to close the forked session overlay before starting a new session."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
                 self.start_fresh_session_with_summary_hint(tui, app_server)
                     .await;
             }
             AppEvent::ClearUi => {
-                self.clear_terminal_ui(tui, /*redraw_header*/ false)?;
+                if self.fork_session_overlay.is_some() {
+                    self.chat_widget.add_error_message(
+                        "Press Ctrl+] then q to close the forked session overlay before clearing the UI."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
+                self.clear_terminal_ui(tui, false)?;
                 self.reset_app_ui_state_after_clear();
 
                 self.start_fresh_session_with_summary_hint(tui, app_server)
                     .await;
             }
             AppEvent::OpenResumePicker => {
+                if self.fork_session_overlay.is_some() {
+                    self.chat_widget.add_error_message(
+                        "Press Ctrl+] then q to close the forked session overlay before resuming another session."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
                 let picker_app_server = match crate::start_app_server_for_picker(
                     &self.config,
                     &match self.remote_app_server_url.clone() {
@@ -4081,53 +4113,43 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ForkCurrentSession => {
+                if self.fork_session_overlay.is_some() {
+                    self.chat_widget.add_error_message(
+                        "A forked session overlay is already open. Press Ctrl+] then q to return to the original session."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
                 self.session_telemetry.counter(
                     "codex.thread.fork",
                     /*inc*/ 1,
                     &[("source", "slash_command")],
                 );
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                    self.chat_widget.thread_name(),
-                );
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
-                if let Some(thread_id) = self.chat_widget.thread_id() {
+                if let Some(path) = self.chat_widget.rollout_path() {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
-                    match app_server.fork_thread(self.config.clone(), thread_id).await {
-                        Ok(forked) => {
-                            self.shutdown_current_thread(app_server).await;
-                            match self
-                                .replace_chat_widget_with_app_server_thread(tui, app_server, forked)
-                                .await
-                            {
-                                Ok(()) => {
-                                    if let Some(summary) = summary {
-                                        let mut lines: Vec<Line<'static>> =
-                                            vec![summary.usage_line.clone().into()];
-                                        if let Some(command) = summary.resume_command {
-                                            let spans = vec![
-                                                "To continue this session, run ".into(),
-                                                command.cyan(),
-                                            ];
-                                            lines.push(spans.into());
-                                        }
-                                        self.chat_widget.add_plain_history_lines(lines);
-                                    }
-                                }
-                                Err(err) => {
+                    // Fresh threads expose a precomputed path, but the file is
+                    // materialized lazily on first user message.
+                    if path.exists() {
+                        match crate::resolve_session_thread_id(path.as_path(), None).await {
+                            Some(thread_id) => {
+                                if let Err(err) =
+                                    self.open_fork_session_overlay(tui, thread_id).await
+                                {
+                                    let path_display = path.display();
                                     self.chat_widget.add_error_message(format!(
-                                        "Failed to attach to forked app-server thread: {err}"
+                                        "Failed to open forked session overlay from {path_display}: {err}"
                                     ));
                                 }
                             }
-                        }
-                        Err(err) => {
-                            self.chat_widget.add_error_message(format!(
-                                "Failed to fork current session through the app server: {err}"
-                            ));
+                            None => {
+                                let path_display = path.display();
+                                self.chat_widget.add_error_message(format!(
+                                    "Failed to read session metadata from {path_display}."
+                                ));
+                            }
                         }
                     }
                 } else {
@@ -5193,9 +5215,23 @@ impl App {
                 self.chat_widget.open_approvals_popup();
             }
             AppEvent::OpenAgentPicker => {
+                if self.fork_session_overlay.is_some() {
+                    self.chat_widget.add_error_message(
+                        "Press Ctrl+] then q to close the forked session overlay before switching threads."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
                 self.open_agent_picker(app_server).await;
             }
             AppEvent::SelectAgentThread(thread_id) => {
+                if self.fork_session_overlay.is_some() {
+                    self.chat_widget.add_error_message(
+                        "Press Ctrl+] then q to close the forked session overlay before switching threads."
+                            .to_string(),
+                    );
+                    return Ok(AppRunControl::Continue);
+                }
                 self.select_agent_thread(tui, app_server, thread_id).await?;
             }
             AppEvent::OpenSkillsList => {
@@ -5778,6 +5814,7 @@ impl App {
         let allow_agent_word_motion_fallback = !self.enhanced_keys_supported
             && self.chat_widget.composer_text_with_pending().is_empty();
         if self.overlay.is_none()
+            && self.fork_session_overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
             // Alt+Left/Right are also natural word-motion keys in the composer. Keep agent
             // fast-switch available only once the draft is empty so editing behavior wins whenever
@@ -5794,6 +5831,7 @@ impl App {
             return;
         }
         if self.overlay.is_none()
+            && self.fork_session_overlay.is_none()
             && self.chat_widget.no_modal_or_popup_active()
             // Mirror the previous-agent rule above: empty drafts may use these keys for thread
             // switching, but non-empty drafts keep them for expected word-wise cursor motion.
@@ -9007,6 +9045,7 @@ guardian_approval = true
             file_search,
             transcript_cells: Vec::new(),
             overlay: None,
+            fork_session_overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
             enhanced_keys_supported: false,
@@ -9061,6 +9100,7 @@ guardian_approval = true
                 file_search,
                 transcript_cells: Vec::new(),
                 overlay: None,
+                fork_session_overlay: None,
                 deferred_history_lines: Vec::new(),
                 has_emitted_history_lines: false,
                 enhanced_keys_supported: false,

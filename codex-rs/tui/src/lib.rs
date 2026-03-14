@@ -153,7 +153,11 @@ pub mod update_action;
 mod update_prompt;
 mod updates;
 mod version;
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
+mod voice;
+mod vt100_backend;
+mod vt100_render;
+#[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
 mod voice;
 #[cfg(target_os = "linux")]
 #[allow(dead_code)]

@@ -1,9 +1,11 @@
 use crate::color::perceptual_distance;
 use ratatui::style::Color;
+use std::env;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 static DEFAULT_PALETTE_VERSION: AtomicU64 = AtomicU64::new(0);
+pub(crate) const PARENT_BG_RGB_ENV_VAR: &str = "CODEX_TUI_PARENT_BG_RGB";
 
 fn bump_palette_version() {
     DEFAULT_PALETTE_VERSION.fetch_add(1, Ordering::Relaxed);
@@ -74,7 +76,7 @@ pub fn default_fg() -> Option<(u8, u8, u8)> {
 }
 
 pub fn default_bg() -> Option<(u8, u8, u8)> {
-    default_colors().map(|c| c.bg)
+    env_default_bg().or_else(|| default_colors().map(|c| c.bg))
 }
 
 /// Returns a monotonic counter that increments whenever `requery_default_colors()` runs
@@ -83,6 +85,21 @@ pub fn default_bg() -> Option<(u8, u8, u8)> {
 #[allow(dead_code)]
 pub fn palette_version() -> u64 {
     DEFAULT_PALETTE_VERSION.load(Ordering::Relaxed)
+}
+
+fn env_default_bg() -> Option<(u8, u8, u8)> {
+    parse_bg_rgb_env(&env::var(PARENT_BG_RGB_ENV_VAR).ok()?)
+}
+
+fn parse_bg_rgb_env(value: &str) -> Option<(u8, u8, u8)> {
+    let mut parts = value.split(',');
+    let red = parts.next()?.trim().parse().ok()?;
+    let green = parts.next()?.trim().parse().ok()?;
+    let blue = parts.next()?.trim().parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((red, green, blue))
 }
 
 #[cfg(all(unix, not(test)))]
@@ -437,3 +454,21 @@ pub const XTERM_COLORS: [(u8, u8, u8); 256] = [
     (228, 228, 228), // 254 Grey89
     (238, 238, 238), // 255 Grey93
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::parse_bg_rgb_env;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn parse_bg_rgb_env_accepts_rgb_triplet() {
+        assert_eq!(parse_bg_rgb_env("12,34,56"), Some((12, 34, 56)));
+    }
+
+    #[test]
+    fn parse_bg_rgb_env_rejects_invalid_values() {
+        assert_eq!(parse_bg_rgb_env("12,34"), None);
+        assert_eq!(parse_bg_rgb_env("12,34,56,78"), None);
+        assert_eq!(parse_bg_rgb_env("12,nope,56"), None);
+    }
+}
