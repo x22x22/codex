@@ -118,6 +118,21 @@ fn allows_network_approval_flow(policy: AskForApproval) -> bool {
     !matches!(policy, AskForApproval::Never)
 }
 
+#[cfg(test)]
+fn pending_decision_for_network_review(
+    review_decision: &ReviewDecision,
+) -> Option<PendingApprovalDecision> {
+    match review_decision {
+        ReviewDecision::Approved => Some(PendingApprovalDecision::AllowOnce),
+        ReviewDecision::ApprovedForSession => Some(PendingApprovalDecision::AllowForSession),
+        ReviewDecision::ApprovedOverrideCommand { .. }
+        | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+        | ReviewDecision::Denied
+        | ReviewDecision::Abort => Some(PendingApprovalDecision::Deny),
+        ReviewDecision::NetworkPolicyAmendment { .. } => None,
+    }
+}
+
 impl PendingApprovalDecision {
     fn to_network_decision(self) -> NetworkDecision {
         match self {
@@ -389,9 +404,7 @@ impl NetworkApprovalService {
 
         let mut cache_session_deny = false;
         let resolved = match approval_decision {
-            ReviewDecision::Approved
-            | ReviewDecision::ApprovedOverrideCommand { .. }
-            | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+            ReviewDecision::Approved | ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
                 PendingApprovalDecision::AllowOnce
             }
             ReviewDecision::ApprovedForSession => PendingApprovalDecision::AllowForSession,
@@ -467,7 +480,9 @@ impl NetworkApprovalService {
                     PendingApprovalDecision::Deny
                 }
             },
-            ReviewDecision::Denied | ReviewDecision::Abort => {
+            ReviewDecision::Denied
+            | ReviewDecision::Abort
+            | ReviewDecision::ApprovedOverrideCommand { .. } => {
                 if routes_approval_to_guardian(&turn_context) {
                     if let Some(owner_call) = owner_call.as_ref() {
                         self.record_call_outcome(

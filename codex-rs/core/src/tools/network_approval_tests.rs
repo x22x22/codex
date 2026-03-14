@@ -1,6 +1,8 @@
 use super::*;
 use codex_network_proxy::BlockedRequestArgs;
+use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::ReviewDecision;
 use pretty_assertions::assert_eq;
 
 #[tokio::test]
@@ -135,6 +137,25 @@ fn only_never_policy_disables_network_approval_flow() {
     assert!(allows_network_approval_flow(AskForApproval::OnRequest));
     assert!(allows_network_approval_flow(AskForApproval::OnFailure));
     assert!(allows_network_approval_flow(AskForApproval::UnlessTrusted));
+}
+
+#[test]
+fn network_review_rejects_command_and_execpolicy_overrides() {
+    assert_eq!(
+        pending_decision_for_network_review(&ReviewDecision::ApprovedOverrideCommand {
+            command: vec!["echo".to_string(), "override".to_string()],
+        }),
+        Some(PendingApprovalDecision::Deny)
+    );
+    assert_eq!(
+        pending_decision_for_network_review(&ReviewDecision::ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment: ExecPolicyAmendment::new(vec![
+                "echo".to_string(),
+                "override".to_string(),
+            ]),
+        }),
+        Some(PendingApprovalDecision::Deny)
+    );
 }
 
 fn denied_blocked_request(host: &str) -> BlockedRequest {
