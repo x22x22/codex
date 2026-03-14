@@ -46,9 +46,9 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 
 ## Current Fix In Progress
 
-- Harden the nearby permissions-history popup tests in `codex-rs/tui/src/chatwidget/tests.rs`.
-- Assert the selected row before hitting `Enter`, and assert that the selection actually moved after navigation instead of relying on implicit popup cursor placement.
-- Rationale: recent merged PR `#14645` fixed one Smart Approvals popup test in this cluster, and the just-passing `permissions_selection_can_disable_smart_approvals` change fixed another. These adjacent history tests were still exercising the same selection flow without proving the cursor state.
+- Harden the remaining permissions-history snapshot tests in `codex-rs/tui/src/chatwidget/tests.rs`.
+- Assert that the popup starts on the current preset, then assert that navigation lands on the intended preset (`Full Access` or `Default`) before confirming.
+- Rationale: these snapshot tests were still inferring cursor position from arrow-key count instead of proving which row was selected, which is the same brittle pattern already fixed in the neighboring Smart Approvals tests.
 
 ## Constraints
 
