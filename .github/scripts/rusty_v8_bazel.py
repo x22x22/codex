@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import hashlib
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -16,6 +18,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_BAZEL = ROOT / "MODULE.bazel"
+V8_CACHE_KEY_INPUT_PATTERNS = [
+    ".bazelrc",
+    ".bazelversion",
+    ".github/workflows/ci.bazelrc",
+    ".github/scripts/rusty_v8_bazel.py",
+    "MODULE.bazel",
+    "MODULE.bazel.lock",
+    "patches/**",
+    "third_party/v8/**",
+]
 
 
 def parse_v8_crate_version() -> str:
@@ -27,6 +39,28 @@ def parse_v8_crate_version() -> str:
     if match is None:
         raise SystemExit("could not determine v8 crate version from MODULE.bazel")
     return match.group(1)
+
+
+def v8_cache_key_inputs() -> list[Path]:
+    paths: set[Path] = set()
+    for pattern in V8_CACHE_KEY_INPUT_PATTERNS:
+        for path in ROOT.glob(pattern):
+            if path.is_file():
+                paths.add(path)
+    if not paths:
+        raise SystemExit("could not find any inputs for V8 cache key")
+    return sorted(paths, key=lambda path: path.relative_to(ROOT).as_posix())
+
+
+def print_cache_key() -> None:
+    hasher = hashlib.sha256()
+    for path in v8_cache_key_inputs():
+        relpath = path.relative_to(ROOT).as_posix()
+        hasher.update(relpath.encode("utf-8"))
+        hasher.update(b"\0")
+        hasher.update(path.read_bytes())
+        hasher.update(b"\0")
+    print(hasher.hexdigest())
 
 
 def bazel_execroot() -> Path:
@@ -142,6 +176,38 @@ def cargo_runtime_rustflags(platform: str) -> str:
             "-C link-arg=-lpthread",
             "-C link-arg=-ldl",
         ]
+    )
+
+
+def cargo_target_rustflags_env_var(target: str) -> str:
+    return f"CARGO_TARGET_{target.upper().replace('-', '_')}_RUSTFLAGS"
+
+
+def append_flag_string(existing: str | None, extra: str) -> str:
+    if existing:
+        return f"{existing} {extra}"
+    return extra
+
+
+def staged_cargo_inputs(output_dir: Path, target: str) -> tuple[Path, Path]:
+    archive = output_dir / f"librusty_v8_release_{target}.a.gz"
+    binding = output_dir / f"src_binding_release_{target}.rs"
+    return (
+        first_existing_path([archive], f"staged V8 archive for {target}"),
+        first_existing_path([binding], f"staged V8 binding for {target}"),
+    )
+
+
+def print_cargo_env(platform: str, target: str, output_dir: Path) -> None:
+    archive, binding = staged_cargo_inputs(output_dir, target)
+    target_rustflags_var = cargo_target_rustflags_env_var(target)
+    cargo_rustflags = cargo_runtime_rustflags(platform)
+
+    print(f"export RUSTY_V8_ARCHIVE={shlex.quote(str(archive.resolve()))}")
+    print(f"export RUSTY_V8_SRC_BINDING_PATH={shlex.quote(str(binding.resolve()))}")
+    print(f"export CODEX_V8_RUSTFLAGS={shlex.quote(cargo_rustflags)}")
+    print(
+        f'export {target_rustflags_var}="${{{target_rustflags_var}:+${target_rustflags_var} }}$CODEX_V8_RUSTFLAGS"'
     )
 
 
@@ -322,9 +388,7 @@ def validate_bundle(platform: str, target: str, bundle_path: Path) -> None:
 
 def validate_cargo_bundle(platform: str, target: str, bundle_path: Path) -> None:
     crate_dir = v8_crate_dir()
-    rustflags_parts = [cargo_runtime_rustflags(platform)]
-    if os.environ.get("RUSTFLAGS"):
-        rustflags_parts.insert(0, os.environ["RUSTFLAGS"])
+    target_rustflags_var = cargo_target_rustflags_env_var(target)
 
     with tempfile.TemporaryDirectory(prefix="rusty-v8-cargo-") as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -338,7 +402,10 @@ def validate_cargo_bundle(platform: str, target: str, bundle_path: Path) -> None
         env = os.environ.copy()
         env["RUSTY_V8_ARCHIVE"] = str(bundle_root / "lib/librusty_v8.a")
         env["RUSTY_V8_SRC_BINDING_PATH"] = str(bundle_root / "src_binding_release.rs")
-        env["RUSTFLAGS"] = " ".join(rustflags_parts)
+        env[target_rustflags_var] = append_flag_string(
+            env.get(target_rustflags_var),
+            cargo_runtime_rustflags(platform),
+        )
         subprocess.run(
             ["cargo", "run", "--target", target],
             cwd=project_dir,
@@ -398,6 +465,7 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("print-version")
+    subparsers.add_parser("print-cache-key")
 
     stage_parser = subparsers.add_parser("stage")
     stage_parser.add_argument("--platform", required=True)
@@ -414,6 +482,11 @@ def parse_args() -> argparse.Namespace:
     cargo_validate_parser.add_argument("--target", required=True)
     cargo_validate_parser.add_argument("--bundle-path", required=True)
 
+    print_env_parser = subparsers.add_parser("print-cargo-env")
+    print_env_parser.add_argument("--platform", required=True)
+    print_env_parser.add_argument("--target", required=True)
+    print_env_parser.add_argument("--output-dir", required=True)
+
     return parser.parse_args()
 
 
@@ -421,6 +494,9 @@ def main() -> int:
     args = parse_args()
     if args.command == "print-version":
         print(parse_v8_crate_version())
+        return 0
+    if args.command == "print-cache-key":
+        print_cache_key()
         return 0
     if args.command == "stage":
         stage_release_assets(
@@ -441,6 +517,13 @@ def main() -> int:
             platform=args.platform,
             target=args.target,
             bundle_path=Path(args.bundle_path),
+        )
+        return 0
+    if args.command == "print-cargo-env":
+        print_cargo_env(
+            platform=args.platform,
+            target=args.target,
+            output_dir=Path(args.output_dir),
         )
         return 0
     raise SystemExit(f"unsupported command: {args.command}")

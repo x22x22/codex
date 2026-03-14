@@ -1,10 +1,36 @@
 name: rusty-v8-bazel-build
 
 on:
-  pull_request: {}
+  pull_request:
+    paths:
+      - ".bazelrc"
+      - ".bazelversion"
+      - ".github/workflows/ci.bazelrc"
+      - ".github/workflows/rusty-v8-bazel-build.yml"
+      - ".github/scripts/rusty_v8_bazel.py"
+      - "MODULE.bazel"
+      - "MODULE.bazel.lock"
+      - "patches/**"
+      - "third_party/v8/**"
+      - "**/*.bzl"
+      - "**/BUILD"
+      - "**/BUILD.bazel"
   push:
     branches:
       - main
+    paths:
+      - ".bazelrc"
+      - ".bazelversion"
+      - ".github/workflows/ci.bazelrc"
+      - ".github/workflows/rusty-v8-bazel-build.yml"
+      - ".github/scripts/rusty_v8_bazel.py"
+      - "MODULE.bazel"
+      - "MODULE.bazel.lock"
+      - "patches/**"
+      - "third_party/v8/**"
+      - "**/*.bzl"
+      - "**/BUILD"
+      - "**/BUILD.bazel"
   workflow_dispatch:
 
 concurrency:
@@ -42,7 +68,22 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Compute V8 bundle cache key
+        id: cache_key
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "key=rusty-v8-bundle-v1-${{ matrix.target }}-$(python3 .github/scripts/rusty_v8_bazel.py print-cache-key)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore staged V8 bundle cache
+        id: bundle_cache_restore
+        uses: actions/cache/restore@v5
+        with:
+          path: dist/${{ matrix.target }}
+          key: ${{ steps.cache_key.outputs.key }}
+
       - name: Build Bazel V8 musl artifacts
+        if: ${{ steps.bundle_cache_restore.outputs.cache-hit != 'true' }}
         env:
           BUILDBUDDY_API_KEY: ${{ secrets.BUILDBUDDY_API_KEY }}
           PLATFORM: ${{ matrix.platform }}
@@ -83,6 +124,7 @@ jobs:
           fi
 
       - name: Stage rusty_v8 release assets
+        if: ${{ steps.bundle_cache_restore.outputs.cache-hit != 'true' }}
         env:
           PLATFORM: ${{ matrix.platform }}
           TARGET: ${{ matrix.target }}
@@ -97,6 +139,7 @@ jobs:
             --output-dir "${output_dir}"
 
       - name: Validate staged bundle outside Bazel
+        if: ${{ steps.bundle_cache_restore.outputs.cache-hit != 'true' }}
         env:
           PLATFORM: ${{ matrix.platform }}
           TARGET: ${{ matrix.target }}
@@ -110,6 +153,7 @@ jobs:
             --bundle-path "dist/${TARGET}/rusty_v8_bundle_${TARGET}.tar.gz"
 
       - name: Validate staged bundle with Cargo
+        if: ${{ steps.bundle_cache_restore.outputs.cache-hit != 'true' }}
         env:
           PLATFORM: ${{ matrix.platform }}
           TARGET: ${{ matrix.target }}
@@ -121,6 +165,13 @@ jobs:
             --platform "${PLATFORM}" \
             --target "${TARGET}" \
             --bundle-path "dist/${TARGET}/rusty_v8_bundle_${TARGET}.tar.gz"
+
+      - name: Save staged V8 bundle cache
+        if: ${{ steps.bundle_cache_restore.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v5
+        with:
+          path: dist/${{ matrix.target }}
+          key: ${{ steps.cache_key.outputs.key }}
 
       - name: Upload staged artifacts
         uses: actions/upload-artifact@v7
