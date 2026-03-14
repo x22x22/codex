@@ -264,6 +264,7 @@ use crate::rollout::map_session_init_error;
 use crate::rollout::metadata;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::shell;
+use crate::shell::ShellStartupMode;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::skills::SkillInjections;
@@ -1696,8 +1697,7 @@ impl Session {
                 (None, None)
             };
 
-        let mut hook_shell_argv =
-            default_shell.derive_exec_args("", /*use_login_shell=*/ false);
+        let mut hook_shell_argv = default_shell.derive_exec_args("", ShellStartupMode::NonLogin);
         let hook_shell_program = hook_shell_argv.remove(0);
         let _ = hook_shell_argv.pop();
         let hooks = Hooks::new(HooksConfig {

@@ -860,12 +860,15 @@ impl App {
                 continue;
             }
             let effective_enabled = self.config.features.enabled(feature);
-            self.chat_widget
-                .set_feature_enabled(feature, effective_enabled);
             if effective_enabled {
-                builder = builder.set_feature_enabled(feature_key, /*enabled=*/ true);
+                self.chat_widget.enable_feature(feature);
+            } else {
+                self.chat_widget.disable_feature(feature);
+            }
+            if effective_enabled {
+                builder = builder.enable_feature(feature_key);
             } else if feature.default_enabled() {
-                builder = builder.set_feature_enabled(feature_key, /*enabled=*/ false);
+                builder = builder.disable_feature(feature_key);
             } else {
                 // If the feature already default to `false`, we drop the key
                 // in the config file so that the user does not miss the feature
@@ -1018,10 +1021,17 @@ impl App {
             .or_insert_with(|| ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY))
     }
 
-    async fn set_thread_active(&mut self, thread_id: ThreadId, active: bool) {
+    async fn activate_thread(&mut self, thread_id: ThreadId) {
         if let Some(channel) = self.thread_event_channels.get_mut(&thread_id) {
             let mut store = channel.store.lock().await;
-            store.active = active;
+            store.active = true;
+        }
+    }
+
+    async fn deactivate_thread(&mut self, thread_id: ThreadId) {
+        if let Some(channel) = self.thread_event_channels.get_mut(&thread_id) {
+            let mut store = channel.store.lock().await;
+            store.active = false;
         }
     }
 
@@ -1029,7 +1039,7 @@ impl App {
         if self.active_thread_id.is_some() {
             return;
         }
-        self.set_thread_active(thread_id, /*active=*/ true).await;
+        self.activate_thread(thread_id).await;
         let receiver = if let Some(channel) = self.thread_event_channels.get_mut(&thread_id) {
             channel.receiver.take()
         } else {
@@ -1070,7 +1080,7 @@ impl App {
 
     async fn clear_active_thread(&mut self) {
         if let Some(active_id) = self.active_thread_id.take() {
-            self.set_thread_active(active_id, /*active=*/ false).await;
+            self.deactivate_thread(active_id).await;
         }
         self.active_thread_rx = None;
         self.refresh_pending_thread_approvals().await;
@@ -4229,7 +4239,7 @@ mod tests {
         let thread_id = ThreadId::new();
         app.thread_event_channels
             .insert(thread_id, ThreadEventChannel::new(1));
-        app.set_thread_active(thread_id, true).await;
+        app.activate_thread(thread_id).await;
 
         let event = Event {
             id: String::new(),
@@ -5179,8 +5189,7 @@ mod tests {
         app.config
             .features
             .set_enabled(Feature::GuardianApproval, true)?;
-        app.chat_widget
-            .set_feature_enabled(Feature::GuardianApproval, true);
+        app.chat_widget.enable_feature(Feature::GuardianApproval);
         let current_session_policy = app.config.permissions.approval_policy.value();
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, false)])

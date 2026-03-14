@@ -5735,8 +5735,14 @@ impl ChatWidget {
             });
 
             let result: Result<ConnectorsSnapshot, String> = async {
+                let cache_policy = if force_refetch {
+                    connectors::CachePolicy::ForceRefresh
+                } else {
+                    connectors::CachePolicy::UseCache
+                };
                 let all_connectors =
-                    connectors::list_all_connectors_with_options(&config, force_refetch).await?;
+                    connectors::list_all_connectors_with_cache_policy(&config, cache_policy)
+                        .await?;
                 let connectors = connectors::merge_connectors_with_accessible(
                     all_connectors,
                     accessible_connectors,
@@ -7345,10 +7351,8 @@ impl ChatWidget {
     pub(crate) fn show_windows_sandbox_setup_status(&mut self) {
         // While elevated sandbox setup runs, prevent typing so the user doesn't
         // accidentally queue messages that will run under an unexpected mode.
-        self.bottom_pane.set_composer_input_enabled(
-            false,
-            Some("Input disabled until setup completes.".to_string()),
-        );
+        self.bottom_pane
+            .disable_composer_input(Some("Input disabled until setup completes.".to_string()));
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(false);
         self.set_status(
@@ -7366,7 +7370,7 @@ impl ChatWidget {
 
     #[cfg(target_os = "windows")]
     pub(crate) fn clear_windows_sandbox_setup_status(&mut self) {
-        self.bottom_pane.set_composer_input_enabled(true, None);
+        self.bottom_pane.enable_composer_input();
         self.bottom_pane.hide_status_indicator();
         self.request_redraw();
     }
@@ -7401,8 +7405,7 @@ impl ChatWidget {
         );
     }
 
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-    pub(crate) fn set_feature_enabled(&mut self, feature: Feature, enabled: bool) -> bool {
+    fn set_feature_enabled_state(&mut self, feature: Feature, enabled: bool) -> bool {
         if let Err(err) = self.config.features.set_enabled(feature, enabled) {
             tracing::warn!(
                 error = %err,
@@ -7455,6 +7458,16 @@ impl ChatWidget {
             );
         }
         enabled
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn enable_feature(&mut self, feature: Feature) -> bool {
+        self.set_feature_enabled_state(feature, true)
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub(crate) fn disable_feature(&mut self, feature: Feature) -> bool {
+        self.set_feature_enabled_state(feature, false)
     }
 
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {

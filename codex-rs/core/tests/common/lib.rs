@@ -10,6 +10,7 @@ use codex_core::CodexThread;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
+use codex_core::shell::ShellStartupMode;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use regex_lite::Regex;
 use std::path::PathBuf;
@@ -264,8 +265,7 @@ pub fn sandbox_network_env_var() -> &'static str {
 }
 
 pub fn format_with_current_shell(command: &str) -> Vec<String> {
-    codex_core::shell::default_user_shell()
-        .derive_exec_args(command, /*use_login_shell=*/ true)
+    codex_core::shell::default_user_shell().derive_exec_args(command, ShellStartupMode::Login)
 }
 
 pub fn format_with_current_shell_display(command: &str) -> String {
@@ -274,8 +274,7 @@ pub fn format_with_current_shell_display(command: &str) -> String {
 }
 
 pub fn format_with_current_shell_non_login(command: &str) -> Vec<String> {
-    codex_core::shell::default_user_shell()
-        .derive_exec_args(command, /*use_login_shell=*/ false)
+    codex_core::shell::default_user_shell().derive_exec_args(command, ShellStartupMode::NonLogin)
 }
 
 pub fn format_with_current_shell_display_non_login(command: &str) -> String {

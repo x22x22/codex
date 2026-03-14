@@ -982,14 +982,24 @@ impl McpServerElicitationOverlay {
             .clamp(MIN_COMPOSER_HEIGHT, MIN_COMPOSER_HEIGHT.saturating_add(5))
     }
 
-    fn move_field(&mut self, next: bool) {
+    fn move_to_next_field(&mut self) {
         let len = self.field_count();
         if len == 0 {
             return;
         }
         self.save_current_draft();
-        let offset = if next { 1 } else { len.saturating_sub(1) };
-        self.current_idx = (self.current_idx + offset) % len;
+        self.current_idx = (self.current_idx + 1) % len;
+        self.validation_error = None;
+        self.restore_current_draft();
+    }
+
+    fn move_to_previous_field(&mut self) {
+        let len = self.field_count();
+        if len == 0 {
+            return;
+        }
+        self.save_current_draft();
+        self.current_idx = (self.current_idx + len.saturating_sub(1)) % len;
         self.validation_error = None;
         self.restore_current_draft();
     }
@@ -1056,11 +1066,11 @@ impl McpServerElicitationOverlay {
         (idx < self.options_len()).then_some(idx)
     }
 
-    fn select_current_option(&mut self, committed: bool) {
+    fn commit_current_option(&mut self) {
         let options_len = self.options_len();
         if let Some(answer) = self.current_answer_mut() {
             answer.selection.clamp_selection(options_len);
-            answer.answer_committed = committed;
+            answer.answer_committed = true;
         }
     }
 
@@ -1164,7 +1174,7 @@ impl McpServerElicitationOverlay {
         if self.current_index() + 1 >= self.field_count() {
             self.submit_answers();
         } else {
-            self.move_field(/*next=*/ true);
+            self.move_to_next_field();
         }
     }
 
@@ -1459,7 +1469,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.move_field(/*next=*/ false);
+                self.move_to_previous_field();
                 return;
             }
             KeyEvent {
@@ -1472,7 +1482,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.move_field(/*next=*/ true);
+                self.move_to_next_field();
                 return;
             }
             KeyEvent {
@@ -1480,7 +1490,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.current_field_is_select() => {
-                self.move_field(/*next=*/ false);
+                self.move_to_previous_field();
                 return;
             }
             KeyEvent {
@@ -1488,7 +1498,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.current_field_is_select() => {
-                self.move_field(/*next=*/ true);
+                self.move_to_next_field();
                 return;
             }
             _ => {}
@@ -1511,10 +1521,10 @@ impl BottomPaneView for McpServerElicitationOverlay {
                     }
                 }
                 KeyCode::Backspace | KeyCode::Delete => self.clear_selection(),
-                KeyCode::Char(' ') => self.select_current_option(/*committed=*/ true),
+                KeyCode::Char(' ') => self.commit_current_option(),
                 KeyCode::Enter => {
                     if self.selected_option_index().is_some() {
-                        self.select_current_option(/*committed=*/ true);
+                        self.commit_current_option();
                     }
                     self.go_next_or_submit();
                 }
@@ -1523,7 +1533,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                         if let Some(answer) = self.current_answer_mut() {
                             answer.selection.selected_idx = Some(option_idx);
                         }
-                        self.select_current_option(/*committed=*/ true);
+                        self.commit_current_option();
                         self.go_next_or_submit();
                     }
                 }
@@ -2013,7 +2023,7 @@ mod tests {
         .expect("expected supported form");
         let mut overlay = McpServerElicitationOverlay::new(request, tx, true, false, false);
 
-        overlay.select_current_option(true);
+        overlay.commit_current_option();
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected resolution");
@@ -2064,7 +2074,7 @@ mod tests {
         if let Some(answer) = overlay.current_answer_mut() {
             answer.selection.selected_idx = Some(1);
         }
-        overlay.select_current_option(true);
+        overlay.commit_current_option();
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected resolution");
@@ -2115,7 +2125,7 @@ mod tests {
         if let Some(answer) = overlay.current_answer_mut() {
             answer.selection.selected_idx = Some(2);
         }
-        overlay.select_current_option(true);
+        overlay.commit_current_option();
         overlay.submit_answers();
 
         let event = rx.try_recv().expect("expected resolution");
@@ -2247,12 +2257,12 @@ mod tests {
 
         overlay.try_consume_mcp_server_elicitation_request(second);
         overlay.try_consume_mcp_server_elicitation_request(third);
-        overlay.select_current_option(true);
+        overlay.commit_current_option();
         overlay.submit_answers();
 
         assert_eq!(overlay.request.message, "Second");
 
-        overlay.select_current_option(true);
+        overlay.commit_current_option();
         overlay.submit_answers();
 
         assert_eq!(overlay.request.message, "Third");

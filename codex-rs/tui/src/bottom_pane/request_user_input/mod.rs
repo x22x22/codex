@@ -612,15 +612,24 @@ impl RequestUserInputOverlay {
         None
     }
 
-    /// Move to the next/previous question, wrapping in either direction.
-    fn move_question(&mut self, next: bool) {
+    fn move_to_next_question(&mut self) {
         let len = self.question_count();
         if len == 0 {
             return;
         }
         self.save_current_draft();
-        let offset = if next { 1 } else { len.saturating_sub(1) };
-        self.current_idx = (self.current_idx + offset) % len;
+        self.current_idx = (self.current_idx + 1) % len;
+        self.restore_current_draft();
+        self.ensure_focus_available();
+    }
+
+    fn move_to_previous_question(&mut self) {
+        let len = self.question_count();
+        if len == 0 {
+            return;
+        }
+        self.save_current_draft();
+        self.current_idx = (self.current_idx + len.saturating_sub(1)) % len;
         self.restore_current_draft();
         self.ensure_focus_available();
     }
@@ -635,15 +644,33 @@ impl RequestUserInputOverlay {
         self.ensure_focus_available();
     }
 
-    /// Synchronize selection state to the currently focused option.
-    fn select_current_option(&mut self, committed: bool) {
+    fn commit_current_option(&mut self) {
         if !self.has_options() {
             return;
         }
         let options_len = self.options_len();
         let updated = if let Some(answer) = self.current_answer_mut() {
             answer.options_state.clamp_selection(options_len);
-            answer.answer_committed = committed;
+            answer.answer_committed = true;
+            true
+        } else {
+            false
+        };
+        if updated {
+            self.sync_composer_placeholder();
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    /// Synchronize selection state to the currently focused option.
+    fn preview_current_option(&mut self) {
+        if !self.has_options() {
+            return;
+        }
+        let options_len = self.options_len();
+        let updated = if let Some(answer) = self.current_answer_mut() {
+            answer.options_state.clamp_selection(options_len);
+            answer.answer_committed = false;
             true
         } else {
             false
@@ -706,7 +733,7 @@ impl RequestUserInputOverlay {
                 self.submit_answers();
             }
         } else {
-            self.move_question(/*next=*/ true);
+            self.move_to_next_question();
         }
     }
 
@@ -1024,7 +1051,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.move_question(/*next=*/ false);
+                self.move_to_previous_question();
                 return;
             }
             KeyEvent {
@@ -1037,7 +1064,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::CONTROL,
                 ..
             } => {
-                self.move_question(/*next=*/ true);
+                self.move_to_next_question();
                 return;
             }
             KeyEvent {
@@ -1045,7 +1072,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.has_options() && matches!(self.focus, Focus::Options) => {
-                self.move_question(/*next=*/ false);
+                self.move_to_previous_question();
                 return;
             }
             KeyEvent {
@@ -1053,7 +1080,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.has_options() && matches!(self.focus, Focus::Options) => {
-                self.move_question(/*next=*/ false);
+                self.move_to_previous_question();
                 return;
             }
             KeyEvent {
@@ -1061,7 +1088,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.has_options() && matches!(self.focus, Focus::Options) => {
-                self.move_question(/*next=*/ true);
+                self.move_to_next_question();
                 return;
             }
             KeyEvent {
@@ -1069,7 +1096,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.has_options() && matches!(self.focus, Focus::Options) => {
-                self.move_question(/*next=*/ true);
+                self.move_to_next_question();
                 return;
             }
             _ => {}
@@ -1105,7 +1132,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                         }
                     }
                     KeyCode::Char(' ') => {
-                        self.select_current_option(/*committed=*/ true);
+                        self.commit_current_option();
                     }
                     KeyCode::Backspace | KeyCode::Delete => {
                         self.clear_selection();
@@ -1119,7 +1146,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     KeyCode::Enter => {
                         let has_selection = self.selected_option_index().is_some();
                         if has_selection {
-                            self.select_current_option(/*committed=*/ true);
+                            self.commit_current_option();
                         }
                         self.go_next_or_submit();
                     }
@@ -1128,7 +1155,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                             if let Some(answer) = self.current_answer_mut() {
                                 answer.options_state.selected_idx = Some(option_idx);
                             }
-                            self.select_current_option(/*committed=*/ true);
+                            self.commit_current_option();
                             self.go_next_or_submit();
                         }
                     }
@@ -1158,7 +1185,7 @@ impl BottomPaneView for RequestUserInputOverlay {
                     if !self.handle_composer_input_result(result) {
                         self.pending_submission_draft = None;
                         if self.has_options() {
-                            self.select_current_option(/*committed=*/ true);
+                            self.commit_current_option();
                         }
                         self.go_next_or_submit();
                     }
@@ -1793,7 +1820,7 @@ mod tests {
             false,
             false,
         );
-        overlay.move_question(true);
+        overlay.move_to_next_question();
 
         let tips = overlay.footer_tips();
         let tip_texts = tips.iter().map(|tip| tip.text.as_str()).collect::<Vec<_>>();
@@ -1844,7 +1871,7 @@ mod tests {
         );
 
         assert!(matches!(overlay.focus, Focus::Notes));
-        overlay.move_question(true);
+        overlay.move_to_next_question();
 
         assert!(matches!(overlay.focus, Focus::Options));
         assert_eq!(overlay.notes_ui_visible(), false);
@@ -1872,7 +1899,7 @@ mod tests {
             .set_text_content("freeform notes".to_string(), Vec::new(), Vec::new());
         overlay.composer.move_cursor_to_end();
 
-        overlay.move_question(true);
+        overlay.move_to_next_question();
 
         assert!(matches!(overlay.focus, Focus::Options));
         assert_eq!(overlay.notes_ui_visible(), false);
@@ -2244,12 +2271,12 @@ mod tests {
         assert_eq!(overlay.answers[0].answer_committed, true);
         let _ = rx.try_recv();
 
-        overlay.move_question(false);
+        overlay.move_to_previous_question();
         overlay
             .composer
             .set_text_content("Edited".to_string(), Vec::new(), Vec::new());
         overlay.composer.move_cursor_to_end();
-        overlay.move_question(true);
+        overlay.move_to_next_question();
         assert_eq!(overlay.answers[0].answer_committed, false);
 
         overlay.submit_answers();
@@ -2277,7 +2304,7 @@ mod tests {
             let answer = overlay.current_answer_mut().expect("answer missing");
             answer.options_state.selected_idx = Some(1);
         }
-        overlay.select_current_option(false);
+        overlay.preview_current_option();
         overlay
             .composer
             .set_text_content("Notes for option 2".to_string(), Vec::new(), Vec::new());
@@ -2408,7 +2435,7 @@ mod tests {
 
         let large = "x".repeat(1_500);
         overlay.composer.handle_paste(large.clone());
-        overlay.move_question(true);
+        overlay.move_to_next_question();
 
         let draft = &overlay.answers[0].draft;
         assert_eq!(draft.pending_pastes.len(), 1);
@@ -2863,7 +2890,7 @@ mod tests {
             false,
             false,
         );
-        overlay.move_question(true);
+        overlay.move_to_next_question();
         let area = Rect::new(0, 0, 120, 12);
         insta::assert_snapshot!(
             "request_user_input_multi_question_last",
@@ -2907,7 +2934,7 @@ mod tests {
             false,
             false,
         );
-        overlay.select_current_option(false);
+        overlay.preview_current_option();
         overlay.focus = Focus::Notes;
         overlay
             .composer

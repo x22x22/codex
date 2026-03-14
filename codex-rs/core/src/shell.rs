@@ -15,6 +15,22 @@ pub enum ShellType {
     Cmd,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ShellStartupMode {
+    Login,
+    NonLogin,
+}
+
+impl ShellStartupMode {
+    pub fn from_login_shell(use_login_shell: bool) -> Self {
+        if use_login_shell {
+            Self::Login
+        } else {
+            Self::NonLogin
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Shell {
     pub(crate) shell_type: ShellType,
@@ -40,10 +56,14 @@ impl Shell {
 
     /// Takes a string of shell and returns the full list of command args to
     /// use with `exec()` to run the shell command.
-    pub fn derive_exec_args(&self, command: &str, use_login_shell: bool) -> Vec<String> {
+    pub fn derive_exec_args(&self, command: &str, startup_mode: ShellStartupMode) -> Vec<String> {
         match self.shell_type {
             ShellType::Zsh | ShellType::Bash | ShellType::Sh => {
-                let arg = if use_login_shell { "-lc" } else { "-c" };
+                let arg = if matches!(startup_mode, ShellStartupMode::Login) {
+                    "-lc"
+                } else {
+                    "-c"
+                };
                 vec![
                     self.shell_path.to_string_lossy().to_string(),
                     arg.to_string(),
@@ -52,7 +72,7 @@ impl Shell {
             }
             ShellType::PowerShell => {
                 let mut args = vec![self.shell_path.to_string_lossy().to_string()];
-                if !use_login_shell {
+                if matches!(startup_mode, ShellStartupMode::NonLogin) {
                     args.push("-NoProfile".to_string());
                 }
 

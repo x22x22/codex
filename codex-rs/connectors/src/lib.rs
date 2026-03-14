@@ -12,6 +12,24 @@ use serde::Deserialize;
 
 pub const CONNECTORS_CACHE_TTL: Duration = Duration::from_secs(3600);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccountScope {
+    PersonalOnly,
+    IncludeWorkspace,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CachePolicy {
+    UseCache,
+    ForceRefresh,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConnectorListOptions {
+    pub account_scope: AccountScope,
+    pub cache_policy: CachePolicy,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AllConnectorsCacheKey {
     chatgpt_base_url: String,
@@ -89,22 +107,23 @@ pub fn cached_all_connectors(cache_key: &AllConnectorsCacheKey) -> Option<Vec<Ap
     None
 }
 
-pub async fn list_all_connectors_with_options<F, Fut>(
+pub async fn list_all_connectors<F, Fut>(
     cache_key: AllConnectorsCacheKey,
-    is_workspace_account: bool,
-    force_refetch: bool,
+    options: ConnectorListOptions,
     mut fetch_page: F,
 ) -> anyhow::Result<Vec<AppInfo>>
 where
     F: FnMut(String) -> Fut,
     Fut: Future<Output = anyhow::Result<DirectoryListResponse>>,
 {
-    if !force_refetch && let Some(cached_connectors) = cached_all_connectors(&cache_key) {
+    if matches!(options.cache_policy, CachePolicy::UseCache)
+        && let Some(cached_connectors) = cached_all_connectors(&cache_key)
+    {
         return Ok(cached_connectors);
     }
 
     let mut apps = list_directory_connectors(&mut fetch_page).await?;
-    if is_workspace_account {
+    if matches!(options.account_scope, AccountScope::IncludeWorkspace) {
         apps.extend(list_workspace_connectors(&mut fetch_page).await?);
     }
 
@@ -444,21 +463,35 @@ mod tests {
         let call_counter = Arc::clone(&calls);
         let key = cache_key("shared");
 
-        let first = list_all_connectors_with_options(key.clone(), false, false, move |_path| {
-            let call_counter = Arc::clone(&call_counter);
-            async move {
-                call_counter.fetch_add(1, Ordering::SeqCst);
-                Ok(DirectoryListResponse {
-                    apps: vec![app("alpha", "Alpha")],
-                    next_token: None,
-                })
-            }
-        })
+        let first = list_all_connectors(
+            key.clone(),
+            ConnectorListOptions {
+                account_scope: AccountScope::PersonalOnly,
+                cache_policy: CachePolicy::UseCache,
+            },
+            move |_path| {
+                let call_counter = Arc::clone(&call_counter);
+                async move {
+                    call_counter.fetch_add(1, Ordering::SeqCst);
+                    Ok(DirectoryListResponse {
+                        apps: vec![app("alpha", "Alpha")],
+                        next_token: None,
+                    })
+                }
+            },
+        )
         .await?;
 
-        let second = list_all_connectors_with_options(key, false, false, move |_path| async move {
-            anyhow::bail!("cache should have been used");
-        })
+        let second = list_all_connectors(
+            key,
+            ConnectorListOptions {
+                account_scope: AccountScope::PersonalOnly,
+                cache_policy: CachePolicy::UseCache,
+            },
+            move |_path| async move {
+                anyhow::bail!("cache should have been used");
+            },
+        )
         .await?;
 
         assert_eq!(calls.load(Ordering::SeqCst), 1);
@@ -472,40 +505,47 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let call_counter = Arc::clone(&calls);
 
-        let connectors = list_all_connectors_with_options(key, true, true, move |path| {
-            let call_counter = Arc::clone(&call_counter);
-            async move {
-                call_counter.fetch_add(1, Ordering::SeqCst);
-                if path.starts_with("/connectors/directory/list_workspace") {
-                    Ok(DirectoryListResponse {
-                        apps: vec![
-                            DirectoryApp {
-                                description: Some("Merged description".to_string()),
-                                branding: Some(AppBranding {
-                                    category: Some("calendar".to_string()),
-                                    developer: None,
-                                    website: None,
-                                    privacy_policy: None,
-                                    terms_of_service: None,
-                                    is_discoverable_app: true,
-                                }),
-                                ..app("alpha", "")
-                            },
-                            DirectoryApp {
-                                visibility: Some("HIDDEN".to_string()),
-                                ..app("hidden", "Hidden")
-                            },
-                        ],
-                        next_token: None,
-                    })
-                } else {
-                    Ok(DirectoryListResponse {
-                        apps: vec![app("alpha", " Alpha "), app("beta", "Beta")],
-                        next_token: None,
-                    })
+        let connectors = list_all_connectors(
+            key,
+            ConnectorListOptions {
+                account_scope: AccountScope::IncludeWorkspace,
+                cache_policy: CachePolicy::ForceRefresh,
+            },
+            move |path| {
+                let call_counter = Arc::clone(&call_counter);
+                async move {
+                    call_counter.fetch_add(1, Ordering::SeqCst);
+                    if path.starts_with("/connectors/directory/list_workspace") {
+                        Ok(DirectoryListResponse {
+                            apps: vec![
+                                DirectoryApp {
+                                    description: Some("Merged description".to_string()),
+                                    branding: Some(AppBranding {
+                                        category: Some("calendar".to_string()),
+                                        developer: None,
+                                        website: None,
+                                        privacy_policy: None,
+                                        terms_of_service: None,
+                                        is_discoverable_app: true,
+                                    }),
+                                    ..app("alpha", "")
+                                },
+                                DirectoryApp {
+                                    visibility: Some("HIDDEN".to_string()),
+                                    ..app("hidden", "Hidden")
+                                },
+                            ],
+                            next_token: None,
+                        })
+                    } else {
+                        Ok(DirectoryListResponse {
+                            apps: vec![app("alpha", " Alpha "), app("beta", "Beta")],
+                            next_token: None,
+                        })
+                    }
                 }
-            }
-        })
+            },
+        )
         .await?;
 
         assert_eq!(calls.load(Ordering::SeqCst), 2);

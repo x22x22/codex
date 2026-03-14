@@ -841,7 +841,7 @@ async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow
     let codex_home = find_codex_home()?;
     ConfigEditsBuilder::new(&codex_home)
         .with_profile(interactive.config_profile.as_deref())
-        .set_feature_enabled(feature, /*enabled=*/ true)
+        .enable_feature(feature)
         .apply()
         .await?;
     println!("Enabled feature `{feature}` in config.toml.");
@@ -854,7 +854,7 @@ async fn disable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyho
     let codex_home = find_codex_home()?;
     ConfigEditsBuilder::new(&codex_home)
         .with_profile(interactive.config_profile.as_deref())
-        .set_feature_enabled(feature, /*enabled=*/ false)
+        .disable_feature(feature)
         .apply()
         .await?;
     println!("Disabled feature `{feature}` in config.toml.");

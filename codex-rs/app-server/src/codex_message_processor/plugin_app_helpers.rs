@@ -15,8 +15,9 @@ pub(super) async fn load_plugin_app_summaries(
         return Vec::new();
     }
 
-    let connectors = match connectors::list_all_connectors_with_options(
-        config, /*force_refetch=*/ false,
+    let connectors = match connectors::list_all_connectors_with_cache_policy(
+        config,
+        connectors::CachePolicy::UseCache,
     )
     .await
     {

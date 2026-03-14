@@ -955,7 +955,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
     let remote_url = "https://example.com/remote-only.png".to_string();
     chat.set_remote_image_urls(vec![remote_url.clone()]);
     chat.bottom_pane
-        .set_composer_input_enabled(false, Some("Input disabled for test.".to_string()));
+        .disable_composer_input(Some("Input disabled for test.".to_string()));
 
     chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
@@ -1289,7 +1289,7 @@ async fn interrupted_turn_restores_queued_messages_with_images_and_elements() {
 async fn interrupted_turn_restore_keeps_active_mode_for_resubmission() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
 
     let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
         .expect("expected plan collaboration mode");
@@ -2455,7 +2455,7 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
 async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
 
     let default_mode = collaboration_modes::default_mode_mask(chat.models_manager.as_ref())
         .expect("expected default collaboration mode");
@@ -2481,7 +2481,7 @@ async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
 async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
         .expect("expected plan collaboration mode");
     chat.set_collaboration_mask(plan_mask);
@@ -2508,7 +2508,7 @@ async fn reasoning_selection_in_plan_mode_opens_scope_prompt_event() {
 async fn reasoning_selection_in_plan_mode_without_effort_change_does_not_open_scope_prompt_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
         .expect("expected plan collaboration mode");
     chat.set_collaboration_mask(plan_mask);
@@ -2543,7 +2543,7 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
  {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
         .expect("expected plan collaboration mode");
     chat.set_collaboration_mask(plan_mask);
@@ -2572,7 +2572,7 @@ async fn reasoning_selection_in_plan_mode_matching_plan_effort_but_different_glo
 #[tokio::test]
 async fn plan_mode_reasoning_override_is_marked_current_in_reasoning_popup() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     set_chatgpt_auth(&mut chat);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
     chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::Low));
@@ -2596,7 +2596,7 @@ async fn plan_mode_reasoning_override_is_marked_current_in_reasoning_popup() {
 async fn reasoning_selection_in_plan_mode_model_switch_does_not_open_scope_prompt_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1-codex-max")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
         .expect("expected plan collaboration mode");
     chat.set_collaboration_mask(plan_mask);
@@ -2861,7 +2861,7 @@ async fn plan_reasoning_scope_popup_plan_only_does_not_update_all_modes_reasonin
 async fn submit_user_message_with_mode_errors_when_mode_changes_during_running_turn() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -2890,7 +2890,7 @@ async fn submit_user_message_with_mode_errors_when_mode_changes_during_running_t
 async fn submit_user_message_with_mode_allows_same_mode_during_running_turn() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -2921,7 +2921,7 @@ async fn submit_user_message_with_mode_allows_same_mode_during_running_turn() {
 async fn submit_user_message_with_mode_submits_when_plan_stream_is_not_active() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -2951,7 +2951,7 @@ async fn submit_user_message_with_mode_submits_when_plan_stream_is_not_active() 
 #[tokio::test]
 async fn plan_implementation_popup_skips_replayed_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -2972,7 +2972,7 @@ async fn plan_implementation_popup_skips_replayed_turn_complete() {
 #[tokio::test]
 async fn plan_implementation_popup_shows_once_when_replay_precedes_live_turn_complete() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -3050,7 +3050,7 @@ async fn replayed_thread_rollback_emits_ordered_app_event() {
 #[tokio::test]
 async fn plan_implementation_popup_skips_when_messages_queued() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -3070,7 +3070,7 @@ async fn plan_implementation_popup_skips_when_messages_queued() {
 #[tokio::test]
 async fn plan_implementation_popup_skips_without_proposed_plan() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -3096,7 +3096,7 @@ async fn plan_implementation_popup_skips_without_proposed_plan() {
 #[tokio::test]
 async fn plan_implementation_popup_shows_after_proposed_plan_output() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -3117,7 +3117,7 @@ async fn plan_implementation_popup_shows_after_proposed_plan_output() {
 #[tokio::test]
 async fn plan_implementation_popup_skips_when_steer_follows_proposed_plan() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -3159,7 +3159,7 @@ async fn plan_implementation_popup_skips_when_steer_follows_proposed_plan() {
 #[tokio::test]
 async fn plan_implementation_popup_shows_after_new_plan_follows_steer() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -3208,7 +3208,7 @@ async fn plan_implementation_popup_skips_when_rate_limit_prompt_pending() {
     chat.auth_manager = codex_core::test_support::auth_manager_from_auth(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     );
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -3642,7 +3642,7 @@ async fn empty_enter_during_task_does_not_queue() {
 #[tokio::test]
 async fn restore_thread_input_state_syncs_sleep_inhibitor_state() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.set_feature_enabled(Feature::PreventIdleSleep, true);
+    chat.enable_feature(Feature::PreventIdleSleep);
 
     chat.restore_thread_input_state(Some(ThreadInputState {
         composer: None,
@@ -3880,7 +3880,7 @@ async fn commentary_completion_restores_status_indicator_before_exec_begin() {
 #[tokio::test]
 async fn plan_completion_restores_status_indicator_after_streaming_plan_output() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -3975,7 +3975,7 @@ async fn unified_exec_begin_restores_working_status_snapshot() {
 async fn steer_enter_queues_while_plan_stream_is_active() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -4290,7 +4290,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
         id: "initial".into(),
         msg: EventMsg::SessionConfigured(configured),
     });
-    chat.set_feature_enabled(Feature::Plugins, true);
+    chat.enable_feature(Feature::Plugins);
     chat.bottom_pane.set_plugin_mentions(Some(vec![
         codex_core::plugins::PluginCapabilitySummary {
             config_name: "sample@test".to_string(),
@@ -4689,7 +4689,7 @@ async fn replaced_turn_clears_pending_steers_but_keeps_queued_drafts() {
 async fn enter_submits_when_plan_stream_is_not_active() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -5392,7 +5392,7 @@ async fn collab_mode_shift_tab_cycles_only_when_idle() {
 #[tokio::test]
 async fn mode_switch_surfaces_model_change_notification_when_effective_model_changes() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let default_model = chat.current_model().to_string();
 
     let mut plan_mask =
@@ -5431,7 +5431,7 @@ async fn mode_switch_surfaces_model_change_notification_when_effective_model_cha
 #[tokio::test]
 async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_same() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
     let plan_mask = collaboration_modes::plan_mask(chat.models_manager.as_ref())
@@ -5453,7 +5453,7 @@ async fn mode_switch_surfaces_reasoning_change_notification_when_model_stays_sam
 async fn collab_slash_command_opens_picker_and_updates_mode() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
 
     chat.dispatch_command(SlashCommand::Collab);
     let popup = render_bottom_popup(&chat, 80);
@@ -5509,7 +5509,7 @@ async fn collab_slash_command_opens_picker_and_updates_mode() {
 #[tokio::test]
 async fn plan_slash_command_switches_to_plan_mode() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let initial = chat.current_collaboration_mode().clone();
 
     chat.dispatch_command(SlashCommand::Plan);
@@ -5527,7 +5527,7 @@ async fn plan_slash_command_switches_to_plan_mode() {
 #[tokio::test]
 async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
 
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
@@ -5667,7 +5667,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
 #[tokio::test]
 async fn set_model_updates_active_collaboration_mask() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -5682,7 +5682,7 @@ async fn set_model_updates_active_collaboration_mask() {
 #[tokio::test]
 async fn set_reasoning_effort_updates_active_collaboration_mask() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
             .expect("expected plan collaboration mask");
@@ -5700,7 +5700,7 @@ async fn set_reasoning_effort_updates_active_collaboration_mask() {
 #[tokio::test]
 async fn set_reasoning_effort_does_not_override_active_plan_override() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.1")).await;
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
     chat.set_plan_mode_reasoning_effort(Some(ReasoningEffortConfig::High));
     let plan_mask =
         collaboration_modes::mask_for_kind(chat.models_manager.as_ref(), ModeKind::Plan)
@@ -5720,7 +5720,7 @@ async fn set_reasoning_effort_does_not_override_active_plan_override() {
 async fn collab_mode_is_sent_after_enabling() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(None).await;
     chat.thread_id = Some(ThreadId::new());
-    chat.set_feature_enabled(Feature::CollaborationModes, true);
+    chat.enable_feature(Feature::CollaborationModes);
 
     chat.bottom_pane
         .set_composer_text("hello".to_string(), Vec::new(), Vec::new());
@@ -5771,7 +5771,7 @@ async fn collab_mode_applies_default_preset() {
 #[tokio::test]
 async fn user_turn_includes_personality_from_config() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.2-codex")).await;
-    chat.set_feature_enabled(Feature::Personality, true);
+    chat.enable_feature(Feature::Personality);
     chat.thread_id = Some(ThreadId::new());
     chat.set_model("gpt-5.2-codex");
     chat.set_personality(Personality::Friendly);
@@ -7747,8 +7747,8 @@ async fn approvals_selection_popup_snapshot_windows_degraded_sandbox() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
     chat.config.notices.hide_full_access_warning = None;
-    chat.set_feature_enabled(Feature::WindowsSandbox, true);
-    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
+    chat.enable_feature(Feature::WindowsSandbox);
+    chat.disable_feature(Feature::WindowsSandboxElevated);
 
     chat.open_approvals_popup();
 
@@ -7832,8 +7832,8 @@ async fn windows_auto_mode_prompt_requests_enabling_sandbox_feature() {
 async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.set_feature_enabled(Feature::WindowsSandbox, false);
-    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
+    chat.disable_feature(Feature::WindowsSandbox);
+    chat.disable_feature(Feature::WindowsSandboxElevated);
 
     chat.maybe_prompt_windows_sandbox_enable(true);
 
@@ -7861,8 +7861,8 @@ async fn startup_prompts_for_windows_sandbox_when_agent_requested() {
 async fn startup_does_not_prompt_for_windows_sandbox_when_not_requested() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
 
-    chat.set_feature_enabled(Feature::WindowsSandbox, false);
-    chat.set_feature_enabled(Feature::WindowsSandboxElevated, false);
+    chat.disable_feature(Feature::WindowsSandbox);
+    chat.disable_feature(Feature::WindowsSandboxElevated);
     chat.maybe_prompt_windows_sandbox_enable(false);
 
     assert!(
@@ -8108,7 +8108,7 @@ async fn disabled_slash_command_while_task_running_snapshot() {
 #[tokio::test]
 async fn fast_slash_command_updates_and_persists_local_service_tier() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
-    chat.set_feature_enabled(Feature::FastMode, true);
+    chat.enable_feature(Feature::FastMode);
 
     chat.dispatch_command(SlashCommand::Fast);
 
@@ -8141,7 +8141,7 @@ async fn user_turn_carries_service_tier_after_fast_toggle() {
     let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5.3-codex")).await;
     chat.thread_id = Some(ThreadId::new());
     set_chatgpt_auth(&mut chat);
-    chat.set_feature_enabled(Feature::FastMode, true);
+    chat.enable_feature(Feature::FastMode);
 
     chat.dispatch_command(SlashCommand::Fast);
 
@@ -10034,7 +10034,7 @@ async fn stream_recovery_restores_previous_status_header() {
 #[tokio::test]
 async fn runtime_metrics_websocket_timing_logs_and_final_separator_sums_totals() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
-    chat.set_feature_enabled(Feature::RuntimeMetrics, true);
+    chat.enable_feature(Feature::RuntimeMetrics);
 
     chat.on_task_started();
     chat.apply_runtime_metrics_delta(RuntimeMetricsSummary {

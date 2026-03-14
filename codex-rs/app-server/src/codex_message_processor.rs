@@ -446,7 +446,7 @@ impl CodexMessageProcessor {
     }
 
     pub(crate) async fn maybe_start_curated_repo_sync_for_latest_config(&self) {
-        match self.load_latest_config(/*fallback_cwd=*/ None).await {
+        match self.load_latest_config().await {
             Ok(config) => self
                 .thread_manager
                 .plugins_manager()
@@ -519,7 +519,11 @@ impl CodexMessageProcessor {
         }
     }
 
-    async fn load_latest_config(
+    async fn load_latest_config(&self) -> Result<Config, JSONRPCErrorError> {
+        self.load_latest_config_with_fallback_cwd(None).await
+    }
+
+    async fn load_latest_config_with_fallback_cwd(
         &self,
         fallback_cwd: Option<PathBuf>,
     ) -> Result<Config, JSONRPCErrorError> {
@@ -4394,7 +4398,7 @@ impl CodexMessageProcessor {
         params: ExperimentalFeatureListParams,
     ) {
         let ExperimentalFeatureListParams { cursor, limit } = params;
-        let config = match self.load_latest_config(/*fallback_cwd=*/ None).await {
+        let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4509,7 +4513,7 @@ impl CodexMessageProcessor {
     }
 
     async fn mcp_server_refresh(&self, request_id: ConnectionRequestId, _params: Option<()>) {
-        let config = match self.load_latest_config(/*fallback_cwd=*/ None).await {
+        let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4568,7 +4572,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: McpServerOauthLoginParams,
     ) {
-        let config = match self.load_latest_config(/*fallback_cwd=*/ None).await {
+        let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4680,7 +4684,7 @@ impl CodexMessageProcessor {
         let request = request_id.clone();
 
         let outgoing = Arc::clone(&self.outgoing);
-        let config = match self.load_latest_config(/*fallback_cwd=*/ None).await {
+        let config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request, error).await;
@@ -5088,7 +5092,7 @@ impl CodexMessageProcessor {
     }
 
     async fn apps_list(&self, request_id: ConnectionRequestId, params: AppsListParams) {
-        let mut config = match self.load_latest_config(/*fallback_cwd=*/ None).await {
+        let mut config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -5180,9 +5184,15 @@ impl CodexMessageProcessor {
 
         let all_config = config.clone();
         tokio::spawn(async move {
-            let result = connectors::list_all_connectors_with_options(&all_config, force_refetch)
-                .await
-                .map_err(|err| format!("failed to list apps: {err}"));
+            let cache_policy = if force_refetch {
+                connectors::CachePolicy::ForceRefresh
+            } else {
+                connectors::CachePolicy::UseCache
+            };
+            let result =
+                connectors::list_all_connectors_with_cache_policy(&all_config, cache_policy)
+                    .await
+                    .map_err(|err| format!("failed to list apps: {err}"));
             let _ = tx.send(AppListLoadResult::Directory(result));
         });
 
@@ -5385,7 +5395,7 @@ impl CodexMessageProcessor {
         } = params;
         let roots = cwds.unwrap_or_default();
 
-        let mut config = match self.load_latest_config(/*fallback_cwd=*/ None).await {
+        let mut config = match self.load_latest_config().await {
             Ok(config) => config,
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
@@ -5418,7 +5428,7 @@ impl CodexMessageProcessor {
                 }
             }
 
-            config = match self.load_latest_config(/*fallback_cwd=*/ None).await {
+            config = match self.load_latest_config().await {
                 Ok(config) => config,
                 Err(err) => {
                     self.outgoing.send_error(request_id, err).await;
@@ -5490,7 +5500,7 @@ impl CodexMessageProcessor {
         } = params;
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
 
-        let config = match self.load_latest_config(config_cwd).await {
+        let config = match self.load_latest_config_with_fallback_cwd(config_cwd).await {
             Ok(config) => config,
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
@@ -5672,7 +5682,7 @@ impl CodexMessageProcessor {
 
         match plugins_manager.install_plugin(request).await {
             Ok(result) => {
-                let config = match self.load_latest_config(config_cwd).await {
+                let config = match self.load_latest_config_with_fallback_cwd(config_cwd).await {
                     Ok(config) => config,
                     Err(err) => {
                         warn!(
@@ -5688,7 +5698,10 @@ impl CodexMessageProcessor {
                     Vec::new()
                 } else {
                     let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-                        connectors::list_all_connectors_with_options(&config, /*force_refetch=*/ true),
+                        connectors::list_all_connectors_with_cache_policy(
+                            &config,
+                            connectors::CachePolicy::ForceRefresh
+                        ),
                         connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
                             &config, /*force_refetch=*/ true
                         ),

@@ -5,6 +5,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
+use crate::shell::ShellStartupMode;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
@@ -339,7 +340,10 @@ pub(crate) fn get_command(
         None => allow_login_shell,
     };
 
-    Ok(shell.derive_exec_args(&args.cmd, use_login_shell))
+    Ok(shell.derive_exec_args(
+        &args.cmd,
+        ShellStartupMode::from_login_shell(use_login_shell),
+    ))
 }
 
 #[cfg(test)]

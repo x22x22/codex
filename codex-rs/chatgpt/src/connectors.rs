@@ -8,7 +8,10 @@ use crate::chatgpt_client::chatgpt_get_request_with_timeout;
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
 
+use codex_connectors::AccountScope;
 use codex_connectors::AllConnectorsCacheKey;
+pub use codex_connectors::CachePolicy;
+use codex_connectors::ConnectorListOptions;
 use codex_connectors::DirectoryListResponse;
 
 pub use codex_core::connectors::AppInfo;
@@ -53,7 +56,7 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    list_all_connectors_with_options(config, /*force_refetch=*/ false).await
+    list_all_connectors_with_cache_policy(config, CachePolicy::UseCache).await
 }
 
 pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {
@@ -75,9 +78,9 @@ pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>>
     })
 }
 
-pub async fn list_all_connectors_with_options(
+pub async fn list_all_connectors_with_cache_policy(
     config: &Config,
-    force_refetch: bool,
+    cache_policy: CachePolicy,
 ) -> anyhow::Result<Vec<AppInfo>> {
     if !apps_enabled(config).await {
         return Ok(Vec::new());
@@ -88,10 +91,17 @@ pub async fn list_all_connectors_with_options(
     let token_data =
         get_chatgpt_token_data().ok_or_else(|| anyhow::anyhow!("ChatGPT token not available"))?;
     let cache_key = all_connectors_cache_key(config, &token_data);
-    let connectors = codex_connectors::list_all_connectors_with_options(
+    let account_scope = if token_data.id_token.is_workspace_account() {
+        AccountScope::IncludeWorkspace
+    } else {
+        AccountScope::PersonalOnly
+    };
+    let connectors = codex_connectors::list_all_connectors(
         cache_key,
-        token_data.id_token.is_workspace_account(),
-        force_refetch,
+        ConnectorListOptions {
+            account_scope,
+            cache_policy,
+        },
         |path| async move {
             chatgpt_get_request_with_timeout::<DirectoryListResponse>(
                 config,

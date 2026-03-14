@@ -13,6 +13,7 @@ use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
 use crate::protocol::ExecCommandSource;
 use crate::shell::Shell;
+use crate::shell::ShellStartupMode;
 use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
@@ -106,7 +107,7 @@ impl ShellCommandHandler {
     }
 
     fn base_command(shell: &Shell, command: &str, use_login_shell: bool) -> Vec<String> {
-        shell.derive_exec_args(command, use_login_shell)
+        shell.derive_exec_args(command, ShellStartupMode::from_login_shell(use_login_shell))
     }
 
     fn to_exec_params(

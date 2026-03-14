@@ -556,12 +556,14 @@ impl BottomPane {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn set_composer_input_enabled(
-        &mut self,
-        enabled: bool,
-        placeholder: Option<String>,
-    ) {
-        self.composer.set_input_enabled(enabled, placeholder);
+    pub(crate) fn enable_composer_input(&mut self) {
+        self.composer.enable_input();
+        self.request_redraw();
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn disable_composer_input(&mut self, placeholder: Option<String>) {
+        self.composer.disable_input(placeholder);
         self.request_redraw();
     }
 
@@ -942,10 +944,7 @@ impl BottomPane {
             self.disable_paste_burst,
         );
         self.pause_status_timer_for_modal();
-        self.set_composer_input_enabled(
-            /*enabled=*/ false,
-            Some("Answer the questions to continue.".to_string()),
-        );
+        self.disable_composer_input(Some("Answer the questions to continue.".to_string()));
         self.push_view(Box::new(modal));
     }
 
@@ -1003,10 +1002,9 @@ impl BottomPane {
                 self.app_event_tx.clone(),
             );
             self.pause_status_timer_for_modal();
-            self.set_composer_input_enabled(
-                /*enabled=*/ false,
-                Some("Respond to the tool suggestion to continue.".to_string()),
-            );
+            self.disable_composer_input(Some(
+                "Respond to the tool suggestion to continue.".to_string(),
+            ));
             self.push_view(Box::new(view));
             return;
         }
@@ -1019,16 +1017,15 @@ impl BottomPane {
             self.disable_paste_burst,
         );
         self.pause_status_timer_for_modal();
-        self.set_composer_input_enabled(
-            /*enabled=*/ false,
-            Some("Respond to the MCP server request to continue.".to_string()),
-        );
+        self.disable_composer_input(Some(
+            "Respond to the MCP server request to continue.".to_string(),
+        ));
         self.push_view(Box::new(modal));
     }
 
     fn on_active_view_complete(&mut self) {
         self.resume_status_timer_after_modal();
-        self.set_composer_input_enabled(/*enabled=*/ true, /*placeholder=*/ None);
+        self.enable_composer_input();
     }
 
     fn pause_status_timer_for_modal(&mut self) {

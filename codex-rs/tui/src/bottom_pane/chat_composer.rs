@@ -3699,13 +3699,18 @@ impl ChatComposer {
         self.voice_state.voice.is_some()
     }
 
+    pub(crate) fn enable_input(&mut self) {
+        self.input_enabled = true;
+        self.input_disabled_placeholder = None;
+    }
+
     #[allow(dead_code)]
-    pub(crate) fn set_input_enabled(&mut self, enabled: bool, placeholder: Option<String>) {
-        self.input_enabled = enabled;
-        self.input_disabled_placeholder = if enabled { None } else { placeholder };
+    pub(crate) fn disable_input(&mut self, placeholder: Option<String>) {
+        self.input_enabled = false;
+        self.input_disabled_placeholder = placeholder;
 
         // Avoid leaving interactive popups open while input is blocked.
-        if !enabled && !matches!(self.active_popup, ActivePopup::None) {
+        if !matches!(self.active_popup, ActivePopup::None) {
             self.active_popup = ActivePopup::None;
         }
     }
@@ -9764,7 +9769,7 @@ mod tests {
         );
 
         composer.set_text_content("hello".to_string(), Vec::new(), Vec::new());
-        composer.set_input_enabled(false, Some("Input disabled for test.".to_string()));
+        composer.disable_input(Some("Input disabled for test.".to_string()));
 
         let (result, needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));

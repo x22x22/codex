@@ -1,5 +1,6 @@
 use crate::is_safe_command::is_known_safe_command;
 use crate::parse_command::parse_command;
+use crate::shell::ShellStartupMode;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
 use crate::tools::handlers::unified_exec::ExecCommandArgs;
@@ -90,10 +91,10 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                 let use_login_shell = params
                     .login
                     .unwrap_or(invocation.turn.tools_config.allow_login_shell);
-                let command = invocation
-                    .session
-                    .user_shell()
-                    .derive_exec_args(&params.command, use_login_shell);
+                let command = invocation.session.user_shell().derive_exec_args(
+                    &params.command,
+                    ShellStartupMode::from_login_shell(use_login_shell),
+                );
                 (command, invocation.turn.resolve_path(params.workdir))
             }),
         "exec_command" => serde_json::from_str::<ExecCommandArgs>(arguments)

@@ -2165,7 +2165,7 @@ fn push_tool_spec(
 ) {
     let spec = augment_tool_spec_for_code_mode(spec, code_mode_enabled);
     if supports_parallel_tool_calls {
-        builder.push_spec_with_parallel_support(spec, /*supports_parallel_tool_calls=*/ true);
+        builder.push_parallel_spec(spec);
     } else {
         builder.push_spec(spec);
     }
@@ -2664,10 +2664,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             .as_ref()
             .filter(|tools| !tools.is_empty())
     {
-        builder.push_spec_with_parallel_support(
-            create_tool_suggest_tool(discoverable_tools),
-            /*supports_parallel_tool_calls=*/ true,
-        );
+        builder.push_parallel_spec(create_tool_suggest_tool(discoverable_tools));
         builder.register_handler(TOOL_SUGGEST_TOOL_NAME, tool_suggest_handler);
     }
 

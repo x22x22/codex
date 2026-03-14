@@ -341,16 +341,11 @@ impl ToolRegistryBuilder {
     }
 
     pub fn push_spec(&mut self, spec: ToolSpec) {
-        self.push_spec_with_parallel_support(spec, /*supports_parallel_tool_calls=*/ false);
+        self.specs.push(ConfiguredToolSpec::new(spec, false));
     }
 
-    pub fn push_spec_with_parallel_support(
-        &mut self,
-        spec: ToolSpec,
-        supports_parallel_tool_calls: bool,
-    ) {
-        self.specs
-            .push(ConfiguredToolSpec::new(spec, supports_parallel_tool_calls));
+    pub fn push_parallel_spec(&mut self, spec: ToolSpec) {
+        self.specs.push(ConfiguredToolSpec::new(spec, true));
     }
 
     pub fn register_handler<H>(&mut self, name: impl Into<String>, handler: Arc<H>)

@@ -8,6 +8,7 @@ use std::time::SystemTime;
 
 use crate::rollout::list::find_thread_path_by_id_str;
 use crate::shell::Shell;
+use crate::shell::ShellStartupMode;
 use crate::shell::ShellType;
 use crate::shell::get_shell;
 use anyhow::Context;
@@ -272,7 +273,7 @@ async fn run_script_with_timeout(
     use_login_shell: bool,
     cwd: &Path,
 ) -> Result<String> {
-    let args = shell.derive_exec_args(script, use_login_shell);
+    let args = shell.derive_exec_args(script, ShellStartupMode::from_login_shell(use_login_shell));
     let shell_name = shell.name();
 
     // Handler is kept as guard to control the drop. The `mut` pattern is required because .args()

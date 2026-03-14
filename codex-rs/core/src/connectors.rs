@@ -412,10 +412,16 @@ async fn list_directory_connectors_for_tool_suggest_with_auth(
         is_workspace_account,
     );
 
-    codex_connectors::list_all_connectors_with_options(
+    codex_connectors::list_all_connectors(
         cache_key,
-        is_workspace_account,
-        /*force_refetch=*/ false,
+        codex_connectors::ConnectorListOptions {
+            account_scope: if is_workspace_account {
+                codex_connectors::AccountScope::IncludeWorkspace
+            } else {
+                codex_connectors::AccountScope::PersonalOnly
+            },
+            cache_policy: codex_connectors::CachePolicy::UseCache,
+        },
         |path| {
             let access_token = access_token.clone();
             let account_id = account_id.clone();

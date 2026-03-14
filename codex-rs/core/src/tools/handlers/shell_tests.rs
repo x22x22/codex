@@ -11,6 +11,7 @@ use crate::powershell::try_find_powershell_executable_blocking;
 use crate::powershell::try_find_pwsh_executable_blocking;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
+use crate::shell::ShellStartupMode;
 use crate::shell::ShellType;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::tools::handlers::ShellCommandHandler;
@@ -56,10 +57,10 @@ fn commands_generated_by_shell_command_handler_can_be_matched_by_is_known_safe_c
 
 fn assert_safe(shell: &Shell, command: &str) {
     assert!(is_known_safe_command(
-        &shell.derive_exec_args(command, /* use_login_shell */ true)
+        &shell.derive_exec_args(command, ShellStartupMode::Login)
     ));
     assert!(is_known_safe_command(
-        &shell.derive_exec_args(command, /* use_login_shell */ false)
+        &shell.derive_exec_args(command, ShellStartupMode::NonLogin)
     ));
 }
 
@@ -74,7 +75,9 @@ async fn shell_command_handler_to_exec_params_uses_session_shell_and_turn_contex
     let sandbox_permissions = SandboxPermissions::RequireEscalated;
     let justification = Some("because tests".to_string());
 
-    let expected_command = session.user_shell().derive_exec_args(&command, true);
+    let expected_command = session
+        .user_shell()
+        .derive_exec_args(&command, ShellStartupMode::Login);
     let expected_cwd = turn_context.resolve_path(workdir.clone());
     let expected_env = create_env(
         &turn_context.shell_environment_policy,
@@ -127,14 +130,14 @@ fn shell_command_handler_respects_explicit_login_flag() {
     let login_command = ShellCommandHandler::base_command(&shell, "echo login shell", true);
     assert_eq!(
         login_command,
-        shell.derive_exec_args("echo login shell", true)
+        shell.derive_exec_args("echo login shell", ShellStartupMode::Login)
     );
 
     let non_login_command =
         ShellCommandHandler::base_command(&shell, "echo non login shell", false);
     assert_eq!(
         non_login_command,
-        shell.derive_exec_args("echo non login shell", false)
+        shell.derive_exec_args("echo non login shell", ShellStartupMode::NonLogin)
     );
 }
 
@@ -163,7 +166,9 @@ async fn shell_command_handler_defaults_to_non_login_when_disallowed() {
 
     assert_eq!(
         exec_params.command,
-        session.user_shell().derive_exec_args("echo hello", false)
+        session
+            .user_shell()
+            .derive_exec_args("echo hello", ShellStartupMode::NonLogin)
     );
 }
 

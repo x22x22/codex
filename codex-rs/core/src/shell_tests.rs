@@ -64,7 +64,7 @@ fn can_run_on_shell_test() {
 
 fn shell_works(shell: Option<Shell>, command: &str, required: bool) -> bool {
     if let Some(shell) = shell {
-        let args = shell.derive_exec_args(command, false);
+        let args = shell.derive_exec_args(command, ShellStartupMode::NonLogin);
         let output = Command::new(args[0].clone())
             .args(&args[1..])
             .output()
@@ -85,11 +85,11 @@ fn derive_exec_args() {
         shell_snapshot: empty_shell_snapshot_receiver(),
     };
     assert_eq!(
-        test_bash_shell.derive_exec_args("echo hello", false),
+        test_bash_shell.derive_exec_args("echo hello", ShellStartupMode::NonLogin),
         vec!["/bin/bash", "-c", "echo hello"]
     );
     assert_eq!(
-        test_bash_shell.derive_exec_args("echo hello", true),
+        test_bash_shell.derive_exec_args("echo hello", ShellStartupMode::Login),
         vec!["/bin/bash", "-lc", "echo hello"]
     );
 
@@ -99,11 +99,11 @@ fn derive_exec_args() {
         shell_snapshot: empty_shell_snapshot_receiver(),
     };
     assert_eq!(
-        test_zsh_shell.derive_exec_args("echo hello", false),
+        test_zsh_shell.derive_exec_args("echo hello", ShellStartupMode::NonLogin),
         vec!["/bin/zsh", "-c", "echo hello"]
     );
     assert_eq!(
-        test_zsh_shell.derive_exec_args("echo hello", true),
+        test_zsh_shell.derive_exec_args("echo hello", ShellStartupMode::Login),
         vec!["/bin/zsh", "-lc", "echo hello"]
     );
 
@@ -113,11 +113,11 @@ fn derive_exec_args() {
         shell_snapshot: empty_shell_snapshot_receiver(),
     };
     assert_eq!(
-        test_powershell_shell.derive_exec_args("echo hello", false),
+        test_powershell_shell.derive_exec_args("echo hello", ShellStartupMode::NonLogin),
         vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"]
     );
     assert_eq!(
-        test_powershell_shell.derive_exec_args("echo hello", true),
+        test_powershell_shell.derive_exec_args("echo hello", ShellStartupMode::Login),
         vec!["pwsh.exe", "-Command", "echo hello"]
     );
 }
