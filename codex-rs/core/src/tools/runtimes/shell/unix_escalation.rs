@@ -455,7 +455,7 @@ impl CoreShellActionProvider {
                             cwd: workdir,
                             additional_permissions,
                         },
-                        None,
+                        /*retry_reason=*/ None,
                     )
                     .await;
                 }
@@ -488,9 +488,9 @@ impl CoreShellActionProvider {
                         approval_id,
                         command,
                         workdir,
-                        None,
-                        None,
-                        None,
+                        /*reason=*/ None,
+                        /*network_approval_context=*/ None,
+                        /*proposed_execpolicy_amendment=*/ None,
                         additional_permissions,
                         skill_metadata,
                         Some(available_decisions),
@@ -933,7 +933,7 @@ impl ShellCommandExecutor for CoreShellCommandExecutor {
                 justification: self.justification.clone(),
                 arg0: self.arg0.clone(),
             },
-            None,
+            /*stdout_stream=*/ None,
             after_spawn,
         )
         .await?;
