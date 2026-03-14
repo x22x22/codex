@@ -100,7 +100,7 @@ pub struct PendingInProcessRequest {
 }
 
 impl PendingInProcessRequest {
-    pub async fn recv(self) -> IoResult<PendingClientRequestResponse> {
+    pub async fn recv(self) -> IoResult<std::result::Result<Result, JSONRPCErrorError>> {
         self.response_rx.await.map_err(|err| {
             IoError::new(
                 ErrorKind::BrokenPipe,
@@ -225,7 +225,10 @@ impl InProcessClientSender {
         Ok(PendingInProcessRequest { response_rx })
     }
 
-    pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
+    pub async fn request(
+        &self,
+        request: ClientRequest,
+    ) -> IoResult<std::result::Result<Result, JSONRPCErrorError>> {
         self.start_request(request)?.recv().await
     }
 
@@ -290,7 +293,10 @@ impl InProcessClientHandle {
     /// request IDs unique among concurrent requests; reusing an in-flight ID
     /// produces an `INVALID_REQUEST` response and can make request routing
     /// ambiguous in the caller.
-    pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
+    pub async fn request(
+        &self,
+        request: ClientRequest,
+    ) -> IoResult<std::result::Result<Result, JSONRPCErrorError>> {
         self.client.request(request).await
     }
 
