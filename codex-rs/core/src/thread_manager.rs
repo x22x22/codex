@@ -206,7 +206,7 @@ impl ThreadManager {
         auth: CodexAuth,
         provider: ModelProviderInfo,
     ) -> Self {
-        set_thread_manager_test_mode_for_tests(true);
+        set_thread_manager_test_mode_for_tests(/*enabled=*/ true);
         let codex_home = std::env::temp_dir().join(format!(
             "codex-thread-manager-test-{}",
             uuid::Uuid::new_v4()
@@ -226,7 +226,7 @@ impl ThreadManager {
         provider: ModelProviderInfo,
         codex_home: PathBuf,
     ) -> Self {
-        set_thread_manager_test_mode_for_tests(true);
+        set_thread_manager_test_mode_for_tests(/*enabled=*/ true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
@@ -234,7 +234,7 @@ impl ThreadManager {
         let skills_manager = Arc::new(SkillsManager::new(
             codex_home.clone(),
             Arc::clone(&plugins_manager),
-            true,
+            /*bundled_skills_enabled=*/ true,
         ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {
@@ -333,7 +333,12 @@ impl ThreadManager {
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
         // Box delegated thread-spawn futures so these convenience wrappers do
         // not inline the full spawn path into every caller's async state.
-        Box::pin(self.start_thread_with_tools(config, Vec::new(), false)).await
+        Box::pin(self.start_thread_with_tools(
+            config,
+            Vec::new(),
+            /*persist_extended_history=*/ false,
+        ))
+        .await
     }
 
     pub async fn start_thread_with_tools(
@@ -346,8 +351,8 @@ impl ThreadManager {
             config,
             dynamic_tools,
             persist_extended_history,
-            None,
-            None,
+            /*metrics_service_name=*/ None,
+            /*parent_trace=*/ None,
         ))
         .await
     }
@@ -385,7 +390,7 @@ impl ThreadManager {
             config,
             initial_history,
             auth_manager,
-            false,
+            /*persist_extended_history=*/ false,
             parent_trace,
         ))
         .await
@@ -406,7 +411,7 @@ impl ThreadManager {
             self.agent_control(),
             Vec::new(),
             persist_extended_history,
-            None,
+            /*metrics_service_name=*/ None,
             parent_trace,
         ))
         .await
@@ -491,7 +496,7 @@ impl ThreadManager {
             self.agent_control(),
             Vec::new(),
             persist_extended_history,
-            None,
+            /*metrics_service_name=*/ None,
             parent_trace,
         ))
         .await
@@ -551,9 +556,9 @@ impl ThreadManagerState {
             config,
             agent_control,
             self.session_source.clone(),
-            false,
-            None,
-            None,
+            /*persist_extended_history=*/ false,
+            /*metrics_service_name=*/ None,
+            /*inherited_shell_snapshot=*/ None,
         ))
         .await
     }
@@ -577,7 +582,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
-            None,
+            /*parent_trace=*/ None,
         ))
         .await
     }
@@ -598,10 +603,10 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             Vec::new(),
-            false,
-            None,
+            /*persist_extended_history=*/ false,
+            /*metrics_service_name=*/ None,
             inherited_shell_snapshot,
-            None,
+            /*parent_trace=*/ None,
         ))
         .await
     }
@@ -623,9 +628,9 @@ impl ThreadManagerState {
             session_source,
             Vec::new(),
             persist_extended_history,
-            None,
+            /*metrics_service_name=*/ None,
             inherited_shell_snapshot,
-            None,
+            /*parent_trace=*/ None,
         ))
         .await
     }
@@ -652,7 +657,7 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
-            None,
+            /*inherited_shell_snapshot=*/ None,
             parent_trace,
         ))
         .await
