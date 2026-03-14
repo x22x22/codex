@@ -4,7 +4,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::config::Config;
 use crate::config::types::MemoriesConfig;
-use crate::contextual_user_message::is_memory_excluded_contextual_user_fragment;
+use crate::model_visible_fragments::is_memory_excluded_contextual_user_fragment;
 use crate::error::CodexErr;
 use crate::memories::metrics;
 use crate::memories::phase_one;

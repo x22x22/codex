@@ -467,9 +467,22 @@ impl Default for BaseInstructions {
 
 /// Developer-provided guidance that is injected into a turn as a developer role
 /// message.
+///
+/// This type represents Codex-authored developer scaffolding such as
+/// permissions and model-switch prompts.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(rename = "developer_instructions", rename_all = "snake_case")]
 pub struct DeveloperInstructions {
+    text: String,
+}
+
+/// Developer-provided guidance supplied directly by a user or client.
+///
+/// This type is only for custom developer instructions provided by users or
+/// clients, such as config or app-server overrides.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
+#[serde(rename = "developer_instructions", rename_all = "snake_case")]
+pub struct CustomDeveloperInstructions {
     text: String,
 }
 
@@ -716,6 +729,16 @@ impl DeveloperInstructions {
     }
 }
 
+impl CustomDeveloperInstructions {
+    pub fn new<T: Into<String>>(text: T) -> Self {
+        Self { text: text.into() }
+    }
+
+    pub fn into_text(self) -> String {
+        self.text
+    }
+}
+
 fn approved_command_prefixes_text(exec_policy: &Policy) -> Option<String> {
     format_allow_prefixes(exec_policy.get_allowed_prefixes())
         .filter(|prefixes| !prefixes.is_empty())
@@ -871,6 +894,20 @@ impl From<DeveloperInstructions> for ResponseItem {
     }
 }
 
+impl From<CustomDeveloperInstructions> for ResponseItem {
+    fn from(instructions: CustomDeveloperInstructions) -> Self {
+        ResponseItem::Message {
+            id: None,
+            role: MessageRole::Developer.to_string(),
+            content: vec![ContentItem::InputText {
+                text: instructions.into_text(),
+            }],
+            end_turn: None,
+            phase: None,
+        }
+    }
+}
+
 impl From<SandboxMode> for DeveloperInstructions {
     fn from(mode: SandboxMode) -> Self {
         let network_access = match mode {
@@ -880,6 +917,93 @@ impl From<SandboxMode> for DeveloperInstructions {
 
         DeveloperInstructions::sandbox_text(mode, network_access)
     }
+}
+
+impl From<SandboxMode> for CustomDeveloperInstructions {
+    fn from(mode: SandboxMode) -> Self {
+        let network_access = match mode {
+            SandboxMode::DangerFullAccess => NetworkAccess::Enabled,
+            SandboxMode::WorkspaceWrite | SandboxMode::ReadOnly => NetworkAccess::Restricted,
+        };
+
+        CustomDeveloperInstructions::new(developer_sandbox_mode_text(mode, network_access))
+    }
+}
+
+pub fn developer_model_switch_text(model_instructions: String) -> String {
+    DeveloperInstructions::model_switch_message(model_instructions).into_text()
+}
+
+pub fn developer_realtime_start_text() -> String {
+    DeveloperInstructions::realtime_start_message().into_text()
+}
+
+pub fn developer_realtime_start_text_with_instructions(instructions: Option<&str>) -> String {
+    let instructions = instructions.unwrap_or(REALTIME_START_INSTRUCTIONS.trim());
+    DeveloperInstructions::realtime_start_message_with_instructions(instructions).into_text()
+}
+
+pub fn developer_realtime_end_text(reason: &str) -> String {
+    DeveloperInstructions::realtime_end_message(reason).into_text()
+}
+
+pub fn developer_personality_spec_text(spec: String) -> String {
+    DeveloperInstructions::personality_spec_message(spec).into_text()
+}
+
+pub fn developer_permissions_text(
+    sandbox_policy: &SandboxPolicy,
+    approval_policy: AskForApproval,
+    approvals_reviewer: ApprovalsReviewer,
+    exec_policy: &Policy,
+    cwd: &Path,
+    exec_permission_approvals_enabled: bool,
+    request_permissions_tool_enabled: bool,
+) -> String {
+    DeveloperInstructions::from_policy(
+        sandbox_policy,
+        approval_policy,
+        approvals_reviewer,
+        exec_policy,
+        cwd,
+        exec_permission_approvals_enabled,
+        request_permissions_tool_enabled,
+    )
+    .into_text()
+}
+
+pub fn developer_collaboration_mode_text(collaboration_mode: &CollaborationMode) -> Option<String> {
+    DeveloperInstructions::from_collaboration_mode(collaboration_mode)
+        .map(DeveloperInstructions::into_text)
+}
+
+pub fn developer_permissions_with_network_text(
+    sandbox_mode: SandboxMode,
+    network_access: NetworkAccess,
+    approval_policy: AskForApproval,
+    approvals_reviewer: ApprovalsReviewer,
+    exec_policy: &Policy,
+    writable_roots: Option<Vec<WritableRoot>>,
+    exec_permission_approvals_enabled: bool,
+    request_permissions_tool_enabled: bool,
+) -> String {
+    DeveloperInstructions::from_permissions_with_network(
+        sandbox_mode,
+        network_access,
+        PermissionsPromptConfig {
+            approval_policy,
+            approvals_reviewer,
+            exec_policy,
+            exec_permission_approvals_enabled,
+            request_permissions_tool_enabled,
+        },
+        writable_roots,
+    )
+    .into_text()
+}
+
+pub fn developer_sandbox_mode_text(mode: SandboxMode, network_access: NetworkAccess) -> String {
+    DeveloperInstructions::sandbox_text(mode, network_access).into_text()
 }
 
 fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>>) -> bool {

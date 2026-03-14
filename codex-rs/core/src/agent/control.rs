@@ -9,9 +9,9 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::find_archived_thread_path_by_id_str;
 use crate::find_thread_path_by_id_str;
+use crate::model_visible_fragments::SubagentNotification;
+use crate::model_visible_fragments::format_subagent_context_line;
 use crate::rollout::RolloutRecorder;
-use crate::session_prefix::format_subagent_context_line;
-use crate::session_prefix::format_subagent_notification_message;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::state_db;
 use crate::thread_manager::ThreadManagerState;
@@ -674,9 +674,10 @@ impl AgentControl {
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
+            let child_thread_id_string = child_thread_id.to_string();
             parent_thread
-                .inject_user_message_without_turn(format_subagent_notification_message(
-                    child_reference.as_str(),
+                .inject_model_visible_fragment_without_turn(SubagentNotification::new(
+                    &child_thread_id_string,
                     &status,
                 ))
                 .await;
