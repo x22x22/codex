@@ -108,13 +108,15 @@ pub(crate) async fn handle_mcp_tool_call(
             &call_id,
             invocation,
             "MCP tool call blocked by app configuration".to_string(),
-            false,
+            /*already_started=*/ false,
         )
         .await;
         let status = if result.is_ok() { "ok" } else { "error" };
-        turn_context
-            .session_telemetry
-            .counter("codex.mcp.call", 1, &[("status", status)]);
+        turn_context.session_telemetry.counter(
+            "codex.mcp.call",
+            /*inc=*/ 1,
+            &[("status", status)],
+        );
         return CallToolResult::from_result(result);
     }
 
@@ -184,7 +186,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
-                    true,
+                    /*already_started=*/ true,
                 )
                 .await
             }
@@ -196,7 +198,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
-                    true,
+                    /*already_started=*/ true,
                 )
                 .await
             }
@@ -207,16 +209,18 @@ pub(crate) async fn handle_mcp_tool_call(
                     &call_id,
                     invocation,
                     message,
-                    true,
+                    /*already_started=*/ true,
                 )
                 .await
             }
         };
 
         let status = if result.is_ok() { "ok" } else { "error" };
-        turn_context
-            .session_telemetry
-            .counter("codex.mcp.call", 1, &[("status", status)]);
+        turn_context.session_telemetry.counter(
+            "codex.mcp.call",
+            /*inc=*/ 1,
+            &[("status", status)],
+        );
 
         return CallToolResult::from_result(result);
     }
@@ -255,9 +259,11 @@ pub(crate) async fn handle_mcp_tool_call(
     maybe_track_codex_app_used(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
 
     let status = if result.is_ok() { "ok" } else { "error" };
-    turn_context
-        .session_telemetry
-        .counter("codex.mcp.call", 1, &[("status", status)]);
+    turn_context.session_telemetry.counter(
+        "codex.mcp.call",
+        /*inc=*/ 1,
+        &[("status", status)],
+    );
 
     CallToolResult::from_result(result)
 }
