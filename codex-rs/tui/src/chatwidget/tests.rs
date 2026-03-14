@@ -1755,7 +1755,7 @@ async fn helpers_are_available_and_do_not_panic() {
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
-        app_event_tx: tx,
+        app_event_tx: tx.clone(),
         initial_user_message: None,
         enhanced_keys_supported: false,
         account: Some(codex_app_server_protocol::Account::ApiKey {}),
@@ -1774,7 +1774,7 @@ async fn helpers_are_available_and_do_not_panic() {
         status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
         session_telemetry,
     };
-    let mut w = ChatWidget::new(init, thread_manager);
+    let mut w = ChatWidget::new_with_op_sender(init, spawn_app_event_forwarder(tx));
     // Basic construction sanity.
     let _ = &mut w;
 }
@@ -5625,10 +5625,12 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
             cfg.model_provider.clone(),
         ),
     );
+    let (app_event_tx_raw, _app_event_rx) = unbounded_channel::<AppEvent>();
+    let app_event_tx = AppEventSender::new(app_event_tx_raw);
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
-        app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        app_event_tx: app_event_tx.clone(),
         initial_user_message: None,
         enhanced_keys_supported: false,
         account: Some(codex_app_server_protocol::Account::ApiKey {}),
@@ -5648,7 +5650,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         session_telemetry,
     };
 
-    let chat = ChatWidget::new(init, thread_manager);
+    let chat = ChatWidget::new_with_op_sender(init, spawn_app_event_forwarder(app_event_tx));
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_model(), resolved_model);
 }
@@ -5679,10 +5681,12 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
             cfg.model_provider.clone(),
         ),
     );
+    let (app_event_tx_raw, _app_event_rx) = unbounded_channel::<AppEvent>();
+    let app_event_tx = AppEventSender::new(app_event_tx_raw);
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
-        app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
+        app_event_tx: app_event_tx.clone(),
         initial_user_message: None,
         enhanced_keys_supported: false,
         account: Some(codex_app_server_protocol::Account::ApiKey {}),
@@ -5702,7 +5706,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         session_telemetry,
     };
 
-    let chat = ChatWidget::new(init, thread_manager);
+    let chat = ChatWidget::new_with_op_sender(init, spawn_app_event_forwarder(app_event_tx));
     assert_eq!(chat.active_collaboration_mode_kind(), ModeKind::Default);
     assert_eq!(chat.current_model(), resolved_model);
 }
