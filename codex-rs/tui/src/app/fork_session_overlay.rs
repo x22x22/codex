@@ -28,6 +28,9 @@ use crate::tui::TuiEvent;
 use crate::vt100_backend::VT100Backend;
 use crate::vt100_render::render_screen;
 
+use super::fork_session_overlay_mouse::OverlayMouseAction;
+use super::fork_session_overlay_mouse::PopupDragState;
+use super::fork_session_overlay_mouse::overlay_mouse_action;
 use super::fork_session_terminal::ForkSessionTerminal;
 
 const DEFAULT_POPUP_WIDTH_NUMERATOR: u16 = 2;
@@ -60,6 +63,7 @@ pub(crate) struct ForkSessionOverlayState {
     popup: Rect,
     command_state: OverlayCommandState,
     focused_pane: OverlayFocusedPane,
+    drag_state: Option<PopupDragState>,
 }
 
 fn popup_size_bounds(area: Rect) -> Rect {
@@ -209,9 +213,7 @@ fn focus_toggle_shortcut(key_event: KeyEvent) -> bool {
 
 fn popup_hint(command_state: OverlayCommandState) -> Vec<Span<'static>> {
     match command_state {
-        OverlayCommandState::PassThrough => {
-            vec!["^O switch".cyan(), "  ".into(), "ctrl+] prefix".dim()]
-        }
+        OverlayCommandState::PassThrough => vec!["ctrl+] prefix".dim()],
         OverlayCommandState::AwaitingPrefix => {
             vec![
                 "m move".cyan(),
@@ -259,17 +261,11 @@ fn popup_block(
         Some(code) => format!("exited {code}").red().bold(),
         None => "running".green().bold(),
     };
-    let focus = match focused_pane {
-        OverlayFocusedPane::Background => "background focus".cyan().bold(),
-        OverlayFocusedPane::Popup => "popup focus".cyan().bold(),
-    };
     let mut title = vec![
-        " fork session ".bold().cyan(),
-        "  ".into(),
+        " fork session".bold().cyan(),
+        " ".into(),
         status,
-        "  ".into(),
-        focus,
-        "  ".into(),
+        " ".into(),
     ];
     title.extend(popup_hint(command_state));
     let title = Line::from(title);
@@ -364,13 +360,16 @@ impl App {
             popup,
             command_state: OverlayCommandState::PassThrough,
             focused_pane: OverlayFocusedPane::Popup,
+            drag_state: None,
         });
+        tui.set_mouse_capture_enabled(true)?;
         tui.frame_requester().schedule_frame();
         Ok(())
     }
 
     pub(crate) async fn close_fork_session_overlay(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.fork_session_overlay = None;
+        tui.set_mouse_capture_enabled(false)?;
         self.restore_inline_view_after_fork_overlay_close(tui)?;
         tui.frame_requester().schedule_frame();
         Ok(())
@@ -623,6 +622,36 @@ impl App {
                         OverlayFocusedPane::Background => self.chat_widget.handle_paste(pasted),
                         OverlayFocusedPane::Popup => {
                             let _ = state.terminal.handle_paste(&pasted).await;
+                        }
+                    }
+                }
+            }
+            TuiEvent::Mouse(mouse_event) => {
+                let viewport = tui.terminal.size()?;
+                let area = Rect::new(0, 0, viewport.width, viewport.height);
+                if let Some(state) = self.fork_session_overlay.as_mut() {
+                    match overlay_mouse_action(area, state.popup, state.drag_state, mouse_event) {
+                        OverlayMouseAction::Ignore => {}
+                        OverlayMouseAction::FocusBackground => {
+                            state.focused_pane = OverlayFocusedPane::Background;
+                            state.command_state = OverlayCommandState::PassThrough;
+                            state.drag_state = None;
+                            tui.frame_requester().schedule_frame();
+                        }
+                        OverlayMouseAction::FocusPopup(drag_state) => {
+                            state.focused_pane = OverlayFocusedPane::Popup;
+                            state.command_state = OverlayCommandState::PassThrough;
+                            state.drag_state = Some(drag_state);
+                            tui.frame_requester().schedule_frame();
+                        }
+                        OverlayMouseAction::MovePopup(popup) => {
+                            state.focused_pane = OverlayFocusedPane::Popup;
+                            state.command_state = OverlayCommandState::PassThrough;
+                            state.popup = popup;
+                            tui.frame_requester().schedule_frame();
+                        }
+                        OverlayMouseAction::EndDrag => {
+                            state.drag_state = None;
                         }
                     }
                 }
@@ -1086,6 +1115,7 @@ ready for a fresh turn\r\n",
             popup: default_popup_rect(Rect::new(0, 0, 100, 28)),
             command_state: OverlayCommandState::PassThrough,
             focused_pane: OverlayFocusedPane::Popup,
+            drag_state: None,
         });
 
         let area = Rect::new(0, 0, 100, 28);
@@ -1125,6 +1155,7 @@ ready for a fresh turn\r\n",
             popup: default_popup_rect(Rect::new(0, 0, 100, 28)),
             command_state: OverlayCommandState::PassThrough,
             focused_pane: OverlayFocusedPane::Background,
+            drag_state: None,
         });
 
         let area = Rect::new(0, 0, 100, 28);
@@ -1168,6 +1199,7 @@ ready for a fresh turn\r\n",
             popup: default_popup_rect(Rect::new(0, 0, 80, 18)),
             command_state: OverlayCommandState::PassThrough,
             focused_pane: OverlayFocusedPane::Background,
+            drag_state: None,
         });
 
         let area = Rect::new(0, 0, 80, 18);

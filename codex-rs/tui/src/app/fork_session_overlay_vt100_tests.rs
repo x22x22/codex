@@ -215,6 +215,7 @@ async fn fork_session_overlay_open_from_inline_viewport_snapshot() {
         popup: default_popup_rect(Rect::new(0, 0, width, height)),
         command_state: OverlayCommandState::PassThrough,
         focused_pane: OverlayFocusedPane::Popup,
+        drag_state: None,
     });
 
     let mut pending_history_lines = Vec::new();

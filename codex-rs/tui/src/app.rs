@@ -155,6 +155,7 @@ mod app_server_adapter;
 mod app_server_requests;
 mod loaded_threads;
 mod fork_session_overlay;
+mod fork_session_overlay_mouse;
 mod fork_session_terminal;
 mod pending_interactive_replay;
 
@@ -3909,6 +3910,7 @@ impl App {
                 TuiEvent::Key(key_event) => {
                     self.handle_key_event(tui, app_server, key_event).await;
                 }
+                TuiEvent::Mouse(_) => {}
                 TuiEvent::Paste(pasted) => {
                     // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
                     // but tui-textarea expects \n. Normalize CR to LF.

@@ -16,10 +16,13 @@ use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
+use crossterm::event::DisableMouseCapture;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::EnableFocusChange;
+use crossterm::event::EnableMouseCapture;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyboardEnhancementFlags;
+use crossterm::event::MouseEvent;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::EnterAlternateScreen;
@@ -129,6 +132,7 @@ fn restore_common(should_disable_raw_mode: bool) -> Result<()> {
     let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
     execute!(stdout(), DisableBracketedPaste)?;
     let _ = execute!(stdout(), DisableFocusChange);
+    let _ = execute!(stdout(), DisableMouseCapture);
     if should_disable_raw_mode {
         disable_raw_mode()?;
     }
@@ -234,6 +238,7 @@ fn set_panic_hook() {
 #[derive(Clone, Debug)]
 pub enum TuiEvent {
     Key(KeyEvent),
+    Mouse(MouseEvent),
     Paste(String),
     Draw,
 }
@@ -255,6 +260,7 @@ pub struct Tui {
     notification_backend: Option<DesktopNotificationBackend>,
     // When false, enter_alt_screen() becomes a no-op (for Zellij scrollback support)
     alt_screen_enabled: bool,
+    mouse_capture_enabled: bool,
 }
 
 impl Tui {
@@ -283,12 +289,18 @@ impl Tui {
             enhanced_keys_supported,
             notification_backend: Some(detect_backend(NotificationMethod::default())),
             alt_screen_enabled: true,
+            mouse_capture_enabled: false,
         }
     }
 
     /// Set whether alternate screen is enabled. When false, enter_alt_screen() becomes a no-op.
     pub fn set_alt_screen_enabled(&mut self, enabled: bool) {
         self.alt_screen_enabled = enabled;
+    }
+
+    pub fn set_mouse_capture_enabled(&mut self, enabled: bool) -> Result<()> {
+        self.mouse_capture_enabled = enabled;
+        self.apply_mouse_capture_state()
     }
 
     pub fn set_notification_method(&mut self, method: NotificationMethod) {
@@ -333,6 +345,7 @@ impl Tui {
 
         // Leave alt screen if active to avoid conflicts with external program `f`.
         let was_alt_screen = self.is_alt_screen_active();
+        let mouse_capture_enabled = self.mouse_capture_enabled;
         if was_alt_screen {
             let _ = self.leave_alt_screen();
         }
@@ -346,6 +359,9 @@ impl Tui {
         if let Err(err) = set_modes() {
             tracing::warn!("failed to re-enable terminal modes after external program: {err}");
         }
+        if mouse_capture_enabled && let Err(err) = self.apply_mouse_capture_state() {
+            tracing::warn!("failed to re-enable mouse capture after external program: {err}");
+        }
         // After the external program `f` finishes, reset terminal state and flush any buffered keypresses.
         flush_terminal_input_buffer();
 
@@ -355,6 +371,15 @@ impl Tui {
 
         self.resume_events();
         output
+    }
+
+    fn apply_mouse_capture_state(&mut self) -> Result<()> {
+        if self.mouse_capture_enabled {
+            execute!(self.terminal.backend_mut(), EnableMouseCapture)?;
+        } else {
+            execute!(self.terminal.backend_mut(), DisableMouseCapture)?;
+        }
+        Ok(())
     }
 
     /// Emit a desktop notification now if the terminal is unfocused.
