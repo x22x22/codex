@@ -75,11 +75,11 @@ pub(crate) enum ThreadUpdate {
     ThreadRealtimeError(ThreadRealtimeErrorNotification),
     ThreadRealtimeClosed(ThreadRealtimeClosedNotification),
     CommandExecutionRequestApproval {
-        request_id: RequestId,
+        _request_id: RequestId,
         params: CommandExecutionRequestApprovalParams,
     },
     FileChangeRequestApproval {
-        request_id: RequestId,
+        _request_id: RequestId,
         params: FileChangeRequestApprovalParams,
     },
     McpServerElicitationRequest {
@@ -87,15 +87,15 @@ pub(crate) enum ThreadUpdate {
         params: McpServerElicitationRequestParams,
     },
     PermissionsRequestApproval {
-        request_id: RequestId,
+        _request_id: RequestId,
         params: PermissionsRequestApprovalParams,
     },
     ToolRequestUserInput {
-        request_id: RequestId,
+        _request_id: RequestId,
         params: ToolRequestUserInputParams,
     },
     DynamicToolCall {
-        request_id: RequestId,
+        _request_id: RequestId,
         params: DynamicToolCallParams,
     },
     ThreadRolledBack {

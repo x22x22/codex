@@ -4838,6 +4838,7 @@ impl ChatWidget {
         self.dispatch_event_msg(Some(id), msg, None);
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_codex_event_replay(&mut self, event: Event) {
         let Event { msg, .. } = event;
         if matches!(msg, EventMsg::ShutdownComplete) {

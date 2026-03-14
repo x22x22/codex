@@ -309,6 +309,7 @@ impl ThreadEventStore {
         }
     }
 
+    #[cfg(test)]
     fn new_with_session_configured(capacity: usize, event: SessionConfiguredEvent) -> Self {
         let mut store = Self::new(capacity);
         store.session_configured = Some(event);
@@ -383,6 +384,7 @@ impl ThreadEventChannel {
         }
     }
 
+    #[cfg(test)]
     fn new_with_session_configured(capacity: usize, event: SessionConfiguredEvent) -> Self {
         let (sender, receiver) = mpsc::channel(capacity);
         Self {
@@ -1199,12 +1201,6 @@ impl App {
         }
     }
 
-    fn abort_thread_event_listener(&mut self, thread_id: ThreadId) {
-        if let Some(handle) = self.thread_event_listener_tasks.remove(&thread_id) {
-            handle.abort();
-        }
-    }
-
     fn abort_all_thread_event_listeners(&mut self) {
         for handle in self
             .thread_event_listener_tasks
@@ -1889,24 +1885,6 @@ impl App {
     ///
     /// A user-requested shutdown (`ExitMode::ShutdownFirst`) sets
     /// `pending_shutdown_exit_thread_id`; matching shutdown completions are ignored
-    /// here so Ctrl+C-like exits don't accidentally resurrect the main thread.
-    ///
-    /// Failover is only eligible when all of these are true:
-    /// 1. the event is `ShutdownComplete`;
-    /// 2. the active thread differs from the primary thread;
-    /// 3. the active thread is not the pending shutdown-exit thread.
-    fn active_non_primary_shutdown_target(&self, msg: &EventMsg) -> Option<(ThreadId, ThreadId)> {
-        if !matches!(msg, EventMsg::ShutdownComplete) {
-            return None;
-        }
-        let active_thread_id = self.active_thread_id?;
-        let primary_thread_id = self.primary_thread_id?;
-        if self.pending_shutdown_exit_thread_id == Some(active_thread_id) {
-            return None;
-        }
-        (active_thread_id != primary_thread_id).then_some((active_thread_id, primary_thread_id))
-    }
-
     fn active_non_primary_closed_thread_target(
         &self,
         update: &ThreadUpdate,
@@ -2651,16 +2629,8 @@ impl App {
             AppEvent::CodexEvent(event) => {
                 self.handle_codex_event_now(event);
             }
-            AppEvent::ThreadEvent { thread_id, event } => {
-                if Some(thread_id) == self.active_thread_id {
-                    self.handle_codex_event_now(event);
-                }
-            }
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(app_server, mode).await);
-            }
-            AppEvent::FatalExitRequest(message) => {
-                return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }
             AppEvent::CodexOp(op) => {
                 let replay_state_op =
@@ -2741,9 +2711,6 @@ impl App {
             AppEvent::FileSearchResult { query, matches } => {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
-            AppEvent::RateLimitSnapshotFetched(snapshot) => {
-                self.chat_widget.on_rate_limit_snapshot(Some(snapshot));
-            }
             AppEvent::RefreshRateLimits => {
                 match Self::read_account_rate_limits_via_app_server(app_server).await {
                     Ok(response) => {
@@ -2766,9 +2733,6 @@ impl App {
                         tracing::debug!(error = %err, "failed to refresh rate limits via app-server");
                     }
                 }
-            }
-            AppEvent::ConnectorsLoaded { result, is_final } => {
-                self.chat_widget.on_connectors_loaded(result, is_final);
             }
             AppEvent::UploadFeedback {
                 category,
@@ -3871,6 +3835,7 @@ impl App {
         }
     }
 
+    #[cfg(test)]
     fn handle_codex_event_replay(&mut self, event: Event) {
         self.chat_widget.handle_codex_event_replay(event);
     }
@@ -3951,13 +3916,6 @@ impl App {
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }
-        Ok(())
-    }
-
-    async fn handle_thread_created(&mut self, thread_id: ThreadId) -> Result<()> {
-        tracing::debug!(
-            "handle_thread_created({thread_id}) should be unreachable after app-server migration"
-        );
         Ok(())
     }
 
@@ -4338,7 +4296,7 @@ mod tests {
         reason: Option<&str>,
     ) -> ThreadUpdate {
         ThreadUpdate::CommandExecutionRequestApproval {
-            request_id: RequestId::String(format!("request-{call_id}")),
+            _request_id: RequestId::String(format!("request-{call_id}")),
             params: codex_app_server_protocol::CommandExecutionRequestApprovalParams {
                 thread_id: thread_id.to_string(),
                 turn_id: turn_id.to_string(),
@@ -6153,85 +6111,6 @@ smart_approvals = true
         ]
         .join("\n");
         assert_snapshot!("agent_picker_item_name", snapshot);
-    }
-
-    #[tokio::test]
-    async fn active_non_primary_shutdown_target_returns_none_for_non_shutdown_event() -> Result<()>
-    {
-        let mut app = make_test_app().await;
-        app.active_thread_id = Some(ThreadId::new());
-        app.primary_thread_id = Some(ThreadId::new());
-
-        assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::SkillsUpdateAvailable),
-            None
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn active_non_primary_shutdown_target_returns_none_for_primary_thread_shutdown()
-    -> Result<()> {
-        let mut app = make_test_app().await;
-        let thread_id = ThreadId::new();
-        app.active_thread_id = Some(thread_id);
-        app.primary_thread_id = Some(thread_id);
-
-        assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
-            None
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn active_non_primary_shutdown_target_returns_ids_for_non_primary_shutdown() -> Result<()>
-    {
-        let mut app = make_test_app().await;
-        let active_thread_id = ThreadId::new();
-        let primary_thread_id = ThreadId::new();
-        app.active_thread_id = Some(active_thread_id);
-        app.primary_thread_id = Some(primary_thread_id);
-
-        assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
-            Some((active_thread_id, primary_thread_id))
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn active_non_primary_shutdown_target_returns_none_when_shutdown_exit_is_pending()
-    -> Result<()> {
-        let mut app = make_test_app().await;
-        let active_thread_id = ThreadId::new();
-        let primary_thread_id = ThreadId::new();
-        app.active_thread_id = Some(active_thread_id);
-        app.primary_thread_id = Some(primary_thread_id);
-        app.pending_shutdown_exit_thread_id = Some(active_thread_id);
-
-        assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
-            None
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn active_non_primary_shutdown_target_still_switches_for_other_pending_exit_thread()
-    -> Result<()> {
-        let mut app = make_test_app().await;
-        let active_thread_id = ThreadId::new();
-        let primary_thread_id = ThreadId::new();
-        app.active_thread_id = Some(active_thread_id);
-        app.primary_thread_id = Some(primary_thread_id);
-        app.pending_shutdown_exit_thread_id = Some(ThreadId::new());
-
-        assert_eq!(
-            app.active_non_primary_shutdown_target(&EventMsg::ShutdownComplete),
-            Some((active_thread_id, primary_thread_id))
-        );
-        Ok(())
     }
 
     async fn render_clear_ui_header_after_long_transcript_for_snapshot() -> String {

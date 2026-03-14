@@ -15,7 +15,6 @@ use codex_file_search::FileMatch;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::protocol::Event;
-use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_approval_presets::ApprovalPreset;
 
 use crate::bottom_pane::ApprovalRequest;
@@ -81,12 +80,6 @@ pub(crate) enum AppEvent {
         op: codex_protocol::protocol::Op,
     },
 
-    /// Forward an event from a non-primary thread into the app-level thread router.
-    ThreadEvent {
-        thread_id: ThreadId,
-        event: Event,
-    },
-
     /// Start a new session.
     NewSession,
 
@@ -108,9 +101,6 @@ pub(crate) enum AppEvent {
     /// background tasks, rollout flush, or child process cleanup).
     Exit(ExitMode),
 
-    /// Request to exit the application due to a fatal error.
-    FatalExitRequest(String),
-
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(codex_protocol::protocol::Op),
@@ -128,17 +118,8 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
-    /// Result of refreshing rate limits
-    RateLimitSnapshotFetched(RateLimitSnapshot),
-
     /// Request a fresh account rate-limit read via app-server.
     RefreshRateLimits,
-
-    /// Result of prefetching connectors.
-    ConnectorsLoaded {
-        result: Result<ConnectorsSnapshot, String>,
-        is_final: bool,
-    },
 
     /// Result of computing a `/diff` command.
     DiffResult(String),

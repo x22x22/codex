@@ -1038,14 +1038,14 @@ impl App {
                 match request.clone() {
                     ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
                         self.route_thread_update(ThreadUpdate::CommandExecutionRequestApproval {
-                            request_id,
+                            _request_id: request_id,
                             params,
                         })
                         .await;
                     }
                     ServerRequest::FileChangeRequestApproval { request_id, params } => {
                         self.route_thread_update(ThreadUpdate::FileChangeRequestApproval {
-                            request_id,
+                            _request_id: request_id,
                             params,
                         })
                         .await;
@@ -1059,21 +1059,21 @@ impl App {
                     }
                     ServerRequest::PermissionsRequestApproval { request_id, params } => {
                         self.route_thread_update(ThreadUpdate::PermissionsRequestApproval {
-                            request_id,
+                            _request_id: request_id,
                             params,
                         })
                         .await;
                     }
                     ServerRequest::ToolRequestUserInput { request_id, params } => {
                         self.route_thread_update(ThreadUpdate::ToolRequestUserInput {
-                            request_id,
+                            _request_id: request_id,
                             params,
                         })
                         .await;
                     }
                     ServerRequest::DynamicToolCall { request_id, params } => {
                         self.route_thread_update(ThreadUpdate::DynamicToolCall {
-                            request_id,
+                            _request_id: request_id,
                             params,
                         })
                         .await;
