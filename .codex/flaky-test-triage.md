@@ -46,9 +46,9 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 
 ## Current Fix In Progress
 
-- Harden `permissions_selection_can_disable_smart_approvals` in `codex-rs/tui/src/chatwidget/tests.rs`.
-- Seed the popup into Smart Approvals mode explicitly, then assert the selected row before and after navigation instead of assuming the initial cursor position.
-- Rationale: recent merged PR `#14645` fixed another Smart Approvals popup test that was implicitly relying on selection state. This remaining test still used the same brittle pattern.
+- Harden the nearby permissions-history popup tests in `codex-rs/tui/src/chatwidget/tests.rs`.
+- Assert the selected row before hitting `Enter`, and assert that the selection actually moved after navigation instead of relying on implicit popup cursor placement.
+- Rationale: recent merged PR `#14645` fixed one Smart Approvals popup test in this cluster, and the just-passing `permissions_selection_can_disable_smart_approvals` change fixed another. These adjacent history tests were still exercising the same selection flow without proving the cursor state.
 
 ## Constraints
 
@@ -63,3 +63,4 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 | --- | --- | --- | --- |
 | `60f44b4d7` | PR bootstrap | partial pass | PR opened and non-Rust checks passed after rebasing to current `main`, but `rust-ci` skipped because only the tracking doc changed. This commit does not count toward the five full-suite green commits. |
 | `b9c655ad4` | First full-suite flaky-test fix | full pass | Full PR CI passed on run `23078933382`, including `Tests — windows-x64 - x86_64-pc-windows-msvc` and `Tests — windows-arm64 - aarch64-pc-windows-msvc`. The approvals matrix write-file command now uses deterministic Python I/O instead of shell redirection. This is pass 1 of 5. |
+| `5dbb9c004` | Second full-suite flaky-test fix | full pass | Full PR CI passed on run `23079410130`, including both Windows test jobs. `permissions_selection_can_disable_smart_approvals` now seeds Smart Approvals mode explicitly and asserts the popup selection before and after navigation. This is pass 2 of 5. |

@@ -6600,6 +6600,13 @@ fn render_bottom_popup(chat: &ChatWidget, width: u16) -> String {
     lines.join("\n")
 }
 
+fn selected_popup_line(popup: &str) -> &str {
+    popup
+        .lines()
+        .find(|line| line.contains('›'))
+        .expect("expected popup to have a selected row")
+}
+
 #[tokio::test]
 async fn apps_popup_stays_loading_until_final_snapshot_updates() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
@@ -8329,7 +8336,17 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
     chat.config.notices.hide_full_access_warning = Some(true);
 
     chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_popup_line(&popup).contains("(current)"),
+        "expected permissions popup to open with the current preset selected: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        !selected_popup_line(&popup).contains("(current)"),
+        "expected moving down to change the selected preset before confirmation: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
@@ -8433,6 +8450,11 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
         .expect("set sandbox policy");
 
     chat.open_permissions_popup();
+    let popup = render_bottom_popup(&chat, 120);
+    assert!(
+        selected_popup_line(&popup).contains("(current)"),
+        "expected permissions popup to open with the current preset selected: {popup}"
+    );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let cells = drain_insert_history(&mut rx);
