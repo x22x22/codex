@@ -6606,6 +6606,7 @@ fn selected_permissions_popup_line(popup: &str) -> &str {
         .find(|line| {
             line.contains('›')
                 && (line.contains("Default")
+                    || line.contains("Read Only")
                     || line.contains("Smart Approvals")
                     || line.contains("Full Access"))
         })
@@ -8385,9 +8386,13 @@ async fn permissions_selection_history_snapshot_after_mode_switch() {
         selected_permissions_popup_line(&popup).contains("Default"),
         "expected permissions popup to open with Default selected: {popup}"
     );
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
-    #[cfg(target_os = "windows")]
-    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    for _ in 0..3 {
+        let popup = render_bottom_popup(&chat, 120);
+        if selected_permissions_popup_line(&popup).contains("Full Access") {
+            break;
+        }
+        chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    }
     let popup = render_bottom_popup(&chat, 120);
     assert!(
         selected_permissions_popup_line(&popup).contains("Full Access"),
@@ -8429,8 +8434,11 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
         selected_permissions_popup_line(&popup).contains("Full Access"),
         "expected permissions popup to open with Full Access selected: {popup}"
     );
-    chat.handle_key_event(KeyEvent::from(KeyCode::Up));
-    if popup.contains("Smart Approvals") {
+    for _ in 0..3 {
+        let popup = render_bottom_popup(&chat, 120);
+        if selected_permissions_popup_line(&popup).contains("Default") {
+            break;
+        }
         chat.handle_key_event(KeyEvent::from(KeyCode::Up));
     }
     let popup = render_bottom_popup(&chat, 120);

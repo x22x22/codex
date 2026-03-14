@@ -46,9 +46,9 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 
 ## Current Fix In Progress
 
-- Drop generic `(current)` assumptions from the broad permission-selection history tests in `codex-rs/tui/src/chatwidget/tests.rs`.
-- Assert the selected preset label (`Default` or `Full Access`) directly in contexts where popup snapshots show the `(current)` suffix is not guaranteed.
-- Rationale: commit `a30e8e2ec` still failed in Linux `Bazel (experimental)` after narrowing the selected-row helper. Existing popup snapshots show `Default` selected without a `(current)` suffix on Unix, so those newer assertions were still stricter than the UI contract.
+- Make the generic permissions-popup helper recognize `Read Only`, which is a real preset on Windows.
+- Replace Windows-specific hard-coded navigation counts with label-driven movement in the permission history snapshot tests.
+- Rationale: commit `8bc3d489a` fixed the cross-platform `(current)` suffix issue, but `rust-ci` still failed on both Windows test lanes. The remaining Windows-only difference is that the permissions popup includes `Read Only` and selection wraps, so hard-coded extra key presses can land on the wrong preset even when the product behavior is correct.
 
 ## Constraints
 
@@ -68,3 +68,4 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 | `1b6e21ccc` | Pin permission history snapshots to concrete presets | superseded | Same state as `dc8d5d46d`: `Bazel (experimental)` was cancelled by PR-level workflow concurrency, so this SHA is not countable yet. |
 | `fc98d21ad` | Select Smart Approvals in session-configured popup tests | failed | `Bazel (experimental)` failed on run `23079852646` across macOS and Linux. Investigation narrowed the likely issue to the overly broad `selected_popup_line()` helper introduced in this commit. |
 | `a30e8e2ec` | Narrow permissions popup selection helper | failed | `Bazel (experimental)` still failed on Linux in run `23080049381`. The helper narrowing was necessary, but Linux snapshots showed the generic `(current)` assertions were still too strict for the default/full-access permission history tests. |
+| `8bc3d489a` | Relax popup current-label assertions | failed | `rust-ci` failed on run `23080137075` in both Windows test jobs after Linux and Bazel turned green. The remaining Windows-only issue is likely the `Read Only` preset and wrapping popup navigation in the generic permission history tests. |
