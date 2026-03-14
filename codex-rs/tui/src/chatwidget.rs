@@ -38,6 +38,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use self::realtime::PendingSteerCompareKey;
+use crate::app_backtrack::BacktrackTurnContextSnapshot;
 use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 use crate::audio_device::list_realtime_audio_device_names;
@@ -7869,6 +7870,38 @@ impl ChatWidget {
         self.config.approvals_reviewer = policy;
     }
 
+    pub(crate) fn restore_backtrack_turn_context(
+        &mut self,
+        snapshot: &BacktrackTurnContextSnapshot,
+    ) {
+        self.config.cwd = snapshot.cwd.clone();
+        self.current_cwd = Some(snapshot.cwd.clone());
+        if let Err(err) = self
+            .config
+            .permissions
+            .approval_policy
+            .set(snapshot.approval_policy)
+        {
+            tracing::warn!(%err, "failed to restore approval_policy on chat config");
+        }
+        if let Err(err) = self
+            .config
+            .permissions
+            .sandbox_policy
+            .set(snapshot.sandbox_policy.clone())
+        {
+            tracing::warn!(%err, "failed to restore sandbox_policy on chat config");
+        }
+        self.config.approvals_reviewer = snapshot.approvals_reviewer;
+        self.config.service_tier = snapshot.service_tier;
+        self.config.personality = snapshot.personality;
+        self.current_collaboration_mode = snapshot.current_collaboration_mode.clone();
+        self.active_collaboration_mask = snapshot.active_collaboration_mask.clone();
+        self.update_collaboration_mode_indicator();
+        self.refresh_model_display();
+        self.request_redraw();
+    }
+
     pub(crate) fn set_full_access_warning_acknowledged(&mut self, acknowledged: bool) {
         self.config.notices.hide_full_access_warning = Some(acknowledged);
     }
@@ -8087,6 +8120,10 @@ impl ChatWidget {
     #[allow(dead_code)] // Used in tests
     pub(crate) fn current_collaboration_mode(&self) -> &CollaborationMode {
         &self.current_collaboration_mode
+    }
+
+    pub(crate) fn active_collaboration_mask(&self) -> Option<&CollaborationModeMask> {
+        self.active_collaboration_mask.as_ref()
     }
 
     pub(crate) fn current_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {

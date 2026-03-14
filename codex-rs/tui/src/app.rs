@@ -2577,6 +2577,7 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_cells.push(cell.clone());
+                self.track_backtrack_transcript_cell(&cell);
                 let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
@@ -4134,7 +4135,16 @@ impl App {
         };
     }
 
-    fn refresh_status_line(&mut self) {
+    pub(crate) fn set_runtime_policy_overrides(
+        &mut self,
+        approval_policy: AskForApproval,
+        sandbox_policy: SandboxPolicy,
+    ) {
+        self.runtime_approval_policy_override = Some(approval_policy);
+        self.runtime_sandbox_policy_override = Some(sandbox_policy);
+    }
+
+    pub(crate) fn refresh_status_line(&mut self) {
         self.chat_widget.refresh_status_line();
     }
 
@@ -4172,6 +4182,7 @@ mod tests {
     use super::*;
     use crate::app_backtrack::BacktrackSelection;
     use crate::app_backtrack::BacktrackState;
+    use crate::app_backtrack::BacktrackTurnContextSnapshot;
     use crate::app_backtrack::user_count;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::chatwidget::tests::set_chatgpt_auth;
@@ -4185,14 +4196,18 @@ mod tests {
     use codex_core::CodexAuth;
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
+    use codex_core::config::types::ApprovalsReviewer;
     use codex_core::config::types::ModelAvailabilityNuxConfig;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::CollaborationModeMask;
     use codex_protocol::config_types::ModeKind;
+    use codex_protocol::config_types::Personality;
+    use codex_protocol::config_types::ServiceTier;
     use codex_protocol::config_types::Settings;
     use codex_protocol::openai_models::ModelAvailabilityNux;
+    use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
     use codex_protocol::protocol::AgentMessageDeltaEvent;
     use codex_protocol::protocol::AskForApproval;
     use codex_protocol::protocol::Event;
@@ -6442,6 +6457,58 @@ smart_approvals = true
         )
     }
 
+    fn backtrack_test_session_configured(
+        session_id: ThreadId,
+        cwd: PathBuf,
+    ) -> SessionConfiguredEvent {
+        SessionConfiguredEvent {
+            session_id,
+            forked_from_id: None,
+            thread_name: None,
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd,
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        }
+    }
+
+    fn backtrack_user_cell(message: &str) -> Arc<dyn HistoryCell> {
+        Arc::new(UserHistoryCell {
+            message: message.to_string(),
+            text_elements: Vec::new(),
+            local_image_paths: Vec::new(),
+            remote_image_urls: Vec::new(),
+        })
+    }
+
+    fn assert_backtrack_turn_context(app: &App, expected: &BacktrackTurnContextSnapshot) {
+        assert_eq!(
+            app.capture_backtrack_turn_context_snapshot(),
+            expected.clone()
+        );
+        assert_eq!(app.config.cwd, expected.cwd.clone());
+        assert_eq!(app.config.approvals_reviewer, expected.approvals_reviewer);
+        assert_eq!(app.config.service_tier, expected.service_tier);
+        assert_eq!(app.config.personality, expected.personality);
+        assert_eq!(
+            app.runtime_approval_policy_override,
+            Some(expected.approval_policy)
+        );
+        assert_eq!(
+            app.runtime_sandbox_policy_override,
+            Some(expected.sandbox_policy.clone())
+        );
+    }
+
     fn next_user_turn_op(op_rx: &mut tokio::sync::mpsc::UnboundedReceiver<Op>) -> Op {
         let mut seen = Vec::new();
         while let Ok(op) = op_rx.try_recv() {
@@ -7354,6 +7421,221 @@ smart_approvals = true
             })
             .collect();
         assert_eq!(user_messages, vec!["first prompt".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn pending_backtrack_restores_previous_surviving_turn_context() {
+        let mut app = make_test_app().await;
+        let session_id = ThreadId::new();
+        let session_event =
+            backtrack_test_session_configured(session_id, PathBuf::from("/tmp/backtrack-base"));
+        app.chat_widget.handle_codex_event(Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(session_event.clone()),
+        });
+        app.config = app.chat_widget.config_ref().clone();
+
+        let session_cell = Arc::new(new_session_info(
+            app.chat_widget.config_ref(),
+            "gpt-test",
+            session_event,
+            false,
+            None,
+            None,
+            false,
+        )) as Arc<dyn HistoryCell>;
+        app.track_backtrack_transcript_cell(&session_cell);
+        app.transcript_cells.push(session_cell);
+        let baseline_snapshot = app.capture_backtrack_turn_context_snapshot();
+
+        let turn_one_snapshot = BacktrackTurnContextSnapshot {
+            cwd: PathBuf::from("/tmp/backtrack-turn-one"),
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            current_collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-turn-one".to_string(),
+                    reasoning_effort: Some(ReasoningEffortConfig::Low),
+                    developer_instructions: None,
+                },
+            },
+            active_collaboration_mask: Some(CollaborationModeMask {
+                name: "plan".to_string(),
+                mode: Some(ModeKind::Plan),
+                model: Some("gpt-turn-one".to_string()),
+                reasoning_effort: Some(Some(ReasoningEffortConfig::High)),
+                developer_instructions: None,
+            }),
+            service_tier: Some(ServiceTier::Fast),
+            personality: Some(Personality::Pragmatic),
+        };
+        app.apply_backtrack_turn_context_snapshot(&turn_one_snapshot);
+        let user_one = backtrack_user_cell("first prompt");
+        app.track_backtrack_transcript_cell(&user_one);
+        app.transcript_cells.push(user_one);
+
+        let turn_two_snapshot = BacktrackTurnContextSnapshot {
+            cwd: PathBuf::from("/tmp/backtrack-turn-two"),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            current_collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-turn-two".to_string(),
+                    reasoning_effort: Some(ReasoningEffortConfig::Medium),
+                    developer_instructions: None,
+                },
+            },
+            active_collaboration_mask: Some(CollaborationModeMask {
+                name: "default".to_string(),
+                mode: Some(ModeKind::Default),
+                model: Some("gpt-turn-two".to_string()),
+                reasoning_effort: Some(Some(ReasoningEffortConfig::Medium)),
+                developer_instructions: None,
+            }),
+            service_tier: None,
+            personality: Some(Personality::Friendly),
+        };
+        app.apply_backtrack_turn_context_snapshot(&turn_two_snapshot);
+        let user_two = backtrack_user_cell("second prompt");
+        app.track_backtrack_transcript_cell(&user_two);
+        app.transcript_cells.push(user_two);
+
+        app.backtrack.pending_rollback = Some(crate::app_backtrack::PendingBacktrackRollback {
+            selection: crate::app_backtrack::BacktrackSelection {
+                nth_user_message: 1,
+                prefill: String::new(),
+                text_elements: Vec::new(),
+                local_image_paths: Vec::new(),
+                remote_image_urls: Vec::new(),
+            },
+            thread_id: app.chat_widget.thread_id(),
+        });
+
+        app.handle_backtrack_event(&EventMsg::ThreadRolledBack(ThreadRolledBackEvent {
+            num_turns: 1,
+        }));
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(user_messages, vec!["first prompt".to_string()]);
+        assert_backtrack_turn_context(&app, &turn_one_snapshot);
+        assert_eq!(
+            app.backtrack.session_baseline_turn_context,
+            Some(baseline_snapshot)
+        );
+        assert_eq!(
+            app.backtrack.current_session_turn_contexts,
+            vec![turn_one_snapshot]
+        );
+    }
+
+    #[tokio::test]
+    async fn non_pending_backtrack_restores_session_baseline_turn_context() {
+        let mut app = make_test_app().await;
+        let session_id = ThreadId::new();
+        let session_event =
+            backtrack_test_session_configured(session_id, PathBuf::from("/tmp/backtrack-base"));
+        app.chat_widget.handle_codex_event(Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(session_event.clone()),
+        });
+        app.config = app.chat_widget.config_ref().clone();
+
+        let session_cell = Arc::new(new_session_info(
+            app.chat_widget.config_ref(),
+            "gpt-test",
+            session_event,
+            false,
+            None,
+            None,
+            false,
+        )) as Arc<dyn HistoryCell>;
+        app.track_backtrack_transcript_cell(&session_cell);
+        app.transcript_cells.push(session_cell);
+        let baseline_snapshot = app.capture_backtrack_turn_context_snapshot();
+
+        let turn_snapshot = BacktrackTurnContextSnapshot {
+            cwd: PathBuf::from("/tmp/backtrack-turn"),
+            approval_policy: AskForApproval::OnRequest,
+            approvals_reviewer: ApprovalsReviewer::GuardianSubagent,
+            sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+            current_collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-turn".to_string(),
+                    reasoning_effort: Some(ReasoningEffortConfig::Low),
+                    developer_instructions: None,
+                },
+            },
+            active_collaboration_mask: Some(CollaborationModeMask {
+                name: "plan".to_string(),
+                mode: Some(ModeKind::Plan),
+                model: Some("gpt-turn".to_string()),
+                reasoning_effort: Some(Some(ReasoningEffortConfig::High)),
+                developer_instructions: None,
+            }),
+            service_tier: Some(ServiceTier::Fast),
+            personality: Some(Personality::Pragmatic),
+        };
+        app.apply_backtrack_turn_context_snapshot(&turn_snapshot);
+        let user_cell = backtrack_user_cell("first prompt");
+        app.track_backtrack_transcript_cell(&user_cell);
+        app.transcript_cells.push(user_cell);
+
+        let stale_snapshot = BacktrackTurnContextSnapshot {
+            cwd: PathBuf::from("/tmp/backtrack-stale"),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            current_collaboration_mode: CollaborationMode {
+                mode: ModeKind::Default,
+                settings: Settings {
+                    model: "gpt-stale".to_string(),
+                    reasoning_effort: Some(ReasoningEffortConfig::Medium),
+                    developer_instructions: None,
+                },
+            },
+            active_collaboration_mask: Some(CollaborationModeMask {
+                name: "default".to_string(),
+                mode: Some(ModeKind::Default),
+                model: Some("gpt-stale".to_string()),
+                reasoning_effort: Some(Some(ReasoningEffortConfig::Medium)),
+                developer_instructions: None,
+            }),
+            service_tier: None,
+            personality: Some(Personality::Friendly),
+        };
+        app.apply_backtrack_turn_context_snapshot(&stale_snapshot);
+
+        assert!(app.apply_non_pending_thread_rollback(1));
+
+        let user_messages: Vec<String> = app
+            .transcript_cells
+            .iter()
+            .filter_map(|cell| {
+                cell.as_any()
+                    .downcast_ref::<UserHistoryCell>()
+                    .map(|cell| cell.message.clone())
+            })
+            .collect();
+        assert_eq!(user_messages, Vec::<String>::new());
+        assert_backtrack_turn_context(&app, &baseline_snapshot);
+        assert_eq!(
+            app.backtrack.session_baseline_turn_context,
+            Some(baseline_snapshot)
+        );
+        assert_eq!(app.backtrack.current_session_turn_contexts, Vec::new());
     }
 
     #[tokio::test]

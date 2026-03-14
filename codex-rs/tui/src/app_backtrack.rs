@@ -34,11 +34,18 @@ use crate::history_cell::UserHistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
+use codex_core::config::types::ApprovalsReviewer;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::CollaborationModeMask;
+use codex_protocol::config_types::Personality;
+use codex_protocol::config_types::ServiceTier;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::TextElement;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -66,6 +73,22 @@ pub(crate) struct BacktrackState {
     /// This acts as a guardrail: once we request a rollback, we block additional backtrack
     /// submissions until core responds with either a success or failure event.
     pub(crate) pending_rollback: Option<PendingBacktrackRollback>,
+    /// Session baseline turn context from the latest session start.
+    pub(crate) session_baseline_turn_context: Option<BacktrackTurnContextSnapshot>,
+    /// Turn-context snapshots aligned with committed user turns in the current session.
+    pub(crate) current_session_turn_contexts: Vec<BacktrackTurnContextSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BacktrackTurnContextSnapshot {
+    pub(crate) cwd: PathBuf,
+    pub(crate) approval_policy: AskForApproval,
+    pub(crate) approvals_reviewer: ApprovalsReviewer,
+    pub(crate) sandbox_policy: SandboxPolicy,
+    pub(crate) current_collaboration_mode: CollaborationMode,
+    pub(crate) active_collaboration_mask: Option<CollaborationModeMask>,
+    pub(crate) service_tier: Option<ServiceTier>,
+    pub(crate) personality: Option<Personality>,
 }
 
 /// A user-visible backtrack choice that can be confirmed into a rollback request.
@@ -461,6 +484,94 @@ impl App {
         tui.frame_requester().schedule_frame();
     }
 
+    pub(crate) fn capture_backtrack_turn_context_snapshot(&self) -> BacktrackTurnContextSnapshot {
+        BacktrackTurnContextSnapshot {
+            cwd: self.chat_widget.config_ref().cwd.clone(),
+            approval_policy: self
+                .chat_widget
+                .config_ref()
+                .permissions
+                .approval_policy
+                .value(),
+            approvals_reviewer: self.chat_widget.config_ref().approvals_reviewer,
+            sandbox_policy: self
+                .chat_widget
+                .config_ref()
+                .permissions
+                .sandbox_policy
+                .get()
+                .clone(),
+            current_collaboration_mode: self.chat_widget.current_collaboration_mode().clone(),
+            active_collaboration_mask: self.chat_widget.active_collaboration_mask().cloned(),
+            service_tier: self.chat_widget.current_service_tier(),
+            personality: self.chat_widget.config_ref().personality,
+        }
+    }
+
+    pub(crate) fn track_backtrack_transcript_cell(
+        &mut self,
+        cell: &Arc<dyn crate::history_cell::HistoryCell>,
+    ) {
+        if cell.as_any().is::<SessionInfoCell>() {
+            self.backtrack.session_baseline_turn_context =
+                Some(self.capture_backtrack_turn_context_snapshot());
+            self.backtrack.current_session_turn_contexts.clear();
+            return;
+        }
+        if cell.as_any().is::<UserHistoryCell>() {
+            self.backtrack
+                .current_session_turn_contexts
+                .push(self.capture_backtrack_turn_context_snapshot());
+        }
+    }
+
+    pub(crate) fn apply_backtrack_turn_context_snapshot(
+        &mut self,
+        snapshot: &BacktrackTurnContextSnapshot,
+    ) {
+        self.config.cwd = snapshot.cwd.clone();
+        self.config.approvals_reviewer = snapshot.approvals_reviewer;
+        self.config.service_tier = snapshot.service_tier;
+        self.config.personality = snapshot.personality;
+        self.config.model_reasoning_effort = snapshot.current_collaboration_mode.reasoning_effort();
+        if let Err(err) = self
+            .config
+            .permissions
+            .approval_policy
+            .set(snapshot.approval_policy)
+        {
+            tracing::warn!(%err, "failed to restore approval_policy after rollback");
+        }
+        if let Err(err) = self
+            .config
+            .permissions
+            .sandbox_policy
+            .set(snapshot.sandbox_policy.clone())
+        {
+            tracing::warn!(%err, "failed to restore sandbox_policy after rollback");
+        }
+        self.set_runtime_policy_overrides(
+            snapshot.approval_policy,
+            snapshot.sandbox_policy.clone(),
+        );
+        self.file_search.update_search_dir(self.config.cwd.clone());
+        self.chat_widget.restore_backtrack_turn_context(snapshot);
+        self.refresh_status_line();
+    }
+
+    fn restore_backtrack_turn_context_after_trim(&mut self) {
+        let Some(snapshot) = self
+            .backtrack
+            .current_session_turn_contexts
+            .last()
+            .cloned()
+            .or_else(|| self.backtrack.session_baseline_turn_context.clone())
+        else {
+            return;
+        };
+        self.apply_backtrack_turn_context_snapshot(&snapshot);
+    }
+
     pub(crate) fn handle_backtrack_event(&mut self, event: &EventMsg) {
         match event {
             EventMsg::ThreadRolledBack(rollback) => {
@@ -500,6 +611,15 @@ impl App {
         if !trim_transcript_cells_drop_last_n_user_turns(&mut self.transcript_cells, num_turns) {
             return false;
         }
+        let turns_from_end = usize::try_from(num_turns).unwrap_or(usize::MAX);
+        if turns_from_end >= self.backtrack.current_session_turn_contexts.len() {
+            self.backtrack.current_session_turn_contexts.clear();
+        } else {
+            self.backtrack
+                .current_session_turn_contexts
+                .truncate(self.backtrack.current_session_turn_contexts.len() - turns_from_end);
+        }
+        self.restore_backtrack_turn_context_after_trim();
         self.sync_overlay_after_transcript_trim();
         self.backtrack_render_pending = true;
         true
@@ -521,6 +641,10 @@ impl App {
             &mut self.transcript_cells,
             pending.selection.nth_user_message,
         ) {
+            self.backtrack
+                .current_session_turn_contexts
+                .truncate(pending.selection.nth_user_message);
+            self.restore_backtrack_turn_context_after_trim();
             self.sync_overlay_after_transcript_trim();
             self.backtrack_render_pending = true;
         }
