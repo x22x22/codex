@@ -87,7 +87,7 @@ pub(crate) fn discover_handlers(config_layer_stack: Option<&ConfigLayerStack>) -
                 &mut display_order,
                 source_path.as_path(),
                 codex_protocol::protocol::HookEventName::Stop,
-                None,
+                /*matcher=*/ None,
                 group.hooks,
             );
         }

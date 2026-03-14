@@ -450,13 +450,14 @@ fn discover_agent_roles_in_dir(
         if declared_role_files.contains(&agent_file) {
             continue;
         }
-        let parsed_file = match read_resolved_agent_role_file(&agent_file, None) {
-            Ok(parsed_file) => parsed_file,
-            Err(err) => {
-                push_agent_role_warning(startup_warnings, err);
-                continue;
-            }
-        };
+        let parsed_file =
+            match read_resolved_agent_role_file(&agent_file, /*role_name_hint=*/ None) {
+                Ok(parsed_file) => parsed_file,
+                Err(err) => {
+                    push_agent_role_warning(startup_warnings, err);
+                    continue;
+                }
+            };
         let role_name = parsed_file.role_name;
         if roles.contains_key(&role_name) {
             push_agent_role_warning(

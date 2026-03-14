@@ -235,7 +235,7 @@ fn render_tree(root: &Path) -> Option<Vec<String>> {
     }
 
     let mut lines = Vec::new();
-    collect_tree_lines(root, 0, &mut lines);
+    collect_tree_lines(root, /*depth=*/ 0, &mut lines);
     (!lines.is_empty()).then_some(lines)
 }
 

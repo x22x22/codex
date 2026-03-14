@@ -79,7 +79,7 @@ pub fn test_path_buf_with_windows(unix_path: &str, windows_path: Option<&str>) -
 }
 
 pub fn test_path_buf(unix_path: &str) -> PathBuf {
-    test_path_buf_with_windows(unix_path, None)
+    test_path_buf_with_windows(unix_path, /*windows_path=*/ None)
 }
 
 pub fn test_absolute_path_with_windows(
@@ -91,7 +91,7 @@ pub fn test_absolute_path_with_windows(
 }
 
 pub fn test_absolute_path(unix_path: &str) -> AbsolutePathBuf {
-    test_absolute_path_with_windows(unix_path, None)
+    test_absolute_path_with_windows(unix_path, /*windows_path=*/ None)
 }
 
 pub fn test_tmp_path() -> AbsolutePathBuf {

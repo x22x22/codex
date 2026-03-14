@@ -367,7 +367,9 @@ impl CloudRequirementsService {
         while attempt <= CLOUD_REQUIREMENTS_MAX_ATTEMPTS {
             let contents = match self.fetcher.fetch_requirements(&auth).await {
                 Ok(contents) => {
-                    emit_fetch_attempt_metric(trigger, attempt, "success", None);
+                    emit_fetch_attempt_metric(
+                        trigger, attempt, "success", /*status_code=*/ None,
+                    );
                     contents
                 }
                 Err(FetchAttemptError::Retryable(status)) => {
@@ -500,7 +502,9 @@ impl CloudRequirementsService {
                 tracing::warn!(error = %err, "Failed to write cloud requirements cache");
             }
 
-            emit_fetch_final_metric(trigger, "success", "none", attempt, None);
+            emit_fetch_final_metric(
+                trigger, "success", "none", attempt, /*status_code=*/ None,
+            );
             return Ok(requirements);
         }
 

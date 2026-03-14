@@ -584,7 +584,13 @@ async fn run_agent_job_loop(
     .await?;
     let initial_progress = db.get_agent_job_progress(job_id.as_str()).await?;
     progress_emitter
-        .maybe_emit(&session, &turn, job_id.as_str(), &initial_progress, true)
+        .maybe_emit(
+            &session,
+            &turn,
+            job_id.as_str(),
+            &initial_progress,
+            /*force=*/ true,
+        )
         .await?;
 
     let mut cancel_requested = db.is_agent_job_cancelled(job_id.as_str()).await?;
@@ -719,7 +725,13 @@ async fn run_agent_job_loop(
             active_items.remove(&thread_id);
             let progress = db.get_agent_job_progress(job_id.as_str()).await?;
             progress_emitter
-                .maybe_emit(&session, &turn, job_id.as_str(), &progress, false)
+                .maybe_emit(
+                    &session,
+                    &turn,
+                    job_id.as_str(),
+                    &progress,
+                    /*force=*/ false,
+                )
                 .await?;
         }
     }
@@ -738,7 +750,13 @@ async fn run_agent_job_loop(
             format!("agent job {job_id} cancelled with {pending_items} unprocessed items");
         let _ = session.notify_background_event(&turn, message).await;
         progress_emitter
-            .maybe_emit(&session, &turn, job_id.as_str(), &progress, true)
+            .maybe_emit(
+                &session,
+                &turn,
+                job_id.as_str(),
+                &progress,
+                /*force=*/ true,
+            )
             .await?;
         return Ok(());
     }
@@ -750,7 +768,13 @@ async fn run_agent_job_loop(
     db.mark_agent_job_completed(job_id.as_str()).await?;
     let progress = db.get_agent_job_progress(job_id.as_str()).await?;
     progress_emitter
-        .maybe_emit(&session, &turn, job_id.as_str(), &progress, true)
+        .maybe_emit(
+            &session,
+            &turn,
+            job_id.as_str(),
+            &progress,
+            /*force=*/ true,
+        )
         .await?;
     Ok(())
 }

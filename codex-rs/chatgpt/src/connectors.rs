@@ -45,13 +45,15 @@ pub async fn list_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
     let connectors = connectors_result?;
     let accessible = accessible_result?;
     Ok(with_app_enabled_state(
-        merge_connectors_with_accessible(connectors, accessible, true),
+        merge_connectors_with_accessible(
+            connectors, accessible, /*all_connectors_loaded=*/ true,
+        ),
         config,
     ))
 }
 
 pub async fn list_all_connectors(config: &Config) -> anyhow::Result<Vec<AppInfo>> {
-    list_all_connectors_with_options(config, false).await
+    list_all_connectors_with_options(config, /*force_refetch=*/ false).await
 }
 
 pub async fn list_cached_all_connectors(config: &Config) -> Option<Vec<AppInfo>> {

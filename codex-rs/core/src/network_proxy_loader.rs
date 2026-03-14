@@ -46,7 +46,7 @@ async fn build_config_state_with_mtimes() -> Result<(ConfigState, Vec<LayerMtime
     let overrides = LoaderOverrides::default();
     let config_layer_stack = load_config_layers_state(
         &codex_home,
-        None,
+        /*cwd=*/ None,
         &cli_overrides,
         overrides,
         CloudRequirementsLoader::default(),

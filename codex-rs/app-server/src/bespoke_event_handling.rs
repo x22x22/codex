@@ -1914,7 +1914,7 @@ async fn handle_turn_interrupted(
         conversation_id,
         event_turn_id,
         TurnStatus::Interrupted,
-        None,
+        /*error=*/ None,
         outgoing,
     )
     .await;
@@ -2503,7 +2503,7 @@ async fn on_command_execution_request_approval_response(
             item_id.clone(),
             completion_item.command,
             completion_item.cwd,
-            None,
+            /*process_id=*/ None,
             completion_item.command_actions,
             status,
             &outgoing,

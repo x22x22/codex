@@ -179,7 +179,7 @@ pub(crate) struct SpawnReservation {
 
 impl SpawnReservation {
     pub(crate) fn reserve_agent_nickname(&mut self, names: &[&str]) -> Result<String> {
-        self.reserve_agent_nickname_with_preference(names, None)
+        self.reserve_agent_nickname_with_preference(names, /*preferred=*/ None)
     }
 
     pub(crate) fn reserve_agent_nickname_with_preference(
@@ -198,7 +198,7 @@ impl SpawnReservation {
     }
 
     pub(crate) fn commit(self, thread_id: ThreadId) {
-        self.commit_with_agent_nickname(thread_id, None);
+        self.commit_with_agent_nickname(thread_id, /*agent_nickname=*/ None);
     }
 
     pub(crate) fn commit_with_agent_nickname(

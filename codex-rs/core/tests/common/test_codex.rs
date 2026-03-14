@@ -105,7 +105,7 @@ impl TestCodexBuilder {
             Some(home) => home,
             None => Arc::new(TempDir::new()?),
         };
-        Box::pin(self.build_with_home(server, home, None)).await
+        Box::pin(self.build_with_home(server, home, /*resume_from=*/ None)).await
     }
 
     pub async fn build_with_streaming_server(
@@ -117,7 +117,12 @@ impl TestCodexBuilder {
             Some(home) => home,
             None => Arc::new(TempDir::new()?),
         };
-        Box::pin(self.build_with_home_and_base_url(format!("{base_url}/v1"), home, None)).await
+        Box::pin(self.build_with_home_and_base_url(
+            format!("{base_url}/v1"),
+            home,
+            /*resume_from=*/ None,
+        ))
+        .await
     }
 
     pub async fn build_with_websocket_server(
@@ -138,7 +143,7 @@ impl TestCodexBuilder {
                 .enable(Feature::ResponsesWebsockets)
                 .expect("test config should allow feature update");
         }));
-        Box::pin(self.build_with_home_and_base_url(base_url, home, None)).await
+        Box::pin(self.build_with_home_and_base_url(base_url, home, /*resume_from=*/ None)).await
     }
 
     pub async fn resume(
@@ -362,8 +367,13 @@ impl TestCodex {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
     ) -> Result<()> {
-        self.submit_turn_with_context(prompt, approval_policy, sandbox_policy, None)
-            .await
+        self.submit_turn_with_context(
+            prompt,
+            approval_policy,
+            sandbox_policy,
+            /*service_tier=*/ None,
+        )
+        .await
     }
 
     async fn submit_turn_with_context(

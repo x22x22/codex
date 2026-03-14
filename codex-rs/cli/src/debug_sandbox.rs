@@ -69,7 +69,7 @@ pub async fn run_command_under_landlock(
         config_overrides,
         codex_linux_sandbox_exe,
         SandboxType::Landlock,
-        false,
+        /*log_denials=*/ false,
     )
     .await
 }
@@ -89,7 +89,7 @@ pub async fn run_command_under_windows(
         config_overrides,
         codex_linux_sandbox_exe,
         SandboxType::Windows,
-        false,
+        /*log_denials=*/ false,
     )
     .await
 }

@@ -495,7 +495,7 @@ async fn maybe_request_mcp_tool_approval(
             sess,
             turn_context,
             build_guardian_mcp_tool_review_request(invocation, metadata),
-            None,
+            /*retry_reason=*/ None,
         )
         .await;
         let decision = mcp_tool_approval_decision_from_guardian(decision);

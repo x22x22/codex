@@ -783,7 +783,12 @@ async fn run_ratatui_app(
             {
                 Ok(page) => match page.items.first() {
                     Some(item) => {
-                        match resolve_session_thread_id(item.path.as_path(), None).await {
+                        match resolve_session_thread_id(
+                            item.path.as_path(),
+                            /*id_str_if_uuid=*/ None,
+                        )
+                        .await
+                        {
                             Some(thread_id) => resume_picker::SessionSelection::Fork(
                                 resume_picker::SessionTarget {
                                     path: item.path.clone(),
@@ -876,30 +881,34 @@ async fn run_ratatui_app(
         )
         .await
         {
-            Ok(Some(path)) => match resolve_session_thread_id(path.as_path(), None).await {
-                Some(thread_id) => {
-                    resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
-                        path,
-                        thread_id,
-                    })
+            Ok(Some(path)) => {
+                match resolve_session_thread_id(path.as_path(), /*id_str_if_uuid=*/ None).await {
+                    Some(thread_id) => {
+                        resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
+                            path,
+                            thread_id,
+                        })
+                    }
+                    None => {
+                        let rollout_path = path.display();
+                        error!(
+                            "Error reading session metadata from latest rollout: {rollout_path}"
+                        );
+                        restore();
+                        session_log::log_session_end();
+                        let _ = tui.terminal.clear();
+                        return Ok(AppExitInfo {
+                            token_usage: codex_protocol::protocol::TokenUsage::default(),
+                            thread_id: None,
+                            thread_name: None,
+                            update_action: None,
+                            exit_reason: ExitReason::Fatal(format!(
+                                "Found latest saved session at {rollout_path}, but failed to read its metadata. Run `codex resume` to choose from existing sessions."
+                            )),
+                        });
+                    }
                 }
-                None => {
-                    let rollout_path = path.display();
-                    error!("Error reading session metadata from latest rollout: {rollout_path}");
-                    restore();
-                    session_log::log_session_end();
-                    let _ = tui.terminal.clear();
-                    return Ok(AppExitInfo {
-                        token_usage: codex_protocol::protocol::TokenUsage::default(),
-                        thread_id: None,
-                        thread_name: None,
-                        update_action: None,
-                        exit_reason: ExitReason::Fatal(format!(
-                            "Found latest saved session at {rollout_path}, but failed to read its metadata. Run `codex resume` to choose from existing sessions."
-                        )),
-                    });
-                }
-            },
+            }
             _ => resume_picker::SessionSelection::StartFresh,
         }
     } else if cli.resume_picker {
@@ -1220,8 +1229,13 @@ async fn load_config_or_exit(
     overrides: ConfigOverrides,
     cloud_requirements: CloudRequirementsLoader,
 ) -> Config {
-    load_config_or_exit_with_fallback_cwd(cli_kv_overrides, overrides, cloud_requirements, None)
-        .await
+    load_config_or_exit_with_fallback_cwd(
+        cli_kv_overrides,
+        overrides,
+        cloud_requirements,
+        /*fallback_cwd=*/ None,
+    )
+    .await
 }
 
 async fn load_config_or_exit_with_fallback_cwd(
