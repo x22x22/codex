@@ -1122,8 +1122,10 @@ impl App {
         }
 
         if let Some(label) = permissions_history_label {
-            self.chat_widget
-                .add_info_message(format!("Permissions updated to {label}"), None);
+            self.chat_widget.add_info_message(
+                format!("Permissions updated to {label}"),
+                /*hint=*/ None,
+            );
         }
     }
 
