@@ -1,8 +1,6 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use codex_arg0::Arg0DispatchPaths;
-use codex_cloud_requirements::cloud_requirements_loader;
-use codex_core::AuthManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config_loader::CloudRequirementsLoader;
@@ -71,6 +69,7 @@ pub mod in_process;
 mod message_processor;
 mod models;
 mod outgoing_message;
+mod runtime_bootstrap;
 mod server_request_error;
 mod thread_state;
 mod thread_status;
@@ -78,6 +77,7 @@ mod transport;
 
 pub use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
 pub use crate::error_code::INVALID_PARAMS_ERROR_CODE;
+pub use crate::runtime_bootstrap::shared_cloud_requirements_loader;
 pub use crate::transport::AppServerTransport;
 
 const LOG_FORMAT_ENV_VAR: &str = "LOG_FORMAT";
@@ -416,16 +416,7 @@ pub async fn run_main_with_transport(
                 }
             }
 
-            let auth_manager = AuthManager::shared(
-                config.codex_home.clone(),
-                false,
-                config.cli_auth_credentials_store_mode,
-            );
-            cloud_requirements_loader(
-                auth_manager,
-                config.chatgpt_base_url,
-                config.codex_home.clone(),
-            )
+            runtime_bootstrap::shared_cloud_requirements_loader_for_config(&config, false)
         }
         Err(err) => {
             warn!(error = %err, "Failed to preload config for cloud requirements");
@@ -607,7 +598,7 @@ pub async fn run_main_with_transport(
             config: Arc::new(config),
             cli_overrides,
             loader_overrides,
-            cloud_requirements: cloud_requirements.clone(),
+            cloud_requirements: Some(cloud_requirements.clone()),
             auth_manager: None,
             thread_manager: None,
             feedback: feedback.clone(),

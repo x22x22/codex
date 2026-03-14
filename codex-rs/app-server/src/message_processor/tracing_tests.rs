@@ -22,7 +22,6 @@ use codex_app_server_protocol::UserInput;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
-use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
@@ -238,7 +237,7 @@ fn build_test_processor(
         config,
         cli_overrides: Vec::new(),
         loader_overrides: LoaderOverrides::default(),
-        cloud_requirements: CloudRequirementsLoader::default(),
+        cloud_requirements: None,
         auth_manager: None,
         thread_manager: None,
         feedback: CodexFeedback::new(),

@@ -10,9 +10,8 @@ pub use app::ExitReason;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
+use codex_app_server_client::shared_cloud_requirements_loader;
 use codex_app_server_protocol::ConfigWarningNotification;
-use codex_cloud_requirements::cloud_requirements_loader;
-use codex_core::AuthManager;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
 use codex_core::ThreadSortKey;
@@ -242,7 +241,6 @@ async fn start_embedded_app_server(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
-    cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
 ) -> color_eyre::Result<InProcessAppServerClient> {
     start_embedded_app_server_with(
@@ -250,7 +248,6 @@ async fn start_embedded_app_server(
         config,
         cli_kv_overrides,
         loader_overrides,
-        cloud_requirements,
         feedback,
         InProcessAppServerClient::start,
     )
@@ -262,7 +259,6 @@ async fn start_embedded_app_server_with<F, Fut>(
     config: Config,
     cli_kv_overrides: Vec<(String, toml::Value)>,
     loader_overrides: LoaderOverrides,
-    cloud_requirements: CloudRequirementsLoader,
     feedback: codex_feedback::CodexFeedback,
     start_client: F,
 ) -> color_eyre::Result<InProcessAppServerClient>
@@ -285,7 +281,6 @@ where
         config: Arc::new(config),
         cli_overrides: cli_kv_overrides,
         loader_overrides,
-        cloud_requirements,
         feedback,
         config_warnings,
         session_source: codex_protocol::protocol::SessionSource::Cli,
@@ -394,19 +389,15 @@ pub async fn run_main(
         tracing::warn!(error = %err, "failed to run personality migration");
     }
 
-    let cloud_auth_manager = AuthManager::shared(
-        codex_home.to_path_buf(),
-        false,
-        config_toml.cli_auth_credentials_store.unwrap_or_default(),
-    );
     let chatgpt_base_url = config_toml
         .chatgpt_base_url
         .clone()
         .unwrap_or_else(|| "https://chatgpt.com/backend-api/".to_string());
-    let cloud_requirements = cloud_requirements_loader(
-        cloud_auth_manager,
-        chatgpt_base_url,
+    let cloud_requirements = shared_cloud_requirements_loader(
         codex_home.to_path_buf(),
+        false,
+        config_toml.cli_auth_credentials_store.unwrap_or_default(),
+        chatgpt_base_url,
     );
 
     let model_provider_override = if cli.oss {
@@ -670,7 +661,6 @@ async fn run_ratatui_app(
                 initial_config.clone(),
                 cli_kv_overrides.clone(),
                 loader_overrides.clone(),
-                cloud_requirements.clone(),
                 feedback.clone(),
             )
             .await
@@ -745,14 +735,11 @@ async fn run_ratatui_app(
         // rebuild config. This avoids missing newly available cloud requirements due to login
         // status detection edge cases.
         if show_login_screen {
-            cloud_requirements = cloud_requirements_loader(
-                AuthManager::shared(
-                    initial_config.codex_home.clone(),
-                    false,
-                    initial_config.cli_auth_credentials_store_mode,
-                ),
-                initial_config.chatgpt_base_url.clone(),
+            cloud_requirements = shared_cloud_requirements_loader(
                 initial_config.codex_home.clone(),
+                false,
+                initial_config.cli_auth_credentials_store_mode,
+                initial_config.chatgpt_base_url.clone(),
             );
         }
 
@@ -1058,7 +1045,6 @@ async fn run_ratatui_app(
         config.clone(),
         cli_kv_overrides.clone(),
         loader_overrides,
-        cloud_requirements.clone(),
         feedback.clone(),
     )
     .await
@@ -1340,7 +1326,6 @@ mod tests {
             config,
             Vec::new(),
             LoaderOverrides::default(),
-            CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
         )
         .await
@@ -1363,19 +1348,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn embedded_app_server_exposes_client_manager_accessors() -> color_eyre::Result<()> {
+    async fn embedded_app_server_starts_without_preloaded_cloud_requirements()
+    -> color_eyre::Result<()> {
         let temp_dir = TempDir::new()?;
         let config = build_config(&temp_dir).await?;
         let app_server = start_test_embedded_app_server(config).await?;
-
-        assert!(Arc::ptr_eq(
-            &app_server.auth_manager(),
-            &app_server.auth_manager()
-        ));
-        assert!(Arc::ptr_eq(
-            &app_server.thread_manager(),
-            &app_server.thread_manager()
-        ));
 
         app_server.shutdown().await?;
         Ok(())
@@ -1390,7 +1367,6 @@ mod tests {
             config,
             Vec::new(),
             LoaderOverrides::default(),
-            CloudRequirementsLoader::default(),
             codex_feedback::CodexFeedback::new(),
             |_args| async { Err(std::io::Error::other("boom")) },
         )

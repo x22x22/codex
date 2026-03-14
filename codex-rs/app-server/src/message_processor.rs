@@ -47,6 +47,7 @@ use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequestPayload;
 use codex_app_server_protocol::experimental_required_message;
 use codex_arg0::Arg0DispatchPaths;
+use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AnalyticsEventsClient;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
@@ -168,7 +169,7 @@ pub(crate) struct MessageProcessorArgs {
     pub(crate) config: Arc<Config>,
     pub(crate) cli_overrides: Vec<(String, TomlValue)>,
     pub(crate) loader_overrides: LoaderOverrides,
-    pub(crate) cloud_requirements: CloudRequirementsLoader,
+    pub(crate) cloud_requirements: Option<CloudRequirementsLoader>,
     pub(crate) auth_manager: Option<Arc<AuthManager>>,
     pub(crate) thread_manager: Option<Arc<ThreadManager>>,
     pub(crate) feedback: CodexFeedback,
@@ -232,7 +233,13 @@ impl MessageProcessor {
         thread_manager
             .plugins_manager()
             .maybe_start_curated_repo_sync_for_config(&config);
-        let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
+        let cloud_requirements = Arc::new(RwLock::new(cloud_requirements.unwrap_or_else(|| {
+            cloud_requirements_loader(
+                auth_manager.clone(),
+                config.chatgpt_base_url.clone(),
+                config.codex_home.clone(),
+            )
+        })));
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager: auth_manager.clone(),
             thread_manager: Arc::clone(&thread_manager),

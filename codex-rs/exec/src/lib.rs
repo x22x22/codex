@@ -300,7 +300,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         cloud_requirements_loader(cloud_auth_manager, chatgpt_base_url, codex_home.clone());
     let run_cli_overrides = cli_kv_overrides.clone();
     let run_loader_overrides = LoaderOverrides::default();
-    let run_cloud_requirements = cloud_requirements.clone();
 
     let model_provider = if oss {
         let resolved = resolve_oss_provider(
@@ -434,7 +433,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         config: std::sync::Arc::new(config.clone()),
         cli_overrides: run_cli_overrides,
         loader_overrides: run_loader_overrides,
-        cloud_requirements: run_cloud_requirements,
         feedback: CodexFeedback::new(),
         config_warnings,
         session_source: SessionSource::Exec,

@@ -4225,7 +4225,6 @@ mod tests {
     use codex_core::config::ConfigBuilder;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::types::ModelAvailabilityNuxConfig;
-    use codex_core::config_loader::CloudRequirementsLoader;
     use codex_core::config_loader::LoaderOverrides;
     use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
@@ -4265,7 +4264,6 @@ mod tests {
             config: Arc::new(config),
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
-            cloud_requirements: CloudRequirementsLoader::default(),
             feedback: codex_feedback::CodexFeedback::new(),
             config_warnings: Vec::new(),
             session_source: SessionSource::Cli,

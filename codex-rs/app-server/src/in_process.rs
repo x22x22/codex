@@ -77,7 +77,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_feedback::CodexFeedback;
 use codex_protocol::protocol::SessionSource;
@@ -122,8 +121,6 @@ pub struct InProcessStartArgs {
     pub cli_overrides: Vec<(String, TomlValue)>,
     /// Loader override knobs used by config API paths.
     pub loader_overrides: LoaderOverrides,
-    /// Preloaded cloud requirements provider.
-    pub cloud_requirements: CloudRequirementsLoader,
     /// Optional prebuilt auth manager reused by an embedding caller.
     pub auth_manager: Option<Arc<AuthManager>>,
     /// Optional prebuilt thread manager reused by an embedding caller.
@@ -409,7 +406,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 config: args.config,
                 cli_overrides: args.cli_overrides,
                 loader_overrides: args.loader_overrides,
-                cloud_requirements: args.cloud_requirements,
+                cloud_requirements: None,
                 auth_manager: args.auth_manager,
                 thread_manager: args.thread_manager,
                 feedback: args.feedback,
@@ -757,7 +754,6 @@ mod tests {
             config: Arc::new(build_test_config().await),
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
-            cloud_requirements: CloudRequirementsLoader::default(),
             auth_manager: None,
             thread_manager: None,
             feedback: CodexFeedback::new(),

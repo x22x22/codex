@@ -26,6 +26,7 @@ use std::time::Duration;
 pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
+pub use codex_app_server::shared_cloud_requirements_loader;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
@@ -39,7 +40,6 @@ use codex_arg0::Arg0DispatchPaths;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
-use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_feedback::CodexFeedback;
@@ -146,8 +146,6 @@ pub struct InProcessClientStartArgs {
     pub cli_overrides: Vec<(String, TomlValue)>,
     /// Loader override knobs used by config API paths.
     pub loader_overrides: LoaderOverrides,
-    /// Preloaded cloud requirements provider.
-    pub cloud_requirements: CloudRequirementsLoader,
     /// Feedback sink used by app-server/core telemetry and logs.
     pub feedback: CodexFeedback,
     /// Startup warnings emitted after initialize succeeds.
@@ -221,7 +219,6 @@ impl InProcessClientStartArgs {
             config: self.config,
             cli_overrides: self.cli_overrides,
             loader_overrides: self.loader_overrides,
-            cloud_requirements: self.cloud_requirements,
             auth_manager: Some(shared_core.auth_manager.clone()),
             thread_manager: Some(shared_core.thread_manager.clone()),
             feedback: self.feedback,
@@ -686,7 +683,6 @@ mod tests {
             config: Arc::new(build_test_config().await),
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
-            cloud_requirements: CloudRequirementsLoader::default(),
             feedback: CodexFeedback::new(),
             config_warnings: Vec::new(),
             session_source,
