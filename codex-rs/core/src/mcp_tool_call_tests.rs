@@ -5,6 +5,7 @@ use crate::config::types::AppConfig;
 use crate::config::types::AppToolConfig;
 use crate::config::types::AppToolsConfig;
 use crate::config::types::AppsConfigToml;
+use crate::mcp_tool_approval_templates::RenderedMcpToolApprovalTemplate;
 use codex_config::CONFIG_TOML_FILE;
 use pretty_assertions::assert_eq;
 use serde::Deserialize;
@@ -98,6 +99,141 @@ fn approval_question_text_prepends_safety_reason() {
         ),
         "Tool call needs your approval. Reason: This tool may contact an external system."
     );
+}
+
+#[test]
+fn extract_codex_app_elicitation_description_strips_control_meta_and_prunes_empty_meta() {
+    let (arguments, elicitation_description) =
+        extract_codex_app_elicitation_description(Some(serde_json::json!({
+            "title": "Roadmap review",
+            "_meta": {
+                "_codex": {
+                    "elicitation_description": "  Allow Calendar to create this event?  "
+                }
+            }
+        })));
+
+    assert_eq!(
+        arguments,
+        Some(serde_json::json!({
+            "title": "Roadmap review",
+        }))
+    );
+    assert_eq!(
+        elicitation_description,
+        Some("Allow Calendar to create this event?".to_string())
+    );
+}
+
+#[test]
+fn extract_codex_app_elicitation_description_preserves_other_meta_fields() {
+    let (arguments, elicitation_description) =
+        extract_codex_app_elicitation_description(Some(serde_json::json!({
+            "title": "Roadmap review",
+            "_meta": {
+                "request_id": "req-1",
+                "_codex": {
+                    "elicitation_description": "Allow Calendar to create this event?"
+                }
+            }
+        })));
+
+    assert_eq!(
+        arguments,
+        Some(serde_json::json!({
+            "title": "Roadmap review",
+            "_meta": {
+                "request_id": "req-1",
+            }
+        }))
+    );
+    assert_eq!(
+        elicitation_description,
+        Some("Allow Calendar to create this event?".to_string())
+    );
+}
+
+#[test]
+fn extract_codex_app_elicitation_description_ignores_blank_strings() {
+    let (arguments, elicitation_description) =
+        extract_codex_app_elicitation_description(Some(serde_json::json!({
+            "_meta": {
+                "_codex": {
+                    "elicitation_description": "   "
+                }
+            }
+        })));
+
+    assert_eq!(arguments, None);
+    assert_eq!(elicitation_description, None);
+}
+
+#[test]
+fn stripped_arguments_omit_codex_meta_from_approval_display_params() {
+    let (arguments, _) = extract_codex_app_elicitation_description(Some(serde_json::json!({
+        "title": "Roadmap review",
+        "_meta": {
+            "_codex": {
+                "elicitation_description": "Allow Calendar to create this event?"
+            }
+        }
+    })));
+
+    assert_eq!(
+        build_mcp_tool_approval_display_params(arguments.as_ref()),
+        Some(vec![RenderedMcpToolApprovalParam {
+            name: "title".to_string(),
+            value: serde_json::json!("Roadmap review"),
+        }])
+    );
+}
+
+#[test]
+fn approval_prompt_copy_prefers_model_text_over_template() {
+    let rendered_template = RenderedMcpToolApprovalTemplate {
+        question: "Allow Calendar to create an event?".to_string(),
+        elicitation_message: "Allow Calendar to create an event?".to_string(),
+        tool_params: None,
+        tool_params_display: Vec::new(),
+    };
+
+    assert_eq!(
+        build_mcp_tool_approval_prompt_copy(
+            Some("Allow Calendar to create this event?"),
+            Some(&rendered_template),
+            None,
+        ),
+        McpToolApprovalPromptCopy {
+            question_override: Some("Allow Calendar to create this event?"),
+            message_override: Some("Allow Calendar to create this event?"),
+        }
+    );
+}
+
+#[test]
+fn approval_prompt_copy_defers_to_safety_reason_over_model_text() {
+    let prompt_copy = build_mcp_tool_approval_prompt_copy(
+        Some("Allow Calendar to create this event?"),
+        None,
+        Some("This tool may contact an external system."),
+    );
+    let question = build_mcp_tool_approval_question(
+        "q".to_string(),
+        CODEX_APPS_MCP_SERVER_NAME,
+        "create_event",
+        Some("Calendar"),
+        prompt_options(true, true),
+        prompt_copy.question_override,
+    );
+
+    assert_eq!(
+        mcp_tool_approval_question_text(
+            question.question,
+            Some("This tool may contact an external system."),
+        ),
+        "Tool call needs your approval. Reason: This tool may contact an external system."
+    );
+    assert_eq!(prompt_copy.message_override, None);
 }
 
 #[tokio::test]
@@ -836,6 +972,7 @@ async fn approve_mode_skips_when_annotations_do_not_require_approval() {
         &turn_context,
         "call-1",
         &invocation,
+        None,
         Some(&metadata),
         AppToolApproval::Approve,
     )
@@ -899,6 +1036,7 @@ async fn approve_mode_blocks_when_arc_returns_interrupt_for_model() {
         &turn_context,
         "call-2",
         &invocation,
+        None,
         Some(&metadata),
         AppToolApproval::Approve,
     )
