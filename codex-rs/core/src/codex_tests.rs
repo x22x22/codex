@@ -56,6 +56,7 @@ use crate::tools::registry::ToolHandler;
 use crate::tools::router::ToolCallSource;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use codex_app_server_protocol::AppInfo;
+use codex_exec_server::ExecServerLaunchCommand;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
@@ -1775,6 +1776,47 @@ async fn build_test_config(codex_home: &Path) -> Config {
         .build()
         .await
         .expect("load default test config")
+}
+
+#[test]
+fn exec_server_launch_command_uses_config_command() {
+    let mut config = test_config();
+    config.exec_server_command = Some(vec![
+        "ssh".to_string(),
+        "-T".to_string(),
+        "executor-host".to_string(),
+        "/opt/codex-exec-server".to_string(),
+    ]);
+
+    let command = exec_server_launch_command_from_config(&config)
+        .expect("config command should parse")
+        .expect("config command should exist");
+
+    assert_eq!(
+        ExecServerLaunchCommand {
+            program: PathBuf::from("ssh"),
+            args: vec![
+                "-T".to_string(),
+                "executor-host".to_string(),
+                "/opt/codex-exec-server".to_string(),
+            ],
+        },
+        command
+    );
+}
+
+#[test]
+fn exec_server_launch_command_rejects_empty_config_command() {
+    let mut config = test_config();
+    config.exec_server_command = Some(Vec::new());
+
+    let err = exec_server_launch_command_from_config(&config)
+        .expect_err("empty config command should fail");
+
+    assert_eq!(
+        err.to_string(),
+        "Fatal error: config [exec_server].command must not be empty"
+    );
 }
 
 fn session_telemetry(

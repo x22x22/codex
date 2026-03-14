@@ -179,12 +179,34 @@ use codex_config::CONFIG_TOML_FILE;
 
 const CODEX_EXEC_SERVER_EXE_ENV_VAR: &str = "CODEX_EXEC_SERVER_EXE";
 
-fn resolve_exec_server_launch_command() -> CodexResult<ExecServerLaunchCommand> {
+fn exec_server_launch_command_from_config(
+    config: &Config,
+) -> CodexResult<Option<ExecServerLaunchCommand>> {
+    let Some(command) = config.exec_server_command.as_ref() else {
+        return Ok(None);
+    };
+    let Some((program, args)) = command.split_first() else {
+        return Err(CodexErr::Fatal(
+            "config [exec_server].command must not be empty".to_string(),
+        ));
+    };
+
+    Ok(Some(ExecServerLaunchCommand {
+        program: PathBuf::from(program),
+        args: args.to_vec(),
+    }))
+}
+
+fn resolve_exec_server_launch_command(config: &Config) -> CodexResult<ExecServerLaunchCommand> {
     if let Some(override_path) = std::env::var_os(CODEX_EXEC_SERVER_EXE_ENV_VAR) {
         return Ok(ExecServerLaunchCommand {
             program: PathBuf::from(override_path),
             args: Vec::new(),
         });
+    }
+
+    if let Some(command) = exec_server_launch_command_from_config(config)? {
+        return Ok(command);
     }
 
     let exec_server_binary_name = if cfg!(windows) {
@@ -227,7 +249,7 @@ fn resolve_exec_server_launch_command() -> CodexResult<ExecServerLaunchCommand> 
     }
 
     Err(CodexErr::Fatal(format!(
-        "failed to resolve exec-server binary; set {CODEX_EXEC_SERVER_EXE_ENV_VAR} or install codex-exec-server"
+        "failed to resolve exec-server binary; set {CODEX_EXEC_SERVER_EXE_ENV_VAR}, configure [exec_server].command, or install codex-exec-server"
     )))
 }
 
@@ -1780,7 +1802,7 @@ impl Session {
 
         let exec_server_client = if config.features.enabled(Feature::ExecServer) {
             Some(Arc::new(
-                ExecServerClient::spawn(resolve_exec_server_launch_command()?)
+                ExecServerClient::spawn(resolve_exec_server_launch_command(&config)?)
                     .await
                     .map_err(|err| {
                         CodexErr::Fatal(format!("failed to start exec-server: {err}"))

@@ -181,11 +181,11 @@ impl UnifiedExecProcess {
     }
 
     pub(super) fn from_remote(
-        process_handle: ExecServerProcess,
+        mut process_handle: ExecServerProcess,
         sandbox_type: SandboxType,
         spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Self {
-        let output_rx = process_handle.output_receiver();
+        let output_rx = process_handle.take_output_receiver();
         Self::build(
             Box::new(process_handle),
             output_rx,

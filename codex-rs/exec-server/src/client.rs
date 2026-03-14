@@ -57,7 +57,7 @@ pub struct ExecServerLaunchCommand {
 pub struct ExecServerProcess {
     process_id: String,
     pid: Option<u32>,
-    output_rx: broadcast::Receiver<Vec<u8>>,
+    output_rx: Option<broadcast::Receiver<Vec<u8>>>,
     writer_tx: mpsc::Sender<Vec<u8>>,
     status: Arc<RemoteProcessStatus>,
     client: ExecServerClient,
@@ -80,7 +80,17 @@ impl ExecServerProcess {
     }
 
     pub fn output_receiver(&self) -> broadcast::Receiver<Vec<u8>> {
-        self.output_rx.resubscribe()
+        match self.output_rx.as_ref() {
+            Some(output_rx) => output_rx.resubscribe(),
+            None => panic!("output receiver should still be present"),
+        }
+    }
+
+    pub fn take_output_receiver(&mut self) -> broadcast::Receiver<Vec<u8>> {
+        match self.output_rx.take() {
+            Some(output_rx) => output_rx,
+            None => panic!("output receiver should only be taken once"),
+        }
     }
 
     pub fn has_exited(&self) -> bool {
@@ -334,7 +344,7 @@ impl ExecServerClient {
         Ok(ExecServerProcess {
             process_id,
             pid: response.pid,
-            output_rx,
+            output_rx: Some(output_rx),
             writer_tx,
             status,
             client: self.clone(),

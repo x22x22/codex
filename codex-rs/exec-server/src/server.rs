@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::env;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 
@@ -167,12 +169,21 @@ async fn handle_exec_request(
         .argv
         .split_first()
         .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
+    let resolved_program = resolve_remote_program(program, &params.env);
+    if resolved_program != *program {
+        tracing::info!(
+            original_program = program,
+            resolved_program,
+            "resolved missing shell path for remote exec"
+        );
+    }
+    let resolved_cwd = resolve_remote_cwd(params.cwd.as_path());
 
-    let spawned = if params.tty {
+    let spawn_result = if params.tty {
         codex_utils_pty::spawn_pty_process(
-            program,
+            &resolved_program,
             args,
-            params.cwd.as_path(),
+            resolved_cwd.as_path(),
             &params.env,
             &params.arg0,
             TerminalSize::default(),
@@ -180,15 +191,25 @@ async fn handle_exec_request(
         .await
     } else {
         codex_utils_pty::spawn_pipe_process_no_stdin(
-            program,
+            &resolved_program,
             args,
-            params.cwd.as_path(),
+            resolved_cwd.as_path(),
             &params.env,
             &params.arg0,
         )
         .await
-    }
-    .map_err(|err| internal_error(err.to_string()))?;
+    };
+    let spawned = spawn_result.map_err(|err| {
+        let path_value = params.env.get("PATH").map(String::as_str).unwrap_or("");
+        eprintln!(
+            "exec-server spawn failed: program={resolved_program:?} argv={:?} cwd={:?} arg0={:?} tty={} path={path_value:?} err={err}",
+            params.argv,
+            resolved_cwd,
+            params.arg0,
+            params.tty,
+        );
+        internal_error(err.to_string())
+    })?;
 
     let pid = spawned.session.pid();
     let stdout_buffer = Arc::new(StdMutex::new(BoundedBytesBuffer::new(
@@ -418,5 +439,198 @@ fn internal_error(message: String) -> JSONRPCErrorError {
         code: -32603,
         data: None,
         message,
+    }
+}
+
+fn resolve_remote_program(program: &str, env_map: &HashMap<String, String>) -> String {
+    let program_path = Path::new(program);
+    if !program_path.is_absolute() || program_path.is_file() {
+        return program.to_string();
+    }
+
+    let Some(program_name) = program_path.file_name().and_then(|name| name.to_str()) else {
+        return program.to_string();
+    };
+
+    let candidates = match program_name {
+        "zsh" => &[
+            "zsh",
+            "/bin/zsh",
+            "/usr/bin/zsh",
+            "bash",
+            "/bin/bash",
+            "/usr/bin/bash",
+            "sh",
+            "/bin/sh",
+            "/usr/bin/sh",
+        ][..],
+        "bash" => &[
+            "bash",
+            "/bin/bash",
+            "/usr/bin/bash",
+            "sh",
+            "/bin/sh",
+            "/usr/bin/sh",
+        ][..],
+        "sh" => &["sh", "/bin/sh", "/usr/bin/sh"][..],
+        "pwsh" | "pwsh.exe" => &[
+            "pwsh",
+            "/usr/local/bin/pwsh",
+            "/usr/bin/pwsh",
+            "powershell",
+            "powershell.exe",
+        ][..],
+        "powershell" | "powershell.exe" => &[
+            "powershell",
+            "powershell.exe",
+            "pwsh",
+            "/usr/local/bin/pwsh",
+            "/usr/bin/pwsh",
+        ][..],
+        "cmd" | "cmd.exe" => &["cmd.exe", "cmd"][..],
+        _ => return program.to_string(),
+    };
+
+    resolve_candidate_from_env(candidates, env_map).unwrap_or_else(|| program.to_string())
+}
+
+fn resolve_remote_cwd(cwd: &Path) -> std::path::PathBuf {
+    if let Ok(stripped) = cwd.strip_prefix("/private") {
+        let stripped_path = Path::new("/").join(stripped);
+        if stripped_path.is_dir() {
+            return stripped_path;
+        }
+    }
+
+    if cwd.is_dir() {
+        return cwd.to_path_buf();
+    }
+
+    cwd.to_path_buf()
+}
+
+fn resolve_candidate_from_env(
+    candidates: &[&str],
+    env_map: &HashMap<String, String>,
+) -> Option<String> {
+    for candidate in candidates {
+        let candidate_path = Path::new(candidate);
+        if candidate_path.is_absolute() {
+            if candidate_path.is_file() {
+                return Some((*candidate).to_string());
+            }
+            continue;
+        }
+
+        if let Some(found) = find_in_path(candidate, env_map) {
+            return Some(found);
+        }
+    }
+
+    None
+}
+
+fn find_in_path(binary: &str, env_map: &HashMap<String, String>) -> Option<String> {
+    let path_value = env_map
+        .get("PATH")
+        .cloned()
+        .or_else(|| env::var("PATH").ok())?;
+    for dir in env::split_paths(&path_value) {
+        let candidate = dir.join(binary);
+        if candidate.is_file() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_remote_cwd;
+    use super::resolve_remote_program;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
+
+    static NEXT_TEST_DIR_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn unique_test_dir() -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let seq = NEXT_TEST_DIR_ID.fetch_add(1, Ordering::Relaxed);
+        path.push(format!("codex-exec-server-shell-resolve-{nanos}-{seq}"));
+        fs::create_dir_all(&path).expect("create test dir");
+        path
+    }
+
+    #[test]
+    fn resolve_remote_program_rewrites_missing_zsh_to_remote_shell_family() {
+        let test_dir = unique_test_dir();
+        let bash_path = test_dir.join("bash");
+        fs::write(&bash_path, "#!/bin/sh\n").expect("write fake bash");
+
+        let mut env_map = HashMap::new();
+        env_map.insert("PATH".to_string(), test_dir.to_string_lossy().to_string());
+
+        let resolved = resolve_remote_program("/opt/homebrew/bin/zsh", &env_map);
+        assert_ne!(resolved, "/opt/homebrew/bin/zsh");
+        let resolved_path = PathBuf::from(&resolved);
+        let resolved_name = resolved_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("resolved shell name");
+        assert!(matches!(resolved_name, "zsh" | "bash" | "sh"));
+
+        fs::remove_dir_all(&test_dir).expect("cleanup test dir");
+    }
+
+    #[test]
+    fn resolve_remote_program_keeps_existing_absolute_path() {
+        let test_dir = unique_test_dir();
+        let shell_path = test_dir.join("zsh");
+        fs::write(&shell_path, "#!/bin/sh\n").expect("write fake shell");
+
+        let resolved = resolve_remote_program(&shell_path.to_string_lossy(), &HashMap::new());
+        assert_eq!(resolved, shell_path.to_string_lossy());
+
+        fs::remove_dir_all(&test_dir).expect("cleanup test dir");
+    }
+
+    #[test]
+    fn resolve_remote_program_leaves_unknown_missing_binary_unchanged() {
+        let resolved = resolve_remote_program("/does/not/exist/python", &HashMap::new());
+        assert_eq!(resolved, "/does/not/exist/python");
+    }
+
+    #[test]
+    fn resolve_remote_cwd_strips_private_prefix_when_needed() {
+        let temp_dir = unique_test_dir();
+        let nested_dir = temp_dir.join("nested");
+        fs::create_dir_all(&nested_dir).expect("create nested dir");
+        let private_alias = PathBuf::from(format!("/private{}", nested_dir.to_string_lossy()));
+
+        let resolved = resolve_remote_cwd(&private_alias);
+
+        assert_eq!(resolved, nested_dir);
+
+        fs::remove_dir_all(&temp_dir).expect("cleanup test dir");
+    }
+
+    #[test]
+    fn resolve_remote_cwd_keeps_existing_directory() {
+        let temp_dir = unique_test_dir();
+
+        let resolved = resolve_remote_cwd(&temp_dir);
+
+        assert_eq!(resolved, temp_dir);
+        fs::remove_dir_all(&resolved).expect("cleanup test dir");
     }
 }

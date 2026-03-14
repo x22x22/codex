@@ -296,6 +296,19 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
+    /// Optional command vector used to launch the experimental exec-server.
+    ///
+    /// This is intended for advanced setups where the exec-server should be
+    /// started through a wrapper or remote transport such as SSH.
+    ///
+    /// Example `~/.codex/config.toml` snippet:
+    ///
+    /// ```toml
+    /// [exec_server]
+    /// command = ["ssh", "-T", "executor-host", "/opt/codex-exec-server"]
+    /// ```
+    pub exec_server_command: Option<Vec<String>>,
+
     /// TUI notifications preference. When set, the TUI will send terminal notifications on
     /// approvals and turn completions when not focused.
     pub tui_notifications: Notifications,
@@ -1201,6 +1214,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub notify: Option<Vec<String>>,
 
+    /// Optional command vector used to launch the experimental exec-server.
+    #[serde(default)]
+    pub exec_server: Option<ExecServerConfigToml>,
+
     /// System instructions.
     pub instructions: Option<String>,
 
@@ -1541,6 +1558,12 @@ pub struct RealtimeToml {
 pub struct RealtimeAudioToml {
     pub microphone: Option<String>,
     pub speaker: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct ExecServerConfigToml {
+    pub command: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
@@ -2440,6 +2463,10 @@ impl Config {
                 .clone()
                 .or(cfg.model_catalog_json.clone()),
         )?;
+        let exec_server_command = cfg
+            .exec_server
+            .clone()
+            .and_then(|exec_server| exec_server.command);
 
         let log_dir = cfg
             .log_dir
@@ -2547,6 +2574,7 @@ impl Config {
             approvals_reviewer,
             enforce_residency: enforce_residency.value,
             notify: cfg.notify,
+            exec_server_command,
             user_instructions,
             base_instructions,
             personality,

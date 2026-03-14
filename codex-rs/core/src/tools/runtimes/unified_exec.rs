@@ -42,6 +42,7 @@ use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
@@ -79,6 +80,25 @@ impl<'a> UnifiedExecRuntime<'a> {
     pub fn new(manager: &'a UnifiedExecProcessManager, backend: UnifiedExecBackendConfig) -> Self {
         Self { manager, backend }
     }
+}
+
+fn prepare_exec_command(
+    base_command: &[String],
+    session_shell: &crate::shell::Shell,
+    cwd: &Path,
+    explicit_env_overrides: &HashMap<String, String>,
+    allow_snapshot_wrap: bool,
+) -> Vec<String> {
+    if allow_snapshot_wrap {
+        return maybe_wrap_shell_lc_with_snapshot(
+            base_command,
+            session_shell,
+            cwd,
+            explicit_env_overrides,
+        );
+    }
+
+    base_command.to_vec()
 }
 
 impl Sandboxable for UnifiedExecRuntime<'_> {
@@ -192,11 +212,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
-        let command = maybe_wrap_shell_lc_with_snapshot(
+        let command = prepare_exec_command(
             base_command,
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,
+            !self.manager.uses_exec_server(),
         );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
             && ctx.session.features().enabled(Feature::PowershellUtf8)
@@ -210,7 +231,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         if let Some(network) = req.network.as_ref() {
             network.apply_to_env(&mut env);
         }
-        if self.backend == UnifiedExecBackendConfig::ZshFork {
+        if self.backend == UnifiedExecBackendConfig::ZshFork && !self.manager.uses_exec_server() {
             let spec = build_command_spec(
                 &command,
                 &req.cwd,
@@ -282,5 +303,54 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                 }
                 other => ToolError::Rejected(other.to_string()),
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prepare_exec_command;
+    use crate::shell::Shell;
+    use crate::shell::ShellType;
+    use crate::shell_snapshot::ShellSnapshot;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use tempfile::tempdir;
+    use tokio::sync::watch;
+
+    fn shell_with_snapshot(
+        shell_path: &str,
+        snapshot_path: PathBuf,
+        snapshot_cwd: PathBuf,
+    ) -> Shell {
+        let (_tx, shell_snapshot) = watch::channel(Some(Arc::new(ShellSnapshot {
+            path: snapshot_path,
+            cwd: snapshot_cwd,
+        })));
+        Shell {
+            shell_type: ShellType::Zsh,
+            shell_path: PathBuf::from(shell_path),
+            shell_snapshot,
+        }
+    }
+
+    #[test]
+    fn prepare_exec_command_skips_snapshot_wrap_for_remote_backend() {
+        let dir = tempdir().expect("create temp dir");
+        let snapshot_path = dir.path().join("snapshot.sh");
+        std::fs::write(&snapshot_path, "# snapshot\n").expect("write snapshot");
+        let session_shell =
+            shell_with_snapshot("/bin/zsh", snapshot_path, dir.path().to_path_buf());
+        let command = vec![
+            "/bin/zsh".to_string(),
+            "-lc".to_string(),
+            "hostname".to_string(),
+        ];
+
+        let prepared =
+            prepare_exec_command(&command, &session_shell, dir.path(), &HashMap::new(), false);
+
+        assert_eq!(prepared, command);
     }
 }

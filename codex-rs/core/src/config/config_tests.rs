@@ -105,6 +105,24 @@ persistence = "none"
         history_no_persistence_cfg.history
     );
 
+    let exec_server = r#"
+[exec_server]
+command = ["ssh", "-T", "executor-host", "/opt/codex-exec-server"]
+"#;
+    let exec_server_cfg =
+        toml::from_str::<ConfigToml>(exec_server).expect("TOML deserialization should succeed");
+    assert_eq!(
+        Some(ExecServerConfigToml {
+            command: Some(vec![
+                "ssh".to_string(),
+                "-T".to_string(),
+                "executor-host".to_string(),
+                "/opt/codex-exec-server".to_string(),
+            ]),
+        }),
+        exec_server_cfg.exec_server
+    );
+
     let memories = r#"
 [memories]
 no_memories_if_mcp_or_web_search = true
@@ -4207,6 +4225,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
             notify: None,
+            exec_server_command: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -4346,6 +4365,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
+        exec_server_command: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -4483,6 +4503,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
+        exec_server_command: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -4606,6 +4627,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         enforce_residency: Constrained::allow_any(None),
         user_instructions: None,
         notify: None,
+        exec_server_command: None,
         cwd: fixture.cwd(),
         cli_auth_credentials_store_mode: Default::default(),
         mcp_servers: Constrained::allow_any(HashMap::new()),

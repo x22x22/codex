@@ -26,6 +26,20 @@ Codex can run a notification hook when the agent finishes a turn. See the config
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
+## Experimental Exec Server
+
+When `experimental_exec_server` is enabled, Codex can launch the exec-server through a custom command vector instead of a local binary lookup. This is useful for SSH-backed execution:
+
+```toml
+[features]
+experimental_exec_server = true
+
+[exec_server]
+command = ["ssh", "-T", "executor-host", "/opt/codex-exec-server"]
+```
+
+`CODEX_EXEC_SERVER_EXE` still takes precedence when set, and remains the simplest single-binary override.
+
 ## JSON Schema
 
 The generated JSON Schema for `config.toml` lives at `codex-rs/core/config.schema.json`.

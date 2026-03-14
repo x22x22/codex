@@ -940,10 +940,17 @@ fn thread_resume_params_from_config(config: &Config, path: Option<PathBuf>) -> T
 }
 
 fn config_request_overrides_from_config(config: &Config) -> Option<HashMap<String, Value>> {
-    config
-        .active_profile
-        .as_ref()
-        .map(|profile| HashMap::from([("profile".to_string(), Value::String(profile.clone()))]))
+    let mut overrides = HashMap::new();
+    if let Some(profile) = config.active_profile.as_ref() {
+        overrides.insert("profile".to_string(), Value::String(profile.clone()));
+    }
+    if let Some(command) = config.exec_server_command.as_ref() {
+        overrides.insert(
+            "exec_server.command".to_string(),
+            serde_json::to_value(command).expect("exec_server.command should serialize"),
+        );
+    }
+    (!overrides.is_empty()).then_some(overrides)
 }
 
 fn approvals_reviewer_override_from_config(
@@ -1628,6 +1635,52 @@ mod tests {
     #[test]
     fn exec_defaults_analytics_to_enabled() {
         assert_eq!(DEFAULT_ANALYTICS_ENABLED, true);
+    }
+
+    #[test]
+    fn thread_start_params_include_exec_server_command_override() {
+        let mut config =
+            Config::load_default_with_cli_overrides(Vec::new()).expect("default config loads");
+        config.exec_server_command = Some(vec![
+            "ssh".to_string(),
+            "-T".to_string(),
+            "dev".to_string(),
+            "codex".to_string(),
+            "exec-server".to_string(),
+        ]);
+
+        let params = thread_start_params_from_config(&config);
+
+        assert_eq!(
+            params.config,
+            Some(HashMap::from([(
+                "exec_server.command".to_string(),
+                serde_json::json!(["ssh", "-T", "dev", "codex", "exec-server"]),
+            )]))
+        );
+    }
+
+    #[test]
+    fn thread_resume_params_include_exec_server_command_override() {
+        let mut config =
+            Config::load_default_with_cli_overrides(Vec::new()).expect("default config loads");
+        config.exec_server_command = Some(vec![
+            "ssh".to_string(),
+            "-T".to_string(),
+            "dev".to_string(),
+            "codex".to_string(),
+            "exec-server".to_string(),
+        ]);
+
+        let params = thread_resume_params_from_config(&config, None);
+
+        assert_eq!(
+            params.config,
+            Some(HashMap::from([(
+                "exec_server.command".to_string(),
+                serde_json::json!(["ssh", "-T", "dev", "codex", "exec-server"]),
+            )]))
+        );
     }
 
     #[test]
