@@ -8374,15 +8374,23 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
 
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
+    #[cfg(target_os = "windows")]
+    let expected_initial = "Read Only";
+    #[cfg(not(target_os = "windows"))]
+    let expected_initial = "Default";
     assert!(
-        selected_permissions_popup_line(&popup).contains("Default"),
-        "expected permissions popup to open with Default selected: {popup}"
+        selected_permissions_popup_name(&popup) == expected_initial,
+        "expected permissions popup to open with {expected_initial} selected: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     let popup = render_bottom_popup(&chat, 120);
+    #[cfg(target_os = "windows")]
+    let expected_after_one_down = "Default";
+    #[cfg(not(target_os = "windows"))]
+    let expected_after_one_down = "Full Access";
     assert!(
-        !selected_permissions_popup_line(&popup).contains("Default"),
-        "expected moving down to change the selected preset before confirmation: {popup}"
+        selected_permissions_popup_name(&popup) == expected_after_one_down,
+        "expected moving down to select {expected_after_one_down} before confirmation: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
@@ -8411,14 +8419,18 @@ async fn permissions_selection_history_snapshot_after_mode_switch() {
 
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
+    #[cfg(target_os = "windows")]
+    let expected_initial = "Read Only";
+    #[cfg(not(target_os = "windows"))]
+    let expected_initial = "Default";
     assert!(
-        selected_permissions_popup_line(&popup).contains("Default"),
-        "expected permissions popup to open with Default selected: {popup}"
+        selected_permissions_popup_name(&popup) == expected_initial,
+        "expected permissions popup to open with {expected_initial} selected: {popup}"
     );
     move_permissions_popup_selection_to(&mut chat, "Full Access", KeyCode::Down);
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_permissions_popup_line(&popup).contains("Full Access"),
+        selected_permissions_popup_name(&popup) == "Full Access",
         "expected navigation to land on Full Access before confirmation: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8454,13 +8466,13 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_permissions_popup_line(&popup).contains("Full Access"),
+        selected_permissions_popup_name(&popup) == "Full Access",
         "expected permissions popup to open with Full Access selected: {popup}"
     );
     move_permissions_popup_selection_to(&mut chat, "Default", KeyCode::Up);
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_permissions_popup_line(&popup).contains("Default"),
+        selected_permissions_popup_name(&popup) == "Default",
         "expected navigation to land on Default before confirmation: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8503,7 +8515,7 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_permissions_popup_line(&popup).contains("Default"),
+        selected_permissions_popup_name(&popup) == "Default",
         "expected permissions popup to open with Default selected: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8611,7 +8623,8 @@ async fn permissions_selection_marks_smart_approvals_current_after_session_confi
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        selected_permissions_popup_line(&popup).contains("Smart Approvals (current)"),
+        selected_permissions_popup_name(&popup) == "Smart Approvals"
+            && selected_permissions_popup_line(&popup).contains("(current)"),
         "expected SessionConfigured sync to select Smart Approvals in the popup: {popup}"
     );
 }
@@ -8665,7 +8678,8 @@ async fn permissions_selection_marks_smart_approvals_current_with_custom_workspa
     let popup = render_bottom_popup(&chat, 120);
 
     assert!(
-        selected_permissions_popup_line(&popup).contains("Smart Approvals (current)"),
+        selected_permissions_popup_name(&popup) == "Smart Approvals"
+            && selected_permissions_popup_line(&popup).contains("(current)"),
         "expected custom workspace-write details to keep Smart Approvals selected: {popup}"
     );
 }
@@ -8695,18 +8709,15 @@ async fn permissions_selection_can_disable_smart_approvals() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup
-            .lines()
-            .any(|line| line.contains("Smart Approvals (current)") && line.contains('›')),
+        selected_permissions_popup_name(&popup) == "Smart Approvals"
+            && selected_permissions_popup_line(&popup).contains("(current)"),
         "expected permissions popup to open with Smart Approvals selected: {popup}"
     );
 
     move_permissions_popup_selection_to(&mut chat, "Default", KeyCode::Up);
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup
-            .lines()
-            .any(|line| line.contains("Default") && line.contains('›')),
+        selected_permissions_popup_name(&popup) == "Default",
         "expected one Up from Smart Approvals to select Default: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8752,18 +8763,14 @@ async fn permissions_selection_sends_approvals_reviewer_in_override_turn_context
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup
-            .lines()
-            .any(|line| line.contains("(current)") && line.contains('›')),
+        selected_permissions_popup_line(&popup).contains("(current)"),
         "expected permissions popup to open with the current preset selected: {popup}"
     );
 
     move_permissions_popup_selection_to(&mut chat, "Smart Approvals", KeyCode::Down);
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        popup
-            .lines()
-            .any(|line| line.contains("Smart Approvals") && line.contains('›')),
+        selected_permissions_popup_name(&popup) == "Smart Approvals",
         "expected one Down from Default to select Smart Approvals: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
