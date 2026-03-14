@@ -15,7 +15,11 @@ pub(super) async fn load_plugin_app_summaries(
         return Vec::new();
     }
 
-    let connectors = match connectors::list_all_connectors_with_options(config, false).await {
+    let connectors = match connectors::list_all_connectors_with_options(
+        config, /*force_refetch=*/ false,
+    )
+    .await
+    {
         Ok(connectors) => connectors,
         Err(err) => {
             warn!("failed to load app metadata for plugin/read: {err:#}");
