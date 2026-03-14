@@ -46,12 +46,13 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 
 ## Current Fix In Progress
 
-- Make the generic permissions-popup helper recognize `Read Only`, which is a real preset on Windows.
-- Replace Windows-specific hard-coded navigation counts with label-driven movement in the permission history snapshot tests.
-- Replace the remaining Windows-only extra navigation in the full-access confirmation/history test, and use the same label-driven movement in the adjacent Smart Approvals popup tests.
-- Follow-up on `87941e5d7`: the helper compared the entire selected row with `contains(label)`, which made `Smart Approvals` look like `Default` because its description text says "Same workspace-write permissions as Default...". Tighten the helper to match the selected preset name at the start of the row instead of any substring in the rendered line.
-- Follow-up on `13c9d91b0`: the cross-platform helper bug is fixed, but the default unelevated Windows popup still opens on `Read Only` instead of `Default`. The remaining Windows-only failures are in tests that added exact initial-selection assertions while assuming the popup would start on `Default`.
-- Rationale: commit `e96d895c9` still failed on both Windows `Tests` jobs in run `23080608881`. The remaining common pattern is Windows-only popup navigation that assumes a fixed number of `Up`/`Down` presses even though the Windows menu includes `Read Only` and selection wraps.
+- Commit `495ef3f76` extended `rust-ci` annotations enough to expose the exact flaky tests on the two remaining Windows jobs.
+- Windows x64 failure: `codex::tests::run_user_shell_command_does_not_set_reference_context_item` timed out waiting for `TurnComplete`.
+- Windows arm64 failure: `all::suite::fuzzy_file_search::test_fuzzy_file_search_session_multiple_query_updates_work` timed out during app-server `initialize`, before the fuzzy-search session logic started.
+- Current patch set:
+  - Pin the standalone shell test to `cmd.exe` on Windows so it validates reference-context isolation without depending on PowerShell startup behavior.
+  - Replace the fuzzy-file-search suite's spawned `codex-app-server` harness with the in-process app-server runtime so the tests still exercise request/notification behavior without the flaky stdio startup path.
+- Rationale: both failures are test-harness flakes, not product behaviors. The fixes keep the assertions intact and remove environment-sensitive startup paths instead of stretching timeouts.
 
 ## Constraints
 
@@ -79,3 +80,4 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 | `9835ec89d` | Record validation pass 1 | full pass | Full PR CI passed on run `23082212165`, including the rerun of `Tests — windows-arm64 - aarch64-pc-windows-msvc` on job `67054619213`. The branch now has 2 consecutive full-suite green commits after `c3b8a0ebf`. |
 | `b6e18d2e8` | Record validation pass 2 | failed | Run `23083106021` isolated a new failure in `Tests — ubuntu-24.04 - x86_64-unknown-linux-gnu` while both Windows `Tests` jobs and all Bazel/lint checks passed. The GitHub CLI log download hit EOFs on both `results-receiver.actions.githubusercontent.com` and the signed Azure blob URL again, so the follow-up commit adds CI annotations and step-summary output for parsed nextest `FAIL`/`LEAK` lines. |
 | `761363008` | Annotate nextest failures in CI | failed | Run `23083522224` flipped to a new `Tests — windows-x64 - x86_64-pc-windows-msvc` failure while `Tests — windows-arm64 - aarch64-pc-windows-msvc` and every non-test job passed. The new annotations proved this failure did not emit a parsable nextest `FAIL`/`LEAK` line, so the next follow-up extends the annotations to the last 80 log lines and requests explicit final failure output from nextest. |
+| `495ef3f76` | Expose nextest failure tail in CI | failed | Run `23083992418` failed in both Windows `Tests` jobs. The new annotations identified `codex::tests::run_user_shell_command_does_not_set_reference_context_item` timing out on Windows x64 and `all::suite::fuzzy_file_search::test_fuzzy_file_search_session_multiple_query_updates_work` timing out during app-server `initialize` on Windows arm64. |
