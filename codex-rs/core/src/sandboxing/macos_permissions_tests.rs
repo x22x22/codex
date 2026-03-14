@@ -31,7 +31,7 @@ fn merge_extensions_widens_permissions() {
             "com.apple.Calendar".to_string(),
         ]),
         macos_mach_services: vec![
-            "2BUA8C4S2C.com.1password.browser-helper".to_string(),
+            "com.vendor.helper".to_string(),
             "com.apple.logd".to_string(),
         ],
         macos_launch_services: true,
@@ -53,7 +53,7 @@ fn merge_extensions_widens_permissions() {
                 "com.apple.Notes".to_string(),
             ]),
             macos_mach_services: vec![
-                "2BUA8C4S2C.com.1password.browser-helper".to_string(),
+                "com.vendor.helper".to_string(),
                 "com.apple.logd".to_string(),
             ],
             macos_launch_services: true,

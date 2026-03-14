@@ -1429,9 +1429,7 @@ mod tests {
                         "com.apple.Calendar".to_string(),
                         "com.apple.Notes".to_string(),
                     ]),
-                    macos_mach_services: vec![
-                        "2BUA8C4S2C.com.1password.browser-helper".to_string(),
-                    ],
+                    macos_mach_services: vec!["com.vendor.helper".to_string()],
                     macos_launch_services: false,
                     macos_accessibility: true,
                     macos_calendar: true,

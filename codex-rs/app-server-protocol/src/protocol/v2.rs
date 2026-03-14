@@ -5908,7 +5908,7 @@ mod tests {
                     "automations": {
                         "bundle_ids": ["com.apple.Notes"]
                     },
-                    "machServices": ["2BUA8C4S2C.com.1password.browser-helper"],
+                    "machServices": ["com.vendor.helper"],
                     "launchServices": false,
                     "accessibility": false,
                     "calendar": false,
@@ -5937,7 +5937,7 @@ mod tests {
                 }),
             Some((
                 CoreMacOsAutomationPermission::BundleIds(vec!["com.apple.Notes".to_string(),]),
-                vec!["2BUA8C4S2C.com.1password.browser-helper".to_string()],
+                vec!["com.vendor.helper".to_string()],
                 false,
                 CoreMacOsContactsPermission::ReadOnly,
             ))
@@ -6064,20 +6064,16 @@ mod tests {
             ),
             (
                 json!({
-                    "machServices": ["2BUA8C4S2C.com.1password.browser-helper"],
+                    "machServices": ["com.vendor.helper"],
                 }),
                 Some(GrantedMacOsPermissions {
-                    mach_services: Some(vec![
-                        "2BUA8C4S2C.com.1password.browser-helper".to_string(),
-                    ]),
+                    mach_services: Some(vec!["com.vendor.helper".to_string()]),
                     ..Default::default()
                 }),
                 Some(CoreMacOsSeatbeltProfileExtensions {
                     macos_preferences: CoreMacOsPreferencesPermission::None,
                     macos_automation: CoreMacOsAutomationPermission::None,
-                    macos_mach_services: vec![
-                        "2BUA8C4S2C.com.1password.browser-helper".to_string(),
-                    ],
+                    macos_mach_services: vec!["com.vendor.helper".to_string()],
                     macos_launch_services: false,
                     macos_accessibility: false,
                     macos_calendar: false,

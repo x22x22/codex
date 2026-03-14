@@ -525,7 +525,7 @@ fn create_macos_permissions_schema() -> JsonSchema {
                 JsonSchema::Array {
                     items: Box::new(JsonSchema::String { description: None }),
                     description: Some(
-                        "Exact macOS global Mach service names to allow for mach-lookup (for example, 1Password app integration uses `2BUA8C4S2C.com.1password.browser-helper`)."
+                        "Exact macOS global Mach service names to allow for mach-lookup (for example, `com.vendor.helper`)."
                             .to_string(),
                     ),
                 },

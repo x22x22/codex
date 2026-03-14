@@ -1729,7 +1729,7 @@ mod tests {
             serde_json::from_value::<MacOsSeatbeltProfileExtensions>(serde_json::json!({
                 "preferences": "read_write",
                 "automations": ["com.apple.Notes"],
-                "mach_services": ["2BUA8C4S2C.com.1password.browser-helper"],
+                "mach_services": ["com.vendor.helper"],
                 "launch_services": true,
                 "accessibility": true,
                 "calendar": true,
@@ -1745,7 +1745,7 @@ mod tests {
                 macos_automation: MacOsAutomationPermission::BundleIds(vec![
                     "com.apple.Notes".to_string(),
                 ]),
-                macos_mach_services: vec!["2BUA8C4S2C.com.1password.browser-helper".to_string()],
+                macos_mach_services: vec!["com.vendor.helper".to_string()],
                 macos_launch_services: true,
                 macos_accessibility: true,
                 macos_calendar: true,
@@ -1760,7 +1760,7 @@ mod tests {
         let permissions =
             serde_json::from_value::<MacOsSeatbeltProfileExtensions>(serde_json::json!({
                 "mach_services": [
-                    "2BUA8C4S2C.com.1password.browser-helper",
+                    "com.vendor.helper",
                     "com.apple.logd",
                 ]
             }))
@@ -1772,7 +1772,7 @@ mod tests {
                 macos_preferences: MacOsPreferencesPermission::ReadOnly,
                 macos_automation: MacOsAutomationPermission::None,
                 macos_mach_services: vec![
-                    "2BUA8C4S2C.com.1password.browser-helper".to_string(),
+                    "com.vendor.helper".to_string(),
                     "com.apple.logd".to_string(),
                 ],
                 macos_launch_services: false,
