@@ -228,6 +228,9 @@ pub enum ResponseInputItem {
     Message {
         role: String,
         content: Vec<ContentItem>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        metadata: Option<ResponseItemMetadata>,
     },
     FunctionCallOutput {
         call_id: String,
@@ -907,11 +910,15 @@ pub fn local_image_content_items_with_label_number(
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
-            ResponseInputItem::Message { role, content } => Self::Message {
+            ResponseInputItem::Message {
                 role,
                 content,
+                metadata,
+            } => Self::Message {
+                role,
+                content,
+                metadata,
                 id: None,
-                metadata: None,
                 end_turn: None,
                 phase: None,
             },
@@ -1038,6 +1045,7 @@ impl From<Vec<UserInput>> for ResponseInputItem {
                     UserInput::Skill { .. } | UserInput::Mention { .. } => Vec::new(), // Tool bodies are injected later in core
                 })
                 .collect::<Vec<ContentItem>>(),
+            metadata: None,
         }
     }
 }

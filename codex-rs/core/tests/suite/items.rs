@@ -175,20 +175,7 @@ async fn user_message_type_metadata_is_emitted_when_feature_enabled() -> anyhow:
     .await;
 
     assert_eq!(started_item.id, completed_item.id);
-    assert_eq!(
-        started_item
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.user_message_type.as_ref()),
-        Some(&codex_protocol::items::UserMessageType::Prompt)
-    );
-    assert_eq!(
-        completed_item
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.user_message_type.as_ref()),
-        Some(&codex_protocol::items::UserMessageType::Prompt)
-    );
+    assert_eq!(started_item.content, completed_item.content);
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while req.requests().is_empty() {
@@ -449,6 +436,7 @@ async fn user_message_type_prompt_queued_metadata_is_emitted_when_feature_enable
                 content: vec![codex_protocol::models::ContentItem::InputText {
                     text: queued_text.into(),
                 }],
+                metadata: None,
             }])
             .await
             .is_ok(),

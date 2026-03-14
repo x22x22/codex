@@ -3707,6 +3707,7 @@ async fn task_finish_emits_turn_item_lifecycle_for_leftover_pending_user_input()
         content: vec![ContentItem::InputText {
             text: "late pending input".to_string(),
         }],
+        metadata: None,
     }])
     .await
     .expect("inject pending input into active turn");
@@ -3825,6 +3826,7 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
         content: vec![ContentItem::InputText {
             text: "late queued pending input".to_string(),
         }],
+        metadata: None,
     }])
     .await
     .expect("inject pending input into active turn");
@@ -3835,7 +3837,18 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
         .await
         .expect("expected raw response item event")
         .expect("channel open");
-    assert!(matches!(first.msg, EventMsg::RawResponseItem(_)));
+    assert!(matches!(
+        first.msg,
+        EventMsg::RawResponseItem(ref event)
+            if matches!(
+                &event.item,
+                ResponseItem::Message {
+                    metadata: Some(metadata),
+                    ..
+                } if metadata.user_message_type
+                    == Some(codex_protocol::items::UserMessageType::PromptQueued)
+            )
+    ));
 
     let second = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
         .await
@@ -3844,10 +3857,12 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
     assert!(matches!(
         second.msg,
         EventMsg::ItemStarted(ItemStartedEvent {
-            item: TurnItem::UserMessage(UserMessageItem { metadata: Some(metadata), .. }),
+            item: TurnItem::UserMessage(UserMessageItem { content, .. }),
             ..
-        }) if metadata.user_message_type
-            == Some(codex_protocol::items::UserMessageType::PromptQueued)
+        }) if content == vec![UserInput::Text {
+            text: "late queued pending input".to_string(),
+            text_elements: Vec::new(),
+        }]
     ));
 
     let third = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
@@ -3857,10 +3872,12 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
     assert!(matches!(
         third.msg,
         EventMsg::ItemCompleted(ItemCompletedEvent {
-            item: TurnItem::UserMessage(UserMessageItem { metadata: Some(metadata), .. }),
+            item: TurnItem::UserMessage(UserMessageItem { content, .. }),
             ..
-        }) if metadata.user_message_type
-            == Some(codex_protocol::items::UserMessageType::PromptQueued)
+        }) if content == vec![UserInput::Text {
+            text: "late queued pending input".to_string(),
+            text_elements: Vec::new(),
+        }]
     ));
 }
 

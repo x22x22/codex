@@ -83,7 +83,6 @@ use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
-use codex_protocol::items::TurnItemMetadata;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::UserMessageType;
 use codex_protocol::mcp::CallToolResult;
@@ -993,6 +992,18 @@ fn local_time_context() -> (String, String) {
             "Etc/UTC".to_string(),
         ),
     }
+}
+
+fn stamp_user_message_type_on_input_item(item: &mut ResponseInputItem, kind: UserMessageType) {
+    let ResponseInputItem::Message { role, metadata, .. } = item else {
+        return;
+    };
+    if role != "user" {
+        return;
+    }
+    let mut metadata_value = metadata.take().unwrap_or_default();
+    metadata_value.user_message_type = Some(kind);
+    *metadata = Some(metadata_value);
 }
 
 #[derive(Clone)]
@@ -2686,6 +2697,7 @@ impl Session {
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
+                metadata: None,
             }])
             .await
             .is_err()
@@ -2783,6 +2795,7 @@ impl Session {
             .inject_response_items(vec![ResponseInputItem::Message {
                 role: "developer".to_string(),
                 content: vec![ContentItem::InputText { text }],
+                metadata: None,
             }])
             .await
             .is_err()
@@ -3714,10 +3727,7 @@ impl Session {
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
         self.record_conversation_items(turn_context, std::slice::from_ref(&response_item))
             .await;
-        let metadata = user_message_type.map(|kind| TurnItemMetadata {
-            user_message_type: Some(kind),
-        });
-        let turn_item = TurnItem::UserMessage(UserMessageItem::new_with_metadata(input, metadata));
+        let turn_item = TurnItem::UserMessage(UserMessageItem::new(input));
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
         self.ensure_rollout_materialized().await;
@@ -3810,8 +3820,13 @@ impl Session {
             });
         }
 
+        let mut input_item: ResponseInputItem = input.into();
+        if self.enabled(Feature::UserMessageTypeMetadata) {
+            stamp_user_message_type_on_input_item(&mut input_item, UserMessageType::PromptSteering);
+        }
+
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input.into(), Some(UserMessageType::PromptSteering));
+        turn_state.push_pending_input(input_item, Some(UserMessageType::PromptSteering));
         Ok(active_turn_id.clone())
     }
 
@@ -3824,11 +3839,16 @@ impl Session {
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
-                for item in input {
+                for mut item in input {
                     let user_message_type = match &item {
                         ResponseInputItem::Message { .. } => Some(UserMessageType::PromptQueued),
                         _ => None,
                     };
+                    if self.enabled(Feature::UserMessageTypeMetadata)
+                        && let Some(kind) = user_message_type.clone()
+                    {
+                        stamp_user_message_type_on_input_item(&mut item, kind);
+                    }
                     ts.push_pending_input(item, user_message_type);
                 }
                 Ok(())
@@ -5577,7 +5597,10 @@ pub(crate) async fn run_turn(
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
 
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+    let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+    if sess.enabled(Feature::UserMessageTypeMetadata) {
+        stamp_user_message_type_on_input_item(&mut initial_input_for_turn, UserMessageType::Prompt);
+    }
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(
         turn_context.as_ref(),
