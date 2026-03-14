@@ -73,9 +73,6 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
-use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SandboxPolicy;
@@ -624,15 +621,7 @@ impl App {
                     "skills/list",
                 )
                 .await?;
-                let skills = serde_json::from_value(
-                    serde_json::to_value(response.data)
-                        .map_err(|err| format!("failed to encode skills/list response: {err}"))?,
-                )
-                .map_err(|err| format!("failed to convert skills/list response: {err}"))?;
-                self.handle_codex_event_now(Event {
-                    id: String::new(),
-                    msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
-                });
+                self.handle_skills_list_response_now(response.data);
             }
             Op::RefreshMcpServers { config } => {
                 let _: McpServerRefreshResponse = send_request_with_response(
@@ -1027,12 +1016,6 @@ impl App {
                 self.handle_server_notification(app_server_client, notification)
                     .await;
             }
-            InProcessServerEvent::LegacyNotification(notification) => {
-                tracing::warn!(
-                    notification.method = %notification.method,
-                    "unexpected legacy notification after TUI app-server typed-event migration"
-                );
-            }
             InProcessServerEvent::ServerRequest(request) => {
                 self.note_server_request(&request);
                 match request.clone() {
@@ -1095,6 +1078,7 @@ impl App {
                     tracing::warn!("{err}");
                 }
             }
+            _ => unreachable!("legacy notifications are filtered by next_typed_event"),
         }
     }
 

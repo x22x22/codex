@@ -274,8 +274,6 @@ pub struct InProcessAppServerClient {
     command_tx: mpsc::Sender<ClientCommand>,
     event_rx: mpsc::Receiver<InProcessServerEvent>,
     worker_handle: tokio::task::JoinHandle<()>,
-    auth_manager: Arc<AuthManager>,
-    thread_manager: Arc<ThreadManager>,
 }
 
 impl InProcessAppServerClient {
@@ -439,19 +437,7 @@ impl InProcessAppServerClient {
             command_tx,
             event_rx,
             worker_handle,
-            auth_manager: shared_core.auth_manager,
-            thread_manager: shared_core.thread_manager,
         })
-    }
-
-    /// Temporary bootstrap escape hatch for embedders migrating toward RPC-only usage.
-    pub fn auth_manager(&self) -> Arc<AuthManager> {
-        self.auth_manager.clone()
-    }
-
-    /// Temporary bootstrap escape hatch for embedders migrating toward RPC-only usage.
-    pub fn thread_manager(&self) -> Arc<ThreadManager> {
-        self.thread_manager.clone()
     }
 
     /// Sends a typed client request and returns raw JSON-RPC result.
@@ -597,6 +583,25 @@ impl InProcessAppServerClient {
         self.event_rx.recv().await
     }
 
+    /// Receives the next non-legacy server event from the in-process runtime.
+    ///
+    /// Legacy bridge notifications are skipped so fully migrated callers can
+    /// consume only typed app-server notifications and requests.
+    pub async fn next_typed_event(&mut self) -> Option<InProcessServerEvent> {
+        loop {
+            match self.next_event().await {
+                Some(InProcessServerEvent::LegacyNotification(notification)) => {
+                    warn!(
+                        notification.method = %notification.method,
+                        "dropping legacy in-process app-server notification"
+                    );
+                }
+                Some(event) => return Some(event),
+                None => return None,
+            }
+        }
+    }
+
     /// Shuts down worker and in-process runtime with bounded wait.
     ///
     /// If graceful shutdown exceeds timeout, the worker task is aborted to
@@ -606,8 +611,6 @@ impl InProcessAppServerClient {
             command_tx,
             event_rx,
             worker_handle,
-            auth_manager: _,
-            thread_manager: _,
         } = self;
         let mut worker_handle = worker_handle;
         // Drop the caller-facing receiver before asking the worker to shut
@@ -659,8 +662,6 @@ mod tests {
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
-    use codex_core::AuthManager;
-    use codex_core::ThreadManager;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
     use tokio::time::Duration;
@@ -757,7 +758,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shared_thread_manager_tracks_threads_started_via_app_server() {
+    async fn thread_read_loads_threads_started_via_app_server() {
         let client = start_test_client(SessionSource::Cli).await;
 
         let response: ThreadStartResponse = client
@@ -770,17 +771,18 @@ mod tests {
             })
             .await
             .expect("thread/start should succeed");
-        let created_thread_id = codex_protocol::ThreadId::from_string(&response.thread.id)
-            .expect("thread id should parse");
-        timeout(
-            Duration::from_secs(2),
-            client.thread_manager().get_thread(created_thread_id),
-        )
-        .await
-        .expect("timed out waiting for retained thread manager to observe started thread")
-        .expect("started thread should be visible through the shared thread manager");
-        let thread_ids = client.thread_manager().list_thread_ids().await;
-        assert!(thread_ids.contains(&created_thread_id));
+        let thread_id = response.thread.id;
+        let read: codex_app_server_protocol::ThreadReadResponse = client
+            .request_typed(ClientRequest::ThreadRead {
+                request_id: RequestId::Integer(4),
+                params: codex_app_server_protocol::ThreadReadParams {
+                    thread_id: thread_id.clone(),
+                    include_turns: false,
+                },
+            })
+            .await
+            .expect("thread/read should succeed");
+        assert_eq!(read.thread.id, thread_id);
 
         client.shutdown().await.expect("shutdown should complete");
     }
@@ -829,22 +831,6 @@ mod tests {
         let (command_tx, _command_rx) = mpsc::channel(1);
         let (event_tx, event_rx) = mpsc::channel(1);
         let worker_handle = tokio::spawn(async {});
-        let config = build_test_config().await;
-        let auth_manager = AuthManager::shared(
-            config.codex_home.clone(),
-            false,
-            config.cli_auth_credentials_store_mode,
-        );
-        let thread_manager = Arc::new(ThreadManager::new(
-            &config,
-            auth_manager.clone(),
-            SessionSource::Exec,
-            CollaborationModesConfig {
-                default_mode_request_user_input: config
-                    .features
-                    .enabled(codex_core::features::Feature::DefaultModeRequestUserInput),
-            },
-        ));
         event_tx
             .send(InProcessServerEvent::Lagged { skipped: 3 })
             .await
@@ -855,8 +841,6 @@ mod tests {
             command_tx,
             event_rx,
             worker_handle,
-            auth_manager,
-            thread_manager,
         };
 
         let event = timeout(Duration::from_secs(2), client.next_event())
@@ -901,17 +885,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accessors_expose_retained_shared_managers() {
-        let client = start_test_client(SessionSource::Cli).await;
+    async fn next_typed_event_skips_legacy_notifications() {
+        let (command_tx, _command_rx) = mpsc::channel(1);
+        let (event_tx, event_rx) = mpsc::channel(2);
+        let worker_handle = tokio::spawn(async {});
+        event_tx
+            .send(InProcessServerEvent::LegacyNotification(
+                codex_app_server_protocol::JSONRPCNotification {
+                    method: "codex/event/task_complete".to_string(),
+                    params: None,
+                },
+            ))
+            .await
+            .expect("legacy notification should enqueue");
+        event_tx
+            .send(InProcessServerEvent::Lagged { skipped: 2 })
+            .await
+            .expect("lagged marker should enqueue");
+        drop(event_tx);
 
-        assert!(
-            Arc::ptr_eq(&client.auth_manager(), &client.auth_manager()),
-            "auth_manager accessor should clone the retained shared manager"
-        );
-        assert!(
-            Arc::ptr_eq(&client.thread_manager(), &client.thread_manager()),
-            "thread_manager accessor should clone the retained shared manager"
-        );
+        let mut client = InProcessAppServerClient {
+            command_tx,
+            event_rx,
+            worker_handle,
+        };
+
+        let event = timeout(Duration::from_secs(2), client.next_typed_event())
+            .await
+            .expect("typed event should arrive before timeout");
+        assert!(matches!(
+            event,
+            Some(InProcessServerEvent::Lagged { skipped: 2 })
+        ));
 
         client.shutdown().await.expect("shutdown should complete");
     }

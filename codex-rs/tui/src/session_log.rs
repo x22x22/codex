@@ -125,9 +125,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
     }
 
     match event {
-        AppEvent::CodexEvent(ev) => {
-            write_record("to_tui", "codex_event", ev);
-        }
+        AppEvent::PushApprovalRequest(_) => {}
         AppEvent::NewSession => {
             let value = json!({
                 "ts": now_ts(),

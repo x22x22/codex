@@ -12,6 +12,8 @@ use crate::bottom_pane::SkillsToggleView;
 use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::skills_helpers::skill_description;
 use crate::skills_helpers::skill_display_name;
+use codex_app_server_protocol::SkillMetadata as AppServerSkillMetadata;
+use codex_app_server_protocol::SkillsListEntry;
 use codex_chatgpt::connectors::AppInfo;
 use codex_core::connectors::connector_mention_slug;
 use codex_core::mention_syntax::TOOL_MENTION_SIGIL;
@@ -19,9 +21,7 @@ use codex_core::skills::model::SkillDependencies;
 use codex_core::skills::model::SkillInterface;
 use codex_core::skills::model::SkillMetadata;
 use codex_core::skills::model::SkillToolDependency;
-use codex_protocol::protocol::ListSkillsResponseEvent;
-use codex_protocol::protocol::SkillMetadata as ProtocolSkillMetadata;
-use codex_protocol::protocol::SkillsListEntry;
+use codex_protocol::protocol::SkillScope as ProtocolSkillScope;
 
 impl ChatWidget {
     pub(crate) fn open_skills_list(&mut self) {
@@ -75,7 +75,7 @@ impl ChatWidget {
             .skills_all
             .iter()
             .map(|skill| {
-                let core_skill = protocol_skill_to_core(skill);
+                let core_skill = app_server_skill_to_core(skill);
                 let display_name = skill_display_name(&core_skill).to_string();
                 let description = skill_description(&core_skill).to_string();
                 let name = core_skill.name.clone();
@@ -137,14 +137,14 @@ impl ChatWidget {
         );
     }
 
-    pub(crate) fn set_skills_from_response(&mut self, response: &ListSkillsResponseEvent) {
-        let skills = skills_for_cwd(&self.config.cwd, &response.skills);
+    pub(crate) fn set_skills_from_entries(&mut self, entries: &[SkillsListEntry]) {
+        let skills = skills_for_cwd(&self.config.cwd, entries);
         self.skills_all = skills;
         self.set_skills(Some(enabled_skills_for_mentions(&self.skills_all)));
     }
 }
 
-fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<ProtocolSkillMetadata> {
+fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<AppServerSkillMetadata> {
     skills_entries
         .iter()
         .find(|entry| entry.cwd.as_path() == cwd)
@@ -152,15 +152,15 @@ fn skills_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<Protoco
         .unwrap_or_default()
 }
 
-fn enabled_skills_for_mentions(skills: &[ProtocolSkillMetadata]) -> Vec<SkillMetadata> {
+fn enabled_skills_for_mentions(skills: &[AppServerSkillMetadata]) -> Vec<SkillMetadata> {
     skills
         .iter()
         .filter(|skill| skill.enabled)
-        .map(protocol_skill_to_core)
+        .map(app_server_skill_to_core)
         .collect()
 }
 
-fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
+fn app_server_skill_to_core(skill: &AppServerSkillMetadata) -> SkillMetadata {
     SkillMetadata {
         name: skill.name.clone(),
         description: skill.description.clone(),
@@ -194,7 +194,16 @@ fn protocol_skill_to_core(skill: &ProtocolSkillMetadata) -> SkillMetadata {
         permission_profile: None,
         managed_network_override: None,
         path_to_skills_md: skill.path.clone(),
-        scope: skill.scope,
+        scope: protocol_skill_scope(skill.scope),
+    }
+}
+
+fn protocol_skill_scope(scope: codex_app_server_protocol::SkillScope) -> ProtocolSkillScope {
+    match scope {
+        codex_app_server_protocol::SkillScope::User => ProtocolSkillScope::User,
+        codex_app_server_protocol::SkillScope::Repo => ProtocolSkillScope::Repo,
+        codex_app_server_protocol::SkillScope::System => ProtocolSkillScope::System,
+        codex_app_server_protocol::SkillScope::Admin => ProtocolSkillScope::Admin,
     }
 }
 

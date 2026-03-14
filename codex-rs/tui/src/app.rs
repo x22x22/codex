@@ -46,6 +46,8 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::SkillErrorInfo;
+use codex_app_server_protocol::SkillsListEntry;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -71,15 +73,11 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
-use codex_protocol::protocol::Event;
-use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
-use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
-use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
@@ -88,6 +86,11 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::style::Stylize;
+
+#[cfg(test)]
+use codex_protocol::protocol::Event;
+#[cfg(test)]
+use codex_protocol::protocol::EventMsg;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
@@ -201,9 +204,8 @@ fn session_summary(
     })
 }
 
-fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillErrorInfo> {
-    response
-        .skills
+fn errors_for_cwd(cwd: &Path, skills_entries: &[SkillsListEntry]) -> Vec<SkillErrorInfo> {
+    skills_entries
         .iter()
         .find(|entry| entry.cwd.as_path() == cwd)
         .map(|entry| entry.errors.clone())
@@ -2274,7 +2276,7 @@ impl App {
                             Err(err) => break Err(err),
                         }
                     }
-                    app_server_event = app_server.next_event(), if listen_for_app_server_events => {
+                    app_server_event = app_server.next_typed_event(), if listen_for_app_server_events => {
                         match app_server_event {
                             Some(event) => app.handle_app_server_event(&app_server, event).await,
                             None => {
@@ -2626,8 +2628,8 @@ impl App {
             AppEvent::CommitTick => {
                 self.chat_widget.on_commit_tick();
             }
-            AppEvent::CodexEvent(event) => {
-                self.handle_codex_event_now(event);
+            AppEvent::PushApprovalRequest(request) => {
+                self.chat_widget.push_approval_request(request);
             }
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(app_server, mode).await);
@@ -3810,6 +3812,15 @@ impl App {
         }
     }
 
+    fn handle_skills_list_response_now(&mut self, skills_entries: Vec<SkillsListEntry>) {
+        let cwd = self.chat_widget.config_ref().cwd.clone();
+        let errors = errors_for_cwd(&cwd, &skills_entries);
+        emit_skill_load_warnings(&self.app_event_tx, &errors);
+        self.chat_widget
+            .handle_skills_list_response(&skills_entries);
+    }
+
+    #[cfg(test)]
     fn handle_codex_event_now(&mut self, event: Event) {
         let needs_refresh = matches!(
             event.msg,
@@ -3821,11 +3832,6 @@ impl App {
         if self.suppress_shutdown_complete && matches!(event.msg, EventMsg::ShutdownComplete) {
             self.suppress_shutdown_complete = false;
             return;
-        }
-        if let EventMsg::ListSkillsResponse(response) = &event.msg {
-            let cwd = self.chat_widget.config_ref().cwd.clone();
-            let errors = errors_for_cwd(&cwd, response);
-            emit_skill_load_warnings(&self.app_event_tx, &errors);
         }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
@@ -3846,7 +3852,7 @@ impl App {
             return;
         }
         if let ThreadUpdate::ThreadRolledBack { num_turns } = update {
-            self.handle_backtrack_event(&EventMsg::ThreadRolledBack(
+            self.handle_backtrack_event(&codex_protocol::protocol::EventMsg::ThreadRolledBack(
                 codex_protocol::protocol::ThreadRolledBackEvent { num_turns },
             ));
             self.chat_widget

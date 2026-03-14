@@ -448,7 +448,7 @@ pub(crate) async fn run_onboarding_app(
                         &mut onboarding_screen,
                     ).await;
                 }
-                app_server_event = app_server.next_event() => {
+                app_server_event = app_server.next_typed_event() => {
                     if let Some(event) = app_server_event {
                         handle_app_server_event(
                             event,
@@ -595,9 +595,9 @@ async fn handle_app_server_event(
                 auth_widget.apply_login_completed(payload);
             }
         }
-        InProcessServerEvent::LegacyNotification(_)
-        | InProcessServerEvent::ServerNotification(_)
+        InProcessServerEvent::ServerNotification(_)
         | InProcessServerEvent::ServerRequest(_)
         | InProcessServerEvent::Lagged { .. } => {}
+        _ => {}
     }
 }
