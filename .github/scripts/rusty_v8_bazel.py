@@ -38,6 +38,8 @@ VALIDATE_BUNDLE_SUPPORT_LABELS = {
     "libcxxabi_headers_dir": "@llvm//runtimes/libcxx:libcxxabi_headers_include_search_directory",
     "musl_headers_dir": "@llvm//runtimes/musl:musl_headers_include_search_directory",
 }
+COMPILER_RT_BUILTINS_LABEL = "@llvm//runtimes/compiler-rt:clang_rt.builtins.static"
+COMPILER_RT_BUILTINS_FILENAME = "libclang_rt.builtins.static.a"
 V8_CACHE_KEY_INPUT_PATTERNS = [
     ".bazelrc",
     ".bazelversion",
@@ -176,6 +178,17 @@ def static_runtime_libs(platform: str) -> tuple[Path, Path, Path]:
     )
 
 
+def compiler_rt_builtins(platform: str) -> Path:
+    return first_existing_path(
+        [
+            path
+            for path in bazel_output_files(platform, [COMPILER_RT_BUILTINS_LABEL])
+            if path.name == COMPILER_RT_BUILTINS_FILENAME
+        ],
+        "compiler-rt builtins static archive",
+    )
+
+
 def validate_bundle_support_paths(platform: str) -> dict[str, Path]:
     return {
         key: bazel_output_path(platform, label, f"{key} output")
@@ -193,21 +206,30 @@ def cargo_runtime_rustflags_from_libs(
     libcxx_static: Path,
     libcxxabi_static: Path,
     libunwind_static: Path,
+    compiler_rt_builtins_static: Path | None = None,
 ) -> str:
-    return " ".join(
+    flags = [
+        f"-C link-arg={libcxx_static}",
+        f"-C link-arg={libcxxabi_static}",
+        f"-C link-arg={libunwind_static}",
+    ]
+    if compiler_rt_builtins_static is not None:
+        flags.append(f"-C link-arg={compiler_rt_builtins_static}")
+    flags.extend(
         [
-            f"-C link-arg={libcxx_static}",
-            f"-C link-arg={libcxxabi_static}",
-            f"-C link-arg={libunwind_static}",
             "-C link-arg=-lc",
             "-C link-arg=-lpthread",
             "-C link-arg=-ldl",
         ]
     )
+    return " ".join(flags)
 
 
 def cargo_runtime_rustflags(platform: str) -> str:
-    return cargo_runtime_rustflags_from_libs(*static_runtime_libs(platform))
+    return cargo_runtime_rustflags_from_libs(
+        *static_runtime_libs(platform),
+        compiler_rt_builtins(platform),
+    )
 
 
 def cargo_target_rustflags_env_var(target: str) -> str:
@@ -251,10 +273,22 @@ def staged_runtime_libs(output_dir: Path) -> tuple[Path, Path, Path]:
     )
 
 
+def staged_compiler_rt_builtins(output_dir: Path) -> Path:
+    runtime_dir = runtime_output_dir(output_dir)
+    return first_existing_path(
+        [runtime_dir / COMPILER_RT_BUILTINS_FILENAME],
+        "staged compiler-rt builtins static archive",
+    )
+
+
 def print_cargo_env(platform: str, target: str, output_dir: Path) -> None:
     archive, binding = staged_cargo_inputs(output_dir, target)
     target_rustflags_var = cargo_target_rustflags_env_var(target)
-    cargo_rustflags = cargo_runtime_rustflags_from_libs(*staged_runtime_libs(output_dir))
+    runtime_libs = tuple(path.resolve() for path in staged_runtime_libs(output_dir))
+    cargo_rustflags = cargo_runtime_rustflags_from_libs(
+        *runtime_libs,
+        staged_compiler_rt_builtins(output_dir).resolve(),
+    )
 
     print(f"export RUSTY_V8_ARCHIVE={shlex.quote(str(archive.resolve()))}")
     print(f"export RUSTY_V8_SRC_BINDING_PATH={shlex.quote(str(binding.resolve()))}")
@@ -460,7 +494,10 @@ def validate_cargo_bundle(platform: str, target: str, bundle_path: Path) -> None
         env = os.environ.copy()
         env["RUSTY_V8_ARCHIVE"] = str(bundle_root / "lib/librusty_v8.a")
         env["RUSTY_V8_SRC_BINDING_PATH"] = str(bundle_root / "src_binding_release.rs")
-        bundle_runtime_rustflags = cargo_runtime_rustflags_from_libs(*staged_runtime_libs(bundle_root))
+        bundle_runtime_rustflags = cargo_runtime_rustflags_from_libs(
+            *staged_runtime_libs(bundle_root),
+            staged_compiler_rt_builtins(bundle_root),
+        )
         env[target_rustflags_var] = append_flag_string(
             env.get(target_rustflags_var),
             bundle_runtime_rustflags,
@@ -513,6 +550,10 @@ def stage_release_assets(platform: str, target: str, output_dir: Path) -> None:
         staged_runtime_path = runtime_dir / runtime_lib.name
         shutil.copyfile(runtime_lib, staged_runtime_path)
         staged_runtime_paths.append(staged_runtime_path)
+    builtins_path = compiler_rt_builtins(platform)
+    staged_builtins_path = runtime_dir / builtins_path.name
+    shutil.copyfile(builtins_path, staged_builtins_path)
+    staged_runtime_paths.append(staged_builtins_path)
     write_bundle_archive(
         output_path=output_dir / bundle_name,
         target=target,
