@@ -10,6 +10,7 @@ on:
       - ".github/scripts/rusty_v8_bazel.py"
       - "MODULE.bazel"
       - "MODULE.bazel.lock"
+      - "codex-rs/v8-poc/**"
       - "patches/**"
       - "third_party/v8/**"
       - "**/*.bzl"
@@ -26,6 +27,7 @@ on:
       - ".github/scripts/rusty_v8_bazel.py"
       - "MODULE.bazel"
       - "MODULE.bazel.lock"
+      - "codex-rs/v8-poc/**"
       - "patches/**"
       - "third_party/v8/**"
       - "**/*.bzl"
@@ -172,6 +174,25 @@ jobs:
         with:
           path: dist/${{ matrix.target }}
           key: ${{ steps.cache_key.outputs.key }}
+
+      - name: Build codex-v8-poc against staged bundle
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          eval "$(python3 .github/scripts/rusty_v8_bazel.py print-cargo-env \
+            --platform "${PLATFORM}" \
+            --target "${TARGET}" \
+            --output-dir "dist/${TARGET}")"
+
+          cargo test \
+            --manifest-path codex-rs/v8-poc/Cargo.toml \
+            --locked \
+            --lib \
+            --target "${TARGET}"
 
       - name: Upload staged artifacts
         uses: actions/upload-artifact@v7
