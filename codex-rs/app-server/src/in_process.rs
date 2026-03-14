@@ -94,6 +94,22 @@ pub const DEFAULT_IN_PROCESS_CHANNEL_CAPACITY: usize = CHANNEL_CAPACITY;
 
 type PendingClientRequestResponse = std::result::Result<Result, JSONRPCErrorError>;
 
+/// Handle for a request that has been enqueued but whose response has not yet been awaited.
+pub struct PendingInProcessRequest {
+    response_rx: oneshot::Receiver<PendingClientRequestResponse>,
+}
+
+impl PendingInProcessRequest {
+    pub async fn recv(self) -> IoResult<PendingClientRequestResponse> {
+        self.response_rx.await.map_err(|err| {
+            IoError::new(
+                ErrorKind::BrokenPipe,
+                format!("in-process request response channel closed: {err}"),
+            )
+        })
+    }
+}
+
 fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
     matches!(notification, ServerNotification::TurnCompleted(_))
 }
@@ -200,18 +216,17 @@ pub struct InProcessClientSender {
 }
 
 impl InProcessClientSender {
-    pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
+    pub fn start_request(&self, request: ClientRequest) -> IoResult<PendingInProcessRequest> {
         let (response_tx, response_rx) = oneshot::channel();
         self.try_send_client_message(InProcessClientMessage::Request {
             request: Box::new(request),
             response_tx,
         })?;
-        response_rx.await.map_err(|err| {
-            IoError::new(
-                ErrorKind::BrokenPipe,
-                format!("in-process request response channel closed: {err}"),
-            )
-        })
+        Ok(PendingInProcessRequest { response_rx })
+    }
+
+    pub async fn request(&self, request: ClientRequest) -> IoResult<PendingClientRequestResponse> {
+        self.start_request(request)?.recv().await
     }
 
     pub fn notify(&self, notification: ClientNotification) -> IoResult<()> {
@@ -263,6 +278,11 @@ pub struct InProcessClientHandle {
 }
 
 impl InProcessClientHandle {
+    /// Enqueues a typed client request and returns a handle for awaiting the response later.
+    pub fn start_request(&self, request: ClientRequest) -> IoResult<PendingInProcessRequest> {
+        self.client.start_request(request)
+    }
+
     /// Sends a typed client request into the in-process runtime.
     ///
     /// The returned value is a transport-level `IoResult` containing either a

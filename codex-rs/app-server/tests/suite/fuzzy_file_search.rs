@@ -3,6 +3,7 @@ use anyhow::anyhow;
 use codex_app_server::in_process::InProcessClientHandle;
 use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
+use codex_app_server::in_process::PendingInProcessRequest;
 use codex_app_server::in_process::start as start_in_process;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
@@ -32,11 +33,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
-use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
-type RawRequestResult = std::result::Result<serde_json::Value, JSONRPCErrorError>;
-type PendingRequest = JoinHandle<std::io::Result<RawRequestResult>>;
+type PendingRequest = PendingInProcessRequest;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const SHORT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
@@ -244,10 +243,7 @@ impl McpProcess {
         request_id: RequestId,
     ) -> Result<JSONRPCResponse> {
         let pending = self.take_pending_request(&request_id)?;
-        match pending
-            .await
-            .map_err(|err| anyhow!("request task failed for {request_id:?}: {err}"))??
-        {
+        match pending.recv().await? {
             Ok(result) => Ok(JSONRPCResponse {
                 id: request_id,
                 result,
@@ -263,10 +259,7 @@ impl McpProcess {
         request_id: RequestId,
     ) -> Result<JSONRPCError> {
         let pending = self.take_pending_request(&request_id)?;
-        match pending
-            .await
-            .map_err(|err| anyhow!("request task failed for {request_id:?}: {err}"))??
-        {
+        match pending.recv().await? {
             Ok(result) => {
                 anyhow::bail!("expected error for {request_id:?}, got response: {result:?}")
             }
@@ -321,12 +314,10 @@ impl McpProcess {
             .as_ref()
             .ok_or_else(|| anyhow!("MCP client not initialized"))?
             .sender();
+        let pending_request = sender.start_request(request)?;
         if self
             .pending_requests
-            .insert(
-                request_id,
-                tokio::spawn(async move { sender.request(request).await }),
-            )
+            .insert(request_id, pending_request)
             .is_some()
         {
             anyhow::bail!("duplicate pending request id: {request_id}");
@@ -352,9 +343,7 @@ impl McpProcess {
 
 impl Drop for McpProcess {
     fn drop(&mut self) {
-        for (_, pending_request) in self.pending_requests.drain() {
-            pending_request.abort();
-        }
+        self.pending_requests.clear();
         if let Some(client) = self.client.take()
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
         {
