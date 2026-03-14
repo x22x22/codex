@@ -2,8 +2,10 @@ use super::*;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
+#[cfg(test)]
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
+#[cfg(test)]
 use codex_protocol::protocol::RealtimeEvent;
 
 const REALTIME_CONVERSATION_PROMPT: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
@@ -113,10 +115,26 @@ impl ChatWidget {
         }
     }
 
-    pub(super) fn pending_steer_compare_key_from_item(
-        item: &codex_protocol::items::UserMessageItem,
+    pub(super) fn pending_steer_compare_key_from_api_inputs(
+        items: &[codex_app_server_protocol::UserInput],
     ) -> PendingSteerCompareKey {
-        Self::pending_steer_compare_key_from_items(&item.content)
+        let mut message = String::new();
+        let mut image_count = 0;
+
+        for item in items {
+            match item {
+                codex_app_server_protocol::UserInput::Text { text, .. } => message.push_str(text),
+                codex_app_server_protocol::UserInput::Image { .. }
+                | codex_app_server_protocol::UserInput::LocalImage { .. } => image_count += 1,
+                codex_app_server_protocol::UserInput::Skill { .. }
+                | codex_app_server_protocol::UserInput::Mention { .. } => {}
+            }
+        }
+
+        PendingSteerCompareKey {
+            message,
+            image_count,
+        }
     }
 
     #[cfg(test)]
@@ -256,6 +274,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     pub(super) fn on_realtime_conversation_realtime(
         &mut self,
         ev: RealtimeConversationRealtimeEvent,
@@ -287,7 +306,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn enqueue_realtime_audio_out(&mut self, frame: &RealtimeAudioFrame) {
+    pub(super) fn enqueue_realtime_audio_out(&mut self, frame: &RealtimeAudioFrame) {
         #[cfg(not(target_os = "linux"))]
         {
             if self.realtime_conversation.audio_player.is_none() {

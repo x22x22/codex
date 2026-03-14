@@ -576,6 +576,15 @@ impl InProcessAppServerClient {
         })?
     }
 
+    /// Reloads managed auth state from disk for the embedded runtime.
+    ///
+    /// This keeps embedders off direct `AuthManager` access while still
+    /// allowing onboarding flows to observe auth changes performed outside the
+    /// app-server request path.
+    pub fn reload_auth_from_storage(&self) -> bool {
+        self.shared_core.auth_manager.reload()
+    }
+
     /// Returns the next in-process event, or `None` when worker exits.
     ///
     /// Callers are expected to drain this stream promptly. If they fall behind,

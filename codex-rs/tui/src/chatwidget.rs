@@ -110,6 +110,7 @@ use codex_protocol::protocol::AgentReasoningRawContentEvent;
 use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 #[cfg(test)]
 use codex_protocol::protocol::BackgroundEventEvent;
+#[cfg(test)]
 use codex_protocol::protocol::CodexErrorInfo;
 #[cfg(test)]
 use codex_protocol::protocol::CollabAgentSpawnBeginEvent;
@@ -129,8 +130,10 @@ use codex_protocol::protocol::ImageGenerationBeginEvent;
 use codex_protocol::protocol::ImageGenerationEndEvent;
 use codex_protocol::protocol::ListCustomPromptsResponseEvent;
 use codex_protocol::protocol::McpListToolsResponseEvent;
+#[cfg(test)]
 use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupStatus;
+#[cfg(test)]
 use codex_protocol::protocol::McpStartupUpdateEvent;
 use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::McpToolCallEndEvent;
@@ -149,7 +152,9 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnCompleteEvent;
 #[cfg(test)]
 use codex_protocol::protocol::TurnDiffEvent;
+#[cfg(test)]
 use codex_protocol::protocol::UndoCompletedEvent;
+#[cfg(test)]
 use codex_protocol::protocol::UndoStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
 use codex_protocol::protocol::ViewImageToolCallEvent;
@@ -277,6 +282,7 @@ use crate::history_cell::WebSearchCell;
 use crate::key_hint;
 use crate::key_hint::KeyBinding;
 use crate::markdown::append_markdown;
+#[cfg(test)]
 use crate::multi_agents;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
@@ -522,6 +528,7 @@ enum ConnectorsCacheState {
     Failed(String),
 }
 
+#[cfg(test)]
 #[derive(Debug)]
 enum RateLimitErrorKind {
     ServerOverloaded,
@@ -529,6 +536,7 @@ enum RateLimitErrorKind {
     Generic,
 }
 
+#[cfg(test)]
 fn rate_limit_error_kind(info: &CodexErrorInfo) -> Option<RateLimitErrorKind> {
     match info {
         CodexErrorInfo::ServerOverloaded => Some(RateLimitErrorKind::ServerOverloaded),
@@ -691,6 +699,7 @@ pub(crate) struct ChatWidget {
     // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
     last_copyable_output: Option<String>,
     running_commands: HashMap<String, RunningCommand>,
+    #[cfg(test)]
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
     suppressed_exec_calls: HashSet<String>,
     skills_all: Vec<AppServerSkillMetadata>,
@@ -1087,6 +1096,7 @@ fn merge_user_messages(messages: Vec<UserMessage>) -> UserMessage {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ReplayKind {
+    #[cfg(test)]
     ResumeInitialMessages,
     ThreadSnapshot,
 }
@@ -2111,6 +2121,7 @@ impl ChatWidget {
         self.maybe_show_pending_rate_limit_prompt();
     }
 
+    #[cfg(test)]
     fn on_server_overloaded_error(&mut self, message: String) {
         self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
@@ -2141,6 +2152,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_mcp_startup_update(&mut self, ev: McpStartupUpdateEvent) {
         let mut status = self.mcp_startup_status.take().unwrap_or_default();
         if let McpStartupStatus::Failed { error } = &ev.status {
@@ -2187,6 +2199,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_mcp_startup_complete(&mut self, ev: McpStartupCompleteEvent) {
         let mut parts = Vec::new();
         if !ev.failed.is_empty() {
@@ -2934,6 +2947,7 @@ impl ChatWidget {
         self.had_work_activity = true;
     }
 
+    #[cfg(test)]
     fn on_collab_event(&mut self, cell: PlainHistoryCell) {
         self.flush_answer_stream_with_separator();
         self.add_to_history(cell);
@@ -2960,10 +2974,6 @@ impl ChatWidget {
         self.on_get_history_entry_response(event);
     }
 
-    fn on_shutdown_complete(&mut self) {
-        self.request_immediate_exit();
-    }
-
     fn on_turn_diff(&mut self, unified_diff: String) {
         debug!("TurnDiffEvent: {unified_diff}");
         self.refresh_status_line();
@@ -2975,6 +2985,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
         self.bottom_pane.ensure_status_indicator();
@@ -3013,6 +3024,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    #[cfg(test)]
     fn on_undo_started(&mut self, event: UndoStartedEvent) {
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.set_interrupt_hint_visible(false);
@@ -3022,6 +3034,7 @@ impl ChatWidget {
         self.set_status_header(message);
     }
 
+    #[cfg(test)]
     fn on_undo_completed(&mut self, event: UndoCompletedEvent) {
         let UndoCompletedEvent { success, message } = event;
         self.bottom_pane.hide_status_indicator();
@@ -3655,6 +3668,7 @@ impl ChatWidget {
             plan_stream_controller: None,
             last_copyable_output: None,
             running_commands: HashMap::new(),
+            #[cfg(test)]
             pending_collab_spawn_requests: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
             last_unified_wait: None,
@@ -4878,8 +4892,11 @@ impl ChatWidget {
 
     fn dispatch_thread_update(&mut self, update: ThreadUpdate, replay_kind: Option<ReplayKind>) {
         let from_replay = replay_kind.is_some();
+        #[cfg(test)]
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
+        #[cfg(not(test))]
+        let is_resume_initial_replay = false;
         if !is_resume_initial_replay {
             self.restore_retry_status_header_if_present();
         }
@@ -5041,7 +5058,9 @@ impl ChatWidget {
                 }
             }
             ThreadUpdate::ThreadRealtimeItemAdded(_) => {}
-            ThreadUpdate::ThreadRealtimeOutputAudioDelta(_) => {}
+            ThreadUpdate::ThreadRealtimeOutputAudioDelta(event) => {
+                self.enqueue_realtime_audio_out(&event.audio.into());
+            }
             ThreadUpdate::ThreadRealtimeError(event) => {
                 if !from_replay {
                     self.on_stream_error(event.message, None);
@@ -5145,9 +5164,10 @@ impl ChatWidget {
     ) {
         match item {
             codex_app_server_protocol::ThreadItem::UserMessage { content, .. } => {
+                let compare_key = Self::pending_steer_compare_key_from_api_inputs(&content);
                 let event = user_message_event_from_api(content);
                 if from_replay || self.should_render_realtime_user_message_event(&event) {
-                    self.on_user_message_event(event);
+                    self.on_committed_user_message_event(event, compare_key, from_replay);
                 }
             }
             codex_app_server_protocol::ThreadItem::AgentMessage { id, text, phase } => {
@@ -5311,8 +5331,11 @@ impl ChatWidget {
         replay_kind: Option<ReplayKind>,
     ) {
         let from_replay = replay_kind.is_some();
+        #[cfg(test)]
         let is_resume_initial_replay =
             matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
+        #[cfg(not(test))]
+        let is_resume_initial_replay = false;
         let is_stream_error = matches!(&msg, EventMsg::StreamError(_));
         if !is_resume_initial_replay && !is_stream_error {
             self.restore_retry_status_header_if_present();
@@ -5450,7 +5473,7 @@ impl ChatWidget {
                     force_reload: true,
                 });
             }
-            EventMsg::ShutdownComplete => self.on_shutdown_complete(),
+            EventMsg::ShutdownComplete => {}
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::DeprecationNotice(ev) => self.on_deprecation_notice(ev),
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
@@ -5548,37 +5571,11 @@ impl ChatWidget {
                     let EventMsg::UserMessage(event) = item.as_legacy_event() else {
                         unreachable!("user message item should convert to a legacy user message");
                     };
-                    let rendered = Self::rendered_user_message_event_from_event(&event);
-                    let compare_key = Self::pending_steer_compare_key_from_item(item);
-                    if self
-                        .pending_steers
-                        .front()
-                        .is_some_and(|pending| pending.compare_key == compare_key)
-                    {
-                        if let Some(pending) = self.pending_steers.pop_front() {
-                            self.refresh_pending_input_preview();
-                            let pending_event = UserMessageEvent {
-                                message: pending.user_message.text,
-                                images: Some(pending.user_message.remote_image_urls),
-                                local_images: pending
-                                    .user_message
-                                    .local_images
-                                    .into_iter()
-                                    .map(|image| image.path)
-                                    .collect(),
-                                text_elements: pending.user_message.text_elements,
-                            };
-                            self.on_user_message_event(pending_event);
-                        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered)
-                        {
-                            tracing::warn!(
-                                "pending steer matched compare key but queue was empty when rendering committed user message"
-                            );
-                            self.on_user_message_event(event);
-                        }
-                    } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
-                        self.on_user_message_event(event);
-                    }
+                    self.on_committed_user_message_event(
+                        event,
+                        Self::pending_steer_compare_key_from_items(&item.content),
+                        false,
+                    );
                 }
                 if let codex_protocol::items::TurnItem::Plan(plan_item) = &item {
                     self.on_plan_item_completed(plan_item.text.clone());
@@ -5652,6 +5649,48 @@ impl ChatWidget {
         self.request_redraw();
     }
 
+    fn on_committed_user_message_event(
+        &mut self,
+        event: UserMessageEvent,
+        compare_key: PendingSteerCompareKey,
+        from_replay: bool,
+    ) {
+        if from_replay {
+            self.on_user_message_event(event);
+            return;
+        }
+
+        let rendered = Self::rendered_user_message_event_from_event(&event);
+        if self
+            .pending_steers
+            .front()
+            .is_some_and(|pending| pending.compare_key == compare_key)
+        {
+            if let Some(pending) = self.pending_steers.pop_front() {
+                self.refresh_pending_input_preview();
+                let pending_event = UserMessageEvent {
+                    message: pending.user_message.text,
+                    images: Some(pending.user_message.remote_image_urls),
+                    local_images: pending
+                        .user_message
+                        .local_images
+                        .into_iter()
+                        .map(|image| image.path)
+                        .collect(),
+                    text_elements: pending.user_message.text_elements,
+                };
+                self.on_user_message_event(pending_event);
+            } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
+                tracing::warn!(
+                    "pending steer matched compare key but queue was empty when rendering committed user message"
+                );
+                self.on_user_message_event(event);
+            }
+        } else if self.last_rendered_user_message_event.as_ref() != Some(&rendered) {
+            self.on_user_message_event(event);
+        }
+    }
+
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
         self.last_rendered_user_message_event =
             Some(Self::rendered_user_message_event_from_event(&event));
@@ -5670,14 +5709,6 @@ impl ChatWidget {
 
         // User messages reset separator state so the next agent response doesn't add a stray break.
         self.needs_final_message_separator = false;
-    }
-
-    /// Exit the UI immediately without waiting for shutdown.
-    ///
-    /// Prefer [`Self::request_quit_without_confirmation`] for user-initiated exits;
-    /// this is mainly a fallback for shutdown completion or emergency exits.
-    fn request_immediate_exit(&self) {
-        self.app_event_tx.send(AppEvent::Exit(ExitMode::Immediate));
     }
 
     /// Request a shutdown-first quit.

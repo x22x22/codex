@@ -114,7 +114,10 @@ impl OnboardingScreen {
                 highlighted_mode,
                 error: None,
                 sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
+                codex_home: config.codex_home.clone(),
+                cli_auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
                 login_status,
+                forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
                 forced_login_method,
                 animations_enabled: config.animations,
             }))
@@ -566,6 +569,24 @@ async fn handle_auth_command(
         AuthCommand::CancelChatgpt { login_id } => {
             if let Err(err) = account_api.cancel_chatgpt_login(app_server, login_id).await {
                 tracing::warn!("failed to cancel onboarding login: {err}");
+            }
+        }
+        AuthCommand::ReloadManagedChatgptAuth => {
+            app_server.reload_auth_from_storage();
+            match account_api.read_account(app_server).await {
+                Ok(response) => {
+                    if let Some(auth_widget) = onboarding_screen.auth_widget_mut() {
+                        auth_widget.apply_account(response.account.as_ref());
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!("failed to refresh managed auth after device code login: {err}")
+                }
+            }
+        }
+        AuthCommand::DeviceCodeFailed { message } => {
+            if let Some(auth_widget) = onboarding_screen.auth_widget_mut() {
+                auth_widget.show_device_code_login_error(message);
             }
         }
     }

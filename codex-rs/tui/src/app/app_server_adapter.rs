@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 use super::App;
@@ -85,6 +86,8 @@ use codex_protocol::protocol::WarningEvent;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use tokio::fs;
+use tokio::io::AsyncReadExt;
 
 use crate::thread_update::ThreadUpdate;
 
@@ -227,7 +230,12 @@ impl App {
             "thread/start",
         )
         .await?;
-        session_configured_from_thread_start_response(&response)
+        let (history_log_id, history_entry_count) = history_metadata(config).await;
+        session_configured_from_thread_start_response(
+            &response,
+            history_log_id,
+            history_entry_count,
+        )
     }
 
     pub(super) async fn thread_resume_via_app_server(
@@ -245,7 +253,12 @@ impl App {
             "thread/resume",
         )
         .await?;
-        session_configured_from_thread_resume_response(&response)
+        let (history_log_id, history_entry_count) = history_metadata(config).await;
+        session_configured_from_thread_resume_response(
+            &response,
+            history_log_id,
+            history_entry_count,
+        )
     }
 
     pub(super) async fn thread_fork_via_app_server(
@@ -263,7 +276,8 @@ impl App {
             "thread/fork",
         )
         .await?;
-        session_configured_from_thread_fork_response(&response)
+        let (history_log_id, history_entry_count) = history_metadata(config).await;
+        session_configured_from_thread_fork_response(&response, history_log_id, history_entry_count)
     }
 
     pub(super) async fn unsubscribe_thread_via_app_server(
@@ -1240,6 +1254,8 @@ fn sandbox_mode_from_policy(sandbox_policy: &SandboxPolicy) -> Option<SandboxMod
 
 fn session_configured_from_thread_start_response(
     response: &ThreadStartResponse,
+    history_log_id: u64,
+    history_entry_count: usize,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
         &response.thread.id,
@@ -1253,11 +1269,15 @@ fn session_configured_from_thread_start_response(
         response.sandbox.to_core(),
         response.cwd.clone(),
         response.reasoning_effort,
+        history_log_id,
+        history_entry_count,
     )
 }
 
 fn session_configured_from_thread_resume_response(
     response: &ThreadResumeResponse,
+    history_log_id: u64,
+    history_entry_count: usize,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
         &response.thread.id,
@@ -1271,11 +1291,15 @@ fn session_configured_from_thread_resume_response(
         response.sandbox.to_core(),
         response.cwd.clone(),
         response.reasoning_effort,
+        history_log_id,
+        history_entry_count,
     )
 }
 
 fn session_configured_from_thread_fork_response(
     response: &ThreadForkResponse,
+    history_log_id: u64,
+    history_entry_count: usize,
 ) -> Result<SessionConfiguredEvent, String> {
     session_configured_from_thread_response(
         &response.thread.id,
@@ -1289,6 +1313,8 @@ fn session_configured_from_thread_fork_response(
         response.sandbox.to_core(),
         response.cwd.clone(),
         response.reasoning_effort,
+        history_log_id,
+        history_entry_count,
     )
 }
 
@@ -1308,6 +1334,8 @@ fn session_configured_from_thread_response(
     sandbox_policy: SandboxPolicy,
     cwd: PathBuf,
     reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    history_log_id: u64,
+    history_entry_count: usize,
 ) -> Result<SessionConfiguredEvent, String> {
     let session_id = ThreadId::from_string(thread_id)
         .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
@@ -1324,12 +1352,65 @@ fn session_configured_from_thread_response(
         sandbox_policy,
         cwd,
         reasoning_effort,
-        history_log_id: 0,
-        history_entry_count: 0,
+        history_log_id,
+        history_entry_count,
         initial_messages: None,
         network_proxy: None,
         rollout_path,
     })
+}
+
+async fn history_metadata(config: &Config) -> (u64, usize) {
+    let path = history_filepath(config);
+    history_metadata_for_file(&path).await
+}
+
+fn history_filepath(config: &Config) -> PathBuf {
+    config.codex_home.join("history.jsonl")
+}
+
+async fn history_metadata_for_file(path: &Path) -> (u64, usize) {
+    let log_id = match fs::metadata(path).await {
+        Ok(metadata) => history_log_id(&metadata).unwrap_or(0),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return (0, 0),
+        Err(_) => return (0, 0),
+    };
+
+    let mut file = match fs::File::open(path).await {
+        Ok(file) => file,
+        Err(_) => return (log_id, 0),
+    };
+
+    let mut buf = [0u8; 8192];
+    let mut count = 0usize;
+    loop {
+        match file.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => {
+                count += buf[..n].iter().filter(|&&b| b == b'\n').count();
+            }
+            Err(_) => return (log_id, 0),
+        }
+    }
+
+    (log_id, count)
+}
+
+#[cfg(unix)]
+fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    Some(metadata.ino())
+}
+
+#[cfg(windows)]
+fn history_log_id(metadata: &std::fs::Metadata) -> Option<u64> {
+    use std::os::windows::fs::MetadataExt;
+    Some(metadata.creation_time())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn history_log_id(_metadata: &std::fs::Metadata) -> Option<u64> {
+    None
 }
 
 fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {

@@ -1375,6 +1375,69 @@ impl App {
         let thread_label = Some(self.thread_label(thread_id));
         match update {
             ThreadUpdate::CommandExecutionRequestApproval { params, .. } => {
+                let network_approval_context: Option<
+                    codex_protocol::approvals::NetworkApprovalContext,
+                > = params.network_approval_context.clone().and_then(|context| {
+                    serde_json::from_value(serde_json::to_value(context).ok()?).ok()
+                });
+                let additional_permissions: Option<codex_protocol::models::PermissionProfile> =
+                    params
+                        .additional_permissions
+                        .clone()
+                        .and_then(|permissions| {
+                            serde_json::from_value(serde_json::to_value(permissions).ok()?).ok()
+                        });
+                let proposed_execpolicy_amendment: Option<
+                    codex_protocol::approvals::ExecPolicyAmendment,
+                > = params
+                    .proposed_execpolicy_amendment
+                    .clone()
+                    .and_then(|amendment| {
+                        serde_json::from_value(serde_json::to_value(amendment).ok()?).ok()
+                    });
+                let proposed_network_policy_amendments: Option<
+                    Vec<codex_protocol::approvals::NetworkPolicyAmendment>,
+                > = params
+                    .proposed_network_policy_amendments
+                    .clone()
+                    .and_then(|amendments| {
+                        serde_json::from_value(serde_json::to_value(amendments).ok()?).ok()
+                    });
+                let available_decisions = match params.available_decisions.clone() {
+                    Some(decisions) => decisions
+                        .into_iter()
+                        .map(|decision| match decision {
+                            codex_app_server_protocol::CommandExecutionApprovalDecision::Accept => {
+                                codex_protocol::protocol::ReviewDecision::Approved
+                            }
+                            codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptForSession => {
+                                codex_protocol::protocol::ReviewDecision::ApprovedForSession
+                            }
+                            codex_app_server_protocol::CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
+                                execpolicy_amendment,
+                            } => codex_protocol::protocol::ReviewDecision::ApprovedExecpolicyAmendment {
+                                proposed_execpolicy_amendment: execpolicy_amendment.into_core(),
+                            },
+                            codex_app_server_protocol::CommandExecutionApprovalDecision::ApplyNetworkPolicyAmendment {
+                                network_policy_amendment,
+                            } => codex_protocol::protocol::ReviewDecision::NetworkPolicyAmendment {
+                                network_policy_amendment: network_policy_amendment.into_core(),
+                            },
+                            codex_app_server_protocol::CommandExecutionApprovalDecision::Decline => {
+                                codex_protocol::protocol::ReviewDecision::Denied
+                            }
+                            codex_app_server_protocol::CommandExecutionApprovalDecision::Cancel => {
+                                codex_protocol::protocol::ReviewDecision::Abort
+                            }
+                        })
+                        .collect(),
+                    None => codex_protocol::approvals::ExecApprovalRequestEvent::default_available_decisions(
+                        network_approval_context.as_ref(),
+                        proposed_execpolicy_amendment.as_ref(),
+                        proposed_network_policy_amendments.as_deref(),
+                        additional_permissions.as_ref(),
+                    ),
+                };
                 Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
                     thread_id,
                     thread_label,
@@ -1388,15 +1451,9 @@ impl App {
                         .map(|command| vec![command.clone()])
                         .unwrap_or_default(),
                     reason: params.reason.clone(),
-                    available_decisions: Vec::new(),
-                    network_approval_context: params.network_approval_context.clone().and_then(
-                        |context| serde_json::from_value(serde_json::to_value(context).ok()?).ok(),
-                    ),
-                    additional_permissions: params.additional_permissions.clone().and_then(
-                        |permissions| {
-                            serde_json::from_value(serde_json::to_value(permissions).ok()?).ok()
-                        },
-                    ),
+                    available_decisions,
+                    network_approval_context,
+                    additional_permissions,
                 }))
             }
             ThreadUpdate::FileChangeRequestApproval { params, .. } => Some(
@@ -3806,10 +3863,6 @@ impl App {
                     AppRunControl::Exit(ExitReason::UserRequested)
                 }
             }
-            ExitMode::Immediate => {
-                self.pending_shutdown_exit_thread_id = None;
-                AppRunControl::Exit(ExitReason::UserRequested)
-            }
         }
     }
 
@@ -4534,6 +4587,41 @@ mod tests {
         }
 
         panic!("expected approval action to submit a thread-scoped op");
+    }
+
+    #[tokio::test]
+    async fn background_exec_approval_uses_default_available_decisions() -> Result<()> {
+        let app = make_test_app().await;
+        let thread_id = ThreadId::new();
+        let update = test_exec_approval_update(thread_id, "/tmp/project", "call-1", "turn-1", None);
+
+        let request = app
+            .interactive_request_for_thread_update(thread_id, &update)
+            .await
+            .expect("approval should be created");
+
+        match request {
+            ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
+                available_decisions,
+                ..
+            }) => {
+                assert_eq!(
+                    available_decisions,
+                    vec![
+                        codex_protocol::protocol::ReviewDecision::Approved,
+                        codex_protocol::protocol::ReviewDecision::Abort,
+                    ]
+                );
+            }
+            ThreadInteractiveRequest::Approval(_) => {
+                panic!("expected exec approval request")
+            }
+            ThreadInteractiveRequest::McpServerElicitation(_) => {
+                panic!("expected exec approval request")
+            }
+        }
+
+        Ok(())
     }
 
     #[tokio::test]

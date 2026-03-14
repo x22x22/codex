@@ -95,9 +95,7 @@ pub(crate) enum AppEvent {
     /// Request to exit the application.
     ///
     /// Use `ShutdownFirst` for user-initiated quits so core cleanup runs and the
-    /// UI exits only after `ShutdownComplete`. `Immediate` is a last-resort
-    /// escape hatch that skips shutdown and may drop in-flight work (e.g.,
-    /// background tasks, rollout flush, or child process cleanup).
+    /// UI exits only after shutdown completes.
     Exit(ExitMode),
 
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
@@ -453,17 +451,11 @@ pub(crate) enum AppEvent {
 /// The exit strategy requested by the UI layer.
 ///
 /// Most user-initiated exits should use `ShutdownFirst` so core cleanup runs and the UI exits only
-/// after core acknowledges completion. `Immediate` is an escape hatch for cases where shutdown has
-/// already completed (or is being bypassed) and the UI loop should terminate right away.
+/// after core acknowledges completion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExitMode {
     /// Shutdown core and exit after completion.
     ShutdownFirst,
-    /// Exit the UI loop immediately without waiting for shutdown.
-    ///
-    /// This skips `Op::Shutdown`, so any in-flight work may be dropped and
-    /// cleanup that normally runs before `ShutdownComplete` can be missed.
-    Immediate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

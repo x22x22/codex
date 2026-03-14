@@ -4,20 +4,35 @@
 //! entries, and the fast-switch keyboard shortcuts. Higher-level coordination, such as deciding
 //! which thread becomes active or when a thread closes, stays in [`crate::app::App`].
 
+#[cfg(test)]
 use crate::history_cell::PlainHistoryCell;
+#[cfg(test)]
 use crate::render::line_utils::prefix_lines;
+#[cfg(test)]
 use crate::text_formatting::truncate_text;
+#[cfg(test)]
 use codex_protocol::ThreadId;
+#[cfg(test)]
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
+#[cfg(test)]
 use codex_protocol::protocol::AgentStatus;
+#[cfg(test)]
 use codex_protocol::protocol::CollabAgentInteractionEndEvent;
+#[cfg(test)]
 use codex_protocol::protocol::CollabAgentRef;
+#[cfg(test)]
 use codex_protocol::protocol::CollabAgentSpawnEndEvent;
+#[cfg(test)]
 use codex_protocol::protocol::CollabAgentStatusEntry;
+#[cfg(test)]
 use codex_protocol::protocol::CollabCloseEndEvent;
+#[cfg(test)]
 use codex_protocol::protocol::CollabResumeBeginEvent;
+#[cfg(test)]
 use codex_protocol::protocol::CollabResumeEndEvent;
+#[cfg(test)]
 use codex_protocol::protocol::CollabWaitingBeginEvent;
+#[cfg(test)]
 use codex_protocol::protocol::CollabWaitingEndEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -26,13 +41,19 @@ use crossterm::event::KeyEventKind;
 #[cfg(target_os = "macos")]
 use crossterm::event::KeyModifiers;
 use ratatui::style::Stylize;
+#[cfg(test)]
 use ratatui::text::Line;
 use ratatui::text::Span;
+#[cfg(test)]
 use std::collections::HashMap;
+#[cfg(test)]
 use std::collections::HashSet;
 
+#[cfg(test)]
 const COLLAB_PROMPT_PREVIEW_GRAPHEMES: usize = 160;
+#[cfg(test)]
 const COLLAB_AGENT_ERROR_PREVIEW_GRAPHEMES: usize = 160;
+#[cfg(test)]
 const COLLAB_AGENT_RESPONSE_PREVIEW_GRAPHEMES: usize = 240;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +66,7 @@ pub(crate) struct AgentPickerThreadEntry {
     pub(crate) is_closed: bool,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct AgentLabel<'a> {
     thread_id: Option<ThreadId>,
@@ -52,6 +74,7 @@ struct AgentLabel<'a> {
     role: Option<&'a str>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SpawnRequestSummary {
     pub(crate) model: String,
@@ -171,6 +194,7 @@ fn next_agent_word_motion_fallback(
     false
 }
 
+#[cfg(test)]
 pub(crate) fn spawn_end(
     ev: CollabAgentSpawnEndEvent,
     spawn_request: Option<&SpawnRequestSummary>,
@@ -206,6 +230,7 @@ pub(crate) fn spawn_end(
     collab_event(title, details)
 }
 
+#[cfg(test)]
 pub(crate) fn interaction_end(ev: CollabAgentInteractionEndEvent) -> PlainHistoryCell {
     let CollabAgentInteractionEndEvent {
         call_id: _,
@@ -234,6 +259,7 @@ pub(crate) fn interaction_end(ev: CollabAgentInteractionEndEvent) -> PlainHistor
     collab_event(title, details)
 }
 
+#[cfg(test)]
 pub(crate) fn waiting_begin(ev: CollabWaitingBeginEvent) -> PlainHistoryCell {
     let CollabWaitingBeginEvent {
         sender_thread_id: _,
@@ -261,6 +287,7 @@ pub(crate) fn waiting_begin(ev: CollabWaitingBeginEvent) -> PlainHistoryCell {
     collab_event(title, details)
 }
 
+#[cfg(test)]
 pub(crate) fn waiting_end(ev: CollabWaitingEndEvent) -> PlainHistoryCell {
     let CollabWaitingEndEvent {
         call_id: _,
@@ -272,6 +299,7 @@ pub(crate) fn waiting_end(ev: CollabWaitingEndEvent) -> PlainHistoryCell {
     collab_event(title_text("Finished waiting"), details)
 }
 
+#[cfg(test)]
 pub(crate) fn close_end(ev: CollabCloseEndEvent) -> PlainHistoryCell {
     let CollabCloseEndEvent {
         call_id: _,
@@ -296,6 +324,7 @@ pub(crate) fn close_end(ev: CollabCloseEndEvent) -> PlainHistoryCell {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn resume_begin(ev: CollabResumeBeginEvent) -> PlainHistoryCell {
     let CollabResumeBeginEvent {
         call_id: _,
@@ -319,6 +348,7 @@ pub(crate) fn resume_begin(ev: CollabResumeBeginEvent) -> PlainHistoryCell {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn resume_end(ev: CollabResumeEndEvent) -> PlainHistoryCell {
     let CollabResumeEndEvent {
         call_id: _,
@@ -343,6 +373,7 @@ pub(crate) fn resume_end(ev: CollabResumeEndEvent) -> PlainHistoryCell {
     )
 }
 
+#[cfg(test)]
 fn collab_event(title: Line<'static>, details: Vec<Line<'static>>) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = vec![title];
     if !details.is_empty() {
@@ -351,10 +382,12 @@ fn collab_event(title: Line<'static>, details: Vec<Line<'static>>) -> PlainHisto
     PlainHistoryCell::new(lines)
 }
 
+#[cfg(test)]
 fn title_text(title: impl Into<String>) -> Line<'static> {
     title_spans_line(vec![Span::from(title.into()).bold()])
 }
 
+#[cfg(test)]
 fn title_with_agent(
     prefix: &str,
     agent: AgentLabel<'_>,
@@ -366,6 +399,7 @@ fn title_with_agent(
     title_spans_line(spans)
 }
 
+#[cfg(test)]
 fn title_spans_line(mut spans: Vec<Span<'static>>) -> Line<'static> {
     let mut title = Vec::with_capacity(spans.len() + 1);
     title.push(Span::from("• ").dim());
@@ -373,6 +407,7 @@ fn title_spans_line(mut spans: Vec<Span<'static>>) -> Line<'static> {
     title.into()
 }
 
+#[cfg(test)]
 fn agent_label_from_ref(agent: &CollabAgentRef) -> AgentLabel<'_> {
     AgentLabel {
         thread_id: Some(agent.thread_id),
@@ -381,10 +416,12 @@ fn agent_label_from_ref(agent: &CollabAgentRef) -> AgentLabel<'_> {
     }
 }
 
+#[cfg(test)]
 fn agent_label_line(agent: AgentLabel<'_>) -> Line<'static> {
     agent_label_spans(agent).into()
 }
 
+#[cfg(test)]
 fn agent_label_spans(agent: AgentLabel<'_>) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let nickname = agent
@@ -409,6 +446,7 @@ fn agent_label_spans(agent: AgentLabel<'_>) -> Vec<Span<'static>> {
     spans
 }
 
+#[cfg(test)]
 fn spawn_request_spans(spawn_request: Option<&SpawnRequestSummary>) -> Vec<Span<'static>> {
     let Some(spawn_request) = spawn_request else {
         return Vec::new();
@@ -428,6 +466,7 @@ fn spawn_request_spans(spawn_request: Option<&SpawnRequestSummary>) -> Vec<Span<
     vec![Span::from(" ").dim(), Span::from(details).magenta()]
 }
 
+#[cfg(test)]
 fn prompt_line(prompt: &str) -> Option<Line<'static>> {
     let trimmed = prompt.trim();
     if trimmed.is_empty() {
@@ -440,6 +479,7 @@ fn prompt_line(prompt: &str) -> Option<Line<'static>> {
     }
 }
 
+#[cfg(test)]
 fn merge_wait_receivers(
     receiver_thread_ids: &[ThreadId],
     mut receiver_agents: Vec<CollabAgentRef>,
@@ -471,6 +511,7 @@ fn merge_wait_receivers(
     receiver_agents
 }
 
+#[cfg(test)]
 fn wait_complete_lines(
     statuses: &HashMap<ThreadId, AgentStatus>,
     agent_statuses: &[CollabAgentStatusEntry],
@@ -533,10 +574,12 @@ fn wait_complete_lines(
         .collect()
 }
 
+#[cfg(test)]
 fn status_summary_line(status: &AgentStatus) -> Line<'static> {
     status_summary_spans(status).into()
 }
 
+#[cfg(test)]
 fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
     match status {
         AgentStatus::PendingInit => vec![Span::from("Pending init").cyan()],
