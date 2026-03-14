@@ -1,69 +1,45 @@
-# Codex devcontainer profiles
+# Containerized Development
 
-This folder now ships two profiles:
+We provide two container paths:
 
-- `devcontainer.codex-dev.json` (default intent: develop the Codex repo itself)
-- `devcontainer.secure.json` (default intent: run Codex in a stricter, firewall-enforced project container)
+- `devcontainer.json` keeps the existing Codex contributor setup for working on this repository.
+- `devcontainer.secure.json` adds a customer-oriented profile with stricter outbound network controls.
 
-`devcontainer.json` currently mirrors `devcontainer.codex-dev.json` so VS Code opens into the Codex contributor setup by default.
+## Codex contributor profile
 
-## Profile 1: Codex contributor (`devcontainer.codex-dev.json`)
+Use `devcontainer.json` when you are developing Codex itself. This is the same lightweight arm64 container that already exists in the repo.
 
-Use this when working on this repository:
+## Secure customer profile
 
-- forces `linux/arm64` (`platform` + `runArgs`)
-- uses `CARGO_TARGET_DIR=${containerWorkspaceFolder}/codex-rs/target-arm64`
-- keeps firewall off by default (`CODEX_ENABLE_FIREWALL=0`) for lower friction
-- still includes persistent mounts and bootstrap (`post_install.py`)
+Use `devcontainer.secure.json` when you want a stricter runtime profile for running Codex inside a project container:
 
-## Profile 2: Secure project (`devcontainer.secure.json`)
+- installs the Codex CLI plus common build tools
+- enables firewall startup with an allowlist-driven outbound policy
+- blocks IPv6 by default so the allowlist cannot be bypassed over AAAA routes
+- requires `NET_ADMIN` and `NET_RAW` so the firewall can be installed at startup
 
-Use this when you want stricter egress control:
+This profile keeps the stricter networking isolated to the customer path instead of changing the default Codex contributor container.
 
-- enables firewall startup (`postStartCommand`)
-- uses IPv4 allowlisting + IPv6 default-deny
-- requires `NET_ADMIN` / `NET_RAW` caps
-- uses project-generic Cargo target dir (`/workspace/.cache/cargo-target`)
-
-## How to switch profiles
-
-Option A (quick swap in repo):
-
-```bash
-cp .devcontainer/devcontainer.secure.json .devcontainer/devcontainer.json
-```
-
-or
-
-```bash
-cp .devcontainer/devcontainer.codex-dev.json .devcontainer/devcontainer.json
-```
-
-Then run **Dev Containers: Rebuild and Reopen in Container**.
-
-Option B (CLI without copying):
+Start it from the CLI with:
 
 ```bash
 devcontainer up --workspace-folder . --config .devcontainer/devcontainer.secure.json
 ```
 
-or
+In VS Code, choose **Dev Containers: Open Folder in Container...** and select `.devcontainer/devcontainer.secure.json`.
 
-```bash
-devcontainer up --workspace-folder . --config .devcontainer/devcontainer.codex-dev.json
+## Docker
+
+To build the contributor image locally for x64 and then run it with the repo mounted under `/workspace`:
+
+```shell
+CODEX_DOCKER_IMAGE_NAME=codex-linux-dev
+docker build --platform=linux/amd64 -t "$CODEX_DOCKER_IMAGE_NAME" ./.devcontainer
+docker run --platform=linux/amd64 --rm -it -e CARGO_TARGET_DIR=/workspace/codex-rs/target-amd64 -v "$PWD":/workspace -w /workspace/codex-rs "$CODEX_DOCKER_IMAGE_NAME"
 ```
 
-## Using Codex after opening the container
+Note that `/workspace/target` will contain the binaries built for your host platform, so we include `-e CARGO_TARGET_DIR=/workspace/codex-rs/target-amd64` in the `docker run` command so that the binaries built inside your container are written to a separate directory.
 
-The image preinstalls the Codex CLI. In the container terminal:
+For arm64, specify `--platform=linux/arm64` instead for both `docker build` and `docker run`.
 
-```bash
-codex
-```
-
-Useful checks:
-
-```bash
-which codex
-codex --help
-```
+Currently, the contributor `Dockerfile` works for both x64 and arm64 Linux, though you need to run `rustup target add x86_64-unknown-linux-musl` yourself to install the musl toolchain for x64.
