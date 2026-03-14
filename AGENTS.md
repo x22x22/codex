@@ -11,6 +11,10 @@ In the codex-rs folder where the rust code lives:
 - Always collapse if statements per https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_if
 - Always inline format! args when possible per https://rust-lang.github.io/rust-clippy/master/index.html#uninlined_format_args
 - Use method references over closures when possible per https://rust-lang.github.io/rust-clippy/master/index.html#redundant_closure_for_method_calls
+- Follow the `argument_comment_lint` convention for anonymous literal arguments in Rust call sites:
+  - Use an exact `/*param_name=*/` comment before opaque literal arguments such as `None`, booleans, and numeric literals when passing them by position.
+  - Do not add these comments for string or char literals unless the comment adds real clarity; those literals are intentionally exempt from the lint.
+  - If you add one of these comments, the parameter name must exactly match the callee signature.
 - When possible, make `match` statements exhaustive and avoid wildcard arms.
 - When writing tests, prefer comparing the equality of entire objects over fields one by one.
 - When making a change that adds or changes an API, ensure that the documentation in the `docs/` folder is up to date if applicable.
