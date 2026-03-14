@@ -2068,9 +2068,15 @@ impl App {
         if let Some(updated_model) = config.model.clone() {
             model = updated_model;
         }
-        let account = App::read_account_via_app_server(&app_server)
-            .await
-            .map_err(|err| color_eyre::eyre::eyre!(err))?;
+        let account = match App::read_account_via_app_server(&app_server).await {
+            Ok(account) => account,
+            Err(err) => {
+                tracing::warn!(
+                    "account/read failed during startup; continuing unauthenticated: {err}"
+                );
+                None
+            }
+        };
         // Determine who should see internal Slack routing. We treat
         // `@openai.com` emails as employees and default to `External` when the
         // email is unavailable (for example, API key auth).
