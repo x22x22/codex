@@ -629,13 +629,35 @@ jobs:
                 tail -n 200 "$log_file"
                 echo '```'
               } >> "$GITHUB_STEP_SUMMARY"
-              echo "::error::nextest failed without a parsable FAIL/LEAK line; inspect the tail in the step summary"
+              echo "::error::nextest failed without a parsable FAIL/LEAK line; the last 80 log lines were emitted as annotations"
+
+              mapfile -t tail_lines < <(tail -n 80 "$log_file")
+              chunk=""
+              chunk_index=1
+              for i in "${!tail_lines[@]}"; do
+                line=${tail_lines[$i]//%/%25}
+                line=${line//$'\r'/%0D}
+                line=${line//$'\n'/%0A}
+                if [[ -n "$chunk" ]]; then
+                  chunk="${chunk}%0A${line}"
+                else
+                  chunk="$line"
+                fi
+
+                if (( (i + 1) % 10 == 0 || i + 1 == ${#tail_lines[@]} )); then
+                  echo "::error title=nextest failure tail ${chunk_index}::$chunk"
+                  chunk=""
+                  ((chunk_index++))
+                fi
+              done
             fi
           fi
 
           exit $status
         env:
           RUST_BACKTRACE: 1
+          NEXTEST_FAILURE_OUTPUT: final
+          NEXTEST_FINAL_STATUS_LEVEL: fail
           NEXTEST_STATUS_LEVEL: leak
 
       - name: Upload Cargo timings (nextest)
