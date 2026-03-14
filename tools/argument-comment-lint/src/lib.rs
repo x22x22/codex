@@ -58,24 +58,28 @@ rustc_session::declare_lint! {
     /// This lint only runs when the callee resolves to a concrete function or
     /// method with available parameter names.
     ///
+    /// If you own the API, prefer a clearer signature such as enums, named
+    /// methods, or newtypes. This lint is primarily for legacy signatures
+    /// where a minimal refactor is the better tradeoff.
+    ///
     /// ### Example
     ///
     /// ```rust
-    /// fn create_openai_url(base_url: Option<String>) -> String {
+    /// fn legacy_create_openai_url(base_url: Option<String>) -> String {
     ///     String::new()
     /// }
     ///
-    /// create_openai_url(/*api_base=*/ None);
+    /// legacy_create_openai_url(/*api_base=*/ None);
     /// ```
     ///
     /// Use instead:
     ///
     /// ```rust
-    /// fn create_openai_url(base_url: Option<String>) -> String {
+    /// fn legacy_create_openai_url(base_url: Option<String>) -> String {
     ///     String::new()
     /// }
     ///
-    /// create_openai_url(/*base_url=*/ None);
+    /// legacy_create_openai_url(/*base_url=*/ None);
     /// ```
     pub ARGUMENT_COMMENT_MISMATCH,
     Warn,
@@ -96,25 +100,27 @@ rustc_session::declare_lint! {
     /// ### Known problems
     ///
     /// This lint is opinionated, so it is `allow` by default.
+    /// Prefer reshaping APIs you control instead of relying on comments for
+    /// new code; this lint exists for legacy call sites and minimal refactors.
     ///
     /// ### Example
     ///
     /// ```rust
-    /// fn create_openai_url(base_url: Option<String>) -> String {
+    /// fn legacy_create_openai_url(base_url: Option<String>) -> String {
     ///     String::new()
     /// }
     ///
-    /// create_openai_url(None);
+    /// legacy_create_openai_url(None);
     /// ```
     ///
     /// Use instead:
     ///
     /// ```rust
-    /// fn create_openai_url(base_url: Option<String>) -> String {
+    /// fn legacy_create_openai_url(base_url: Option<String>) -> String {
     ///     String::new()
     /// }
     ///
-    /// create_openai_url(/*base_url=*/ None);
+    /// legacy_create_openai_url(/*base_url=*/ None);
     /// ```
     pub UNCOMMENTED_ANONYMOUS_LITERAL_ARGUMENT,
     Allow,

@@ -7649,6 +7649,14 @@ impl ChatWidget {
         true
     }
 
+    pub(crate) fn enable_feature(&mut self, feature: Feature) -> bool {
+        self.set_feature_enabled(feature, true)
+    }
+
+    pub(crate) fn disable_feature(&mut self, feature: Feature) -> bool {
+        self.set_feature_enabled(feature, false)
+    }
+
     fn initial_collaboration_mask(
         _config: &Config,
         models_manager: &ModelsManager,

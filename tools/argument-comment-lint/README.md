@@ -16,31 +16,50 @@ self-descriptive at the callsite.
 
 ## Behavior
 
-Given:
+When you own the API, prefer a clearer shape over positional literal arguments:
 
 ```rust
-fn create_openai_url(base_url: Option<String>, retry_count: usize) -> String {
+enum BaseUrl {
+    Default,
+    Custom(String),
+}
+
+struct RetryCount(usize);
+
+fn create_openai_url(base_url: BaseUrl, retry_count: RetryCount) -> String {
     let _ = (base_url, retry_count);
     String::new()
 }
 ```
 
-This is accepted:
+```rust
+create_openai_url(BaseUrl::Default, RetryCount(3));
+```
+
+When a minimal refactor needs to keep a legacy signature, `/*param=*/` comments
+make those call sites readable:
 
 ```rust
-create_openai_url(/*base_url=*/ None, /*retry_count=*/ 3);
+fn legacy_create_openai_url(base_url: Option<String>, retry_count: usize) -> String {
+    let _ = (base_url, retry_count);
+    String::new()
+}
+```
+
+```rust
+legacy_create_openai_url(/*base_url=*/ None, /*retry_count=*/ 3);
 ```
 
 This is warned on by `argument_comment_mismatch`:
 
 ```rust
-create_openai_url(/*api_base=*/ None, 3);
+legacy_create_openai_url(/*api_base=*/ None, 3);
 ```
 
 This is only warned on when `uncommented_anonymous_literal_argument` is enabled:
 
 ```rust
-create_openai_url(None, 3);
+legacy_create_openai_url(None, 3);
 ```
 
 ## Development

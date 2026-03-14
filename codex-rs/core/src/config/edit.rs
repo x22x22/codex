@@ -857,11 +857,20 @@ impl ConfigEditsBuilder {
         self
     }
 
-    /// Enable or disable a feature flag by key under the `[features]` table.
-    pub fn set_feature_enabled(mut self, key: &str, enabled: bool) -> Self {
+    /// Enable a feature flag by key under the `[features]` table.
+    pub fn enable_feature(mut self, key: &str) -> Self {
         self.edits.push(ConfigEdit::SetPath {
             segments: vec!["features".to_string(), key.to_string()],
-            value: value(enabled),
+            value: value(true),
+        });
+        self
+    }
+
+    /// Disable a feature flag by key under the `[features]` table.
+    pub fn disable_feature(mut self, key: &str) -> Self {
+        self.edits.push(ConfigEdit::SetPath {
+            segments: vec!["features".to_string(), key.to_string()],
+            value: value(false),
         });
         self
     }

@@ -860,12 +860,15 @@ impl App {
                 continue;
             }
             let effective_enabled = self.config.features.enabled(feature);
-            self.chat_widget
-                .set_feature_enabled(feature, effective_enabled);
             if effective_enabled {
-                builder = builder.set_feature_enabled(feature_key, true);
+                self.chat_widget.enable_feature(feature);
+            } else {
+                self.chat_widget.disable_feature(feature);
+            }
+            if effective_enabled {
+                builder = builder.enable_feature(feature_key);
             } else if feature.default_enabled() {
-                builder = builder.set_feature_enabled(feature_key, false);
+                builder = builder.disable_feature(feature_key);
             } else {
                 // If the feature already default to `false`, we drop the key
                 // in the config file so that the user does not miss the feature
@@ -5156,8 +5159,7 @@ mod tests {
         app.config
             .features
             .set_enabled(Feature::GuardianApproval, true)?;
-        app.chat_widget
-            .set_feature_enabled(Feature::GuardianApproval, true);
+        app.chat_widget.enable_feature(Feature::GuardianApproval);
         let current_session_policy = app.config.permissions.approval_policy.value();
 
         app.update_feature_flags(vec![(Feature::GuardianApproval, false)])

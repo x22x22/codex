@@ -107,7 +107,11 @@ impl ToolHandler for UnifiedExecHandler {
         let command = match get_command(
             &params,
             invocation.session.user_shell(),
-            invocation.turn.tools_config.allow_login_shell,
+            if invocation.turn.tools_config.allow_login_shell {
+                LoginShellPolicy::Allow
+            } else {
+                LoginShellPolicy::Disallow
+            },
         ) {
             Ok(command) => command,
             Err(_) => return true,
@@ -154,7 +158,11 @@ impl ToolHandler for UnifiedExecHandler {
                 let command = get_command(
                     &args,
                     session.user_shell(),
-                    turn.tools_config.allow_login_shell,
+                    if turn.tools_config.allow_login_shell {
+                        LoginShellPolicy::Allow
+                    } else {
+                        LoginShellPolicy::Disallow
+                    },
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
 
@@ -317,10 +325,22 @@ impl ToolHandler for UnifiedExecHandler {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LoginShellPolicy {
+    Allow,
+    Disallow,
+}
+
+impl LoginShellPolicy {
+    fn allows_login_shell(self) -> bool {
+        matches!(self, Self::Allow)
+    }
+}
+
 pub(crate) fn get_command(
     args: &ExecCommandArgs,
     session_shell: Arc<Shell>,
-    allow_login_shell: bool,
+    login_shell_policy: LoginShellPolicy,
 ) -> Result<Vec<String>, String> {
     let model_shell = args.shell.as_ref().map(|shell_str| {
         let mut shell = get_shell_by_model_provided_path(&PathBuf::from(shell_str));
@@ -329,6 +349,7 @@ pub(crate) fn get_command(
     });
 
     let shell = model_shell.as_ref().unwrap_or(session_shell.as_ref());
+    let allow_login_shell = login_shell_policy.allows_login_shell();
     let use_login_shell = match args.login {
         Some(true) if !allow_login_shell => {
             return Err(
