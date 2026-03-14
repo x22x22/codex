@@ -8345,13 +8345,13 @@ async fn permissions_selection_emits_history_cell_when_selection_changes() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_permissions_popup_line(&popup).contains("(current)"),
-        "expected permissions popup to open with the current preset selected: {popup}"
+        selected_permissions_popup_line(&popup).contains("Default"),
+        "expected permissions popup to open with Default selected: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        !selected_permissions_popup_line(&popup).contains("(current)"),
+        !selected_permissions_popup_line(&popup).contains("Default"),
         "expected moving down to change the selected preset before confirmation: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
@@ -8382,8 +8382,8 @@ async fn permissions_selection_history_snapshot_after_mode_switch() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_permissions_popup_line(&popup).contains("(current)"),
-        "expected permissions popup to open with the current preset selected: {popup}"
+        selected_permissions_popup_line(&popup).contains("Default"),
+        "expected permissions popup to open with Default selected: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Down));
     #[cfg(target_os = "windows")]
@@ -8426,7 +8426,7 @@ async fn permissions_selection_history_snapshot_full_access_to_default() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_permissions_popup_line(&popup).contains("Full Access (current)"),
+        selected_permissions_popup_line(&popup).contains("Full Access"),
         "expected permissions popup to open with Full Access selected: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Up));
@@ -8478,8 +8478,8 @@ async fn permissions_selection_emits_history_cell_when_current_is_selected() {
     chat.open_permissions_popup();
     let popup = render_bottom_popup(&chat, 120);
     assert!(
-        selected_permissions_popup_line(&popup).contains("(current)"),
-        "expected permissions popup to open with the current preset selected: {popup}"
+        selected_permissions_popup_line(&popup).contains("Default"),
+        "expected permissions popup to open with Default selected: {popup}"
     );
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 

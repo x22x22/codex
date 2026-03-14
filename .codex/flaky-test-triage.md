@@ -46,9 +46,9 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 
 ## Current Fix In Progress
 
-- Narrow the permissions-popup selection helper in `codex-rs/tui/src/chatwidget/tests.rs`.
-- Match only the selected permission preset row (`Default`, `Smart Approvals`, or `Full Access`) instead of the first rendered line that contains `›`.
-- Rationale: commit `fc98d21ad` failed in `Bazel (experimental)` across macOS and Linux while only TUI permission-popup assertions had changed. The helper introduced in that commit was too broad and could bind to a non-permission line, making the assertions brittle even when the popup state was correct.
+- Drop generic `(current)` assumptions from the broad permission-selection history tests in `codex-rs/tui/src/chatwidget/tests.rs`.
+- Assert the selected preset label (`Default` or `Full Access`) directly in contexts where popup snapshots show the `(current)` suffix is not guaranteed.
+- Rationale: commit `a30e8e2ec` still failed in Linux `Bazel (experimental)` after narrowing the selected-row helper. Existing popup snapshots show `Default` selected without a `(current)` suffix on Unix, so those newer assertions were still stricter than the UI contract.
 
 ## Constraints
 
@@ -67,3 +67,4 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
 | `dc8d5d46d` | Harden history-cell permission selection assertions | superseded | `rust-ci` kept running, but `Bazel (experimental)` was cancelled by workflow concurrency after later commits landed on the PR branch. This SHA cannot be counted until its cancelled Bazel run is backfilled. |
 | `1b6e21ccc` | Pin permission history snapshots to concrete presets | superseded | Same state as `dc8d5d46d`: `Bazel (experimental)` was cancelled by PR-level workflow concurrency, so this SHA is not countable yet. |
 | `fc98d21ad` | Select Smart Approvals in session-configured popup tests | failed | `Bazel (experimental)` failed on run `23079852646` across macOS and Linux. Investigation narrowed the likely issue to the overly broad `selected_popup_line()` helper introduced in this commit. |
+| `a30e8e2ec` | Narrow permissions popup selection helper | failed | `Bazel (experimental)` still failed on Linux in run `23080049381`. The helper narrowing was necessary, but Linux snapshots showed the generic `(current)` assertions were still too strict for the default/full-access permission history tests. |
