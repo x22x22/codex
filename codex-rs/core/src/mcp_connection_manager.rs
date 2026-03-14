@@ -110,7 +110,7 @@ const MCP_TOOLS_CACHE_WRITE_DURATION_METRIC: &str = "codex.mcp.tools.cache_write
 fn sanitize_responses_api_tool_name(name: &str) -> String {
     let mut sanitized = String::with_capacity(name.len());
     for c in name.chars() {
-        if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+        if c.is_ascii_alphanumeric() || c == '_' {
             sanitized.push(c);
         } else {
             sanitized.push('_');
@@ -254,7 +254,7 @@ fn elicitation_is_rejected_by_policy(approval_policy: AskForApproval) -> bool {
         AskForApproval::OnFailure => false,
         AskForApproval::OnRequest => false,
         AskForApproval::UnlessTrusted => false,
-        AskForApproval::Reject(reject_config) => reject_config.rejects_mcp_elicitations(),
+        AskForApproval::Granular(granular_config) => !granular_config.allows_mcp_elicitations(),
     }
 }
 
@@ -1230,11 +1230,12 @@ fn normalize_codex_apps_tool_name(
         return tool_name.to_string();
     }
 
-    let tool_name = sanitize_name(tool_name);
+    let tool_name = sanitize_name(tool_name).replace('-', "_");
 
     if let Some(connector_name) = connector_name
         .map(str::trim)
         .map(sanitize_name)
+        .map(|name| name.replace('-', "_"))
         .filter(|name| !name.is_empty())
         && let Some(stripped) = tool_name.strip_prefix(&connector_name)
         && !stripped.is_empty()
@@ -1245,6 +1246,7 @@ fn normalize_codex_apps_tool_name(
     if let Some(connector_id) = connector_id
         .map(str::trim)
         .map(sanitize_name)
+        .map(|name| name.replace('-', "_"))
         .filter(|name| !name.is_empty())
         && let Some(stripped) = tool_name.strip_prefix(&connector_id)
         && !stripped.is_empty()
