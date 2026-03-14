@@ -703,7 +703,7 @@ pub(crate) struct App {
     active_turn_ids: HashMap<ThreadId, String>,
     pending_exec_approval_request_ids: HashMap<String, RequestId>,
     pending_patch_approval_request_ids: HashMap<String, RequestId>,
-    pending_elicitation_request_ids: HashMap<(String, String), RequestId>,
+    pending_elicitation_request_ids: HashMap<(String, RequestId), RequestId>,
     pending_permissions_request_ids: HashMap<String, RequestId>,
     pending_user_input_request_ids: HashMap<String, RequestId>,
     pending_dynamic_tool_request_ids: HashMap<String, RequestId>,

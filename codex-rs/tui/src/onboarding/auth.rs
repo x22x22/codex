@@ -721,12 +721,24 @@ impl AuthModeWidget {
     }
 
     pub(crate) fn apply_chatgpt_login_started(&mut self, login_id: String, auth_url: String) {
+        let mut sign_in_state = self.sign_in_state.write().unwrap();
+        let still_waiting_for_login = matches!(
+            &*sign_in_state,
+            SignInState::ChatGptContinueInBrowser(ContinueInBrowserState { login_id: None, .. })
+        );
+        if !still_waiting_for_login {
+            drop(sign_in_state);
+            let _ = self
+                .auth_command_tx
+                .send(AuthCommand::CancelChatgpt { login_id });
+            return;
+        }
+
         self.error = None;
-        *self.sign_in_state.write().unwrap() =
-            SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
-                auth_url,
-                login_id: Some(login_id),
-            });
+        *sign_in_state = SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+            auth_url,
+            login_id: Some(login_id),
+        });
         self.request_frame.schedule_frame();
     }
 
@@ -928,6 +940,30 @@ mod tests {
 
         let found = collect_osc8_chars(&buf, area, url);
         assert_eq!(found, url, "OSC 8 hyperlink should cover the full URL");
+    }
+
+    #[test]
+    fn chatgpt_login_start_after_cancel_requests_server_cancel_without_reopening_ui() {
+        let (auth_command_tx, mut auth_command_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut widget = auth_widget(Some(ForcedLoginMethod::Chatgpt), SignInOption::ChatGpt);
+        widget.auth_command_tx = auth_command_tx;
+        *widget.sign_in_state.write().unwrap() = SignInState::PickMode;
+
+        widget.apply_chatgpt_login_started(
+            "login-123".to_string(),
+            "https://auth.example.com/login?state=abc123".to_string(),
+        );
+
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::PickMode
+        ));
+        assert_eq!(
+            auth_command_rx.try_recv().unwrap(),
+            AuthCommand::CancelChatgpt {
+                login_id: "login-123".to_string()
+            }
+        );
     }
 
     #[test]

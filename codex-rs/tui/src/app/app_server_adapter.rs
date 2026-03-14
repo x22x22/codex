@@ -553,7 +553,10 @@ impl App {
                 content,
                 meta,
             } => {
-                let key = (server_name.clone(), request_id.to_string());
+                let key = (
+                    server_name.clone(),
+                    mcp_request_id_to_app_server_request_id(&request_id),
+                );
                 let Some(server_request_id) = self.pending_elicitation_request_ids.remove(&key)
                 else {
                     return Err(format!(
@@ -769,7 +772,7 @@ impl App {
             }
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
                 self.pending_elicitation_request_ids.insert(
-                    (params.server_name.clone(), request_id.to_string()),
+                    (params.server_name.clone(), request_id.clone()),
                     request_id.clone(),
                 );
             }
@@ -1436,6 +1439,15 @@ fn review_decision_to_file_change_decision(
         | codex_protocol::protocol::ReviewDecision::NetworkPolicyAmendment { .. } => {
             FileChangeApprovalDecision::Accept
         }
+    }
+}
+
+fn mcp_request_id_to_app_server_request_id(
+    request_id: &codex_protocol::mcp::RequestId,
+) -> RequestId {
+    match request_id {
+        codex_protocol::mcp::RequestId::String(value) => RequestId::String(value.clone()),
+        codex_protocol::mcp::RequestId::Integer(value) => RequestId::Integer(*value),
     }
 }
 

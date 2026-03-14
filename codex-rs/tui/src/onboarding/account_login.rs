@@ -13,6 +13,7 @@ use serde::de::DeserializeOwned;
 
 use crate::LoginStatus;
 
+#[derive(Debug, PartialEq)]
 pub(crate) enum AuthCommand {
     StartApiKey { api_key: String },
     StartChatgpt,
