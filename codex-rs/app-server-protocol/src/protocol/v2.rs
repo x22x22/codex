@@ -25,9 +25,9 @@ use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
+use codex_protocol::items::ItemSandboxPolicy as CoreItemSandboxPolicy;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::items::TurnItemMetadata as CoreTurnItemMetadata;
-use codex_protocol::items::UserMessageType as CoreUserMessageType;
 use codex_protocol::mcp::Resource as McpResource;
 use codex_protocol::mcp::ResourceTemplate as McpResourceTemplate;
 use codex_protocol::mcp::Tool as McpTool;
@@ -3089,8 +3089,8 @@ pub struct PluginSummary {
     pub source: PluginSource,
     pub installed: bool,
     pub enabled: bool,
-    pub install_policy: PluginInstallPolicy,
-    pub auth_policy: PluginAuthPolicy,
+    pub install_policy: Option<PluginInstallPolicy>,
+    pub auth_policy: Option<PluginAuthPolicy>,
     pub interface: Option<PluginInterface>,
 }
 
@@ -3151,7 +3151,7 @@ pub struct PluginInstallParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginInstallResponse {
-    pub auth_policy: PluginAuthPolicy,
+    pub auth_policy: Option<PluginAuthPolicy>,
     pub apps_needing_auth: Vec<AppSummary>,
 }
 
@@ -3799,18 +3799,18 @@ pub enum UserInput {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case", export_to = "v2/")]
-pub enum UserMessageType {
-    Prompt,
-    PromptSteering,
-    PromptQueued,
+pub enum ItemSandboxPolicy {
+    ReadOnly,
+    Sandbox,
+    FullAccess,
 }
 
-impl From<CoreUserMessageType> for UserMessageType {
-    fn from(value: CoreUserMessageType) -> Self {
+impl From<CoreItemSandboxPolicy> for ItemSandboxPolicy {
+    fn from(value: CoreItemSandboxPolicy) -> Self {
         match value {
-            CoreUserMessageType::Prompt => UserMessageType::Prompt,
-            CoreUserMessageType::PromptSteering => UserMessageType::PromptSteering,
-            CoreUserMessageType::PromptQueued => UserMessageType::PromptQueued,
+            CoreItemSandboxPolicy::ReadOnly => ItemSandboxPolicy::ReadOnly,
+            CoreItemSandboxPolicy::Sandbox => ItemSandboxPolicy::Sandbox,
+            CoreItemSandboxPolicy::FullAccess => ItemSandboxPolicy::FullAccess,
         }
     }
 }
@@ -3820,13 +3820,13 @@ impl From<CoreUserMessageType> for UserMessageType {
 pub struct ItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub user_message_type: Option<UserMessageType>,
+    pub sandbox_policy: Option<ItemSandboxPolicy>,
 }
 
 impl From<CoreTurnItemMetadata> for ItemMetadata {
     fn from(value: CoreTurnItemMetadata) -> Self {
         Self {
-            user_message_type: value.user_message_type.map(Into::into),
+            sandbox_policy: value.sandbox_policy.map(Into::into),
         }
     }
 }
@@ -3891,7 +3891,6 @@ pub enum ThreadItem {
         id: String,
         content: Vec<UserInput>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3902,7 +3901,6 @@ pub enum ThreadItem {
         #[serde(default)]
         phase: Option<MessagePhase>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3913,7 +3911,6 @@ pub enum ThreadItem {
         id: String,
         text: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3925,7 +3922,6 @@ pub enum ThreadItem {
         #[serde(default)]
         content: Vec<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3951,7 +3947,6 @@ pub enum ThreadItem {
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3961,7 +3956,6 @@ pub enum ThreadItem {
         changes: Vec<FileUpdateChange>,
         status: PatchApplyStatus,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3978,7 +3972,6 @@ pub enum ThreadItem {
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -3994,7 +3987,6 @@ pub enum ThreadItem {
         #[ts(type = "number | null")]
         duration_ms: Option<i64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4013,14 +4005,9 @@ pub enum ThreadItem {
         receiver_thread_ids: Vec<String>,
         /// Prompt text sent as part of the collab tool call, when available.
         prompt: Option<String>,
-        /// Model requested for the spawned agent, when applicable.
-        model: Option<String>,
-        /// Reasoning effort requested for the spawned agent, when applicable.
-        reasoning_effort: Option<ReasoningEffort>,
         /// Last known status of the target agents, when available.
         agents_states: HashMap<String, CollabAgentState>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4030,7 +4017,6 @@ pub enum ThreadItem {
         query: String,
         action: Option<WebSearchAction>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4039,7 +4025,6 @@ pub enum ThreadItem {
         id: String,
         path: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4050,7 +4035,6 @@ pub enum ThreadItem {
         revised_prompt: Option<String>,
         result: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4059,7 +4043,6 @@ pub enum ThreadItem {
         id: String,
         review: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4068,7 +4051,6 @@ pub enum ThreadItem {
         id: String,
         review: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
     #[serde(rename_all = "camelCase")]
@@ -4076,7 +4058,6 @@ pub enum ThreadItem {
     ContextCompaction {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        #[ts(optional)]
         metadata: Option<ItemMetadata>,
     },
 }

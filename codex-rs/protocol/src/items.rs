@@ -32,17 +32,17 @@ pub enum TurnItem {
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
-pub enum UserMessageType {
-    Prompt,
-    PromptSteering,
-    PromptQueued,
+pub enum ItemSandboxPolicy {
+    ReadOnly,
+    Sandbox,
+    FullAccess,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, TS, JsonSchema, PartialEq, Eq)]
 pub struct TurnItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub user_message_type: Option<UserMessageType>,
+    pub sandbox_policy: Option<ItemSandboxPolicy>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS, JsonSchema)]
