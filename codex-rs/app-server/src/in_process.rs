@@ -406,7 +406,6 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 config: args.config,
                 cli_overrides: args.cli_overrides,
                 loader_overrides: args.loader_overrides,
-                cloud_requirements: None,
                 auth_manager: args.auth_manager,
                 thread_manager: args.thread_manager,
                 feedback: args.feedback,

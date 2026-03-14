@@ -237,7 +237,6 @@ fn build_test_processor(
         config,
         cli_overrides: Vec::new(),
         loader_overrides: LoaderOverrides::default(),
-        cloud_requirements: None,
         auth_manager: None,
         thread_manager: None,
         feedback: CodexFeedback::new(),
