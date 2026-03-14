@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use codex_app_server_protocol::McpElicitationEnumSchema;
 use codex_app_server_protocol::McpElicitationPrimitiveSchema;
 use codex_app_server_protocol::McpElicitationSingleSelectEnumSchema;
+use codex_app_server_protocol::McpServerElicitationRequest;
+use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_app_server_protocol::RequestId as AppServerRequestId;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::approvals::ElicitationRequest;
@@ -200,6 +203,47 @@ impl FooterTip {
 }
 
 impl McpServerElicitationFormRequest {
+    pub(crate) fn from_app_server_request(
+        thread_id: ThreadId,
+        request_id: AppServerRequestId,
+        params: McpServerElicitationRequestParams,
+    ) -> Option<Self> {
+        let request = match params.request {
+            McpServerElicitationRequest::Form {
+                meta,
+                message,
+                requested_schema,
+            } => ElicitationRequest::Form {
+                meta,
+                message,
+                requested_schema: serde_json::to_value(requested_schema).ok()?,
+            },
+            McpServerElicitationRequest::Url {
+                meta,
+                message,
+                url,
+                elicitation_id,
+            } => ElicitationRequest::Url {
+                meta,
+                message,
+                url,
+                elicitation_id,
+            },
+        };
+        Self::from_event(
+            thread_id,
+            ElicitationRequestEvent {
+                turn_id: params.turn_id,
+                server_name: params.server_name,
+                id: match request_id {
+                    AppServerRequestId::String(value) => McpRequestId::String(value),
+                    AppServerRequestId::Integer(value) => McpRequestId::Integer(value),
+                },
+                request,
+            },
+        )
+    }
+
     pub(crate) fn from_event(
         thread_id: ThreadId,
         request: ElicitationRequestEvent,

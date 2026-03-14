@@ -119,6 +119,7 @@ mod style;
 mod terminal_palette;
 mod text_formatting;
 mod theme_picker;
+mod thread_update;
 mod tooltips;
 mod tui;
 mod ui_consts;

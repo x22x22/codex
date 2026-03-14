@@ -18,7 +18,6 @@ use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::McpServerElicitationAction;
 use codex_app_server_protocol::McpServerElicitationRequestResponse;
 use codex_app_server_protocol::McpServerRefreshResponse;
@@ -84,6 +83,8 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::request_permissions::PermissionGrantScope;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+
+use crate::thread_update::ThreadUpdate;
 
 impl App {
     pub(super) async fn list_models_via_app_server(
@@ -628,12 +629,10 @@ impl App {
                         .map_err(|err| format!("failed to encode skills/list response: {err}"))?,
                 )
                 .map_err(|err| format!("failed to convert skills/list response: {err}"))?;
-                self.enqueue_primary_event(Event {
+                self.handle_codex_event_now(Event {
                     id: String::new(),
                     msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
-                })
-                .await
-                .map_err(|err| err.to_string())?;
+                });
             }
             Op::RefreshMcpServers { config } => {
                 let _: McpServerRefreshResponse = send_request_with_response(
@@ -691,6 +690,8 @@ impl App {
                     "thread/rollback",
                 )
                 .await?;
+                self.route_thread_update(ThreadUpdate::ThreadRolledBack { num_turns })
+                    .await;
             }
             Op::Review { review_request } => {
                 let response: ReviewStartResponse = send_request_with_response(
@@ -758,10 +759,10 @@ impl App {
                     .insert(params.item_id.clone(), request_id.clone());
             }
             ServerRequest::McpServerElicitationRequest { request_id, params } => {
-                self.pending_elicitation_request_queues
-                    .entry(params.server_name.clone())
-                    .or_default()
-                    .push_back(request_id.clone());
+                self.pending_elicitation_request_ids.insert(
+                    (params.server_name.clone(), request_id.to_string()),
+                    request_id.clone(),
+                );
             }
             ServerRequest::PermissionsRequestApproval { request_id, params } => {
                 self.pending_permissions_request_ids
@@ -784,6 +785,24 @@ impl App {
         }
     }
 
+    async fn route_thread_update(&mut self, update: ThreadUpdate) {
+        let Some(thread_id_text) = update.thread_id() else {
+            self.handle_thread_update_now(update);
+            return;
+        };
+        let Ok(thread_id) = ThreadId::from_string(&thread_id_text) else {
+            tracing::warn!("failed to parse thread id for thread update");
+            return;
+        };
+        if self.primary_thread_id.is_none() || self.primary_thread_id == Some(thread_id) {
+            if let Err(err) = self.enqueue_primary_update(update).await {
+                tracing::warn!("{err}");
+            }
+        } else if let Err(err) = self.handle_routed_thread_update(thread_id, update).await {
+            tracing::warn!("{err}");
+        }
+    }
+
     async fn handle_server_notification(
         &mut self,
         app_server_client: &InProcessAppServerClient,
@@ -791,9 +810,12 @@ impl App {
     ) {
         match notification {
             ServerNotification::TurnStarted(payload) => {
+                let active_turn_id = payload.turn.id.clone();
                 if let Ok(thread_id) = ThreadId::from_string(&payload.thread_id) {
-                    self.active_turn_ids.insert(thread_id, payload.turn.id);
+                    self.active_turn_ids.insert(thread_id, active_turn_id);
                 }
+                self.route_thread_update(ThreadUpdate::TurnStarted(payload))
+                    .await;
             }
             ServerNotification::TurnCompleted(payload) => {
                 if let Ok(thread_id) = ThreadId::from_string(&payload.thread_id)
@@ -801,34 +823,146 @@ impl App {
                 {
                     self.active_turn_ids.remove(&thread_id);
                 }
+                self.route_thread_update(ThreadUpdate::TurnCompleted(payload))
+                    .await;
             }
             ServerNotification::ThreadStarted(payload) => {
+                let agent_nickname = payload.thread.agent_nickname.clone();
+                let agent_role = payload.thread.agent_role.clone();
                 if let Ok(thread_id) = ThreadId::from_string(&payload.thread.id) {
-                    self.upsert_agent_picker_thread(
-                        thread_id,
-                        payload.thread.agent_nickname,
-                        payload.thread.agent_role,
-                        false,
-                    );
+                    self.upsert_agent_picker_thread(thread_id, agent_nickname, agent_role, false);
                 }
+                self.route_thread_update(ThreadUpdate::ThreadStarted(payload))
+                    .await;
+            }
+            ServerNotification::ThreadStatusChanged(payload) => {
+                self.route_thread_update(ThreadUpdate::ThreadStatusChanged(payload))
+                    .await;
             }
             ServerNotification::ThreadClosed(payload) => {
                 if let Ok(thread_id) = ThreadId::from_string(&payload.thread_id) {
                     self.mark_agent_picker_thread_closed(thread_id);
                     self.active_turn_ids.remove(&thread_id);
                 }
+                self.route_thread_update(ThreadUpdate::ThreadClosed(payload))
+                    .await;
             }
             ServerNotification::ThreadNameUpdated(payload) => {
                 if let Ok(thread_id) = ThreadId::from_string(&payload.thread_id)
                     && let Some(channel) = self.thread_event_channels.get(&thread_id)
                 {
                     let mut store = channel.store.lock().await;
-                    if let Some(event) = store.session_configured.as_mut()
-                        && let EventMsg::SessionConfigured(session) = &mut event.msg
-                    {
+                    if let Some(session) = store.session_configured.as_mut() {
                         session.thread_name = payload.thread_name.clone();
                     }
                 }
+                self.route_thread_update(ThreadUpdate::ThreadNameUpdated(payload))
+                    .await;
+            }
+            ServerNotification::ThreadTokenUsageUpdated(payload) => {
+                self.route_thread_update(ThreadUpdate::ThreadTokenUsageUpdated(payload))
+                    .await;
+            }
+            ServerNotification::TurnDiffUpdated(payload) => {
+                self.route_thread_update(ThreadUpdate::TurnDiffUpdated(payload))
+                    .await;
+            }
+            ServerNotification::TurnPlanUpdated(payload) => {
+                self.route_thread_update(ThreadUpdate::TurnPlanUpdated(payload))
+                    .await;
+            }
+            ServerNotification::ItemStarted(payload) => {
+                self.route_thread_update(ThreadUpdate::ItemStarted(payload))
+                    .await;
+            }
+            ServerNotification::ItemGuardianApprovalReviewStarted(payload) => {
+                self.route_thread_update(ThreadUpdate::ItemGuardianApprovalReviewStarted(payload))
+                    .await;
+            }
+            ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
+                self.route_thread_update(ThreadUpdate::ItemGuardianApprovalReviewCompleted(
+                    payload,
+                ))
+                .await;
+            }
+            ServerNotification::ItemCompleted(payload) => {
+                self.route_thread_update(ThreadUpdate::ItemCompleted(payload))
+                    .await;
+            }
+            ServerNotification::AgentMessageDelta(payload) => {
+                self.route_thread_update(ThreadUpdate::AgentMessageDelta(payload))
+                    .await;
+            }
+            ServerNotification::PlanDelta(payload) => {
+                self.route_thread_update(ThreadUpdate::PlanDelta(payload))
+                    .await;
+            }
+            ServerNotification::ReasoningSummaryTextDelta(payload) => {
+                self.route_thread_update(ThreadUpdate::ReasoningSummaryTextDelta(payload))
+                    .await;
+            }
+            ServerNotification::ReasoningSummaryPartAdded(payload) => {
+                self.route_thread_update(ThreadUpdate::ReasoningSummaryPartAdded(payload))
+                    .await;
+            }
+            ServerNotification::ReasoningTextDelta(payload) => {
+                self.route_thread_update(ThreadUpdate::ReasoningTextDelta(payload))
+                    .await;
+            }
+            ServerNotification::TerminalInteraction(payload) => {
+                self.route_thread_update(ThreadUpdate::TerminalInteraction(payload))
+                    .await;
+            }
+            ServerNotification::CommandExecutionOutputDelta(payload) => {
+                self.route_thread_update(ThreadUpdate::CommandExecutionOutputDelta(payload))
+                    .await;
+            }
+            ServerNotification::FileChangeOutputDelta(payload) => {
+                self.route_thread_update(ThreadUpdate::FileChangeOutputDelta(payload))
+                    .await;
+            }
+            ServerNotification::McpToolCallProgress(payload) => {
+                self.route_thread_update(ThreadUpdate::McpToolCallProgress(payload))
+                    .await;
+            }
+            ServerNotification::HookStarted(payload) => {
+                self.route_thread_update(ThreadUpdate::HookStarted(payload))
+                    .await;
+            }
+            ServerNotification::HookCompleted(payload) => {
+                self.route_thread_update(ThreadUpdate::HookCompleted(payload))
+                    .await;
+            }
+            ServerNotification::Error(payload) => {
+                self.route_thread_update(ThreadUpdate::Error(payload)).await;
+            }
+            ServerNotification::ModelRerouted(payload) => {
+                self.route_thread_update(ThreadUpdate::ModelRerouted(payload))
+                    .await;
+            }
+            ServerNotification::DeprecationNotice(payload) => {
+                self.route_thread_update(ThreadUpdate::DeprecationNotice(payload))
+                    .await;
+            }
+            ServerNotification::ThreadRealtimeStarted(payload) => {
+                self.route_thread_update(ThreadUpdate::ThreadRealtimeStarted(payload))
+                    .await;
+            }
+            ServerNotification::ThreadRealtimeItemAdded(payload) => {
+                self.route_thread_update(ThreadUpdate::ThreadRealtimeItemAdded(payload))
+                    .await;
+            }
+            ServerNotification::ThreadRealtimeOutputAudioDelta(payload) => {
+                self.route_thread_update(ThreadUpdate::ThreadRealtimeOutputAudioDelta(payload))
+                    .await;
+            }
+            ServerNotification::ThreadRealtimeError(payload) => {
+                self.route_thread_update(ThreadUpdate::ThreadRealtimeError(payload))
+                    .await;
+            }
+            ServerNotification::ThreadRealtimeClosed(payload) => {
+                self.route_thread_update(ThreadUpdate::ThreadRealtimeClosed(payload))
+                    .await;
             }
             ServerNotification::AccountUpdated(_) => {
                 match Self::read_account_via_app_server(app_server_client).await {
@@ -857,19 +991,21 @@ impl App {
                     true,
                 );
             }
+            ServerNotification::SkillsChanged(_) => {
+                if let Some(thread_id) = self.primary_thread_id {
+                    let _ = self
+                        .submit_app_server_op_inner(
+                            app_server_client,
+                            thread_id,
+                            Op::ListSkills {
+                                cwds: Vec::new(),
+                                force_reload: true,
+                            },
+                        )
+                        .await;
+                }
+            }
             _ => {}
-        }
-    }
-
-    fn maybe_correlate_legacy_server_request(&mut self, event: &Event) {
-        if let EventMsg::ElicitationRequest(ev) = &event.msg
-            && let Some(queue) = self
-                .pending_elicitation_request_queues
-                .get_mut(&ev.server_name)
-            && let Some(request_id) = queue.pop_front()
-        {
-            self.pending_elicitation_request_ids
-                .insert((ev.server_name.clone(), ev.id.to_string()), request_id);
         }
     }
 
@@ -892,51 +1028,58 @@ impl App {
                     .await;
             }
             InProcessServerEvent::LegacyNotification(notification) => {
-                match decode_legacy_notification(notification) {
-                    Ok(decoded) => {
-                        self.maybe_correlate_legacy_server_request(&decoded.event);
-                        match decoded.conversation_id {
-                            Some(conversation_id) => {
-                                match ThreadId::from_string(&conversation_id) {
-                                    Ok(thread_id) => {
-                                        if self.primary_thread_id.is_none()
-                                            || self.primary_thread_id == Some(thread_id)
-                                        {
-                                            if let Err(err) =
-                                                self.enqueue_primary_event(decoded.event).await
-                                            {
-                                                tracing::warn!("{err}");
-                                            }
-                                        } else if let Err(err) = self
-                                            .handle_routed_thread_event(thread_id, decoded.event)
-                                            .await
-                                        {
-                                            tracing::warn!("{err}");
-                                        }
-                                    }
-                                    Err(err) => {
-                                        tracing::warn!(
-                                            conversation_id,
-                                            error = %err,
-                                            "failed to parse app-server conversation id"
-                                        );
-                                    }
-                                }
-                            }
-                            None => {
-                                if let Err(err) = self.enqueue_primary_event(decoded.event).await {
-                                    tracing::warn!("{err}");
-                                }
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!("{err}");
-                    }
-                }
+                tracing::warn!(
+                    notification.method = %notification.method,
+                    "unexpected legacy notification after TUI app-server typed-event migration"
+                );
             }
             InProcessServerEvent::ServerRequest(request) => {
                 self.note_server_request(&request);
+                match request.clone() {
+                    ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
+                        self.route_thread_update(ThreadUpdate::CommandExecutionRequestApproval {
+                            request_id,
+                            params,
+                        })
+                        .await;
+                    }
+                    ServerRequest::FileChangeRequestApproval { request_id, params } => {
+                        self.route_thread_update(ThreadUpdate::FileChangeRequestApproval {
+                            request_id,
+                            params,
+                        })
+                        .await;
+                    }
+                    ServerRequest::McpServerElicitationRequest { request_id, params } => {
+                        self.route_thread_update(ThreadUpdate::McpServerElicitationRequest {
+                            request_id,
+                            params,
+                        })
+                        .await;
+                    }
+                    ServerRequest::PermissionsRequestApproval { request_id, params } => {
+                        self.route_thread_update(ThreadUpdate::PermissionsRequestApproval {
+                            request_id,
+                            params,
+                        })
+                        .await;
+                    }
+                    ServerRequest::ToolRequestUserInput { request_id, params } => {
+                        self.route_thread_update(ThreadUpdate::ToolRequestUserInput {
+                            request_id,
+                            params,
+                        })
+                        .await;
+                    }
+                    ServerRequest::DynamicToolCall { request_id, params } => {
+                        self.route_thread_update(ThreadUpdate::DynamicToolCall {
+                            request_id,
+                            params,
+                        })
+                        .await;
+                    }
+                    _ => {}
+                }
                 if let ServerRequest::ChatgptAuthTokensRefresh {
                     request_id,
                     params: _,
@@ -1216,10 +1359,6 @@ fn elicitation_action_to_api(action: ElicitationAction) -> McpServerElicitationA
     }
 }
 
-fn normalize_legacy_notification_method(method: &str) -> &str {
-    method.strip_prefix("codex/event/").unwrap_or(method)
-}
-
 fn lagged_event_warning_message(skipped: usize) -> String {
     format!("in-process app-server event stream lagged; dropped {skipped} events")
 }
@@ -1301,56 +1440,6 @@ fn credits_snapshot_from_api(
         unlimited: credits.unlimited,
         balance: credits.balance,
     }
-}
-
-struct DecodedLegacyNotification {
-    conversation_id: Option<String>,
-    event: Event,
-}
-
-fn decode_legacy_notification(
-    notification: JSONRPCNotification,
-) -> Result<DecodedLegacyNotification, String> {
-    let value = notification
-        .params
-        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
-    let method = notification.method;
-    let normalized_method = normalize_legacy_notification_method(&method).to_string();
-    let serde_json::Value::Object(mut object) = value else {
-        return Err(format!(
-            "legacy notification `{method}` params were not an object"
-        ));
-    };
-    let conversation_id = object
-        .get("conversationId")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned);
-    let mut event_payload = if let Some(serde_json::Value::Object(msg_payload)) = object.get("msg")
-    {
-        serde_json::Value::Object(msg_payload.clone())
-    } else {
-        object.remove("conversationId");
-        serde_json::Value::Object(object)
-    };
-    let serde_json::Value::Object(ref mut object) = event_payload else {
-        return Err(format!(
-            "legacy notification `{method}` event payload was not an object"
-        ));
-    };
-    object.insert(
-        "type".to_string(),
-        serde_json::Value::String(normalized_method),
-    );
-
-    let msg: EventMsg = serde_json::from_value(event_payload)
-        .map_err(|err| format!("failed to decode event: {err}"))?;
-    Ok(DecodedLegacyNotification {
-        conversation_id,
-        event: Event {
-            id: String::new(),
-            msg,
-        },
-    })
 }
 
 async fn resolve_server_request<T>(

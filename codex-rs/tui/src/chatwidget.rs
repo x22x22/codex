@@ -49,6 +49,7 @@ use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
 use crate::status::rate_limit_snapshot_display_for_limit;
 use crate::text_formatting::proper_join;
+use crate::thread_update::ThreadUpdate;
 use crate::version::CODEX_CLI_VERSION;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_chatgpt::connectors;
@@ -77,6 +78,7 @@ use codex_otel::RuntimeMetricsSummary;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
 use codex_protocol::account::PlanType;
+use codex_protocol::approvals::ElicitationRequest;
 use codex_protocol::approvals::ElicitationRequestEvent;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -4844,6 +4846,436 @@ impl ChatWidget {
         self.dispatch_event_msg(None, msg, Some(ReplayKind::ThreadSnapshot));
     }
 
+    pub(crate) fn handle_thread_update(&mut self, update: ThreadUpdate) {
+        self.dispatch_thread_update(update, None);
+    }
+
+    pub(crate) fn handle_thread_update_replay(&mut self, update: ThreadUpdate) {
+        self.dispatch_thread_update(update, Some(ReplayKind::ThreadSnapshot));
+    }
+
+    fn dispatch_thread_update(&mut self, update: ThreadUpdate, replay_kind: Option<ReplayKind>) {
+        let from_replay = replay_kind.is_some();
+        let is_resume_initial_replay =
+            matches!(replay_kind, Some(ReplayKind::ResumeInitialMessages));
+        if !is_resume_initial_replay {
+            self.restore_retry_status_header_if_present();
+        }
+
+        match update {
+            ThreadUpdate::SessionConfigured(event) => self.on_session_configured(event),
+            ThreadUpdate::ThreadNameUpdated(event) => {
+                match ThreadId::from_string(&event.thread_id) {
+                    Ok(thread_id) => self.on_thread_name_updated(
+                        codex_protocol::protocol::ThreadNameUpdatedEvent {
+                            thread_id,
+                            thread_name: event.thread_name,
+                        },
+                    ),
+                    Err(err) => tracing::warn!(
+                        thread_id = %event.thread_id,
+                        "ignoring thread/nameUpdated notification with invalid thread id: {err}"
+                    ),
+                }
+            }
+            ThreadUpdate::ThreadTokenUsageUpdated(event) => {
+                let info = Some(TokenUsageInfo {
+                    total_token_usage: token_usage_from_api(&event.token_usage.total),
+                    last_token_usage: token_usage_from_api(&event.token_usage.last),
+                    model_context_window: event.token_usage.model_context_window,
+                });
+                self.set_token_info(info);
+            }
+            ThreadUpdate::TurnStarted(_event) => {
+                if !is_resume_initial_replay {
+                    self.on_task_started();
+                    self.apply_turn_started_context_window(None);
+                }
+            }
+            ThreadUpdate::TurnCompleted(event) => {
+                let last_agent_message =
+                    event.turn.items.iter().rev().find_map(|item| match item {
+                        codex_app_server_protocol::ThreadItem::AgentMessage { text, .. } => {
+                            Some(text.clone())
+                        }
+                        _ => None,
+                    });
+                match event.turn.status {
+                    codex_app_server_protocol::TurnStatus::Completed
+                    | codex_app_server_protocol::TurnStatus::Failed => {
+                        self.on_task_complete(last_agent_message, from_replay);
+                        if let Some(error) = event.turn.error {
+                            self.on_error(error.message);
+                        }
+                    }
+                    codex_app_server_protocol::TurnStatus::Interrupted => {
+                        self.on_interrupted_turn(TurnAbortReason::Interrupted);
+                    }
+                    codex_app_server_protocol::TurnStatus::InProgress => {}
+                }
+            }
+            ThreadUpdate::TurnDiffUpdated(event) => self.on_turn_diff(event.diff),
+            ThreadUpdate::TurnPlanUpdated(event) => {
+                self.on_plan_update(update_plan_args_from_api(event.explanation, event.plan))
+            }
+            ThreadUpdate::AgentMessageDelta(event) => self.on_agent_message_delta(event.delta),
+            ThreadUpdate::PlanDelta(event) => self.on_plan_delta(event.delta),
+            ThreadUpdate::ReasoningSummaryTextDelta(event) => {
+                self.on_agent_reasoning_delta(event.delta);
+            }
+            ThreadUpdate::ReasoningSummaryPartAdded(_) => self.on_reasoning_section_break(),
+            ThreadUpdate::ReasoningTextDelta(event) => self.on_agent_reasoning_delta(event.delta),
+            ThreadUpdate::TerminalInteraction(event) => {
+                self.on_terminal_interaction(codex_protocol::protocol::TerminalInteractionEvent {
+                    call_id: event.item_id,
+                    process_id: event.process_id,
+                    stdin: event.stdin,
+                });
+            }
+            ThreadUpdate::CommandExecutionOutputDelta(event) => {
+                self.on_exec_command_output_delta(
+                    codex_protocol::protocol::ExecCommandOutputDeltaEvent {
+                        call_id: event.item_id,
+                        stream: codex_protocol::protocol::ExecOutputStream::Stdout,
+                        chunk: event.delta.into_bytes(),
+                    },
+                );
+            }
+            ThreadUpdate::FileChangeOutputDelta(_) => {}
+            ThreadUpdate::McpToolCallProgress(_) => {}
+            ThreadUpdate::ItemStarted(event) => {
+                self.handle_thread_item_started(event.item);
+            }
+            ThreadUpdate::ItemCompleted(event) => {
+                self.handle_thread_item_completed(event.item, from_replay);
+            }
+            ThreadUpdate::ItemGuardianApprovalReviewStarted(event) => {
+                self.on_guardian_assessment(codex_protocol::approvals::GuardianAssessmentEvent {
+                    id: event.target_item_id,
+                    turn_id: event.turn_id,
+                    status: guardian_status_from_api(event.review.status),
+                    risk_score: event.review.risk_score,
+                    risk_level: event.review.risk_level.map(guardian_risk_level_from_api),
+                    rationale: event.review.rationale,
+                    action: event.action,
+                });
+            }
+            ThreadUpdate::ItemGuardianApprovalReviewCompleted(event) => {
+                self.on_guardian_assessment(codex_protocol::approvals::GuardianAssessmentEvent {
+                    id: event.target_item_id,
+                    turn_id: event.turn_id,
+                    status: guardian_status_from_api(event.review.status),
+                    risk_score: event.review.risk_score,
+                    risk_level: event.review.risk_level.map(guardian_risk_level_from_api),
+                    rationale: event.review.rationale,
+                    action: event.action,
+                });
+            }
+            ThreadUpdate::CommandExecutionRequestApproval { params, .. } => {
+                self.on_exec_approval_request(String::new(), exec_approval_event_from_api(params));
+            }
+            ThreadUpdate::FileChangeRequestApproval { params, .. } => {
+                self.on_apply_patch_approval_request(
+                    String::new(),
+                    patch_approval_event_from_api(params),
+                );
+            }
+            ThreadUpdate::McpServerElicitationRequest { request_id, params } => {
+                self.on_elicitation_request(elicitation_event_from_api(request_id, params));
+            }
+            ThreadUpdate::PermissionsRequestApproval { params, .. } => {
+                self.on_request_permissions(request_permissions_event_from_api(params));
+            }
+            ThreadUpdate::ToolRequestUserInput { params, .. } => {
+                self.on_request_user_input(request_user_input_event_from_api(params));
+            }
+            ThreadUpdate::Error(event) => self.on_error(event.error.message),
+            ThreadUpdate::ModelRerouted(_) => {}
+            ThreadUpdate::DeprecationNotice(event) => {
+                self.on_deprecation_notice(codex_protocol::protocol::DeprecationNoticeEvent {
+                    summary: event.summary,
+                    details: event.details,
+                });
+            }
+            ThreadUpdate::HookStarted(event) => {
+                self.on_hook_started(codex_protocol::protocol::HookStartedEvent {
+                    turn_id: event.turn_id,
+                    run: hook_run_summary_from_api(event.run),
+                });
+            }
+            ThreadUpdate::HookCompleted(event) => {
+                self.on_hook_completed(codex_protocol::protocol::HookCompletedEvent {
+                    turn_id: event.turn_id,
+                    run: hook_run_summary_from_api(event.run),
+                });
+            }
+            ThreadUpdate::ThreadRealtimeStarted(event) => {
+                if !from_replay {
+                    self.on_realtime_conversation_started(
+                        codex_protocol::protocol::RealtimeConversationStartedEvent {
+                            session_id: event.session_id,
+                        },
+                    );
+                }
+            }
+            ThreadUpdate::ThreadRealtimeItemAdded(_) => {}
+            ThreadUpdate::ThreadRealtimeOutputAudioDelta(_) => {}
+            ThreadUpdate::ThreadRealtimeError(event) => {
+                if !from_replay {
+                    self.on_stream_error(event.message, None);
+                }
+            }
+            ThreadUpdate::ThreadRealtimeClosed(event) => {
+                if !from_replay {
+                    self.on_realtime_conversation_closed(
+                        codex_protocol::protocol::RealtimeConversationClosedEvent {
+                            reason: event.reason,
+                        },
+                    );
+                }
+            }
+            ThreadUpdate::DynamicToolCall { .. } => {}
+            ThreadUpdate::ThreadStarted(_)
+            | ThreadUpdate::ThreadStatusChanged(_)
+            | ThreadUpdate::ThreadClosed(_) => {}
+            ThreadUpdate::ThreadRolledBack { num_turns } => {
+                self.last_copyable_output = None;
+                if from_replay {
+                    self.app_event_tx
+                        .send(AppEvent::ApplyThreadRollback { num_turns });
+                }
+            }
+        }
+
+        if !from_replay && self.agent_turn_running {
+            self.refresh_runtime_metrics();
+        }
+    }
+
+    fn handle_thread_item_started(&mut self, item: codex_app_server_protocol::ThreadItem) {
+        match item {
+            codex_app_server_protocol::ThreadItem::CommandExecution {
+                id,
+                command,
+                cwd,
+                process_id,
+                ..
+            } => {
+                let command = vec![command];
+                let parsed_cmd = codex_shell_command::parse_command::parse_command(&command);
+                self.on_exec_command_begin(ExecCommandBeginEvent {
+                    call_id: id,
+                    process_id,
+                    turn_id: String::new(),
+                    command,
+                    cwd,
+                    parsed_cmd,
+                    source: ExecCommandSource::Agent,
+                    interaction_input: None,
+                });
+            }
+            codex_app_server_protocol::ThreadItem::FileChange { id, changes, .. } => {
+                self.on_patch_apply_begin(PatchApplyBeginEvent {
+                    call_id: id,
+                    turn_id: String::new(),
+                    auto_approved: false,
+                    changes: file_changes_from_api(changes),
+                });
+            }
+            codex_app_server_protocol::ThreadItem::McpToolCall {
+                id,
+                server,
+                tool,
+                arguments,
+                ..
+            } => {
+                self.on_mcp_tool_call_begin(McpToolCallBeginEvent {
+                    call_id: id,
+                    invocation: codex_protocol::protocol::McpInvocation {
+                        server,
+                        tool,
+                        arguments: Some(arguments),
+                    },
+                });
+            }
+            codex_app_server_protocol::ThreadItem::WebSearch { id, .. } => {
+                self.on_web_search_begin(codex_protocol::protocol::WebSearchBeginEvent {
+                    call_id: id,
+                });
+            }
+            codex_app_server_protocol::ThreadItem::ImageView { id, path } => {
+                self.on_view_image_tool_call(codex_protocol::protocol::ViewImageToolCallEvent {
+                    call_id: id,
+                    path: PathBuf::from(path),
+                });
+            }
+            codex_app_server_protocol::ThreadItem::ImageGeneration { id, .. } => {
+                self.on_image_generation_begin(ImageGenerationBeginEvent { call_id: id });
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_thread_item_completed(
+        &mut self,
+        item: codex_app_server_protocol::ThreadItem,
+        from_replay: bool,
+    ) {
+        match item {
+            codex_app_server_protocol::ThreadItem::UserMessage { content, .. } => {
+                let event = user_message_event_from_api(content);
+                if from_replay || self.should_render_realtime_user_message_event(&event) {
+                    self.on_user_message_event(event);
+                }
+            }
+            codex_app_server_protocol::ThreadItem::AgentMessage { id, text, phase } => {
+                if from_replay || self.is_review_mode {
+                    self.on_agent_message(text.clone());
+                }
+                self.on_agent_message_item_completed(AgentMessageItem {
+                    id,
+                    content: vec![AgentMessageContent::Text { text }],
+                    phase,
+                });
+            }
+            codex_app_server_protocol::ThreadItem::Plan { text, .. } => {
+                self.on_plan_item_completed(text);
+            }
+            codex_app_server_protocol::ThreadItem::Reasoning { content, .. } => {
+                for part in content {
+                    self.on_agent_reasoning_delta(part);
+                }
+                self.on_agent_reasoning_final();
+            }
+            codex_app_server_protocol::ThreadItem::CommandExecution {
+                id,
+                command,
+                cwd,
+                process_id,
+                aggregated_output,
+                exit_code,
+                duration_ms,
+                status,
+                ..
+            } => {
+                let command = vec![command];
+                let parsed_cmd = codex_shell_command::parse_command::parse_command(&command);
+                self.on_exec_command_end(ExecCommandEndEvent {
+                    call_id: id,
+                    process_id,
+                    turn_id: String::new(),
+                    command,
+                    cwd,
+                    parsed_cmd,
+                    source: ExecCommandSource::Agent,
+                    interaction_input: None,
+                    stdout: aggregated_output.clone().unwrap_or_default(),
+                    stderr: String::new(),
+                    aggregated_output: aggregated_output.unwrap_or_default(),
+                    exit_code: exit_code.unwrap_or_default(),
+                    duration: std::time::Duration::from_millis(
+                        duration_ms.unwrap_or_default().max(0) as u64,
+                    ),
+                    formatted_output: String::new(),
+                    status: exec_status_from_api(status),
+                });
+            }
+            codex_app_server_protocol::ThreadItem::FileChange {
+                id,
+                status,
+                changes,
+                ..
+            } => {
+                self.on_patch_apply_end(codex_protocol::protocol::PatchApplyEndEvent {
+                    call_id: id,
+                    turn_id: String::new(),
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: matches!(
+                        status,
+                        codex_app_server_protocol::PatchApplyStatus::Completed
+                    ),
+                    changes: file_changes_from_api(changes),
+                    status: patch_apply_status_from_api(status),
+                });
+            }
+            codex_app_server_protocol::ThreadItem::McpToolCall {
+                id,
+                server,
+                tool,
+                arguments,
+                result,
+                error,
+                duration_ms,
+                ..
+            } => {
+                self.on_mcp_tool_call_end(McpToolCallEndEvent {
+                    call_id: id,
+                    invocation: codex_protocol::protocol::McpInvocation {
+                        server,
+                        tool,
+                        arguments: Some(arguments),
+                    },
+                    duration: std::time::Duration::from_millis(
+                        duration_ms.unwrap_or_default().max(0) as u64,
+                    ),
+                    result: match result {
+                        Some(result) => Ok(mcp_result_from_api(result)),
+                        None => Err(error.map(|err| err.message).unwrap_or_default()),
+                    },
+                });
+            }
+            codex_app_server_protocol::ThreadItem::WebSearch { id, query, action } => {
+                self.on_web_search_end(codex_protocol::protocol::WebSearchEndEvent {
+                    call_id: id,
+                    query,
+                    action: web_search_action_from_api(action),
+                });
+            }
+            codex_app_server_protocol::ThreadItem::ImageGeneration {
+                id,
+                status,
+                revised_prompt,
+                result,
+            } => {
+                self.on_image_generation_end(ImageGenerationEndEvent {
+                    call_id: id,
+                    status,
+                    revised_prompt,
+                    result,
+                    saved_path: None,
+                });
+            }
+            codex_app_server_protocol::ThreadItem::EnteredReviewMode { review, .. } => {
+                self.on_entered_review_mode(
+                    ReviewRequest {
+                        target: ReviewTarget::Custom {
+                            instructions: review.clone(),
+                        },
+                        user_facing_hint: Some(review),
+                    },
+                    from_replay,
+                );
+            }
+            codex_app_server_protocol::ThreadItem::ExitedReviewMode { review, .. } => {
+                self.on_exited_review_mode(ExitedReviewModeEvent {
+                    review_output: Some(codex_protocol::protocol::ReviewOutputEvent {
+                        findings: Vec::new(),
+                        overall_correctness: String::new(),
+                        overall_explanation: review,
+                        overall_confidence_score: 0.0,
+                    }),
+                });
+            }
+            codex_app_server_protocol::ThreadItem::ContextCompaction { .. } => {
+                self.on_agent_message("Context compacted".to_owned());
+            }
+            codex_app_server_protocol::ThreadItem::ImageView { .. }
+            | codex_app_server_protocol::ThreadItem::DynamicToolCall { .. }
+            | codex_app_server_protocol::ThreadItem::CollabAgentToolCall { .. } => {}
+        }
+    }
+
     /// Dispatch a protocol `EventMsg` to the appropriate handler.
     ///
     /// `id` is `Some` for live events and `None` for replayed events from
@@ -8981,6 +9413,337 @@ fn hook_event_label(event_name: codex_protocol::protocol::HookEventName) -> &'st
     match event_name {
         codex_protocol::protocol::HookEventName::SessionStart => "SessionStart",
         codex_protocol::protocol::HookEventName::Stop => "Stop",
+    }
+}
+
+fn token_usage_from_api(
+    usage: &codex_app_server_protocol::TokenUsageBreakdown,
+) -> codex_protocol::protocol::TokenUsage {
+    codex_protocol::protocol::TokenUsage {
+        total_tokens: usage.total_tokens,
+        input_tokens: usage.input_tokens,
+        cached_input_tokens: usage.cached_input_tokens,
+        output_tokens: usage.output_tokens,
+        reasoning_output_tokens: usage.reasoning_output_tokens,
+    }
+}
+
+fn update_plan_args_from_api(
+    explanation: Option<String>,
+    plan: Vec<codex_app_server_protocol::TurnPlanStep>,
+) -> codex_protocol::plan_tool::UpdatePlanArgs {
+    codex_protocol::plan_tool::UpdatePlanArgs {
+        explanation,
+        plan: plan
+            .into_iter()
+            .map(|step| codex_protocol::plan_tool::PlanItemArg {
+                step: step.step,
+                status: match step.status {
+                    codex_app_server_protocol::TurnPlanStepStatus::Pending => {
+                        codex_protocol::plan_tool::StepStatus::Pending
+                    }
+                    codex_app_server_protocol::TurnPlanStepStatus::InProgress => {
+                        codex_protocol::plan_tool::StepStatus::InProgress
+                    }
+                    codex_app_server_protocol::TurnPlanStepStatus::Completed => {
+                        codex_protocol::plan_tool::StepStatus::Completed
+                    }
+                },
+            })
+            .collect(),
+    }
+}
+
+fn guardian_status_from_api(
+    status: codex_app_server_protocol::GuardianApprovalReviewStatus,
+) -> GuardianAssessmentStatus {
+    match status {
+        codex_app_server_protocol::GuardianApprovalReviewStatus::InProgress => {
+            GuardianAssessmentStatus::InProgress
+        }
+        codex_app_server_protocol::GuardianApprovalReviewStatus::Approved => {
+            GuardianAssessmentStatus::Approved
+        }
+        codex_app_server_protocol::GuardianApprovalReviewStatus::Denied => {
+            GuardianAssessmentStatus::Denied
+        }
+        codex_app_server_protocol::GuardianApprovalReviewStatus::Aborted => {
+            GuardianAssessmentStatus::Aborted
+        }
+    }
+}
+
+fn guardian_risk_level_from_api(
+    level: codex_app_server_protocol::GuardianRiskLevel,
+) -> codex_protocol::approvals::GuardianRiskLevel {
+    match level {
+        codex_app_server_protocol::GuardianRiskLevel::Low => {
+            codex_protocol::approvals::GuardianRiskLevel::Low
+        }
+        codex_app_server_protocol::GuardianRiskLevel::Medium => {
+            codex_protocol::approvals::GuardianRiskLevel::Medium
+        }
+        codex_app_server_protocol::GuardianRiskLevel::High => {
+            codex_protocol::approvals::GuardianRiskLevel::High
+        }
+    }
+}
+
+fn exec_approval_event_from_api(
+    params: codex_app_server_protocol::CommandExecutionRequestApprovalParams,
+) -> ExecApprovalRequestEvent {
+    let command = params
+        .command
+        .map(|command| vec![command])
+        .unwrap_or_default();
+    ExecApprovalRequestEvent {
+        call_id: params.item_id,
+        approval_id: params.approval_id,
+        turn_id: params.turn_id,
+        command: command.clone(),
+        cwd: params.cwd.unwrap_or_default(),
+        reason: params.reason,
+        network_approval_context: params
+            .network_approval_context
+            .and_then(|context| serde_json::from_value(serde_json::to_value(context).ok()?).ok()),
+        proposed_execpolicy_amendment: None,
+        proposed_network_policy_amendments: None,
+        additional_permissions: params.additional_permissions.and_then(|permissions| {
+            serde_json::from_value(serde_json::to_value(permissions).ok()?).ok()
+        }),
+        skill_metadata: None,
+        available_decisions: None,
+        parsed_cmd: codex_shell_command::parse_command::parse_command(&command),
+    }
+}
+
+fn patch_approval_event_from_api(
+    params: codex_app_server_protocol::FileChangeRequestApprovalParams,
+) -> ApplyPatchApprovalRequestEvent {
+    ApplyPatchApprovalRequestEvent {
+        call_id: params.item_id,
+        turn_id: params.turn_id,
+        changes: HashMap::new(),
+        reason: params.reason,
+        grant_root: params.grant_root,
+    }
+}
+
+fn elicitation_event_from_api(
+    request_id: codex_app_server_protocol::RequestId,
+    params: codex_app_server_protocol::McpServerElicitationRequestParams,
+) -> ElicitationRequestEvent {
+    ElicitationRequestEvent {
+        turn_id: params.turn_id,
+        server_name: params.server_name,
+        id: match request_id {
+            codex_app_server_protocol::RequestId::String(value) => {
+                codex_protocol::mcp::RequestId::String(value)
+            }
+            codex_app_server_protocol::RequestId::Integer(value) => {
+                codex_protocol::mcp::RequestId::Integer(value)
+            }
+        },
+        request: match params.request {
+            codex_app_server_protocol::McpServerElicitationRequest::Form {
+                meta,
+                message,
+                requested_schema,
+            } => ElicitationRequest::Form {
+                meta,
+                message,
+                requested_schema: serde_json::to_value(requested_schema)
+                    .unwrap_or(serde_json::Value::Null),
+            },
+            codex_app_server_protocol::McpServerElicitationRequest::Url {
+                meta,
+                message,
+                url,
+                elicitation_id,
+            } => ElicitationRequest::Url {
+                meta,
+                message,
+                url,
+                elicitation_id,
+            },
+        },
+    }
+}
+
+fn request_permissions_event_from_api(
+    params: codex_app_server_protocol::PermissionsRequestApprovalParams,
+) -> codex_protocol::request_permissions::RequestPermissionsEvent {
+    codex_protocol::request_permissions::RequestPermissionsEvent {
+        call_id: params.item_id,
+        turn_id: params.turn_id,
+        reason: params.reason,
+        permissions: serde_json::from_value(
+            serde_json::to_value(params.permissions).unwrap_or(serde_json::Value::Null),
+        )
+        .unwrap_or_default(),
+    }
+}
+
+fn request_user_input_event_from_api(
+    params: codex_app_server_protocol::ToolRequestUserInputParams,
+) -> codex_protocol::request_user_input::RequestUserInputEvent {
+    codex_protocol::request_user_input::RequestUserInputEvent {
+        call_id: params.item_id,
+        turn_id: params.turn_id,
+        questions: params
+            .questions
+            .into_iter()
+            .map(
+                |question| codex_protocol::request_user_input::RequestUserInputQuestion {
+                    id: question.id,
+                    header: question.header,
+                    question: question.question,
+                    is_other: question.is_other,
+                    is_secret: question.is_secret,
+                    options: question.options.map(|options| {
+                        options
+                            .into_iter()
+                            .map(|option| {
+                                codex_protocol::request_user_input::RequestUserInputQuestionOption {
+                                    label: option.label,
+                                    description: option.description,
+                                }
+                            })
+                            .collect()
+                    }),
+                },
+            )
+            .collect(),
+    }
+}
+
+fn file_changes_from_api(
+    changes: Vec<codex_app_server_protocol::FileUpdateChange>,
+) -> HashMap<PathBuf, codex_protocol::protocol::FileChange> {
+    changes
+        .into_iter()
+        .map(|change| {
+            let file_change = match change.kind {
+                codex_app_server_protocol::PatchChangeKind::Add => {
+                    codex_protocol::protocol::FileChange::Add {
+                        content: change.diff,
+                    }
+                }
+                codex_app_server_protocol::PatchChangeKind::Delete => {
+                    codex_protocol::protocol::FileChange::Delete {
+                        content: change.diff,
+                    }
+                }
+                codex_app_server_protocol::PatchChangeKind::Update { move_path } => {
+                    codex_protocol::protocol::FileChange::Update {
+                        unified_diff: change.diff,
+                        move_path,
+                    }
+                }
+            };
+            (PathBuf::from(change.path), file_change)
+        })
+        .collect()
+}
+
+fn user_message_event_from_api(
+    content: Vec<codex_app_server_protocol::UserInput>,
+) -> codex_protocol::protocol::UserMessageEvent {
+    let mut message = String::new();
+    let mut images = Vec::new();
+    let mut local_images = Vec::new();
+    let mut text_elements = Vec::new();
+    for item in content {
+        match item {
+            codex_app_server_protocol::UserInput::Text {
+                text,
+                text_elements: api_elements,
+            } => {
+                message.push_str(&text);
+                text_elements.extend(api_elements.into_iter().map(Into::into));
+            }
+            codex_app_server_protocol::UserInput::Image { url } => images.push(url),
+            codex_app_server_protocol::UserInput::LocalImage { path } => local_images.push(path),
+            codex_app_server_protocol::UserInput::Skill { .. }
+            | codex_app_server_protocol::UserInput::Mention { .. } => {}
+        }
+    }
+    codex_protocol::protocol::UserMessageEvent {
+        message,
+        images: Some(images),
+        local_images,
+        text_elements,
+    }
+}
+
+fn exec_status_from_api(
+    status: codex_app_server_protocol::CommandExecutionStatus,
+) -> codex_protocol::protocol::ExecCommandStatus {
+    match status {
+        codex_app_server_protocol::CommandExecutionStatus::InProgress
+        | codex_app_server_protocol::CommandExecutionStatus::Completed => {
+            codex_protocol::protocol::ExecCommandStatus::Completed
+        }
+        codex_app_server_protocol::CommandExecutionStatus::Failed => {
+            codex_protocol::protocol::ExecCommandStatus::Failed
+        }
+        codex_app_server_protocol::CommandExecutionStatus::Declined => {
+            codex_protocol::protocol::ExecCommandStatus::Declined
+        }
+    }
+}
+
+fn patch_apply_status_from_api(
+    status: codex_app_server_protocol::PatchApplyStatus,
+) -> codex_protocol::protocol::PatchApplyStatus {
+    match status {
+        codex_app_server_protocol::PatchApplyStatus::InProgress
+        | codex_app_server_protocol::PatchApplyStatus::Completed => {
+            codex_protocol::protocol::PatchApplyStatus::Completed
+        }
+        codex_app_server_protocol::PatchApplyStatus::Failed => {
+            codex_protocol::protocol::PatchApplyStatus::Failed
+        }
+        codex_app_server_protocol::PatchApplyStatus::Declined => {
+            codex_protocol::protocol::PatchApplyStatus::Declined
+        }
+    }
+}
+
+fn hook_run_summary_from_api(
+    run: codex_app_server_protocol::HookRunSummary,
+) -> codex_protocol::protocol::HookRunSummary {
+    serde_json::from_value(serde_json::to_value(run).unwrap_or(serde_json::Value::Null))
+        .unwrap_or_else(|err| panic!("failed to convert app-server hook run summary: {err}"))
+}
+
+fn mcp_result_from_api(
+    result: codex_app_server_protocol::McpToolCallResult,
+) -> codex_protocol::mcp::CallToolResult {
+    codex_protocol::mcp::CallToolResult {
+        content: result.content,
+        structured_content: result.structured_content,
+        is_error: None,
+        meta: None,
+    }
+}
+
+fn web_search_action_from_api(
+    action: Option<codex_app_server_protocol::WebSearchAction>,
+) -> codex_protocol::models::WebSearchAction {
+    match action.unwrap_or(codex_app_server_protocol::WebSearchAction::Other) {
+        codex_app_server_protocol::WebSearchAction::Search { query, queries } => {
+            codex_protocol::models::WebSearchAction::Search { query, queries }
+        }
+        codex_app_server_protocol::WebSearchAction::OpenPage { url } => {
+            codex_protocol::models::WebSearchAction::OpenPage { url }
+        }
+        codex_app_server_protocol::WebSearchAction::FindInPage { url, pattern } => {
+            codex_protocol::models::WebSearchAction::FindInPage { url, pattern }
+        }
+        codex_app_server_protocol::WebSearchAction::Other => {
+            codex_protocol::models::WebSearchAction::Other
+        }
     }
 }
 

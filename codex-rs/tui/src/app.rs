@@ -37,6 +37,7 @@ use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
+use crate::thread_update::ThreadUpdate;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
@@ -65,7 +66,6 @@ use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
-use codex_protocol::items::TurnItem;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -93,7 +93,6 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::path::PathBuf;
@@ -283,16 +282,15 @@ struct SessionSummary {
 
 #[derive(Debug, Clone)]
 struct ThreadEventSnapshot {
-    session_configured: Option<Event>,
-    events: Vec<Event>,
+    session_configured: Option<SessionConfiguredEvent>,
+    updates: Vec<ThreadUpdate>,
     input_state: Option<ThreadInputState>,
 }
 
 #[derive(Debug)]
 struct ThreadEventStore {
-    session_configured: Option<Event>,
-    buffer: VecDeque<Event>,
-    user_message_ids: HashSet<String>,
+    session_configured: Option<SessionConfiguredEvent>,
+    buffer: VecDeque<ThreadUpdate>,
     pending_interactive_replay: PendingInteractiveReplayState,
     input_state: Option<ThreadInputState>,
     capacity: usize,
@@ -304,7 +302,6 @@ impl ThreadEventStore {
         Self {
             session_configured: None,
             buffer: VecDeque::new(),
-            user_message_ids: HashSet::new(),
             pending_interactive_replay: PendingInteractiveReplayState::default(),
             input_state: None,
             capacity,
@@ -312,53 +309,24 @@ impl ThreadEventStore {
         }
     }
 
-    fn new_with_session_configured(capacity: usize, event: Event) -> Self {
+    fn new_with_session_configured(capacity: usize, event: SessionConfiguredEvent) -> Self {
         let mut store = Self::new(capacity);
         store.session_configured = Some(event);
         store
     }
 
-    fn push_event(&mut self, event: Event) {
-        self.pending_interactive_replay.note_event(&event);
-        match &event.msg {
-            EventMsg::SessionConfigured(_) => {
-                self.session_configured = Some(event);
-                return;
-            }
-            EventMsg::ItemCompleted(completed) => {
-                if let TurnItem::UserMessage(item) = &completed.item {
-                    if !event.id.is_empty() && self.user_message_ids.contains(&event.id) {
-                        return;
-                    }
-                    let legacy = Event {
-                        id: event.id,
-                        msg: item.as_legacy_event(),
-                    };
-                    self.push_legacy_event(legacy);
-                    return;
-                }
-            }
-            _ => {}
-        }
-
-        self.push_legacy_event(event);
-    }
-
-    fn push_legacy_event(&mut self, event: Event) {
-        if let EventMsg::UserMessage(_) = &event.msg
-            && !event.id.is_empty()
-            && !self.user_message_ids.insert(event.id.clone())
-        {
+    fn push_update(&mut self, update: ThreadUpdate) {
+        self.pending_interactive_replay.note_update(&update);
+        if let ThreadUpdate::SessionConfigured(session) = &update {
+            self.session_configured = Some(session.clone());
             return;
         }
-        self.buffer.push_back(event);
+        self.buffer.push_back(update);
         if self.buffer.len() > self.capacity
             && let Some(removed) = self.buffer.pop_front()
         {
-            self.pending_interactive_replay.note_evicted_event(&removed);
-            if matches!(removed.msg, EventMsg::UserMessage(_)) && !removed.id.is_empty() {
-                self.user_message_ids.remove(&removed.id);
-            }
+            self.pending_interactive_replay
+                .note_evicted_update(&removed);
         }
     }
 
@@ -367,12 +335,12 @@ impl ThreadEventStore {
             session_configured: self.session_configured.clone(),
             // Thread switches replay buffered events into a rebuilt ChatWidget. Only replay
             // interactive prompts that are still pending, or answered approvals/input will reappear.
-            events: self
+            updates: self
                 .buffer
                 .iter()
-                .filter(|event| {
+                .filter(|update| {
                     self.pending_interactive_replay
-                        .should_replay_snapshot_event(event)
+                        .should_replay_snapshot_update(update)
                 })
                 .cloned()
                 .collect(),
@@ -388,8 +356,8 @@ impl ThreadEventStore {
         PendingInteractiveReplayState::op_can_change_state(op)
     }
 
-    fn event_can_change_pending_thread_approvals(event: &Event) -> bool {
-        PendingInteractiveReplayState::event_can_change_pending_thread_approvals(event)
+    fn update_can_change_pending_thread_approvals(update: &ThreadUpdate) -> bool {
+        PendingInteractiveReplayState::update_can_change_pending_thread_approvals(update)
     }
 
     fn has_pending_thread_approvals(&self) -> bool {
@@ -400,8 +368,8 @@ impl ThreadEventStore {
 
 #[derive(Debug)]
 struct ThreadEventChannel {
-    sender: mpsc::Sender<Event>,
-    receiver: Option<mpsc::Receiver<Event>>,
+    sender: mpsc::Sender<ThreadUpdate>,
+    receiver: Option<mpsc::Receiver<ThreadUpdate>>,
     store: Arc<Mutex<ThreadEventStore>>,
 }
 
@@ -415,7 +383,7 @@ impl ThreadEventChannel {
         }
     }
 
-    fn new_with_session_configured(capacity: usize, event: Event) -> Self {
+    fn new_with_session_configured(capacity: usize, event: SessionConfiguredEvent) -> Self {
         let (sender, receiver) = mpsc::channel(capacity);
         Self {
             sender,
@@ -723,16 +691,15 @@ pub(crate) struct App {
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
     active_thread_id: Option<ThreadId>,
-    active_thread_rx: Option<mpsc::Receiver<Event>>,
+    active_thread_rx: Option<mpsc::Receiver<ThreadUpdate>>,
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
-    pending_primary_events: VecDeque<Event>,
+    pending_primary_updates: VecDeque<ThreadUpdate>,
     next_app_server_request_id: i64,
     active_turn_ids: HashMap<ThreadId, String>,
     pending_exec_approval_request_ids: HashMap<String, RequestId>,
     pending_patch_approval_request_ids: HashMap<String, RequestId>,
     pending_elicitation_request_ids: HashMap<(String, String), RequestId>,
-    pending_elicitation_request_queues: HashMap<String, VecDeque<RequestId>>,
     pending_permissions_request_ids: HashMap<String, RequestId>,
     pending_user_input_request_ids: HashMap<String, RequestId>,
     pending_dynamic_tool_request_ids: HashMap<String, RequestId>,
@@ -1295,7 +1262,7 @@ impl App {
     async fn activate_thread_for_replay(
         &mut self,
         thread_id: ThreadId,
-    ) -> Option<(mpsc::Receiver<Event>, ThreadEventSnapshot)> {
+    ) -> Option<(mpsc::Receiver<ThreadUpdate>, ThreadEventSnapshot)> {
         let channel = self.thread_event_channels.get_mut(&thread_id)?;
         let receiver = channel.receiver.take()?;
         let mut store = channel.store.lock().await;
@@ -1383,70 +1350,110 @@ impl App {
     async fn thread_cwd(&self, thread_id: ThreadId) -> Option<PathBuf> {
         let channel = self.thread_event_channels.get(&thread_id)?;
         let store = channel.store.lock().await;
-        match store.session_configured.as_ref().map(|event| &event.msg) {
-            Some(EventMsg::SessionConfigured(session)) => Some(session.cwd.clone()),
-            _ => None,
+        store
+            .session_configured
+            .as_ref()
+            .map(|session| session.cwd.clone())
+    }
+
+    fn app_server_request_id_to_mcp_request_id(
+        request_id: &codex_app_server_protocol::RequestId,
+    ) -> codex_protocol::mcp::RequestId {
+        match request_id {
+            codex_app_server_protocol::RequestId::String(value) => {
+                codex_protocol::mcp::RequestId::String(value.clone())
+            }
+            codex_app_server_protocol::RequestId::Integer(value) => {
+                codex_protocol::mcp::RequestId::Integer(*value)
+            }
         }
     }
 
-    async fn interactive_request_for_thread_event(
+    async fn interactive_request_for_thread_update(
         &self,
         thread_id: ThreadId,
-        event: &Event,
+        update: &ThreadUpdate,
     ) -> Option<ThreadInteractiveRequest> {
         let thread_label = Some(self.thread_label(thread_id));
-        match &event.msg {
-            EventMsg::ExecApprovalRequest(ev) => {
+        match update {
+            ThreadUpdate::CommandExecutionRequestApproval { params, .. } => {
                 Some(ThreadInteractiveRequest::Approval(ApprovalRequest::Exec {
                     thread_id,
                     thread_label,
-                    id: ev.effective_approval_id(),
-                    command: ev.command.clone(),
-                    reason: ev.reason.clone(),
-                    available_decisions: ev.effective_available_decisions(),
-                    network_approval_context: ev.network_approval_context.clone(),
-                    additional_permissions: ev.additional_permissions.clone(),
+                    id: params
+                        .approval_id
+                        .clone()
+                        .unwrap_or_else(|| params.item_id.clone()),
+                    command: params
+                        .command
+                        .as_ref()
+                        .map(|command| vec![command.clone()])
+                        .unwrap_or_default(),
+                    reason: params.reason.clone(),
+                    available_decisions: Vec::new(),
+                    network_approval_context: params.network_approval_context.clone().and_then(
+                        |context| serde_json::from_value(serde_json::to_value(context).ok()?).ok(),
+                    ),
+                    additional_permissions: params.additional_permissions.clone().and_then(
+                        |permissions| {
+                            serde_json::from_value(serde_json::to_value(permissions).ok()?).ok()
+                        },
+                    ),
                 }))
             }
-            EventMsg::ApplyPatchApprovalRequest(ev) => Some(ThreadInteractiveRequest::Approval(
-                ApprovalRequest::ApplyPatch {
+            ThreadUpdate::FileChangeRequestApproval { params, .. } => Some(
+                ThreadInteractiveRequest::Approval(ApprovalRequest::ApplyPatch {
                     thread_id,
                     thread_label,
-                    id: ev.call_id.clone(),
-                    reason: ev.reason.clone(),
+                    id: params.item_id.clone(),
+                    reason: params.reason.clone(),
                     cwd: self
                         .thread_cwd(thread_id)
                         .await
                         .unwrap_or_else(|| self.config.cwd.clone()),
-                    changes: ev.changes.clone(),
-                },
-            )),
-            EventMsg::ElicitationRequest(ev) => {
-                if let Some(request) =
-                    McpServerElicitationFormRequest::from_event(thread_id, ev.clone())
-                {
+                    changes: HashMap::new(),
+                }),
+            ),
+            ThreadUpdate::McpServerElicitationRequest { request_id, params } => {
+                if let Some(request) = McpServerElicitationFormRequest::from_app_server_request(
+                    thread_id,
+                    request_id.clone(),
+                    params.clone(),
+                ) {
                     Some(ThreadInteractiveRequest::McpServerElicitation(request))
                 } else {
                     Some(ThreadInteractiveRequest::Approval(
                         ApprovalRequest::McpElicitation {
                             thread_id,
                             thread_label,
-                            server_name: ev.server_name.clone(),
-                            request_id: ev.id.clone(),
-                            message: ev.request.message().to_string(),
+                            server_name: params.server_name.clone(),
+                            request_id: Self::app_server_request_id_to_mcp_request_id(request_id),
+                            message: match &params.request {
+                                codex_app_server_protocol::McpServerElicitationRequest::Form {
+                                    message,
+                                    ..
+                                }
+                                | codex_app_server_protocol::McpServerElicitationRequest::Url {
+                                    message,
+                                    ..
+                                } => message.clone(),
+                            },
                         },
                     ))
                 }
             }
-            EventMsg::RequestPermissions(ev) => Some(ThreadInteractiveRequest::Approval(
-                ApprovalRequest::Permissions {
+            ThreadUpdate::PermissionsRequestApproval { params, .. } => Some(
+                ThreadInteractiveRequest::Approval(ApprovalRequest::Permissions {
                     thread_id,
                     thread_label,
-                    call_id: ev.call_id.clone(),
-                    reason: ev.reason.clone(),
-                    permissions: ev.permissions.clone(),
-                },
-            )),
+                    call_id: params.item_id.clone(),
+                    reason: params.reason.clone(),
+                    permissions: serde_json::from_value(
+                        serde_json::to_value(params.permissions.clone()).ok()?,
+                    )
+                    .unwrap_or_default(),
+                }),
+            ),
             _ => None,
         }
     }
@@ -1496,11 +1503,15 @@ impl App {
         self.chat_widget.set_pending_thread_approvals(threads);
     }
 
-    async fn enqueue_thread_event(&mut self, thread_id: ThreadId, event: Event) -> Result<()> {
+    async fn enqueue_thread_update(
+        &mut self,
+        thread_id: ThreadId,
+        update: ThreadUpdate,
+    ) -> Result<()> {
         let refresh_pending_thread_approvals =
-            ThreadEventStore::event_can_change_pending_thread_approvals(&event);
+            ThreadEventStore::update_can_change_pending_thread_approvals(&update);
         let inactive_interactive_request = if self.active_thread_id != Some(thread_id) {
-            self.interactive_request_for_thread_event(thread_id, &event)
+            self.interactive_request_for_thread_update(thread_id, &update)
                 .await
         } else {
             None
@@ -1512,7 +1523,7 @@ impl App {
 
         let should_send = {
             let mut guard = store.lock().await;
-            guard.push_event(event.clone());
+            guard.push_update(update.clone());
             guard.active
         };
 
@@ -1520,11 +1531,11 @@ impl App {
             // Never await a bounded channel send on the main TUI loop: if the receiver falls behind,
             // `send().await` can block and the UI stops drawing. If the channel is full, wait in a
             // spawned task instead.
-            match sender.try_send(event) {
+            match sender.try_send(update) {
                 Ok(()) => {}
-                Err(TrySendError::Full(event)) => {
+                Err(TrySendError::Full(update)) => {
                     tokio::spawn(async move {
-                        if let Err(err) = sender.send(event).await {
+                        if let Err(err) = sender.send(update).await {
                             tracing::warn!("thread {thread_id} event channel closed: {err}");
                         }
                     });
@@ -1550,13 +1561,13 @@ impl App {
         Ok(())
     }
 
-    async fn handle_routed_thread_event(
+    async fn handle_routed_thread_update(
         &mut self,
         thread_id: ThreadId,
-        event: Event,
+        update: ThreadUpdate,
     ) -> Result<()> {
         if !self.thread_event_channels.contains_key(&thread_id) {
-            let should_attach_channel = matches!(event.msg, EventMsg::SessionConfigured(_))
+            let should_attach_channel = matches!(update, ThreadUpdate::SessionConfigured(_))
                 || self.agent_navigation.get(&thread_id).is_some();
             if !should_attach_channel {
                 tracing::debug!("dropping routed event for unknown thread {thread_id}");
@@ -1565,29 +1576,30 @@ impl App {
             self.ensure_thread_channel(thread_id);
         }
 
-        self.enqueue_thread_event(thread_id, event).await
+        self.enqueue_thread_update(thread_id, update).await
     }
 
-    async fn enqueue_primary_event(&mut self, event: Event) -> Result<()> {
+    async fn enqueue_primary_update(&mut self, update: ThreadUpdate) -> Result<()> {
         if let Some(thread_id) = self.primary_thread_id {
-            return self.enqueue_thread_event(thread_id, event).await;
+            return self.enqueue_thread_update(thread_id, update).await;
         }
 
-        if let EventMsg::SessionConfigured(session) = &event.msg {
+        if let ThreadUpdate::SessionConfigured(session) = &update {
             let thread_id = session.session_id;
             self.primary_thread_id = Some(thread_id);
             self.primary_session_configured = Some(session.clone());
             self.upsert_agent_picker_thread(thread_id, None, None, false);
             self.ensure_thread_channel(thread_id);
             self.activate_thread_channel(thread_id).await;
-            self.enqueue_thread_event(thread_id, event).await?;
+            self.enqueue_thread_update(thread_id, update).await?;
 
-            let pending = std::mem::take(&mut self.pending_primary_events);
-            for pending_event in pending {
-                self.enqueue_thread_event(thread_id, pending_event).await?;
+            let pending = std::mem::take(&mut self.pending_primary_updates);
+            for pending_update in pending {
+                self.enqueue_thread_update(thread_id, pending_update)
+                    .await?;
             }
         } else {
-            self.pending_primary_events.push_back(event);
+            self.pending_primary_updates.push_back(update);
         }
         Ok(())
     }
@@ -1757,7 +1769,7 @@ impl App {
         self.active_thread_id = None;
         self.active_thread_rx = None;
         self.primary_thread_id = None;
-        self.pending_primary_events.clear();
+        self.pending_primary_updates.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -1820,10 +1832,7 @@ impl App {
         );
         self.reset_thread_event_state();
         if let Err(err) = self
-            .enqueue_primary_event(Event {
-                id: String::new(),
-                msg: EventMsg::SessionConfigured(session_configured),
-            })
+            .enqueue_primary_update(ThreadUpdate::SessionConfigured(session_configured))
             .await
         {
             self.chat_widget
@@ -1854,7 +1863,7 @@ impl App {
         let mut disconnected = false;
         loop {
             match rx.try_recv() {
-                Ok(event) => self.handle_codex_event_now(event),
+                Ok(event) => self.handle_thread_update_now(event),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     disconnected = true;
@@ -1898,19 +1907,37 @@ impl App {
         (active_thread_id != primary_thread_id).then_some((active_thread_id, primary_thread_id))
     }
 
+    fn active_non_primary_closed_thread_target(
+        &self,
+        update: &ThreadUpdate,
+    ) -> Option<(ThreadId, ThreadId)> {
+        let ThreadUpdate::ThreadClosed(notification) = update else {
+            return None;
+        };
+        let active_thread_id = self.active_thread_id?;
+        let primary_thread_id = self.primary_thread_id?;
+        if self.pending_shutdown_exit_thread_id == Some(active_thread_id) {
+            return None;
+        }
+        if notification.thread_id != active_thread_id.to_string() {
+            return None;
+        }
+        (active_thread_id != primary_thread_id).then_some((active_thread_id, primary_thread_id))
+    }
+
     fn replay_thread_snapshot(
         &mut self,
         snapshot: ThreadEventSnapshot,
         resume_restored_queue: bool,
     ) {
-        if let Some(event) = snapshot.session_configured {
-            self.handle_codex_event_replay(event);
+        if let Some(session) = snapshot.session_configured {
+            self.handle_thread_update_replay(ThreadUpdate::SessionConfigured(session));
         }
         self.chat_widget.set_queue_autosend_suppressed(true);
         self.chat_widget
             .restore_thread_input_state(snapshot.input_state);
-        for event in snapshot.events {
-            self.handle_codex_event_replay(event);
+        for update in snapshot.updates {
+            self.handle_thread_update_replay(update);
         }
         self.chat_widget.set_queue_autosend_suppressed(false);
         if resume_restored_queue {
@@ -2119,13 +2146,12 @@ impl App {
             active_thread_rx: None,
             primary_thread_id: None,
             primary_session_configured: None,
-            pending_primary_events: VecDeque::new(),
+            pending_primary_updates: VecDeque::new(),
             next_app_server_request_id: 1,
             active_turn_ids: HashMap::new(),
             pending_exec_approval_request_ids: HashMap::new(),
             pending_patch_approval_request_ids: HashMap::new(),
             pending_elicitation_request_ids: HashMap::new(),
-            pending_elicitation_request_queues: HashMap::new(),
             pending_permissions_request_ids: HashMap::new(),
             pending_user_input_request_ids: HashMap::new(),
             pending_dynamic_tool_request_ids: HashMap::new(),
@@ -2175,11 +2201,8 @@ impl App {
             }
         };
         if let Some(session_configured) = initial_session_configured {
-            app.enqueue_primary_event(Event {
-                id: String::new(),
-                msg: EventMsg::SessionConfigured(session_configured),
-            })
-            .await?;
+            app.enqueue_primary_update(ThreadUpdate::SessionConfigured(session_configured))
+                .await?;
         }
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -2259,7 +2282,7 @@ impl App {
                         app.active_thread_rx.is_some()
                     ) => {
                         if let Some(event) = active {
-                            if let Err(err) = app.handle_active_thread_event(tui, event).await {
+                            if let Err(err) = app.handle_active_thread_update(tui, event).await {
                                 break Err(err);
                             }
                         } else {
@@ -2463,10 +2486,9 @@ impl App {
                                     ),
                                 );
                                 self.reset_thread_event_state();
-                                self.enqueue_primary_event(Event {
-                                    id: String::new(),
-                                    msg: EventMsg::SessionConfigured(session_configured),
-                                })
+                                self.enqueue_primary_update(ThreadUpdate::SessionConfigured(
+                                    session_configured,
+                                ))
                                 .await?;
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
@@ -2534,10 +2556,9 @@ impl App {
                                     ),
                                 );
                                 self.reset_thread_event_state();
-                                self.enqueue_primary_event(Event {
-                                    id: String::new(),
-                                    msg: EventMsg::SessionConfigured(session_configured),
-                                })
+                                self.enqueue_primary_update(ThreadUpdate::SessionConfigured(
+                                    session_configured,
+                                ))
                                 .await?;
                                 if let Some(summary) = summary {
                                     let mut lines: Vec<Line<'static>> =
@@ -2628,10 +2649,12 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
-                self.enqueue_primary_event(event).await?;
+                self.handle_codex_event_now(event);
             }
             AppEvent::ThreadEvent { thread_id, event } => {
-                self.handle_routed_thread_event(thread_id, event).await?;
+                if Some(thread_id) == self.active_thread_id {
+                    self.handle_codex_event_now(event);
+                }
             }
             AppEvent::Exit(mode) => {
                 return Ok(self.handle_exit_mode(app_server, mode).await);
@@ -3852,15 +3875,42 @@ impl App {
         self.chat_widget.handle_codex_event_replay(event);
     }
 
+    fn handle_thread_update_now(&mut self, update: ThreadUpdate) {
+        if self.suppress_shutdown_complete && update.is_thread_closed() {
+            self.suppress_shutdown_complete = false;
+            return;
+        }
+        if let ThreadUpdate::ThreadRolledBack { num_turns } = update {
+            self.handle_backtrack_event(&EventMsg::ThreadRolledBack(
+                codex_protocol::protocol::ThreadRolledBackEvent { num_turns },
+            ));
+            self.chat_widget
+                .handle_thread_update(ThreadUpdate::ThreadRolledBack { num_turns });
+            return;
+        }
+        self.chat_widget.handle_thread_update(update.clone());
+        if update.is_status_refresh_update() {
+            self.refresh_status_line();
+        }
+    }
+
+    fn handle_thread_update_replay(&mut self, update: ThreadUpdate) {
+        self.chat_widget.handle_thread_update_replay(update);
+    }
+
     /// Handles an event emitted by the currently active thread.
     ///
     /// This function enforces shutdown intent routing: unexpected non-primary
     /// thread shutdowns fail over to the primary thread, while user-requested
     /// app exits consume only the tracked shutdown completion and then proceed.
-    async fn handle_active_thread_event(&mut self, tui: &mut tui::Tui, event: Event) -> Result<()> {
+    async fn handle_active_thread_update(
+        &mut self,
+        tui: &mut tui::Tui,
+        update: ThreadUpdate,
+    ) -> Result<()> {
         // Capture this before any potential thread switch: we only want to clear
         // the exit marker when the currently active thread acknowledges shutdown.
-        let pending_shutdown_exit_completed = matches!(&event.msg, EventMsg::ShutdownComplete)
+        let pending_shutdown_exit_completed = matches!(&update, ThreadUpdate::ThreadClosed(_))
             && self.pending_shutdown_exit_thread_id == self.active_thread_id;
 
         // Processing order matters:
@@ -3872,7 +3922,7 @@ impl App {
         // This preserves the mental model that user-requested exits do not trigger
         // failover, while true sub-agent deaths still do.
         if let Some((closed_thread_id, primary_thread_id)) =
-            self.active_non_primary_shutdown_target(&event.msg)
+            self.active_non_primary_closed_thread_target(&update)
         {
             self.mark_agent_picker_thread_closed(closed_thread_id);
             self.select_agent_thread(tui, primary_thread_id).await?;
@@ -3897,7 +3947,7 @@ impl App {
             // thread, so unrelated shutdowns cannot consume this marker.
             self.pending_shutdown_exit_thread_id = None;
         }
-        self.handle_codex_event_now(event);
+        self.handle_thread_update_now(update);
         if self.backtrack_render_pending {
             tui.frame_requester().schedule_frame();
         }
@@ -4241,8 +4291,6 @@ mod tests {
     use codex_protocol::protocol::SessionConfiguredEvent;
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::ThreadRolledBackEvent;
-    use codex_protocol::protocol::TurnAbortReason;
-    use codex_protocol::protocol::TurnAbortedEvent;
     use codex_protocol::protocol::TurnCompleteEvent;
     use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
@@ -4257,6 +4305,92 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use tempfile::tempdir;
     use tokio::time;
+
+    fn test_session_configured(
+        thread_id: ThreadId,
+        cwd: impl Into<PathBuf>,
+    ) -> SessionConfiguredEvent {
+        SessionConfiguredEvent {
+            session_id: thread_id,
+            forked_from_id: None,
+            thread_name: None,
+            model: "gpt-test".to_string(),
+            model_provider_id: "test-provider".to_string(),
+            service_tier: None,
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            cwd: cwd.into(),
+            reasoning_effort: None,
+            history_log_id: 0,
+            history_entry_count: 0,
+            initial_messages: None,
+            network_proxy: None,
+            rollout_path: Some(PathBuf::new()),
+        }
+    }
+
+    fn test_exec_approval_update(
+        thread_id: ThreadId,
+        cwd: impl Into<PathBuf>,
+        call_id: &str,
+        turn_id: &str,
+        reason: Option<&str>,
+    ) -> ThreadUpdate {
+        ThreadUpdate::CommandExecutionRequestApproval {
+            request_id: RequestId::String(format!("request-{call_id}")),
+            params: codex_app_server_protocol::CommandExecutionRequestApprovalParams {
+                thread_id: thread_id.to_string(),
+                turn_id: turn_id.to_string(),
+                item_id: call_id.to_string(),
+                approval_id: None,
+                reason: reason.map(str::to_string),
+                network_approval_context: None,
+                command: Some("echo hi".to_string()),
+                cwd: Some(cwd.into()),
+                command_actions: None,
+                additional_permissions: None,
+                skill_metadata: None,
+                proposed_execpolicy_amendment: None,
+                proposed_network_policy_amendments: None,
+                available_decisions: None,
+            },
+        }
+    }
+
+    fn test_thread_closed_update(thread_id: ThreadId) -> ThreadUpdate {
+        ThreadUpdate::ThreadClosed(codex_app_server_protocol::ThreadClosedNotification {
+            thread_id: thread_id.to_string(),
+        })
+    }
+
+    fn test_turn_started_update(thread_id: ThreadId, turn_id: &str) -> ThreadUpdate {
+        ThreadUpdate::TurnStarted(codex_app_server_protocol::TurnStartedNotification {
+            thread_id: thread_id.to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: turn_id.to_string(),
+                items: Vec::new(),
+                status: codex_app_server_protocol::TurnStatus::InProgress,
+                error: None,
+            },
+        })
+    }
+
+    fn test_turn_completed_update(
+        thread_id: ThreadId,
+        turn_id: &str,
+        status: codex_app_server_protocol::TurnStatus,
+    ) -> ThreadUpdate {
+        ThreadUpdate::TurnCompleted(codex_app_server_protocol::TurnCompletedNotification {
+            thread_id: thread_id.to_string(),
+            turn: codex_app_server_protocol::Turn {
+                id: turn_id.to_string(),
+                items: Vec::new(),
+                status,
+                error: None,
+            },
+        })
+    }
 
     async fn start_test_app_server(config: Config) -> InProcessAppServerClient {
         InProcessAppServerClient::start(codex_app_server_client::InProcessClientStartArgs {
@@ -4384,50 +4518,18 @@ mod tests {
     -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
         let thread_id = ThreadId::new();
-        let approval_event = Event {
-            id: "approval-event".to_string(),
-            msg: EventMsg::ExecApprovalRequest(
-                codex_protocol::protocol::ExecApprovalRequestEvent {
-                    call_id: "call-1".to_string(),
-                    approval_id: None,
-                    turn_id: "turn-1".to_string(),
-                    command: vec!["echo".to_string(), "hello".to_string()],
-                    cwd: PathBuf::from("/tmp/project"),
-                    reason: Some("needs approval".to_string()),
-                    network_approval_context: None,
-                    proposed_execpolicy_amendment: None,
-                    proposed_network_policy_amendments: None,
-                    additional_permissions: None,
-                    skill_metadata: None,
-                    available_decisions: None,
-                    parsed_cmd: Vec::new(),
-                },
-            ),
-        };
-        let session_configured_event = Event {
-            id: "session-configured".to_string(),
-            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: thread_id,
-                forked_from_id: None,
-                thread_name: None,
-                model: "gpt-test".to_string(),
-                model_provider_id: "test-provider".to_string(),
-                service_tier: None,
-                approval_policy: AskForApproval::Never,
-                approvals_reviewer: ApprovalsReviewer::User,
-                sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                cwd: PathBuf::from("/tmp/project"),
-                reasoning_effort: None,
-                history_log_id: 0,
-                history_entry_count: 0,
-                initial_messages: None,
-                network_proxy: None,
-                rollout_path: Some(PathBuf::new()),
-            }),
-        };
+        let approval_event = test_exec_approval_update(
+            thread_id,
+            "/tmp/project",
+            "call-1",
+            "turn-1",
+            Some("needs approval"),
+        );
+        let session_configured_event =
+            ThreadUpdate::SessionConfigured(test_session_configured(thread_id, "/tmp/project"));
 
-        app.enqueue_primary_event(approval_event.clone()).await?;
-        app.enqueue_primary_event(session_configured_event.clone())
+        app.enqueue_primary_update(approval_event.clone()).await?;
+        app.enqueue_primary_update(session_configured_event.clone())
             .await?;
 
         let rx = app
@@ -4443,11 +4545,14 @@ mod tests {
             .expect("timed out waiting for buffered approval event")
             .expect("channel closed unexpectedly");
 
-        assert!(matches!(first_event.msg, EventMsg::SessionConfigured(_)));
-        assert!(matches!(second_event.msg, EventMsg::ExecApprovalRequest(_)));
+        assert!(matches!(first_event, ThreadUpdate::SessionConfigured(_)));
+        assert!(matches!(
+            second_event,
+            ThreadUpdate::CommandExecutionRequestApproval { .. }
+        ));
 
-        app.handle_codex_event_now(first_event);
-        app.handle_codex_event_now(second_event);
+        app.handle_thread_update_now(first_event);
+        app.handle_thread_update_now(second_event);
         app.chat_widget
             .handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
 
@@ -4475,14 +4580,8 @@ mod tests {
         );
 
         app.reset_thread_event_state();
-        app.handle_routed_thread_event(
-            thread_id,
-            Event {
-                id: "stale-event".to_string(),
-                msg: EventMsg::ShutdownComplete,
-            },
-        )
-        .await?;
+        app.handle_routed_thread_update(thread_id, test_thread_closed_update(thread_id))
+            .await?;
 
         assert!(
             !app.thread_event_channels.contains_key(&thread_id),
@@ -4536,18 +4635,15 @@ mod tests {
             .insert(thread_id, ThreadEventChannel::new(1));
         app.set_thread_active(thread_id, true).await;
 
-        let event = Event {
-            id: String::new(),
-            msg: EventMsg::ShutdownComplete,
-        };
+        let event = test_thread_closed_update(thread_id);
 
-        app.enqueue_thread_event(thread_id, event.clone()).await?;
+        app.enqueue_thread_update(thread_id, event.clone()).await?;
         time::timeout(
             Duration::from_millis(50),
-            app.enqueue_thread_event(thread_id, event),
+            app.enqueue_thread_update(thread_id, event),
         )
         .await
-        .expect("enqueue_thread_event blocked on a full channel")?;
+        .expect("enqueue_thread_update blocked on a full channel")?;
 
         let mut rx = app
             .thread_event_channels
@@ -4577,27 +4673,7 @@ mod tests {
             thread_id,
             ThreadEventChannel::new_with_session_configured(
                 THREAD_EVENT_CHANNEL_CAPACITY,
-                Event {
-                    id: "session-configured".to_string(),
-                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                        session_id: thread_id,
-                        forked_from_id: None,
-                        thread_name: None,
-                        model: "gpt-test".to_string(),
-                        model_provider_id: "test-provider".to_string(),
-                        service_tier: None,
-                        approval_policy: AskForApproval::Never,
-                        approvals_reviewer: ApprovalsReviewer::User,
-                        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                        cwd: PathBuf::from("/tmp/project"),
-                        reasoning_effort: None,
-                        history_log_id: 0,
-                        history_entry_count: 0,
-                        initial_messages: None,
-                        network_proxy: None,
-                        rollout_path: Some(PathBuf::new()),
-                    }),
-                },
+                test_session_configured(thread_id, "/tmp/project"),
             ),
         );
         app.activate_thread_channel(thread_id).await;
@@ -4709,13 +4785,11 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![Event {
-                    id: "turn-complete".to_string(),
-                    msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                        turn_id: "turn-1".to_string(),
-                        last_agent_message: None,
-                    }),
-                }],
+                updates: vec![test_turn_completed_update(
+                    thread_id,
+                    "turn-1",
+                    codex_app_server_protocol::TurnStatus::Completed,
+                )],
                 input_state: Some(input_state),
             },
             true,
@@ -4792,13 +4866,11 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![Event {
-                    id: "turn-complete".to_string(),
-                    msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                        turn_id: "turn-1".to_string(),
-                        last_agent_message: None,
-                    }),
-                }],
+                updates: vec![test_turn_completed_update(
+                    thread_id,
+                    "turn-1",
+                    codex_app_server_protocol::TurnStatus::Completed,
+                )],
                 input_state: Some(input_state),
             },
             false,
@@ -4873,7 +4945,7 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![],
+                updates: vec![],
                 input_state: Some(input_state),
             },
             true,
@@ -4948,22 +5020,13 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![
-                    Event {
-                        id: "older-turn-complete".to_string(),
-                        msg: EventMsg::TurnComplete(TurnCompleteEvent {
-                            turn_id: "turn-0".to_string(),
-                            last_agent_message: None,
-                        }),
-                    },
-                    Event {
-                        id: "latest-turn-started".to_string(),
-                        msg: EventMsg::TurnStarted(TurnStartedEvent {
-                            turn_id: "turn-1".to_string(),
-                            model_context_window: None,
-                            collaboration_mode_kind: Default::default(),
-                        }),
-                    },
+                updates: vec![
+                    test_turn_completed_update(
+                        thread_id,
+                        "turn-0",
+                        codex_app_server_protocol::TurnStatus::Completed,
+                    ),
+                    test_turn_started_update(thread_id, "turn-1"),
                 ],
                 input_state: Some(input_state),
             },
@@ -5007,27 +5070,7 @@ mod tests {
             thread_id,
             ThreadEventChannel::new_with_session_configured(
                 THREAD_EVENT_CHANNEL_CAPACITY,
-                Event {
-                    id: "session-configured".to_string(),
-                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                        session_id: thread_id,
-                        forked_from_id: None,
-                        thread_name: None,
-                        model: "gpt-test".to_string(),
-                        model_provider_id: "test-provider".to_string(),
-                        service_tier: None,
-                        approval_policy: AskForApproval::Never,
-                        approvals_reviewer: ApprovalsReviewer::User,
-                        sandbox_policy: SandboxPolicy::new_read_only_policy(),
-                        cwd: PathBuf::from("/tmp/project"),
-                        reasoning_effort: None,
-                        history_log_id: 0,
-                        history_entry_count: 0,
-                        initial_messages: None,
-                        network_proxy: None,
-                        rollout_path: Some(PathBuf::new()),
-                    }),
-                },
+                test_session_configured(thread_id, "/tmp/project"),
             ),
         );
         app.activate_thread_channel(thread_id).await;
@@ -5136,7 +5179,7 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![],
+                updates: vec![],
                 input_state: Some(input_state),
             },
             true,
@@ -5237,7 +5280,7 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![],
+                updates: vec![],
                 input_state: Some(input_state),
             },
             true,
@@ -5313,13 +5356,11 @@ mod tests {
         app.replay_thread_snapshot(
             ThreadEventSnapshot {
                 session_configured: None,
-                events: vec![Event {
-                    id: "turn-aborted".to_string(),
-                    msg: EventMsg::TurnAborted(TurnAbortedEvent {
-                        turn_id: Some("turn-1".to_string()),
-                        reason: TurnAbortReason::ReviewEnded,
-                    }),
-                }],
+                updates: vec![test_turn_completed_update(
+                    thread_id,
+                    "turn-1",
+                    codex_app_server_protocol::TurnStatus::Interrupted,
+                )],
                 input_state: Some(input_state),
             },
             true,
@@ -5999,26 +6040,13 @@ smart_approvals = true
         let agent_channel = ThreadEventChannel::new(1);
         {
             let mut store = agent_channel.store.lock().await;
-            store.push_event(Event {
-                id: "ev-1".to_string(),
-                msg: EventMsg::ExecApprovalRequest(
-                    codex_protocol::protocol::ExecApprovalRequestEvent {
-                        call_id: "call-1".to_string(),
-                        approval_id: None,
-                        turn_id: "turn-1".to_string(),
-                        command: vec!["echo".to_string(), "hi".to_string()],
-                        cwd: PathBuf::from("/tmp"),
-                        reason: None,
-                        network_approval_context: None,
-                        proposed_execpolicy_amendment: None,
-                        proposed_network_policy_amendments: None,
-                        additional_permissions: None,
-                        skill_metadata: None,
-                        available_decisions: None,
-                        parsed_cmd: Vec::new(),
-                    },
-                ),
-            });
+            store.push_update(test_exec_approval_update(
+                agent_thread_id,
+                "/tmp",
+                "call-1",
+                "turn-1",
+                None,
+            ));
         }
         app.thread_event_channels
             .insert(agent_thread_id, agent_channel);
@@ -6056,26 +6084,11 @@ smart_approvals = true
             agent_thread_id,
             ThreadEventChannel::new_with_session_configured(
                 1,
-                Event {
-                    id: String::new(),
-                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                        session_id: agent_thread_id,
-                        forked_from_id: None,
-                        thread_name: None,
-                        model: "gpt-5".to_string(),
-                        model_provider_id: "test-provider".to_string(),
-                        service_tier: None,
-                        approval_policy: AskForApproval::OnRequest,
-                        approvals_reviewer: ApprovalsReviewer::User,
-                        sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
-                        cwd: PathBuf::from("/tmp/agent"),
-                        reasoning_effort: None,
-                        history_log_id: 0,
-                        history_entry_count: 0,
-                        initial_messages: None,
-                        network_proxy: None,
-                        rollout_path: Some(PathBuf::from("/tmp/agent-rollout.jsonl")),
-                    }),
+                SessionConfiguredEvent {
+                    approval_policy: AskForApproval::OnRequest,
+                    sandbox_policy: SandboxPolicy::new_workspace_write_policy(),
+                    rollout_path: Some(PathBuf::from("/tmp/agent-rollout.jsonl")),
+                    ..test_session_configured(agent_thread_id, "/tmp/agent")
                 },
             ),
         );
@@ -6086,28 +6099,15 @@ smart_approvals = true
             false,
         );
 
-        app.enqueue_thread_event(
+        app.enqueue_thread_update(
             agent_thread_id,
-            Event {
-                id: "ev-approval".to_string(),
-                msg: EventMsg::ExecApprovalRequest(
-                    codex_protocol::protocol::ExecApprovalRequestEvent {
-                        call_id: "call-approval".to_string(),
-                        approval_id: None,
-                        turn_id: "turn-approval".to_string(),
-                        command: vec!["echo".to_string(), "hi".to_string()],
-                        cwd: PathBuf::from("/tmp/agent"),
-                        reason: Some("need approval".to_string()),
-                        network_approval_context: None,
-                        proposed_execpolicy_amendment: None,
-                        proposed_network_policy_amendments: None,
-                        additional_permissions: None,
-                        skill_metadata: None,
-                        available_decisions: None,
-                        parsed_cmd: Vec::new(),
-                    },
-                ),
-            },
+            test_exec_approval_update(
+                agent_thread_id,
+                "/tmp/agent",
+                "call-approval",
+                "turn-approval",
+                Some("need approval"),
+            ),
         )
         .await?;
 
@@ -6439,13 +6439,12 @@ smart_approvals = true
             active_thread_rx: None,
             primary_thread_id: None,
             primary_session_configured: None,
-            pending_primary_events: VecDeque::new(),
+            pending_primary_updates: VecDeque::new(),
             next_app_server_request_id: 1,
             active_turn_ids: HashMap::new(),
             pending_exec_approval_request_ids: HashMap::new(),
             pending_patch_approval_request_ids: HashMap::new(),
             pending_elicitation_request_ids: HashMap::new(),
-            pending_elicitation_request_queues: HashMap::new(),
             pending_permissions_request_ids: HashMap::new(),
             pending_user_input_request_ids: HashMap::new(),
             pending_dynamic_tool_request_ids: HashMap::new(),
@@ -6512,13 +6511,12 @@ smart_approvals = true
                 active_thread_rx: None,
                 primary_thread_id: None,
                 primary_session_configured: None,
-                pending_primary_events: VecDeque::new(),
+                pending_primary_updates: VecDeque::new(),
                 next_app_server_request_id: 1,
                 active_turn_ids: HashMap::new(),
                 pending_exec_approval_request_ids: HashMap::new(),
                 pending_patch_approval_request_ids: HashMap::new(),
                 pending_elicitation_request_ids: HashMap::new(),
-                pending_elicitation_request_queues: HashMap::new(),
                 pending_permissions_request_ids: HashMap::new(),
                 pending_user_input_request_ids: HashMap::new(),
                 pending_dynamic_tool_request_ids: HashMap::new(),
