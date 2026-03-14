@@ -7551,6 +7551,46 @@ smart_approvals = true
     }
 
     #[tokio::test]
+    async fn override_turn_context_and_reload_user_config_use_runtime_path() {
+        let mut app = make_test_app().await;
+        let app_server = start_test_app_server(app.config.clone()).await;
+        let event = app
+            .thread_start_via_app_server(&app_server, &app.config.clone())
+            .await
+            .expect("thread/start should succeed");
+
+        assert!(
+            app.submit_app_server_op(
+                &app_server,
+                event.session_id,
+                Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: Some(AskForApproval::OnFailure),
+                    approvals_reviewer: None,
+                    sandbox_policy: None,
+                    windows_sandbox_level: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    service_tier: None,
+                    collaboration_mode: None,
+                    personality: None,
+                }
+            )
+            .await
+        );
+        assert!(
+            app.submit_app_server_op(&app_server, event.session_id, Op::ReloadUserConfig)
+                .await
+        );
+
+        app_server
+            .shutdown()
+            .await
+            .expect("shutdown should complete");
+    }
+
+    #[tokio::test]
     async fn clear_only_ui_reset_preserves_chat_session_state() {
         let mut app = make_test_app().await;
         let thread_id = ThreadId::new();

@@ -555,7 +555,7 @@ async fn handle_auth_command(
                     Ok(LoginAccountResponse::Chatgpt { login_id, auth_url }) => {
                         auth_widget.apply_chatgpt_login_started(login_id, auth_url.clone());
                         if let Err(err) = webbrowser::open(&auth_url) {
-                            auth_widget.show_login_request_error(format!(
+                            auth_widget.show_continue_in_browser_error(format!(
                                 "Failed to open browser for {auth_url}: {err}"
                             ));
                         }

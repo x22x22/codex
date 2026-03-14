@@ -657,10 +657,6 @@ impl App {
                 .await?;
                 let _ = config;
             }
-            Op::ReloadUserConfig | Op::OverrideTurnContext { .. } => {
-                // TODO(app-server): add a thread-scoped override/context refresh API so the TUI
-                // does not need to treat these as local-only state updates.
-            }
             Op::Compact => {
                 let _: ThreadCompactStartResponse = send_request_with_response(
                     app_server_client,
@@ -728,9 +724,11 @@ impl App {
             | Op::Undo
             | Op::DropMemories
             | Op::UpdateMemories
+            | Op::ReloadUserConfig
             | Op::RunUserShellCommand { .. }
             | Op::GetHistoryEntryRequest { .. }
-            | Op::ListMcpTools => {
+            | Op::ListMcpTools
+            | Op::OverrideTurnContext { .. } => {
                 // TODO(app-server): migrate these legacy-only TUI features once app-server grows
                 // equivalent APIs. Until then, keep routing the still-emitted TUI ops through the
                 // shared in-process thread runtime so existing behavior does not regress.

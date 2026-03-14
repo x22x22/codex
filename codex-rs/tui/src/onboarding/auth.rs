@@ -799,6 +799,11 @@ impl AuthModeWidget {
         self.request_frame.schedule_frame();
     }
 
+    pub(crate) fn show_continue_in_browser_error(&mut self, message: String) {
+        self.error = Some(message);
+        self.request_frame.schedule_frame();
+    }
+
     pub(crate) fn show_device_code_login_error(&mut self, message: String) {
         *self.sign_in_state.write().unwrap() = SignInState::PickMode;
         self.error = Some(message);
@@ -964,6 +969,32 @@ mod tests {
                 login_id: "login-123".to_string()
             }
         );
+    }
+
+    #[test]
+    fn continue_in_browser_error_keeps_active_login_state() {
+        let mut widget = auth_widget(Some(ForcedLoginMethod::Chatgpt), SignInOption::ChatGpt);
+        *widget.sign_in_state.write().unwrap() =
+            SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+                auth_url: String::new(),
+                login_id: None,
+            });
+        widget.apply_chatgpt_login_started(
+            "login-123".to_string(),
+            "https://auth.example.com/login?state=abc123".to_string(),
+        );
+
+        widget.show_continue_in_browser_error("Failed to open browser".to_string());
+
+        assert_eq!(widget.error.as_deref(), Some("Failed to open browser"));
+        assert!(matches!(
+            &*widget.sign_in_state.read().unwrap(),
+            SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+                auth_url,
+                login_id: Some(login_id),
+            }) if auth_url == "https://auth.example.com/login?state=abc123"
+                && login_id == "login-123"
+        ));
     }
 
     #[test]
