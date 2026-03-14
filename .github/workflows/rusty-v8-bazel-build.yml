@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "key=rusty-v8-bundle-v1-${{ matrix.target }}-$(python3 .github/scripts/rusty_v8_bazel.py print-cache-key)" >> "$GITHUB_OUTPUT"
+          echo "key=rusty-v8-bundle-v2-${{ matrix.target }}-$(python3 .github/scripts/rusty_v8_bazel.py print-cache-key)" >> "$GITHUB_OUTPUT"
 
       - name: Restore staged V8 bundle cache
         id: bundle_cache_restore
@@ -105,6 +105,11 @@ jobs:
             "--platforms=@llvm//platforms:${PLATFORM}"
             "${lib_target}"
             "${binding_target}"
+            '--remote_download_regex=.*third_party/v8/libv8_.*\.a$'
+            '--remote_download_regex=.*third_party/v8/src_binding_release_.*\.rs$'
+            '--remote_download_regex=.*liblibcxx\.static\.a$'
+            '--remote_download_regex=.*liblibcxxabi\.static\.a$'
+            '--remote_download_regex=.*liblibunwind\.static\.a$'
             --build_metadata=REPO_URL=https://github.com/${GITHUB_REPOSITORY}.git
             --build_metadata=COMMIT_SHA=$(git rev-parse HEAD)
             --build_metadata=ROLE=CI

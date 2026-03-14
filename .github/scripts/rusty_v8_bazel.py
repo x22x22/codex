@@ -18,6 +18,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_BAZEL = ROOT / "MODULE.bazel"
+RUNTIME_LIB_FILENAMES = {
+    "libcxx": "liblibcxx.static.a",
+    "libcxxabi": "liblibcxxabi.static.a",
+    "libunwind": "liblibunwind.static.a",
+}
 V8_CACHE_KEY_INPUT_PATTERNS = [
     ".bazelrc",
     ".bazelversion",
@@ -149,9 +154,9 @@ def musl_generated_include_dir(platform: str, target: str) -> Path:
 
 def static_runtime_libs(platform: str) -> tuple[Path, Path, Path]:
     st_bin = platform_st_bin_dir(platform)
-    libcxx = st_bin / "external/llvm++llvm_source+libcxx/libcxx.static_/liblibcxx.static.a"
-    libcxxabi = st_bin / "external/llvm++llvm_source+libcxxabi/libcxxabi.static_/liblibcxxabi.static.a"
-    libunwind = st_bin / "external/llvm++llvm_source+libunwind/libunwind.static_/liblibunwind.static.a"
+    libcxx = st_bin / f"external/llvm++llvm_source+libcxx/libcxx.static_/{RUNTIME_LIB_FILENAMES['libcxx']}"
+    libcxxabi = st_bin / f"external/llvm++llvm_source+libcxxabi/libcxxabi.static_/{RUNTIME_LIB_FILENAMES['libcxxabi']}"
+    libunwind = st_bin / f"external/llvm++llvm_source+libunwind/libunwind.static_/{RUNTIME_LIB_FILENAMES['libunwind']}"
     return (
         first_existing_path([libcxx], "libcxx static archive"),
         first_existing_path([libcxxabi], "libcxxabi static archive"),
@@ -165,8 +170,11 @@ def v8_crate_dir() -> Path:
     return first_existing_path([path], "v8 crate dir")
 
 
-def cargo_runtime_rustflags(platform: str) -> str:
-    libcxx_static, libcxxabi_static, libunwind_static = static_runtime_libs(platform)
+def cargo_runtime_rustflags_from_libs(
+    libcxx_static: Path,
+    libcxxabi_static: Path,
+    libunwind_static: Path,
+) -> str:
     return " ".join(
         [
             f"-C link-arg={libcxx_static}",
@@ -177,6 +185,10 @@ def cargo_runtime_rustflags(platform: str) -> str:
             "-C link-arg=-ldl",
         ]
     )
+
+
+def cargo_runtime_rustflags(platform: str) -> str:
+    return cargo_runtime_rustflags_from_libs(*static_runtime_libs(platform))
 
 
 def cargo_target_rustflags_env_var(target: str) -> str:
@@ -198,10 +210,32 @@ def staged_cargo_inputs(output_dir: Path, target: str) -> tuple[Path, Path]:
     )
 
 
+def runtime_output_dir(output_dir: Path) -> Path:
+    return output_dir / "runtime"
+
+
+def staged_runtime_libs(output_dir: Path) -> tuple[Path, Path, Path]:
+    runtime_dir = runtime_output_dir(output_dir)
+    return (
+        first_existing_path(
+            [runtime_dir / RUNTIME_LIB_FILENAMES["libcxx"]],
+            "staged libcxx static archive",
+        ),
+        first_existing_path(
+            [runtime_dir / RUNTIME_LIB_FILENAMES["libcxxabi"]],
+            "staged libcxxabi static archive",
+        ),
+        first_existing_path(
+            [runtime_dir / RUNTIME_LIB_FILENAMES["libunwind"]],
+            "staged libunwind static archive",
+        ),
+    )
+
+
 def print_cargo_env(platform: str, target: str, output_dir: Path) -> None:
     archive, binding = staged_cargo_inputs(output_dir, target)
     target_rustflags_var = cargo_target_rustflags_env_var(target)
-    cargo_rustflags = cargo_runtime_rustflags(platform)
+    cargo_rustflags = cargo_runtime_rustflags_from_libs(*staged_runtime_libs(output_dir))
 
     print(f"export RUSTY_V8_ARCHIVE={shlex.quote(str(archive.resolve()))}")
     print(f"export RUSTY_V8_SRC_BINDING_PATH={shlex.quote(str(binding.resolve()))}")
@@ -275,6 +309,7 @@ def write_bundle_archive(
     lib_path: Path,
     binding_path: Path,
     include_root: Path,
+    runtime_libs: tuple[Path, Path, Path],
 ) -> None:
     bundle_root = f"rusty_v8_{target}"
 
@@ -301,6 +336,12 @@ def write_bundle_archive(
                     source=binding_path,
                     arcname=f"{bundle_root}/src_binding_release.rs",
                 )
+                for runtime_lib in runtime_libs:
+                    add_regular_file_to_tar(
+                        tar,
+                        source=runtime_lib,
+                        arcname=f"{bundle_root}/runtime/{runtime_lib.name}",
+                    )
                 for header_path in sorted(include_root.rglob("*")):
                     if not header_path.is_file():
                         continue
@@ -318,14 +359,13 @@ def validate_bundle(platform: str, target: str, bundle_path: Path) -> None:
     kernel_headers = kernel_headers_dir(target)
     musl_includes = musl_generated_include_dir(platform, target)
     compiler_rt = bazel_cache_root() / "external/llvm++llvm_source+compiler-rt/include"
-    libcxx_static, libcxxabi_static, libunwind_static = static_runtime_libs(platform)
-
     with tempfile.TemporaryDirectory(prefix="rusty-v8-bundle-") as tmpdir:
         tmpdir_path = Path(tmpdir)
         with tarfile.open(bundle_path, "r:gz") as tar:
             tar.extractall(tmpdir_path, filter="data")
 
         bundle_root = tmpdir_path / f"rusty_v8_{target}"
+        libcxx_static, libcxxabi_static, libunwind_static = staged_runtime_libs(bundle_root)
         output_binary = tmpdir_path / "non_bazel_v8_smoke_test"
 
         cmd = [
@@ -402,9 +442,10 @@ def validate_cargo_bundle(platform: str, target: str, bundle_path: Path) -> None
         env = os.environ.copy()
         env["RUSTY_V8_ARCHIVE"] = str(bundle_root / "lib/librusty_v8.a")
         env["RUSTY_V8_SRC_BINDING_PATH"] = str(bundle_root / "src_binding_release.rs")
+        bundle_runtime_rustflags = cargo_runtime_rustflags_from_libs(*staged_runtime_libs(bundle_root))
         env[target_rustflags_var] = append_flag_string(
             env.get(target_rustflags_var),
-            cargo_runtime_rustflags(platform),
+            bundle_runtime_rustflags,
         )
         subprocess.run(
             ["cargo", "run", "--target", target],
@@ -435,6 +476,8 @@ def stage_release_assets(platform: str, target: str, output_dir: Path) -> None:
     archive_name = f"librusty_v8_release_{target}.a.gz"
     binding_name = f"src_binding_release_{target}.rs"
     bundle_name = f"rusty_v8_bundle_{target}.tar.gz"
+    runtime_dir = runtime_output_dir(output_dir)
+    runtime_dir.mkdir(exist_ok=True)
 
     with lib_path.open("rb") as src, (output_dir / archive_name).open("wb") as dst:
         with gzip.GzipFile(
@@ -447,12 +490,18 @@ def stage_release_assets(platform: str, target: str, output_dir: Path) -> None:
             shutil.copyfileobj(src, gz)
 
     shutil.copyfile(binding_path, output_dir / binding_name)
+    staged_runtime_paths = []
+    for runtime_lib in static_runtime_libs(platform):
+        staged_runtime_path = runtime_dir / runtime_lib.name
+        shutil.copyfile(runtime_lib, staged_runtime_path)
+        staged_runtime_paths.append(staged_runtime_path)
     write_bundle_archive(
         output_path=output_dir / bundle_name,
         target=target,
         lib_path=lib_path,
         binding_path=binding_path,
         include_root=bazel_execroot() / "external" / "v8+" / "include",
+        runtime_libs=tuple(staged_runtime_paths),
     )
 
     print(output_dir / archive_name)
