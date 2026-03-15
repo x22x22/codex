@@ -228,7 +228,9 @@ impl AuthModeWidget {
         let mut options = Vec::new();
         if self.is_chatgpt_login_allowed() {
             options.push(SignInOption::ChatGpt);
-            options.push(SignInOption::DeviceCode);
+            if self.allow_device_code_login {
+                options.push(SignInOption::DeviceCode);
+            }
         }
         if self.is_api_login_allowed() {
             options.push(SignInOption::ApiKey);
@@ -1023,6 +1025,17 @@ mod tests {
 
         assert_eq!(
             widget.displayed_sign_in_options(),
+            vec![SignInOption::ChatGpt, SignInOption::ApiKey]
+        );
+    }
+
+    #[test]
+    fn device_code_option_is_not_selectable_when_not_allowed() {
+        let mut widget = auth_widget(None, SignInOption::ChatGpt);
+        widget.allow_device_code_login = false;
+
+        assert_eq!(
+            widget.selectable_sign_in_options(),
             vec![SignInOption::ChatGpt, SignInOption::ApiKey]
         );
     }

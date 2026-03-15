@@ -672,7 +672,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             session_id,
             last,
             all,
-            remote,
+            remote: resume_remote,
             config_overrides,
         })) => {
             interactive = finalize_resume_interactive(
@@ -683,15 +683,19 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 all,
                 config_overrides,
             );
-            let exit_info =
-                run_interactive_tui(interactive, arg0_paths.clone(), remote.remote).await?;
+            let exit_info = run_interactive_tui(
+                interactive,
+                arg0_paths.clone(),
+                effective_interactive_remote(&remote, resume_remote),
+            )
+            .await?;
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Fork(ForkCommand {
             session_id,
             last,
             all,
-            remote,
+            remote: fork_remote,
             config_overrides,
         })) => {
             interactive = finalize_fork_interactive(
@@ -702,8 +706,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 all,
                 config_overrides,
             );
-            let exit_info =
-                run_interactive_tui(interactive, arg0_paths.clone(), remote.remote).await?;
+            let exit_info = run_interactive_tui(
+                interactive,
+                arg0_paths.clone(),
+                effective_interactive_remote(&remote, fork_remote),
+            )
+            .await?;
             handle_app_exit(exit_info)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
@@ -1052,6 +1060,15 @@ fn reject_remote_mode_for_subcommand(remote: Option<&str>, subcommand: &str) -> 
     Ok(())
 }
 
+fn effective_interactive_remote(
+    root_remote: &InteractiveRemoteOptions,
+    subcommand_remote: InteractiveRemoteOptions,
+) -> Option<String> {
+    subcommand_remote
+        .remote
+        .or_else(|| root_remote.remote.clone())
+}
+
 fn confirm(prompt: &str) -> std::io::Result<bool> {
     eprintln!("{prompt}");
 
@@ -1256,6 +1273,60 @@ mod tests {
         };
         assert_eq!(remote.remote.as_deref(), Some("wss://example.test/socket"));
         assert!(last);
+    }
+
+    #[test]
+    fn root_remote_flag_is_preserved_for_resume_subcommand() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--remote",
+            "ws://example.test/socket",
+            "resume",
+            "--last",
+        ])
+        .expect("parse should succeed");
+        let MultitoolCli {
+            remote, subcommand, ..
+        } = cli;
+        let Some(Subcommand::Resume(ResumeCommand {
+            remote: resume_remote,
+            ..
+        })) = subcommand
+        else {
+            panic!("expected resume subcommand");
+        };
+
+        assert_eq!(
+            effective_interactive_remote(&remote, resume_remote),
+            Some("ws://example.test/socket".to_string())
+        );
+    }
+
+    #[test]
+    fn root_remote_flag_is_preserved_for_fork_subcommand() {
+        let cli = MultitoolCli::try_parse_from([
+            "codex",
+            "--remote",
+            "ws://example.test/socket",
+            "fork",
+            "--last",
+        ])
+        .expect("parse should succeed");
+        let MultitoolCli {
+            remote, subcommand, ..
+        } = cli;
+        let Some(Subcommand::Fork(ForkCommand {
+            remote: fork_remote,
+            ..
+        })) = subcommand
+        else {
+            panic!("expected fork subcommand");
+        };
+
+        assert_eq!(
+            effective_interactive_remote(&remote, fork_remote),
+            Some("ws://example.test/socket".to_string())
+        );
     }
 
     #[test]
