@@ -112,23 +112,3 @@ async fn sends_multiple_handoff_outputs_until_cleared() {
         .expect("send");
     assert!(rx.is_empty());
 }
-
-#[tokio::test]
-async fn final_tool_output_waits_for_completion_in_realtime_v2() {
-    let (tx, rx) = bounded(2);
-    let state = RealtimeHandoffState::new(tx, true);
-
-    *state.active_handoff.lock().await = Some("handoff_1".to_string());
-    state.send_output("result".to_string()).await.expect("send");
-    assert!(rx.is_empty());
-
-    state.send_final_output().await.expect("final send");
-    let output = rx.recv().await.expect("recv");
-    assert_eq!(
-        output,
-        HandoffOutput::FinalToolCall {
-            handoff_id: "handoff_1".to_string(),
-            output_text: "result".to_string(),
-        }
-    );
-}

@@ -1,13 +1,9 @@
-use super::build_current_thread_section;
 use super::build_recent_work_section;
 use super::build_workspace_section;
 use super::build_workspace_section_with_user_root;
-use crate::contextual_user_message::ENVIRONMENT_CONTEXT_FRAGMENT;
 use chrono::TimeZone;
 use chrono::Utc;
 use codex_protocol::ThreadId;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
 use codex_state::ThreadMetadata;
 use pretty_assertions::assert_eq;
 use std::fs;
@@ -134,61 +130,4 @@ fn recent_work_section_groups_threads_by_cwd() {
     )));
     assert!(section.contains(&format!("### Directory: {}", outside.display())));
     assert!(section.contains(&format!("- {}: Inspect flaky test", outside.display())));
-}
-
-fn text_message(role: &str, text: &str, output: bool) -> ResponseItem {
-    ResponseItem::Message {
-        id: None,
-        role: role.to_string(),
-        content: vec![if output {
-            ContentItem::OutputText {
-                text: text.to_string(),
-            }
-        } else {
-            ContentItem::InputText {
-                text: text.to_string(),
-            }
-        }],
-        end_turn: None,
-        phase: None,
-    }
-}
-
-#[test]
-fn current_thread_section_keeps_latest_two_turns() {
-    let section = build_current_thread_section(&[
-        text_message("user", "first question", false),
-        text_message("assistant", "first answer", true),
-        text_message("user", "second question", false),
-        text_message("assistant", "second answer", true),
-        text_message("user", "third question", false),
-        text_message("assistant", "third answer", true),
-    ])
-    .expect("current thread section");
-
-    assert!(!section.contains("first question"));
-    assert!(section.contains("### Prior turn 1"));
-    assert!(section.contains("second question"));
-    assert!(section.contains("second answer"));
-    assert!(section.contains("### Latest turn"));
-    assert!(section.contains("third question"));
-    assert!(section.contains("third answer"));
-}
-
-#[test]
-fn current_thread_section_skips_contextual_user_messages() {
-    let section = build_current_thread_section(&[
-        ENVIRONMENT_CONTEXT_FRAGMENT.into_message(
-            ENVIRONMENT_CONTEXT_FRAGMENT.wrap("stale environment context".to_string()),
-        ),
-        text_message("assistant", "ignore contextual pairing", true),
-        text_message("user", "actual question", false),
-        text_message("assistant", "actual answer", true),
-    ])
-    .expect("current thread section");
-
-    assert!(!section.contains("stale environment context"));
-    assert!(!section.contains("ignore contextual pairing"));
-    assert!(section.contains("actual question"));
-    assert!(section.contains("actual answer"));
 }
