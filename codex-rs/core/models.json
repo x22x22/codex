@@ -72,6 +72,7 @@
         "pro",
         "team"
       ],
+      "supports_search_tool": true,
       "supports_reasoning_summaries": true
     },
     {
@@ -143,6 +144,7 @@
         "pro",
         "team"
       ],
+      "supports_search_tool": true,
       "supports_reasoning_summaries": true
     },
     {
