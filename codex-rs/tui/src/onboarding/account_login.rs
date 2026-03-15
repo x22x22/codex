@@ -10,6 +10,7 @@ use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::RequestId;
 use codex_core::auth::AuthMode;
 use serde::de::DeserializeOwned;
+use tracing::warn;
 
 use crate::LoginStatus;
 
@@ -105,12 +106,25 @@ pub(crate) fn login_status_from_account(account: Option<&Account>) -> LoginStatu
     }
 }
 
+fn login_status_from_account_read_result(
+    result: Result<GetAccountResponse, String>,
+) -> LoginStatus {
+    match result {
+        Ok(response) => login_status_from_account(response.account.as_ref()),
+        Err(err) => {
+            warn!(
+                "account/read failed during onboarding startup; continuing unauthenticated: {err}"
+            );
+            LoginStatus::NotAuthenticated
+        }
+    }
+}
+
 pub(crate) async fn read_login_status_via_app_server(
     app_server: &InProcessAppServerClient,
-) -> Result<LoginStatus, String> {
+) -> LoginStatus {
     let mut api = OnboardingAccountApi::default();
-    let response = api.read_account(app_server).await?;
-    Ok(login_status_from_account(response.account.as_ref()))
+    login_status_from_account_read_result(api.read_account(app_server).await)
 }
 
 async fn send_request_with_response<T>(
@@ -125,4 +139,17 @@ where
         .request_typed(request)
         .await
         .map_err(|err| format!("{method} failed: {err}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    #[tokio::test]
+    async fn read_login_status_falls_back_to_unauthenticated_on_rpc_error() {
+        let status = login_status_from_account_read_result(Err("boom".to_string()));
+
+        assert_eq!(status, LoginStatus::NotAuthenticated);
+    }
 }

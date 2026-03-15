@@ -624,11 +624,6 @@ impl App {
                 resolve_server_request(app_server_client, request_id, response, "item/tool/call")
                     .await?;
             }
-            Op::AddToHistory { text } => {
-                let _ = (thread_id, text);
-                // TODO(app-server): expose message-history append/lookup APIs and migrate
-                // `AddToHistory`/`GetHistoryEntryRequest` together.
-            }
             Op::ListSkills { cwds, force_reload } => {
                 let response: SkillsListResponse = send_request_with_response(
                     app_server_client,
@@ -720,7 +715,8 @@ impl App {
                 self.unsubscribe_thread_via_app_server(app_server_client, thread_id)
                     .await?;
             }
-            Op::ListCustomPrompts
+            Op::AddToHistory { .. }
+            | Op::ListCustomPrompts
             | Op::Undo
             | Op::DropMemories
             | Op::UpdateMemories

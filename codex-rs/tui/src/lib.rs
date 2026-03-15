@@ -678,17 +678,7 @@ async fn run_ratatui_app(
         None
     };
     let login_status = if let Some(app_server) = onboarding_app_server.as_ref() {
-        match read_login_status_via_app_server(app_server).await {
-            Ok(status) => status,
-            Err(err) => {
-                if let Some(app_server) = onboarding_app_server.take() {
-                    let _ = app_server.shutdown().await;
-                }
-                restore();
-                session_log::log_session_end();
-                return Err(color_eyre::eyre::eyre!("{err}"));
-            }
-        }
+        read_login_status_via_app_server(app_server).await
     } else {
         LoginStatus::NotAuthenticated
     };

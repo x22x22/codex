@@ -7551,7 +7551,7 @@ smart_approvals = true
     }
 
     #[tokio::test]
-    async fn override_turn_context_and_reload_user_config_use_runtime_path() {
+    async fn legacy_runtime_ops_use_runtime_path() {
         let mut app = make_test_app().await;
         let app_server = start_test_app_server(app.config.clone()).await;
         let event = app
@@ -7582,6 +7582,16 @@ smart_approvals = true
         assert!(
             app.submit_app_server_op(&app_server, event.session_id, Op::ReloadUserConfig)
                 .await
+        );
+        assert!(
+            app.submit_app_server_op(
+                &app_server,
+                event.session_id,
+                Op::AddToHistory {
+                    text: "persist me".to_string(),
+                },
+            )
+            .await
         );
 
         app_server
