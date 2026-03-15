@@ -4,13 +4,37 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ElicitationRequestId {
+    String(String),
+    Integer(i64),
+}
+
+impl From<codex_app_server_protocol::RequestId> for ElicitationRequestId {
+    fn from(value: codex_app_server_protocol::RequestId) -> Self {
+        match value {
+            codex_app_server_protocol::RequestId::String(value) => Self::String(value),
+            codex_app_server_protocol::RequestId::Integer(value) => Self::Integer(value),
+        }
+    }
+}
+
+impl From<codex_protocol::mcp::RequestId> for ElicitationRequestId {
+    fn from(value: codex_protocol::mcp::RequestId) -> Self {
+        match value {
+            codex_protocol::mcp::RequestId::String(value) => Self::String(value),
+            codex_protocol::mcp::RequestId::Integer(value) => Self::Integer(value),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ElicitationRequestKey {
     server_name: String,
-    request_id: String,
+    request_id: ElicitationRequestId,
 }
 
 impl ElicitationRequestKey {
-    fn new(server_name: String, request_id: String) -> Self {
+    fn new(server_name: String, request_id: ElicitationRequestId) -> Self {
         Self {
             server_name,
             request_id,
@@ -82,7 +106,7 @@ impl PendingInteractiveReplayState {
                 self.elicitation_requests
                     .remove(&ElicitationRequestKey::new(
                         server_name.clone(),
-                        request_id.to_string(),
+                        request_id.clone().into(),
                     ));
             }
             Op::RequestPermissionsResponse { id, .. } => {
@@ -135,7 +159,7 @@ impl PendingInteractiveReplayState {
             ThreadUpdate::McpServerElicitationRequest { request_id, params } => {
                 self.elicitation_requests.insert(ElicitationRequestKey::new(
                     params.server_name.clone(),
-                    request_id.to_string(),
+                    request_id.clone().into(),
                 ));
             }
             ThreadUpdate::ToolRequestUserInput { params, .. } => {
@@ -189,7 +213,7 @@ impl PendingInteractiveReplayState {
                 self.elicitation_requests
                     .remove(&ElicitationRequestKey::new(
                         params.server_name.clone(),
-                        request_id.to_string(),
+                        request_id.clone().into(),
                     ));
             }
             ThreadUpdate::ToolRequestUserInput { params, .. } => {
@@ -224,7 +248,7 @@ impl PendingInteractiveReplayState {
                 .elicitation_requests
                 .contains(&ElicitationRequestKey::new(
                     params.server_name.clone(),
-                    request_id.to_string(),
+                    request_id.clone().into(),
                 )),
             ThreadUpdate::ToolRequestUserInput { params, .. } => {
                 self.request_user_input_ids.contains(&params.item_id)
@@ -304,5 +328,51 @@ impl PendingInteractiveReplayState {
         if remove_turn_entry {
             call_ids_by_turn_id.remove(turn_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PendingInteractiveReplayState;
+    use crate::thread_update::ThreadUpdate;
+    use codex_app_server_protocol::McpServerElicitationRequest;
+    use codex_app_server_protocol::McpServerElicitationRequestParams;
+    use codex_app_server_protocol::RequestId;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn elicitation_request_keys_preserve_request_id_type() {
+        let mut state = PendingInteractiveReplayState::default();
+        let params = McpServerElicitationRequestParams {
+            thread_id: "thread-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            server_name: "server".to_string(),
+            request: McpServerElicitationRequest::Url {
+                meta: None,
+                message: "Open this link".to_string(),
+                url: "https://example.com".to_string(),
+                elicitation_id: "elicitation-1".to_string(),
+            },
+        };
+
+        state.note_update(&ThreadUpdate::McpServerElicitationRequest {
+            request_id: RequestId::Integer(1),
+            params: params.clone(),
+        });
+
+        assert_eq!(
+            state.should_replay_snapshot_update(&ThreadUpdate::McpServerElicitationRequest {
+                request_id: RequestId::Integer(1),
+                params: params.clone(),
+            }),
+            true
+        );
+        assert_eq!(
+            state.should_replay_snapshot_update(&ThreadUpdate::McpServerElicitationRequest {
+                request_id: RequestId::String("1".to_string()),
+                params,
+            }),
+            false
+        );
     }
 }

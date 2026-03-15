@@ -17,6 +17,7 @@ use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 
 use super::AuthModeWidget;
+use super::ContinueInBrowserState;
 use super::ContinueWithDeviceCodeState;
 use super::SignInState;
 use super::mark_url_hyperlink;
@@ -32,7 +33,19 @@ pub(super) fn start_headless_chatgpt_login(widget: &mut AuthModeWidget, opts: Se
         let device_code = match request_device_code(&opts).await {
             Ok(device_code) => device_code,
             Err(err) => {
-                if set_device_code_state_for_active_attempt(
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    if set_device_code_state_for_active_attempt(
+                        &sign_in_state,
+                        &request_frame,
+                        &cancel,
+                        SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+                            auth_url: String::new(),
+                            login_id: None,
+                        }),
+                    ) {
+                        let _ = auth_command_tx.send(AuthCommand::StartChatgpt);
+                    }
+                } else if set_device_code_state_for_active_attempt(
                     &sign_in_state,
                     &request_frame,
                     &cancel,
@@ -274,6 +287,33 @@ mod tests {
         assert!(matches!(
             &*sign_in_state.read().unwrap(),
             SignInState::ChatGptDeviceCode(_)
+        ));
+    }
+
+    #[test]
+    fn device_code_not_found_falls_back_to_browser_login_state() {
+        let request_frame = FrameRequester::test_dummy();
+        let cancel = Arc::new(Notify::new());
+        let sign_in_state = device_code_sign_in_state(cancel.clone());
+
+        assert_eq!(
+            set_device_code_state_for_active_attempt(
+                &sign_in_state,
+                &request_frame,
+                &cancel,
+                SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+                    auth_url: String::new(),
+                    login_id: None,
+                }),
+            ),
+            true
+        );
+        assert!(matches!(
+            &*sign_in_state.read().unwrap(),
+            SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
+                auth_url,
+                login_id: None,
+            }) if auth_url.is_empty()
         ));
     }
 }
