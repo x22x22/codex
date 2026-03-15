@@ -5,6 +5,8 @@ use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
 use codex_protocol::protocol::RealtimeEvent;
+#[cfg(not(target_os = "linux"))]
+use std::sync::atomic::AtomicUsize;
 
 const REALTIME_CONVERSATION_PROMPT: &str = "You are in a realtime voice conversation in the Codex TUI. Respond conversationally and concisely.";
 
@@ -30,6 +32,8 @@ pub(super) struct RealtimeConversationUiState {
     capture: Option<crate::voice::VoiceCapture>,
     #[cfg(not(target_os = "linux"))]
     audio_player: Option<crate::voice::RealtimeAudioPlayer>,
+    #[cfg(not(target_os = "linux"))]
+    playback_queued_samples: Arc<AtomicUsize>,
 }
 
 impl RealtimeConversationUiState {
@@ -293,8 +297,11 @@ impl ChatWidget {
         #[cfg(not(target_os = "linux"))]
         {
             if self.realtime_conversation.audio_player.is_none() {
-                self.realtime_conversation.audio_player =
-                    crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
+                self.realtime_conversation.audio_player = crate::voice::RealtimeAudioPlayer::start(
+                    &self.config,
+                    Arc::clone(&self.realtime_conversation.playback_queued_samples),
+                )
+                .ok();
             }
             if let Some(player) = &self.realtime_conversation.audio_player
                 && let Err(err) = player.enqueue_frame(frame)
@@ -331,6 +338,7 @@ impl ChatWidget {
         let capture = match crate::voice::VoiceCapture::start_realtime(
             &self.config,
             self.app_event_tx.clone(),
+            Arc::clone(&self.realtime_conversation.playback_queued_samples),
         ) {
             Ok(capture) => capture,
             Err(err) => {
@@ -349,8 +357,11 @@ impl ChatWidget {
         self.realtime_conversation.capture_stop_flag = Some(stop_flag.clone());
         self.realtime_conversation.capture = Some(capture);
         if self.realtime_conversation.audio_player.is_none() {
-            self.realtime_conversation.audio_player =
-                crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
+            self.realtime_conversation.audio_player = crate::voice::RealtimeAudioPlayer::start(
+                &self.config,
+                Arc::clone(&self.realtime_conversation.playback_queued_samples),
+            )
+            .ok();
         }
 
         std::thread::spawn(move || {
@@ -388,7 +399,10 @@ impl ChatWidget {
             }
             RealtimeAudioDeviceKind::Speaker => {
                 self.stop_realtime_speaker();
-                match crate::voice::RealtimeAudioPlayer::start(&self.config) {
+                match crate::voice::RealtimeAudioPlayer::start(
+                    &self.config,
+                    Arc::clone(&self.realtime_conversation.playback_queued_samples),
+                ) {
                     Ok(player) => {
                         self.realtime_conversation.audio_player = Some(player);
                     }
