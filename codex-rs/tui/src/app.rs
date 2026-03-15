@@ -705,7 +705,7 @@ pub(crate) struct App {
     pending_patch_approval_request_ids: HashMap<String, RequestId>,
     pending_elicitation_request_ids: HashMap<(String, RequestId), RequestId>,
     pending_permissions_request_ids: HashMap<String, RequestId>,
-    pending_user_input_request_ids: HashMap<String, RequestId>,
+    pending_user_input_request_ids: HashMap<String, VecDeque<RequestId>>,
     pending_dynamic_tool_request_ids: HashMap<String, RequestId>,
 }
 
@@ -7598,6 +7598,24 @@ smart_approvals = true
             .shutdown()
             .await
             .expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn pending_user_input_request_ids_preserve_fifo_per_turn() {
+        let mut app = make_test_app().await;
+
+        app.note_pending_user_input_request_id("turn-1", RequestId::Integer(1));
+        app.note_pending_user_input_request_id("turn-1", RequestId::Integer(2));
+
+        assert_eq!(
+            app.pop_pending_user_input_request_id("turn-1"),
+            Some(RequestId::Integer(1))
+        );
+        assert_eq!(
+            app.pop_pending_user_input_request_id("turn-1"),
+            Some(RequestId::Integer(2))
+        );
+        assert_eq!(app.pop_pending_user_input_request_id("turn-1"), None);
     }
 
     #[tokio::test]

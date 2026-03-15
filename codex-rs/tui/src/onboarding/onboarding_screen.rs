@@ -460,7 +460,9 @@ pub(crate) async fn run_onboarding_app(
                             &mut onboarding_screen,
                         ).await;
                     } else {
-                        break;
+                        return Err(eyre!(
+                            "onboarding app server event stream closed before onboarding completed"
+                        ));
                     }
                 }
             }

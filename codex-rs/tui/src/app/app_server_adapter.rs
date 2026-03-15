@@ -577,7 +577,7 @@ impl App {
                 .await?;
             }
             Op::UserInputAnswer { id, response } => {
-                let Some(request_id) = self.pending_user_input_request_ids.remove(&id) else {
+                let Some(request_id) = self.pop_pending_user_input_request_id(&id) else {
                     return Err(format!(
                         "Missing app-server request for user input turn {id}."
                     ));
@@ -775,8 +775,7 @@ impl App {
                     .insert(params.item_id.clone(), request_id.clone());
             }
             ServerRequest::ToolRequestUserInput { request_id, params } => {
-                self.pending_user_input_request_ids
-                    .insert(params.turn_id.clone(), request_id.clone());
+                self.note_pending_user_input_request_id(&params.turn_id, request_id.clone());
             }
             ServerRequest::DynamicToolCall { request_id, params } => {
                 self.pending_dynamic_tool_request_ids
@@ -789,6 +788,35 @@ impl App {
             }
             ServerRequest::ChatgptAuthTokensRefresh { .. } => {}
         }
+    }
+
+    pub(super) fn note_pending_user_input_request_id(
+        &mut self,
+        turn_id: &str,
+        request_id: RequestId,
+    ) {
+        self.pending_user_input_request_ids
+            .entry(turn_id.to_string())
+            .or_default()
+            .push_back(request_id);
+    }
+
+    pub(super) fn pop_pending_user_input_request_id(&mut self, turn_id: &str) -> Option<RequestId> {
+        let mut remove_turn_id = false;
+        let request_id = self
+            .pending_user_input_request_ids
+            .get_mut(turn_id)
+            .and_then(|request_ids| {
+                let request_id = request_ids.pop_front();
+                if request_ids.is_empty() {
+                    remove_turn_id = true;
+                }
+                request_id
+            });
+        if remove_turn_id {
+            self.pending_user_input_request_ids.remove(turn_id);
+        }
+        request_id
     }
 
     async fn route_thread_update(&mut self, update: ThreadUpdate) {
