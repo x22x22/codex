@@ -2768,6 +2768,12 @@
         "data": {
           "type": "string"
         },
+        "itemId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "numChannels": {
           "format": "uint16",
           "minimum": 0.0,

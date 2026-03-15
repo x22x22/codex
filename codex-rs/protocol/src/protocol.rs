@@ -133,6 +133,8 @@ pub struct RealtimeAudioFrame {
     pub num_channels: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub samples_per_channel: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
@@ -155,14 +157,26 @@ pub struct RealtimeHandoffRequested {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeInputAudioSpeechStarted {
+    pub item_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
+pub struct RealtimeResponseCancelled {
+    pub response_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, JsonSchema, TS)]
 pub enum RealtimeEvent {
     SessionUpdated {
         session_id: String,
         instructions: Option<String>,
     },
+    InputAudioSpeechStarted(RealtimeInputAudioSpeechStarted),
     InputTranscriptDelta(RealtimeTranscriptDelta),
     OutputTranscriptDelta(RealtimeTranscriptDelta),
     AudioOut(RealtimeAudioFrame),
+    ResponseCancelled(RealtimeResponseCancelled),
     ConversationItemAdded(Value),
     ConversationItemDone {
         item_id: String,
@@ -174,6 +188,13 @@ pub enum RealtimeEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ConversationAudioParams {
     pub frame: RealtimeAudioFrame,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
+pub struct ConversationAudioTruncateParams {
+    pub item_id: String,
+    pub content_index: u32,
+    pub audio_end_ms: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
@@ -199,6 +220,9 @@ pub enum Op {
 
     /// Send audio input to the running realtime conversation stream.
     RealtimeConversationAudio(ConversationAudioParams),
+
+    /// Truncate output audio for the running realtime conversation stream.
+    RealtimeConversationAudioTruncate(ConversationAudioTruncateParams),
 
     /// Send text input to the running realtime conversation stream.
     RealtimeConversationText(ConversationTextParams),
@@ -493,6 +517,7 @@ impl Op {
             Self::CleanBackgroundTerminals => "clean_background_terminals",
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
+            Self::RealtimeConversationAudioTruncate(_) => "realtime_conversation_audio_truncate",
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::UserInput { .. } => "user_input",
@@ -4058,7 +4083,13 @@ mod tests {
                 sample_rate: 24_000,
                 num_channels: 1,
                 samples_per_channel: Some(480),
+                item_id: None,
             },
+        });
+        let truncate = Op::RealtimeConversationAudioTruncate(ConversationAudioTruncateParams {
+            item_id: "item_1".to_string(),
+            content_index: 0,
+            audio_end_ms: 123,
         });
         let start = Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "be helpful".to_string(),
@@ -4087,6 +4118,15 @@ mod tests {
                     "num_channels": 1,
                     "samples_per_channel": 480
                 }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&truncate).unwrap(),
+            json!({
+                "type": "realtime_conversation_audio_truncate",
+                "item_id": "item_1",
+                "content_index": 0,
+                "audio_end_ms": 123
             })
         );
         assert_eq!(
