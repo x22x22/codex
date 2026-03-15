@@ -1,7 +1,8 @@
-use crate::endpoint::realtime_websocket::protocol::ConversationFunctionCallOutputItem;
-use crate::endpoint::realtime_websocket::protocol::ConversationItemContent;
-use crate::endpoint::realtime_websocket::protocol::ConversationItemPayload;
-use crate::endpoint::realtime_websocket::protocol::ConversationMessageItem;
+use crate::endpoint::realtime_websocket::methods_common::conversation_handoff_append_message;
+use crate::endpoint::realtime_websocket::methods_common::conversation_item_create_message;
+use crate::endpoint::realtime_websocket::methods_common::normalized_session_mode;
+use crate::endpoint::realtime_websocket::methods_common::session_update_session;
+use crate::endpoint::realtime_websocket::methods_common::websocket_intent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeAudioFrame;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEvent;
 use crate::endpoint::realtime_websocket::protocol::RealtimeEventParser;
@@ -10,16 +11,6 @@ use crate::endpoint::realtime_websocket::protocol::RealtimeSessionConfig;
 use crate::endpoint::realtime_websocket::protocol::RealtimeSessionMode;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptDelta;
 use crate::endpoint::realtime_websocket::protocol::RealtimeTranscriptEntry;
-use crate::endpoint::realtime_websocket::protocol::SessionAudio;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioFormat;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioInput;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioOutput;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioOutputFormat;
-use crate::endpoint::realtime_websocket::protocol::SessionAudioVoice;
-use crate::endpoint::realtime_websocket::protocol::SessionFunctionTool;
-use crate::endpoint::realtime_websocket::protocol::SessionNoiseReduction;
-use crate::endpoint::realtime_websocket::protocol::SessionTurnDetection;
-use crate::endpoint::realtime_websocket::protocol::SessionUpdateSession;
 use crate::endpoint::realtime_websocket::protocol::parse_realtime_event;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -29,7 +20,6 @@ use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::HeaderValue;
-use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -49,27 +39,6 @@ use tracing::info;
 use tracing::trace;
 use tungstenite::protocol::WebSocketConfig;
 use url::Url;
-
-const REALTIME_AUDIO_SAMPLE_RATE: u32 = 24_000;
-const REALTIME_AUDIO_FORMAT: &str = "audio/pcm";
-const REALTIME_V2_NOISE_REDUCTION: &str = "near_field";
-const REALTIME_V2_TURN_DETECTION: &str = "server_vad";
-const REALTIME_V2_OUTPUT_MODALITY_AUDIO: &str = "audio";
-const REALTIME_V2_TOOL_CHOICE: &str = "auto";
-const REALTIME_V1_SESSION_TYPE: &str = "quicksilver";
-const REALTIME_V2_SESSION_TYPE: &str = "realtime";
-const REALTIME_V2_CODEX_TOOL_NAME: &str = "codex";
-const REALTIME_V2_CODEX_TOOL_DESCRIPTION: &str = "Delegate a request to Codex and return the final result to the user. Use this as the default action. If the user asks to do something next, later, after this, or once current work finishes, call this tool so the work is actually queued instead of merely promising to do it later.";
-
-fn normalized_session_mode(
-    event_parser: RealtimeEventParser,
-    session_mode: RealtimeSessionMode,
-) -> RealtimeSessionMode {
-    match event_parser {
-        RealtimeEventParser::V1 => RealtimeSessionMode::Conversational,
-        RealtimeEventParser::RealtimeV2 => session_mode,
-    }
-}
 
 struct WsStream {
     tx_command: mpsc::Sender<WsCommand>,
@@ -323,21 +292,8 @@ impl RealtimeWebsocketWriter {
     }
 
     pub async fn send_conversation_item_create(&self, text: String) -> Result<(), ApiError> {
-        let content_kind = match self.event_parser {
-            RealtimeEventParser::V1 => "text",
-            RealtimeEventParser::RealtimeV2 => "input_text",
-        };
-        self.send_json(RealtimeOutboundMessage::ConversationItemCreate {
-            item: ConversationItemPayload::Message(ConversationMessageItem {
-                kind: "message".to_string(),
-                role: "user".to_string(),
-                content: vec![ConversationItemContent {
-                    kind: content_kind.to_string(),
-                    text,
-                }],
-            }),
-        })
-        .await
+        self.send_json(conversation_item_create_message(self.event_parser, text))
+            .await
     }
 
     pub async fn send_conversation_handoff_append(
@@ -345,23 +301,12 @@ impl RealtimeWebsocketWriter {
         handoff_id: String,
         output_text: String,
     ) -> Result<(), ApiError> {
-        let message = match self.event_parser {
-            RealtimeEventParser::V1 => RealtimeOutboundMessage::ConversationHandoffAppend {
-                handoff_id,
-                output_text,
-            },
-            RealtimeEventParser::RealtimeV2 => RealtimeOutboundMessage::ConversationItemCreate {
-                item: ConversationItemPayload::FunctionCallOutput(
-                    ConversationFunctionCallOutputItem {
-                        kind: "function_call_output".to_string(),
-                        call_id: handoff_id,
-                        output: output_text,
-                    },
-                ),
-            },
-        };
-
-        self.send_json(message).await
+        self.send_json(conversation_handoff_append_message(
+            self.event_parser,
+            handoff_id,
+            output_text,
+        ))
+        .await
     }
 
     pub async fn send_response_create(&self) -> Result<(), ApiError> {
@@ -389,125 +334,17 @@ impl RealtimeWebsocketWriter {
         session_mode: RealtimeSessionMode,
     ) -> Result<(), ApiError> {
         let session_mode = normalized_session_mode(self.event_parser, session_mode);
-        let (session_kind, session_instructions, output_modalities, input_audio, output_audio) =
-            match session_mode {
-                RealtimeSessionMode::Conversational => {
-                    let kind = match self.event_parser {
-                        RealtimeEventParser::V1 => REALTIME_V1_SESSION_TYPE.to_string(),
-                        RealtimeEventParser::RealtimeV2 => REALTIME_V2_SESSION_TYPE.to_string(),
-                    };
-                    let input = match self.event_parser {
-                        RealtimeEventParser::V1 => SessionAudioInput {
-                            format: SessionAudioFormat {
-                                kind: REALTIME_AUDIO_FORMAT.to_string(),
-                                rate: REALTIME_AUDIO_SAMPLE_RATE,
-                            },
-                            noise_reduction: None,
-                            turn_detection: None,
-                        },
-                        RealtimeEventParser::RealtimeV2 => SessionAudioInput {
-                            format: SessionAudioFormat {
-                                kind: REALTIME_AUDIO_FORMAT.to_string(),
-                                rate: REALTIME_AUDIO_SAMPLE_RATE,
-                            },
-                            noise_reduction: Some(SessionNoiseReduction {
-                                kind: REALTIME_V2_NOISE_REDUCTION.to_string(),
-                            }),
-                            turn_detection: Some(SessionTurnDetection {
-                                kind: REALTIME_V2_TURN_DETECTION.to_string(),
-                                interrupt_response: true,
-                                create_response: true,
-                            }),
-                        },
-                    };
-                    let output = match self.event_parser {
-                        RealtimeEventParser::V1 => SessionAudioOutput {
-                            format: None,
-                            voice: SessionAudioVoice::Fathom,
-                        },
-                        RealtimeEventParser::RealtimeV2 => SessionAudioOutput {
-                            format: Some(SessionAudioOutputFormat {
-                                kind: REALTIME_AUDIO_FORMAT.to_string(),
-                                rate: REALTIME_AUDIO_SAMPLE_RATE,
-                            }),
-                            voice: SessionAudioVoice::Marin,
-                        },
-                    };
-                    let output_modalities = match self.event_parser {
-                        RealtimeEventParser::V1 => None,
-                        RealtimeEventParser::RealtimeV2 => {
-                            Some(vec![REALTIME_V2_OUTPUT_MODALITY_AUDIO.to_string()])
-                        }
-                    };
-                    (
-                        kind,
-                        Some(instructions),
-                        output_modalities,
-                        input,
-                        Some(output),
-                    )
-                }
-                RealtimeSessionMode::Transcription => (
-                    "transcription".to_string(),
-                    None,
-                    None,
-                    SessionAudioInput {
-                        format: SessionAudioFormat {
-                            kind: REALTIME_AUDIO_FORMAT.to_string(),
-                            rate: REALTIME_AUDIO_SAMPLE_RATE,
-                        },
-                        noise_reduction: None,
-                        turn_detection: None,
-                    },
-                    None,
-                ),
-            };
-        let (tools, tool_choice) = match (self.event_parser, session_mode) {
-            (RealtimeEventParser::RealtimeV2, RealtimeSessionMode::Conversational) => (
-                Some(vec![SessionFunctionTool {
-                    kind: "function".to_string(),
-                    name: REALTIME_V2_CODEX_TOOL_NAME.to_string(),
-                    description: REALTIME_V2_CODEX_TOOL_DESCRIPTION.to_string(),
-                    parameters: json!({
-                        "type": "object",
-                        "properties": {
-                            "prompt": {
-                                "type": "string",
-                                "description": "The user request to delegate to Codex."
-                            }
-                        },
-                        "required": ["prompt"],
-                        "additionalProperties": false
-                    }),
-                }]),
-                Some(REALTIME_V2_TOOL_CHOICE.to_string()),
-            ),
-            (RealtimeEventParser::RealtimeV2, RealtimeSessionMode::Transcription)
-            | (RealtimeEventParser::V1, RealtimeSessionMode::Conversational)
-            | (RealtimeEventParser::V1, RealtimeSessionMode::Transcription) => (None, None),
-        };
+        let session = session_update_session(self.event_parser, instructions, session_mode);
         debug!(
             event_parser = ?self.event_parser,
             session_mode = ?session_mode,
-            instructions_len = session_instructions.as_ref().map(String::len).unwrap_or_default(),
-            has_output_audio = output_audio.is_some(),
-            has_tools = tools.is_some(),
+            instructions_len = session.instructions.as_ref().map(String::len).unwrap_or_default(),
+            has_output_audio = session.audio.output.is_some(),
+            has_tools = session.tools.is_some(),
             "realtime websocket prepared session.update"
         );
-        self.send_json(RealtimeOutboundMessage::SessionUpdate {
-            session: SessionUpdateSession {
-                kind: session_kind,
-                instructions: session_instructions,
-                output_modalities,
-                audio: SessionAudio {
-                    input: input_audio,
-                    output: output_audio,
-                },
-                tools,
-                tool_choice,
-            },
-        })
-        .await
+        self.send_json(RealtimeOutboundMessage::SessionUpdate { session })
+            .await
     }
 
     pub async fn close(&self) -> Result<(), ApiError> {
@@ -775,10 +612,7 @@ fn websocket_url_from_api_url(
         }
     }
 
-    let intent = match event_parser {
-        RealtimeEventParser::V1 => Some("quicksilver"),
-        RealtimeEventParser::RealtimeV2 => None,
-    };
+    let intent = websocket_intent(event_parser);
     let has_extra_query_params = query_params.is_some_and(|query_params| {
         query_params
             .iter()
