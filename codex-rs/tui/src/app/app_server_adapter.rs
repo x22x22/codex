@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use super::App;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessServerEvent;
+use codex_app_server_client::local_external_chatgpt_tokens;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::ClientRequest;
@@ -1118,15 +1119,29 @@ impl App {
                     request_id,
                     params: _,
                 } = request
-                    && let Err(err) = self
-                        .reject_app_server_request(
-                            app_server_client,
-                            request_id,
-                            "TUI does not yet handle auth refresh server requests".to_string(),
-                        )
-                        .await
                 {
-                    tracing::warn!("{err}");
+                    match local_external_chatgpt_tokens(&self.config) {
+                        Ok(response) => {
+                            if let Err(err) = resolve_server_request(
+                                app_server_client,
+                                request_id,
+                                response,
+                                "account/chatgptAuthTokens/refresh",
+                            )
+                            .await
+                            {
+                                tracing::warn!("{err}");
+                            }
+                        }
+                        Err(err) => {
+                            if let Err(reject_err) = self
+                                .reject_app_server_request(app_server_client, request_id, err)
+                                .await
+                            {
+                                tracing::warn!("{reject_err}");
+                            }
+                        }
+                    }
                 }
             }
         }

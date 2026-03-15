@@ -27,6 +27,7 @@ pub use codex_app_server::in_process::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 pub use codex_app_server::in_process::InProcessServerEvent;
 use codex_app_server::in_process::InProcessStartArgs;
 pub use codex_app_server::shared_cloud_requirements_loader;
+use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientNotification;
 use codex_app_server_protocol::ClientRequest;
@@ -43,6 +44,7 @@ use codex_core::config::Config;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_feedback::CodexFeedback;
+use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::protocol::SessionSource;
 use serde::de::DeserializeOwned;
 use tokio::sync::mpsc;
@@ -59,6 +61,49 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// the same JSON-RPC result envelope used by socket/stdio transports because
 /// `MessageProcessor` continues to produce that shape internally.
 pub type RequestResult = std::result::Result<JsonRpcResult, JSONRPCErrorError>;
+
+pub fn local_external_chatgpt_tokens(
+    config: &Config,
+) -> Result<ChatgptAuthTokensRefreshResponse, String> {
+    let auth_manager = AuthManager::shared(
+        config.codex_home.clone(),
+        false,
+        config.cli_auth_credentials_store_mode,
+    );
+    auth_manager.set_forced_chatgpt_workspace_id(config.forced_chatgpt_workspace_id.clone());
+    auth_manager.reload();
+
+    let auth = auth_manager
+        .auth_cached()
+        .ok_or_else(|| "no cached auth available for local token refresh".to_string())?;
+    if !auth.is_external_chatgpt_tokens() {
+        return Err("external ChatGPT token auth is not active".to_string());
+    }
+
+    let access_token = auth
+        .get_token()
+        .map_err(|err| format!("failed to read external access token: {err}"))?;
+    let chatgpt_account_id = auth
+        .get_account_id()
+        .ok_or_else(|| "external token auth is missing chatgpt account id".to_string())?;
+    let chatgpt_plan_type = auth.account_plan_type().map(|plan_type| match plan_type {
+        AccountPlanType::Free => "free".to_string(),
+        AccountPlanType::Go => "go".to_string(),
+        AccountPlanType::Plus => "plus".to_string(),
+        AccountPlanType::Pro => "pro".to_string(),
+        AccountPlanType::Team => "team".to_string(),
+        AccountPlanType::Business => "business".to_string(),
+        AccountPlanType::Enterprise => "enterprise".to_string(),
+        AccountPlanType::Edu => "edu".to_string(),
+        AccountPlanType::Unknown => "unknown".to_string(),
+    });
+
+    Ok(ChatgptAuthTokensRefreshResponse {
+        access_token,
+        chatgpt_account_id,
+        chatgpt_plan_type,
+    })
+}
 
 fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
     // These terminal events drive surface shutdown/completion state. Dropping
@@ -984,5 +1029,18 @@ mod tests {
             .await
             .expect("shutdown should not wait for the 5s fallback timeout")
             .expect("shutdown should complete");
+    }
+
+    #[tokio::test]
+    async fn local_external_chatgpt_tokens_errors_without_cached_external_auth() {
+        let config = build_test_config().await;
+
+        let err = local_external_chatgpt_tokens(&config)
+            .expect_err("default test config should not have cached external ChatGPT auth tokens");
+
+        assert!(
+            err.contains("no cached auth available")
+                || err.contains("external ChatGPT token auth is not active")
+        );
     }
 }
