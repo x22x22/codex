@@ -15,6 +15,8 @@
 //! bridging async `mpsc` channels on both sides. Queues are bounded so overload
 //! surfaces as channel-full errors rather than unbounded memory growth.
 
+mod remote;
+
 use std::error::Error;
 use std::fmt;
 use std::io::Error as IoError;
@@ -35,8 +37,11 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
+use codex_app_server_protocol::ServerNotification;
+use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::AuthManager;
 use codex_core::ThreadManager;
@@ -53,6 +58,9 @@ use tokio::time::timeout;
 use toml::Value as TomlValue;
 use tracing::warn;
 
+pub use crate::remote::RemoteAppServerClient;
+pub use crate::remote::RemoteAppServerConnectArgs;
+
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Raw app-server request result for typed in-process requests.
@@ -61,6 +69,30 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// the same JSON-RPC result envelope used by socket/stdio transports because
 /// `MessageProcessor` continues to produce that shape internally.
 pub type RequestResult = std::result::Result<JsonRpcResult, JSONRPCErrorError>;
+
+#[derive(Debug, Clone)]
+pub enum AppServerEvent {
+    Lagged { skipped: usize },
+    ServerNotification(ServerNotification),
+    LegacyNotification(JSONRPCNotification),
+    ServerRequest(ServerRequest),
+    Disconnected { message: String },
+}
+
+impl From<InProcessServerEvent> for AppServerEvent {
+    fn from(value: InProcessServerEvent) -> Self {
+        match value {
+            InProcessServerEvent::Lagged { skipped } => Self::Lagged { skipped },
+            InProcessServerEvent::ServerNotification(notification) => {
+                Self::ServerNotification(notification)
+            }
+            InProcessServerEvent::LegacyNotification(notification) => {
+                Self::LegacyNotification(notification)
+            }
+            InProcessServerEvent::ServerRequest(request) => Self::ServerRequest(request),
+        }
+    }
+}
 
 pub fn local_external_chatgpt_tokens(
     config: &Config,
@@ -706,6 +738,113 @@ impl InProcessAppServerClient {
             let _ = worker_handle.await;
         }
         Ok(())
+    }
+}
+
+pub enum AppServerClient {
+    InProcess(InProcessAppServerClient),
+    Remote(RemoteAppServerClient),
+}
+
+impl AppServerClient {
+    pub fn in_process(client: InProcessAppServerClient) -> Self {
+        Self::InProcess(client)
+    }
+
+    pub async fn connect_remote(args: RemoteAppServerConnectArgs) -> IoResult<Self> {
+        RemoteAppServerClient::connect(args).await.map(Self::Remote)
+    }
+
+    pub async fn request(&self, request: ClientRequest) -> IoResult<RequestResult> {
+        match self {
+            Self::InProcess(client) => client.request(request).await,
+            Self::Remote(client) => client.request(request).await,
+        }
+    }
+
+    pub async fn request_typed<T>(&self, request: ClientRequest) -> Result<T, TypedRequestError>
+    where
+        T: DeserializeOwned,
+    {
+        match self {
+            Self::InProcess(client) => client.request_typed(request).await,
+            Self::Remote(client) => client.request_typed(request).await,
+        }
+    }
+
+    pub async fn notify(&self, notification: ClientNotification) -> IoResult<()> {
+        match self {
+            Self::InProcess(client) => client.notify(notification).await,
+            Self::Remote(client) => client.notify(notification).await,
+        }
+    }
+
+    pub async fn resolve_server_request(
+        &self,
+        request_id: RequestId,
+        result: JsonRpcResult,
+    ) -> IoResult<()> {
+        match self {
+            Self::InProcess(client) => client.resolve_server_request(request_id, result).await,
+            Self::Remote(client) => client.resolve_server_request(request_id, result).await,
+        }
+    }
+
+    pub async fn reject_server_request(
+        &self,
+        request_id: RequestId,
+        error: JSONRPCErrorError,
+    ) -> IoResult<()> {
+        match self {
+            Self::InProcess(client) => client.reject_server_request(request_id, error).await,
+            Self::Remote(client) => client.reject_server_request(request_id, error).await,
+        }
+    }
+
+    pub async fn next_event(&mut self) -> Option<AppServerEvent> {
+        match self {
+            Self::InProcess(client) => client.next_event().await.map(Into::into),
+            Self::Remote(client) => client.next_event().await,
+        }
+    }
+
+    pub async fn next_typed_event(&mut self) -> Option<AppServerEvent> {
+        loop {
+            match self.next_event().await {
+                Some(AppServerEvent::LegacyNotification(notification)) => {
+                    warn!(
+                        notification.method = %notification.method,
+                        "dropping legacy app-server notification"
+                    );
+                }
+                Some(event) => return Some(event),
+                None => return None,
+            }
+        }
+    }
+
+    pub async fn submit_legacy_thread_op(
+        &self,
+        thread_id: codex_protocol::ThreadId,
+        op: codex_protocol::protocol::Op,
+    ) -> IoResult<()> {
+        match self {
+            Self::InProcess(client) => client.submit_legacy_thread_op(thread_id, op).await,
+            Self::Remote(_) => Err(IoError::other(
+                "legacy TUI operation is not supported over remote app-server transport",
+            )),
+        }
+    }
+
+    pub async fn shutdown(self) -> IoResult<()> {
+        match self {
+            Self::InProcess(client) => client.shutdown().await,
+            Self::Remote(client) => client.shutdown().await,
+        }
+    }
+
+    pub fn is_remote(&self) -> bool {
+        matches!(self, Self::Remote(_))
     }
 }
 

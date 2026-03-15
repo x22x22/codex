@@ -7,9 +7,11 @@ use additional_dirs::add_dir_warning_message;
 use app::App;
 pub use app::AppExitInfo;
 pub use app::ExitReason;
+use codex_app_server_client::AppServerClient;
 use codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY;
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_client::InProcessClientStartArgs;
+use codex_app_server_client::RemoteAppServerConnectArgs;
 use codex_app_server_client::shared_cloud_requirements_loader;
 use codex_app_server_protocol::ConfigWarningNotification;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
@@ -297,10 +299,25 @@ where
     Ok(client)
 }
 
+async fn connect_remote_app_server(websocket_url: &str) -> color_eyre::Result<AppServerClient> {
+    AppServerClient::connect_remote(RemoteAppServerConnectArgs {
+        websocket_url: websocket_url.to_string(),
+        client_name: "codex-tui".to_string(),
+        client_version: env!("CARGO_PKG_VERSION").to_string(),
+        experimental_api: true,
+        opt_out_notification_methods: Vec::new(),
+        channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+    })
+    .await
+    .map_err(color_eyre::Report::from)
+    .wrap_err("failed to connect to remote app server")
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
+    remote_url: Option<String>,
 ) -> std::io::Result<AppExitInfo> {
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
@@ -591,6 +608,7 @@ pub async fn run_main(
         cli,
         arg0_paths,
         loader_overrides,
+        remote_url,
         config,
         overrides,
         cli_kv_overrides,
@@ -606,6 +624,7 @@ async fn run_ratatui_app(
     cli: Cli,
     arg0_paths: Arg0DispatchPaths,
     loader_overrides: LoaderOverrides,
+    remote_url: Option<String>,
     initial_config: Config,
     overrides: ConfigOverrides,
     cli_kv_overrides: Vec<(String, toml::Value)>,
@@ -656,8 +675,16 @@ async fn run_ratatui_app(
     session_log::maybe_init(&initial_config);
 
     let mut onboarding_app_server = if initial_config.model_provider.requires_openai_auth {
-        Some(
-            match start_embedded_app_server(
+        Some(match remote_url.as_deref() {
+            Some(websocket_url) => match connect_remote_app_server(websocket_url).await {
+                Ok(app_server) => app_server,
+                Err(err) => {
+                    restore();
+                    session_log::log_session_end();
+                    return Err(err);
+                }
+            },
+            None => match start_embedded_app_server(
                 arg0_paths.clone(),
                 initial_config.clone(),
                 cli_kv_overrides.clone(),
@@ -666,14 +693,14 @@ async fn run_ratatui_app(
             )
             .await
             {
-                Ok(app_server) => app_server,
+                Ok(app_server) => AppServerClient::in_process(app_server),
                 Err(err) => {
                     restore();
                     session_log::log_session_end();
                     return Err(err);
                 }
             },
-        )
+        })
     } else {
         None
     };
@@ -694,6 +721,7 @@ async fn run_ratatui_app(
                 show_login_screen,
                 show_trust_screen: should_show_trust_screen_flag,
                 login_status,
+                allow_device_code_login: remote_url.is_none(),
                 config: initial_config.clone(),
             },
             &mut tui,
@@ -773,7 +801,104 @@ async fn run_ratatui_app(
     };
 
     let use_fork = cli.fork_picker || cli.fork_last || cli.fork_session_id.is_some();
-    let session_selection = if use_fork {
+    let mut remote_session_app_server = if let Some(websocket_url) = remote_url.as_deref() {
+        Some(match connect_remote_app_server(websocket_url).await {
+            Ok(app_server) => app_server,
+            Err(err) => {
+                restore();
+                session_log::log_session_end();
+                return Err(err);
+            }
+        })
+    } else {
+        None
+    };
+    let session_selection = if let Some(app_server) = remote_session_app_server.as_ref() {
+        if use_fork {
+            if let Some(id_str) = cli.fork_session_id.as_deref() {
+                match resume_picker::find_remote_session_target(app_server, &config, id_str).await?
+                {
+                    Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
+                    None => return missing_session_exit(id_str, "fork"),
+                }
+            } else if cli.fork_last {
+                match resume_picker::latest_remote_session_target(
+                    app_server,
+                    &config,
+                    cli.fork_show_all,
+                )
+                .await?
+                {
+                    Some(target_session) => resume_picker::SessionSelection::Fork(target_session),
+                    None => resume_picker::SessionSelection::StartFresh,
+                }
+            } else if cli.fork_picker {
+                match resume_picker::run_remote_fork_picker(
+                    &mut tui,
+                    app_server,
+                    &config,
+                    cli.fork_show_all,
+                )
+                .await?
+                {
+                    resume_picker::SessionSelection::Exit => {
+                        restore();
+                        session_log::log_session_end();
+                        return Ok(AppExitInfo {
+                            token_usage: codex_protocol::protocol::TokenUsage::default(),
+                            thread_id: None,
+                            thread_name: None,
+                            update_action: None,
+                            exit_reason: ExitReason::UserRequested,
+                        });
+                    }
+                    other => other,
+                }
+            } else {
+                resume_picker::SessionSelection::StartFresh
+            }
+        } else if let Some(id_str) = cli.resume_session_id.as_deref() {
+            match resume_picker::find_remote_session_target(app_server, &config, id_str).await? {
+                Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
+                None => return missing_session_exit(id_str, "resume"),
+            }
+        } else if cli.resume_last {
+            match resume_picker::latest_remote_session_target(
+                app_server,
+                &config,
+                cli.resume_show_all,
+            )
+            .await?
+            {
+                Some(target_session) => resume_picker::SessionSelection::Resume(target_session),
+                None => resume_picker::SessionSelection::StartFresh,
+            }
+        } else if cli.resume_picker {
+            match resume_picker::run_remote_resume_picker(
+                &mut tui,
+                app_server,
+                &config,
+                cli.resume_show_all,
+            )
+            .await?
+            {
+                resume_picker::SessionSelection::Exit => {
+                    restore();
+                    session_log::log_session_end();
+                    return Ok(AppExitInfo {
+                        token_usage: codex_protocol::protocol::TokenUsage::default(),
+                        thread_id: None,
+                        thread_name: None,
+                        update_action: None,
+                        exit_reason: ExitReason::UserRequested,
+                    });
+                }
+                other => other,
+            }
+        } else {
+            resume_picker::SessionSelection::StartFresh
+        }
+    } else if use_fork {
         if let Some(id_str) = cli.fork_session_id.as_deref() {
             let is_uuid = Uuid::parse_str(id_str).is_ok();
             let path = if is_uuid {
@@ -791,8 +916,10 @@ async fn run_ratatui_app(
                             None => return missing_session_exit(id_str, "fork"),
                         };
                     resume_picker::SessionSelection::Fork(resume_picker::SessionTarget {
-                        path,
+                        path: path.clone(),
+                        rollout_path: Some(path.clone()),
                         thread_id,
+                        cwd: None,
                     })
                 }
                 None => return missing_session_exit(id_str, "fork"),
@@ -817,7 +944,9 @@ async fn run_ratatui_app(
                             Some(thread_id) => resume_picker::SessionSelection::Fork(
                                 resume_picker::SessionTarget {
                                     path: item.path.clone(),
+                                    rollout_path: Some(item.path.clone()),
                                     thread_id,
+                                    cwd: item.cwd.clone(),
                                 },
                             ),
                             None => {
@@ -881,8 +1010,10 @@ async fn run_ratatui_app(
                     None => return missing_session_exit(id_str, "resume"),
                 };
                 resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
-                    path,
+                    path: path.clone(),
+                    rollout_path: Some(path.clone()),
                     thread_id,
+                    cwd: None,
                 })
             }
             None => return missing_session_exit(id_str, "resume"),
@@ -909,8 +1040,10 @@ async fn run_ratatui_app(
             Ok(Some(path)) => match resolve_session_thread_id(path.as_path(), None).await {
                 Some(thread_id) => {
                     resume_picker::SessionSelection::Resume(resume_picker::SessionTarget {
-                        path,
+                        path: path.clone(),
+                        rollout_path: Some(path.clone()),
                         thread_id,
+                        cwd: None,
                     })
                 }
                 None => {
@@ -969,7 +1102,8 @@ async fn run_ratatui_app(
                 &config,
                 &current_cwd,
                 target_session.thread_id,
-                &target_session.path,
+                target_session.cwd.as_deref(),
+                target_session.rollout_path.as_deref(),
                 action,
                 allow_prompt,
             )
@@ -1031,21 +1165,24 @@ async fn run_ratatui_app(
 
     let use_alt_screen = determine_alt_screen_mode(no_alt_screen, config.tui_alternate_screen);
     tui.set_alt_screen_enabled(use_alt_screen);
-    let app_server = match start_embedded_app_server(
-        arg0_paths,
-        config.clone(),
-        cli_kv_overrides.clone(),
-        loader_overrides,
-        feedback.clone(),
-    )
-    .await
-    {
-        Ok(app_server) => app_server,
-        Err(err) => {
-            restore();
-            session_log::log_session_end();
-            return Err(err);
-        }
+    let app_server = match remote_session_app_server.take() {
+        Some(app_server) => app_server,
+        None => match start_embedded_app_server(
+            arg0_paths,
+            config.clone(),
+            cli_kv_overrides.clone(),
+            loader_overrides,
+            feedback.clone(),
+        )
+        .await
+        {
+            Ok(app_server) => AppServerClient::in_process(app_server),
+            Err(err) => {
+                restore();
+                session_log::log_session_end();
+                return Err(err);
+            }
+        },
     };
 
     let app_result = App::run(
@@ -1149,16 +1286,28 @@ pub(crate) enum ResolveCwdOutcome {
     Exit,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resume/fork cwd resolution needs explicit inputs"
+)]
 pub(crate) async fn resolve_cwd_for_resume_or_fork(
     tui: &mut Tui,
     config: &Config,
     current_cwd: &Path,
     thread_id: ThreadId,
-    path: &Path,
+    session_cwd_hint: Option<&Path>,
+    path: Option<&Path>,
     action: CwdPromptAction,
     allow_prompt: bool,
 ) -> color_eyre::Result<ResolveCwdOutcome> {
-    let Some(history_cwd) = read_session_cwd(config, thread_id, path).await else {
+    let history_cwd = if let Some(session_cwd_hint) = session_cwd_hint {
+        Some(session_cwd_hint.to_path_buf())
+    } else if let Some(path) = path {
+        read_session_cwd(config, thread_id, path).await
+    } else {
+        None
+    };
+    let Some(history_cwd) = history_cwd else {
         return Ok(ResolveCwdOutcome::Continue(None));
     };
     if allow_prompt && cwds_differ(current_cwd, &history_cwd) {

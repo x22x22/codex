@@ -3,8 +3,10 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use super::App;
-use codex_app_server_client::InProcessAppServerClient;
-use codex_app_server_client::InProcessServerEvent;
+use super::AppRunControl;
+use super::ExitReason;
+use codex_app_server_client::AppServerClient;
+use codex_app_server_client::AppServerEvent;
 use codex_app_server_client::local_external_chatgpt_tokens;
 use codex_app_server_protocol::AppsListParams;
 use codex_app_server_protocol::AppsListResponse;
@@ -94,7 +96,7 @@ use crate::thread_update::ThreadUpdate;
 
 impl App {
     pub(super) async fn list_models_via_app_server(
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
     ) -> Result<Vec<ModelPreset>, String> {
         let response: ModelListResponse = send_request_with_response(
             app_server_client,
@@ -113,7 +115,7 @@ impl App {
     }
 
     pub(super) async fn list_collaboration_modes_via_app_server(
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
     ) -> Result<Vec<CollaborationModeMask>, String> {
         let response: CollaborationModeListResponse = send_request_with_response(
             app_server_client,
@@ -132,7 +134,7 @@ impl App {
     }
 
     pub(super) async fn read_account_via_app_server(
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
     ) -> Result<Option<codex_app_server_protocol::Account>, String> {
         let response: GetAccountResponse = send_request_with_response(
             app_server_client,
@@ -149,7 +151,7 @@ impl App {
     }
 
     pub(super) async fn read_account_rate_limits_via_app_server(
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
     ) -> Result<GetAccountRateLimitsResponse, String> {
         send_request_with_response(
             app_server_client,
@@ -163,7 +165,7 @@ impl App {
     }
 
     pub(super) async fn list_apps_via_app_server(
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
         thread_id: Option<String>,
         force_refetch: bool,
     ) -> Result<Vec<codex_app_server_protocol::AppInfo>, String> {
@@ -185,7 +187,7 @@ impl App {
     }
 
     pub(super) async fn upload_feedback_via_app_server(
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
         request_id: RequestId,
         classification: String,
         reason: Option<String>,
@@ -219,7 +221,7 @@ impl App {
 
     pub(super) async fn thread_start_via_app_server(
         &mut self,
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
         config: &Config,
     ) -> Result<SessionConfiguredEvent, String> {
         let response: ThreadStartResponse = send_request_with_response(
@@ -231,7 +233,8 @@ impl App {
             "thread/start",
         )
         .await?;
-        let (history_log_id, history_entry_count) = history_metadata(config).await;
+        let (history_log_id, history_entry_count) =
+            history_metadata(config, app_server_client).await;
         session_configured_from_thread_start_response(
             &response,
             history_log_id,
@@ -241,20 +244,22 @@ impl App {
 
     pub(super) async fn thread_resume_via_app_server(
         &mut self,
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
         config: &Config,
-        path: PathBuf,
+        thread_id: ThreadId,
+        path: Option<PathBuf>,
     ) -> Result<SessionConfiguredEvent, String> {
         let response: ThreadResumeResponse = send_request_with_response(
             app_server_client,
             ClientRequest::ThreadResume {
                 request_id: self.next_app_server_request_id(),
-                params: thread_resume_params_from_config(config, path),
+                params: thread_resume_params_from_config(config, thread_id, path),
             },
             "thread/resume",
         )
         .await?;
-        let (history_log_id, history_entry_count) = history_metadata(config).await;
+        let (history_log_id, history_entry_count) =
+            history_metadata(config, app_server_client).await;
         session_configured_from_thread_resume_response(
             &response,
             history_log_id,
@@ -264,26 +269,28 @@ impl App {
 
     pub(super) async fn thread_fork_via_app_server(
         &mut self,
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
         config: &Config,
-        path: PathBuf,
+        thread_id: ThreadId,
+        path: Option<PathBuf>,
     ) -> Result<SessionConfiguredEvent, String> {
         let response: ThreadForkResponse = send_request_with_response(
             app_server_client,
             ClientRequest::ThreadFork {
                 request_id: self.next_app_server_request_id(),
-                params: thread_fork_params_from_config(config, path),
+                params: thread_fork_params_from_config(config, thread_id, path),
             },
             "thread/fork",
         )
         .await?;
-        let (history_log_id, history_entry_count) = history_metadata(config).await;
+        let (history_log_id, history_entry_count) =
+            history_metadata(config, app_server_client).await;
         session_configured_from_thread_fork_response(&response, history_log_id, history_entry_count)
     }
 
     pub(super) async fn unsubscribe_thread_via_app_server(
         &mut self,
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
         thread_id: ThreadId,
     ) -> Result<(), String> {
         let _: ThreadUnsubscribeResponse = send_request_with_response(
@@ -303,7 +310,7 @@ impl App {
 
     pub(super) async fn submit_app_server_op(
         &mut self,
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
         thread_id: ThreadId,
         op: Op,
     ) -> bool {
@@ -319,7 +326,7 @@ impl App {
 
     async fn submit_app_server_op_inner(
         &mut self,
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
         thread_id: ThreadId,
         op: Op,
     ) -> Result<(), String> {
@@ -729,6 +736,15 @@ impl App {
             | Op::GetHistoryEntryRequest { .. }
             | Op::ListMcpTools
             | Op::OverrideTurnContext { .. } => {
+                if app_server_client.is_remote() {
+                    match remote_legacy_op_behavior(&op) {
+                        RemoteLegacyOpBehavior::Ignore => return Ok(()),
+                        RemoteLegacyOpBehavior::UserFacingError(message) => {
+                            return Err(message.to_string());
+                        }
+                        RemoteLegacyOpBehavior::UseLegacyRuntime => {}
+                    }
+                }
                 // TODO(app-server): migrate these legacy-only TUI features once app-server grows
                 // equivalent APIs. Until then, keep routing the still-emitted TUI ops through the
                 // shared in-process thread runtime so existing behavior does not regress.
@@ -843,7 +859,7 @@ impl App {
 
     async fn handle_server_notification(
         &mut self,
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
         notification: ServerNotification,
     ) {
         match notification {
@@ -1049,11 +1065,11 @@ impl App {
 
     pub(super) async fn handle_app_server_event(
         &mut self,
-        app_server_client: &InProcessAppServerClient,
-        event: InProcessServerEvent,
-    ) {
+        app_server_client: &AppServerClient,
+        event: AppServerEvent,
+    ) -> AppRunControl {
         match event {
-            InProcessServerEvent::Lagged { skipped } => {
+            AppServerEvent::Lagged { skipped } => {
                 tracing::warn!(
                     skipped,
                     "app-server event consumer lagged; dropping ignored events"
@@ -1061,14 +1077,14 @@ impl App {
                 self.chat_widget
                     .add_error_message(lagged_event_warning_message(skipped));
             }
-            InProcessServerEvent::ServerNotification(notification) => {
+            AppServerEvent::ServerNotification(notification) => {
                 self.handle_server_notification(app_server_client, notification)
                     .await;
             }
-            InProcessServerEvent::LegacyNotification(notification) => {
+            AppServerEvent::LegacyNotification(notification) => {
                 self.handle_legacy_notification(notification);
             }
-            InProcessServerEvent::ServerRequest(request) => {
+            AppServerEvent::ServerRequest(request) => {
                 self.note_server_request(&request);
                 match request.clone() {
                     ServerRequest::CommandExecutionRequestApproval { request_id, params } => {
@@ -1144,7 +1160,13 @@ impl App {
                     }
                 }
             }
+            AppServerEvent::Disconnected { message } => {
+                return AppRunControl::Exit(ExitReason::Fatal(format!(
+                    "Remote app server disconnected: {message}"
+                )));
+            }
         }
+        AppRunControl::Continue
     }
 
     fn handle_legacy_notification(&mut self, notification: JSONRPCNotification) {
@@ -1183,7 +1205,7 @@ impl App {
 
     async fn reject_app_server_request(
         &self,
-        app_server_client: &InProcessAppServerClient,
+        app_server_client: &AppServerClient,
         request_id: RequestId,
         reason: String,
     ) -> Result<(), String> {
@@ -1202,7 +1224,7 @@ impl App {
 }
 
 async fn send_request_with_response<T>(
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request: ClientRequest,
     method: &str,
 ) -> Result<T, String>
@@ -1240,11 +1262,15 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
     }
 }
 
-fn thread_resume_params_from_config(config: &Config, path: PathBuf) -> ThreadResumeParams {
+fn thread_resume_params_from_config(
+    config: &Config,
+    thread_id: ThreadId,
+    path: Option<PathBuf>,
+) -> ThreadResumeParams {
     ThreadResumeParams {
-        thread_id: "resume".to_string(),
+        thread_id: thread_id.to_string(),
         history: None,
-        path: Some(path),
+        path,
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         service_tier: config.service_tier.map(Some),
@@ -1260,10 +1286,14 @@ fn thread_resume_params_from_config(config: &Config, path: PathBuf) -> ThreadRes
     }
 }
 
-fn thread_fork_params_from_config(config: &Config, path: PathBuf) -> ThreadForkParams {
+fn thread_fork_params_from_config(
+    config: &Config,
+    thread_id: ThreadId,
+    path: Option<PathBuf>,
+) -> ThreadForkParams {
     ThreadForkParams {
-        thread_id: "fork".to_string(),
-        path: Some(path),
+        thread_id: thread_id.to_string(),
+        path,
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         service_tier: config.service_tier.map(Some),
@@ -1403,13 +1433,50 @@ fn session_configured_from_thread_response(
     })
 }
 
-async fn history_metadata(config: &Config) -> (u64, usize) {
+async fn history_metadata(config: &Config, app_server_client: &AppServerClient) -> (u64, usize) {
+    if app_server_client.is_remote() {
+        return (0, 0);
+    }
     let path = history_filepath(config);
     history_metadata_for_file(&path).await
 }
 
 fn history_filepath(config: &Config) -> PathBuf {
     config.codex_home.join("history.jsonl")
+}
+
+enum RemoteLegacyOpBehavior {
+    Ignore,
+    UserFacingError(&'static str),
+    UseLegacyRuntime,
+}
+
+fn remote_legacy_op_behavior(op: &Op) -> RemoteLegacyOpBehavior {
+    match op {
+        Op::AddToHistory { .. } | Op::ListCustomPrompts => RemoteLegacyOpBehavior::Ignore,
+        Op::GetHistoryEntryRequest { .. } => RemoteLegacyOpBehavior::UserFacingError(
+            "Persistent prompt history is not available when connected to a remote app server yet. Reconnect without `--remote` to use shared history.",
+        ),
+        Op::ListMcpTools => RemoteLegacyOpBehavior::UserFacingError(
+            "The `/mcp` tools listing is not available when connected to a remote app server yet. Reconnect without `--remote` to use this command.",
+        ),
+        Op::RunUserShellCommand { .. } => RemoteLegacyOpBehavior::UserFacingError(
+            "User shell commands are not available when connected to a remote app server yet. Reconnect without `--remote` to use `!cmd`.",
+        ),
+        Op::DropMemories | Op::UpdateMemories => RemoteLegacyOpBehavior::UserFacingError(
+            "Memory management is not available when connected to a remote app server yet. Reconnect without `--remote` to use `/memory`.",
+        ),
+        Op::ReloadUserConfig => RemoteLegacyOpBehavior::UserFacingError(
+            "Reloading the active session config is not available when connected to a remote app server yet. Reconnect without `--remote` to use this action.",
+        ),
+        Op::OverrideTurnContext { .. } => RemoteLegacyOpBehavior::UserFacingError(
+            "Changing live turn settings is not available when connected to a remote app server yet. Reconnect without `--remote` to use this action.",
+        ),
+        Op::Undo => RemoteLegacyOpBehavior::UserFacingError(
+            "Undo is not available when connected to a remote app server yet. Reconnect without `--remote` to use this action.",
+        ),
+        _ => RemoteLegacyOpBehavior::UseLegacyRuntime,
+    }
 }
 
 async fn history_metadata_for_file(path: &Path) -> (u64, usize) {
@@ -1602,7 +1669,7 @@ fn credits_snapshot_from_api(
 }
 
 async fn resolve_server_request<T>(
-    client: &InProcessAppServerClient,
+    client: &AppServerClient,
     request_id: RequestId,
     value: T,
     method: &str,
@@ -1655,5 +1722,55 @@ fn legacy_op_name(op: &Op) -> &'static str {
         Op::RunUserShellCommand { .. } => "run_user_shell_command",
         Op::ListModels => "list_models",
         _ => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RemoteLegacyOpBehavior;
+    use super::history_metadata_for_file;
+    use super::remote_legacy_op_behavior;
+    use codex_protocol::protocol::Op;
+    use pretty_assertions::assert_eq;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn remote_mode_ignores_startup_only_legacy_ops() {
+        assert!(matches!(
+            remote_legacy_op_behavior(&Op::ListCustomPrompts),
+            RemoteLegacyOpBehavior::Ignore
+        ));
+        assert!(matches!(
+            remote_legacy_op_behavior(&Op::AddToHistory {
+                text: "hello".to_string(),
+            }),
+            RemoteLegacyOpBehavior::Ignore
+        ));
+    }
+
+    #[test]
+    fn remote_mode_returns_targeted_message_for_unsupported_legacy_ops() {
+        let behavior = remote_legacy_op_behavior(&Op::RunUserShellCommand {
+            command: "pwd".to_string(),
+        });
+        let RemoteLegacyOpBehavior::UserFacingError(message) = behavior else {
+            panic!("expected targeted remote-mode error");
+        };
+        assert_eq!(
+            message,
+            "User shell commands are not available when connected to a remote app server yet. Reconnect without `--remote` to use `!cmd`."
+        );
+    }
+
+    #[tokio::test]
+    async fn history_metadata_counts_lines_for_existing_file() {
+        let file = NamedTempFile::new().expect("tempfile");
+        tokio::fs::write(file.path(), b"{\"text\":\"one\"}\n{\"text\":\"two\"}\n")
+            .await
+            .expect("history write");
+
+        let (_, count) = history_metadata_for_file(file.path()).await;
+
+        assert_eq!(count, 2);
     }
 }

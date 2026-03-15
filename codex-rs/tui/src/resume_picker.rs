@@ -12,6 +12,16 @@ use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use chrono::DateTime;
 use chrono::Utc;
+use codex_app_server_client::AppServerClient;
+use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::RequestId;
+use codex_app_server_protocol::Thread;
+use codex_app_server_protocol::ThreadListParams;
+use codex_app_server_protocol::ThreadListResponse;
+use codex_app_server_protocol::ThreadReadParams;
+use codex_app_server_protocol::ThreadReadResponse;
+use codex_app_server_protocol::ThreadSortKey as ApiThreadSortKey;
+use codex_app_server_protocol::ThreadSourceKind;
 use codex_core::Cursor;
 use codex_core::INTERACTIVE_SESSION_SOURCES;
 use codex_core::RolloutRecorder;
@@ -43,7 +53,9 @@ const LOAD_NEAR_THRESHOLD: usize = 5;
 #[derive(Debug, Clone)]
 pub struct SessionTarget {
     pub path: PathBuf,
+    pub rollout_path: Option<PathBuf>,
     pub thread_id: ThreadId,
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,8 +87,19 @@ impl SessionPickerAction {
         }
     }
 
-    fn selection(self, path: PathBuf, thread_id: ThreadId) -> SessionSelection {
-        let target_session = SessionTarget { path, thread_id };
+    fn selection(
+        self,
+        path: PathBuf,
+        rollout_path: Option<PathBuf>,
+        thread_id: ThreadId,
+        cwd: Option<PathBuf>,
+    ) -> SessionSelection {
+        let target_session = SessionTarget {
+            path,
+            rollout_path,
+            thread_id,
+            cwd,
+        };
         match self {
             SessionPickerAction::Resume => SessionSelection::Resume(target_session),
             SessionPickerAction::Fork => SessionSelection::Fork(target_session),
@@ -133,6 +156,31 @@ pub async fn run_fork_picker(
     show_all: bool,
 ) -> Result<SessionSelection> {
     run_session_picker(tui, config, show_all, SessionPickerAction::Fork).await
+}
+
+pub async fn run_remote_resume_picker(
+    tui: &mut Tui,
+    app_server: &AppServerClient,
+    config: &Config,
+    show_all: bool,
+) -> Result<SessionSelection> {
+    run_remote_session_picker(
+        tui,
+        app_server,
+        config,
+        show_all,
+        SessionPickerAction::Resume,
+    )
+    .await
+}
+
+pub async fn run_remote_fork_picker(
+    tui: &mut Tui,
+    app_server: &AppServerClient,
+    config: &Config,
+    show_all: bool,
+) -> Result<SessionSelection> {
+    run_remote_session_picker(tui, app_server, config, show_all, SessionPickerAction::Fork).await
 }
 
 async fn run_session_picker(
@@ -224,6 +272,62 @@ async fn run_session_picker(
     }
 
     // Fallback – treat as cancel/new
+    Ok(SessionSelection::StartFresh)
+}
+
+async fn run_remote_session_picker(
+    tui: &mut Tui,
+    app_server: &AppServerClient,
+    config: &Config,
+    show_all: bool,
+    action: SessionPickerAction,
+) -> Result<SessionSelection> {
+    let alt = AltScreenGuard::enter(tui);
+    let filter_cwd = if show_all {
+        None
+    } else {
+        Some(config.cwd.to_path_buf())
+    };
+    let threads = fetch_remote_threads(app_server, config, show_all, None).await?;
+
+    let no_op_loader: PageLoader = Arc::new(|_request: PageLoadRequest| {});
+    let mut state = PickerState::new(
+        config.codex_home.clone(),
+        alt.tui.frame_requester(),
+        no_op_loader,
+        config.model_provider_id.to_string(),
+        show_all,
+        filter_cwd,
+        action,
+    );
+    state.all_rows = threads.into_iter().map(remote_thread_to_row).collect();
+    state.apply_filter();
+    state.update_thread_names().await;
+    state.request_frame();
+
+    let mut tui_events = alt.tui.event_stream().fuse();
+    loop {
+        match tui_events.next().await {
+            Some(TuiEvent::Key(key)) => {
+                if matches!(key.kind, KeyEventKind::Release) {
+                    continue;
+                }
+                if let Some(selection) = state.handle_key(key).await? {
+                    return Ok(selection);
+                }
+            }
+            Some(TuiEvent::Draw) => {
+                if let Ok(size) = alt.tui.terminal.size() {
+                    let list_height = size.height.saturating_sub(4) as usize;
+                    state.update_view_rows(list_height);
+                }
+                draw_picker(alt.tui, &state)?;
+            }
+            Some(_) => {}
+            None => break,
+        }
+    }
+
     Ok(SessionSelection::StartFresh)
 }
 
@@ -329,6 +433,7 @@ impl SearchState {
 #[derive(Clone)]
 struct Row {
     path: PathBuf,
+    rollout_path: Option<PathBuf>,
     preview: String,
     thread_id: Option<ThreadId>,
     thread_name: Option<String>,
@@ -419,7 +524,12 @@ impl PickerState {
                         None => crate::resolve_session_thread_id(path.as_path(), None).await,
                     };
                     if let Some(thread_id) = thread_id {
-                        return Ok(Some(self.action.selection(path, thread_id)));
+                        return Ok(Some(self.action.selection(
+                            path,
+                            row.rollout_path.clone(),
+                            thread_id,
+                            row.cwd.clone(),
+                        )));
                     }
                     self.inline_error = Some(format!(
                         "Failed to read session metadata from {}",
@@ -837,6 +947,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
 
     Row {
         path: item.path.clone(),
+        rollout_path: Some(item.path.clone()),
         preview,
         thread_id: item.thread_id,
         thread_name: None,
@@ -861,6 +972,112 @@ fn parse_timestamp_str(ts: &str) -> Option<DateTime<Utc>> {
     chrono::DateTime::parse_from_rfc3339(ts)
         .map(|dt| dt.with_timezone(&Utc))
         .ok()
+}
+
+fn remote_thread_to_row(thread: Thread) -> Row {
+    let thread_id = ThreadId::from_string(&thread.id).ok();
+    let rollout_path = thread.path.clone();
+    let path = rollout_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(format!(".codex-remote-threads/{}", thread.id)));
+    Row {
+        path,
+        rollout_path,
+        preview: if thread.preview.trim().is_empty() {
+            "(no message yet)".to_string()
+        } else {
+            thread.preview
+        },
+        thread_id,
+        thread_name: thread.name,
+        created_at: DateTime::<Utc>::from_timestamp(thread.created_at, 0),
+        updated_at: DateTime::<Utc>::from_timestamp(thread.updated_at, 0),
+        cwd: Some(thread.cwd),
+        git_branch: thread.git_info.and_then(|info| info.branch),
+    }
+}
+
+async fn fetch_remote_threads(
+    app_server: &AppServerClient,
+    config: &Config,
+    show_all: bool,
+    search_term: Option<String>,
+) -> Result<Vec<Thread>> {
+    let response: ThreadListResponse = app_server
+        .request_typed(ClientRequest::ThreadList {
+            request_id: RequestId::Integer(0),
+            params: ThreadListParams {
+                cursor: None,
+                limit: Some(100),
+                sort_key: Some(ApiThreadSortKey::UpdatedAt),
+                model_providers: Some(vec![config.model_provider_id.to_string()]),
+                source_kinds: Some(vec![ThreadSourceKind::Cli]),
+                archived: Some(false),
+                cwd: (!show_all).then(|| config.cwd.to_string_lossy().to_string()),
+                search_term,
+            },
+        })
+        .await
+        .map_err(color_eyre::Report::from)?;
+    Ok(response.data)
+}
+
+pub async fn find_remote_session_target(
+    app_server: &AppServerClient,
+    config: &Config,
+    id_or_name: &str,
+) -> Result<Option<SessionTarget>> {
+    if let Ok(thread_id) = ThreadId::from_string(id_or_name) {
+        let response: ThreadReadResponse = app_server
+            .request_typed(ClientRequest::ThreadRead {
+                request_id: RequestId::Integer(0),
+                params: ThreadReadParams {
+                    thread_id: thread_id.to_string(),
+                    include_turns: false,
+                },
+            })
+            .await
+            .map_err(color_eyre::Report::from)?;
+        let row = remote_thread_to_row(response.thread);
+        return Ok(Some(SessionTarget {
+            path: row.path,
+            rollout_path: row.rollout_path,
+            thread_id,
+            cwd: row.cwd,
+        }));
+    }
+
+    let threads =
+        fetch_remote_threads(app_server, config, true, Some(id_or_name.to_string())).await?;
+    Ok(threads.into_iter().find_map(|thread| {
+        if thread.name.as_deref() != Some(id_or_name) {
+            return None;
+        }
+        let row = remote_thread_to_row(thread);
+        Some(SessionTarget {
+            path: row.path,
+            rollout_path: row.rollout_path,
+            thread_id: row.thread_id?,
+            cwd: row.cwd,
+        })
+    }))
+}
+
+pub async fn latest_remote_session_target(
+    app_server: &AppServerClient,
+    config: &Config,
+    show_all: bool,
+) -> Result<Option<SessionTarget>> {
+    let threads = fetch_remote_threads(app_server, config, show_all, None).await?;
+    Ok(threads.into_iter().next().and_then(|thread| {
+        let row = remote_thread_to_row(thread);
+        Some(SessionTarget {
+            path: row.path,
+            rollout_path: row.rollout_path,
+            thread_id: row.thread_id?,
+            cwd: row.cwd,
+        })
+    }))
 }
 
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
@@ -1543,6 +1760,7 @@ mod tests {
     fn row_display_preview_prefers_thread_name() {
         let row = Row {
             path: PathBuf::from("/tmp/a.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/a.jsonl")),
             preview: String::from("first message"),
             thread_id: None,
             thread_name: Some(String::from("My session")),
@@ -1577,6 +1795,7 @@ mod tests {
         let rows = vec![
             Row {
                 path: PathBuf::from("/tmp/a.jsonl"),
+                rollout_path: Some(PathBuf::from("/tmp/a.jsonl")),
                 preview: String::from("Fix resume picker timestamps"),
                 thread_id: None,
                 thread_name: None,
@@ -1587,6 +1806,7 @@ mod tests {
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
+                rollout_path: Some(PathBuf::from("/tmp/b.jsonl")),
                 preview: String::from("Investigate lazy pagination cap"),
                 thread_id: None,
                 thread_name: None,
@@ -1597,6 +1817,7 @@ mod tests {
             },
             Row {
                 path: PathBuf::from("/tmp/c.jsonl"),
+                rollout_path: Some(PathBuf::from("/tmp/c.jsonl")),
                 preview: String::from("Explain the codebase"),
                 thread_id: None,
                 thread_name: None,
@@ -1891,6 +2112,7 @@ mod tests {
         let rows = vec![
             Row {
                 path: PathBuf::from("/tmp/a.jsonl"),
+                rollout_path: Some(PathBuf::from("/tmp/a.jsonl")),
                 preview: String::from("First message preview"),
                 thread_id: Some(id1),
                 thread_name: None,
@@ -1901,6 +2123,7 @@ mod tests {
             },
             Row {
                 path: PathBuf::from("/tmp/b.jsonl"),
+                rollout_path: Some(PathBuf::from("/tmp/b.jsonl")),
                 preview: String::from("Second message preview"),
                 thread_id: Some(id2),
                 thread_name: None,
@@ -2181,6 +2404,7 @@ mod tests {
 
         let row = Row {
             path: PathBuf::from("/tmp/missing.jsonl"),
+            rollout_path: Some(PathBuf::from("/tmp/missing.jsonl")),
             preview: String::from("missing metadata"),
             thread_id: None,
             thread_name: None,

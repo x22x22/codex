@@ -1,5 +1,5 @@
-use codex_app_server_client::InProcessAppServerClient;
-use codex_app_server_client::InProcessServerEvent;
+use codex_app_server_client::AppServerClient;
+use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::ServerNotification;
 use codex_core::config::Config;
@@ -71,6 +71,7 @@ pub(crate) struct OnboardingScreenArgs {
     pub show_trust_screen: bool,
     pub show_login_screen: bool,
     pub login_status: LoginStatus,
+    pub allow_device_code_login: bool,
     pub config: Config,
 }
 
@@ -89,6 +90,7 @@ impl OnboardingScreen {
             show_trust_screen,
             show_login_screen,
             login_status,
+            allow_device_code_login,
             config,
         } = args;
         let cwd = config.cwd.clone();
@@ -119,6 +121,7 @@ impl OnboardingScreen {
                 login_status,
                 forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
                 forced_login_method,
+                allow_device_code_login,
                 animations_enabled: config.animations,
             }))
         }
@@ -412,7 +415,7 @@ impl WidgetRef for Step {
 pub(crate) async fn run_onboarding_app(
     args: OnboardingScreenArgs,
     tui: &mut Tui,
-    app_server: Option<&mut InProcessAppServerClient>,
+    app_server: Option<&mut AppServerClient>,
 ) -> Result<OnboardingResult> {
     use tokio_stream::StreamExt;
 
@@ -458,7 +461,7 @@ pub(crate) async fn run_onboarding_app(
                             app_server,
                             &mut account_api,
                             &mut onboarding_screen,
-                        ).await;
+                        ).await?;
                     } else {
                         return Err(eyre!(
                             "onboarding app server event stream closed before onboarding completed"
@@ -538,7 +541,7 @@ fn handle_tui_event(
 
 async fn handle_auth_command(
     command: AuthCommand,
-    app_server: &InProcessAppServerClient,
+    app_server: &AppServerClient,
     account_api: &mut OnboardingAccountApi,
     onboarding_screen: &mut OnboardingScreen,
 ) {
@@ -587,13 +590,13 @@ async fn handle_auth_command(
 }
 
 async fn handle_app_server_event(
-    event: InProcessServerEvent,
-    app_server: &InProcessAppServerClient,
+    event: AppServerEvent,
+    app_server: &AppServerClient,
     account_api: &mut OnboardingAccountApi,
     onboarding_screen: &mut OnboardingScreen,
-) {
+) -> Result<()> {
     match event {
-        InProcessServerEvent::ServerNotification(ServerNotification::AccountUpdated(_)) => {
+        AppServerEvent::ServerNotification(ServerNotification::AccountUpdated(_)) => {
             match account_api.read_account(app_server).await {
                 Ok(response) => {
                     if let Some(auth_widget) = onboarding_screen.auth_widget_mut() {
@@ -603,16 +606,20 @@ async fn handle_app_server_event(
                 Err(err) => tracing::warn!("failed to refresh onboarding account state: {err}"),
             }
         }
-        InProcessServerEvent::ServerNotification(ServerNotification::AccountLoginCompleted(
-            payload,
-        )) => {
+        AppServerEvent::ServerNotification(ServerNotification::AccountLoginCompleted(payload)) => {
             if let Some(auth_widget) = onboarding_screen.auth_widget_mut() {
                 auth_widget.apply_login_completed(payload);
             }
         }
-        InProcessServerEvent::ServerNotification(_)
-        | InProcessServerEvent::ServerRequest(_)
-        | InProcessServerEvent::Lagged { .. } => {}
-        _ => {}
+        AppServerEvent::Disconnected { message } => {
+            return Err(eyre!(
+                "onboarding app server disconnected before onboarding completed: {message}"
+            ));
+        }
+        AppServerEvent::ServerNotification(_)
+        | AppServerEvent::ServerRequest(_)
+        | AppServerEvent::Lagged { .. }
+        | AppServerEvent::LegacyNotification(_) => {}
     }
+    Ok(())
 }

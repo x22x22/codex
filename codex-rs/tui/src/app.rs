@@ -43,6 +43,8 @@ use crate::tui::TuiEvent;
 use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
+use codex_app_server_client::AppServerClient;
+#[cfg(test)]
 use codex_app_server_client::InProcessAppServerClient;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::RequestId;
@@ -1188,7 +1190,7 @@ impl App {
         self.backtrack_render_pending = false;
     }
 
-    async fn shutdown_current_thread(&mut self, app_server: &InProcessAppServerClient) {
+    async fn shutdown_current_thread(&mut self, app_server: &AppServerClient) {
         if let Some(thread_id) = self.chat_widget.thread_id() {
             // Clear any in-flight rollback guard when switching threads.
             self.backtrack.pending_rollback = None;
@@ -1515,7 +1517,7 @@ impl App {
 
     async fn submit_op_to_thread(
         &mut self,
-        app_server: &InProcessAppServerClient,
+        app_server: &AppServerClient,
         thread_id: ThreadId,
         op: Op,
     ) {
@@ -1832,7 +1834,7 @@ impl App {
     async fn start_fresh_session_with_summary_hint(
         &mut self,
         tui: &mut tui::Tui,
-        app_server: &InProcessAppServerClient,
+        app_server: &AppServerClient,
     ) {
         // Start a fresh in-memory session while preserving resumability via persisted rollout
         // history.
@@ -2007,7 +2009,7 @@ impl App {
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         tui: &mut tui::Tui,
-        mut app_server: InProcessAppServerClient,
+        mut app_server: AppServerClient,
         mut config: Config,
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
@@ -2215,7 +2217,8 @@ impl App {
                     app.thread_resume_via_app_server(
                         &app_server,
                         &resume_config,
-                        target_session.path.clone(),
+                        target_session.thread_id,
+                        target_session.rollout_path.clone(),
                     )
                     .await
                     .map_err(|err| {
@@ -2233,7 +2236,8 @@ impl App {
                     app.thread_fork_via_app_server(
                         &app_server,
                         &fork_config,
-                        target_session.path.clone(),
+                        target_session.thread_id,
+                        target_session.rollout_path.clone(),
                     )
                     .await
                     .map_err(|err| {
@@ -2346,9 +2350,11 @@ impl App {
                             None => {
                                 listen_for_app_server_events = false;
                                 tracing::warn!("app-server event stream closed");
+                                AppRunControl::Exit(ExitReason::Fatal(
+                                    "App server event stream closed unexpectedly".to_string(),
+                                ))
                             }
                         }
-                        AppRunControl::Continue
                     }
                 };
                 if App::should_stop_waiting_for_initial_session(
@@ -2452,7 +2458,7 @@ impl App {
     async fn handle_event(
         &mut self,
         tui: &mut tui::Tui,
-        app_server: &InProcessAppServerClient,
+        app_server: &AppServerClient,
         event: AppEvent,
     ) -> Result<AppRunControl> {
         match event {
@@ -2468,7 +2474,18 @@ impl App {
                     .await;
             }
             AppEvent::OpenResumePicker => {
-                match crate::resume_picker::run_resume_picker(tui, &self.config, false).await? {
+                let selection = if app_server.is_remote() {
+                    crate::resume_picker::run_remote_resume_picker(
+                        tui,
+                        app_server,
+                        &self.config,
+                        false,
+                    )
+                    .await?
+                } else {
+                    crate::resume_picker::run_resume_picker(tui, &self.config, false).await?
+                };
+                match selection {
                     SessionSelection::Resume(target_session) => {
                         let current_cwd = self.config.cwd.clone();
                         let resume_cwd = match crate::resolve_cwd_for_resume_or_fork(
@@ -2476,7 +2493,8 @@ impl App {
                             &self.config,
                             &current_cwd,
                             target_session.thread_id,
-                            &target_session.path,
+                            target_session.cwd.as_deref(),
+                            target_session.rollout_path.as_deref(),
                             CwdPromptAction::Resume,
                             true,
                         )
@@ -2510,7 +2528,8 @@ impl App {
                             .thread_resume_via_app_server(
                                 app_server,
                                 &resume_config,
-                                target_session.path.clone(),
+                                target_session.thread_id,
+                                target_session.rollout_path.clone(),
                             )
                             .await
                         {
@@ -2583,8 +2602,19 @@ impl App {
                     // materialized lazily on first user message.
                     if path.exists() {
                         let fork_config = self.config.clone();
+                        let Some(thread_id) = self.chat_widget.thread_id() else {
+                            self.chat_widget.add_error_message(
+                                "Failed to determine the current thread to fork.".to_string(),
+                            );
+                            return Ok(AppRunControl::Continue);
+                        };
                         match self
-                            .thread_fork_via_app_server(app_server, &fork_config, path.clone())
+                            .thread_fork_via_app_server(
+                                app_server,
+                                &fork_config,
+                                thread_id,
+                                Some(path.clone()),
+                            )
                             .await
                         {
                             Ok(session_configured) => {
@@ -3847,7 +3877,7 @@ impl App {
 
     async fn handle_exit_mode(
         &mut self,
-        app_server: &InProcessAppServerClient,
+        app_server: &AppServerClient,
         mode: ExitMode,
     ) -> AppRunControl {
         match mode {
@@ -4424,24 +4454,26 @@ mod tests {
         })
     }
 
-    async fn start_test_app_server(config: Config) -> InProcessAppServerClient {
-        InProcessAppServerClient::start(codex_app_server_client::InProcessClientStartArgs {
-            arg0_paths: Arg0DispatchPaths::default(),
-            config: Arc::new(config),
-            cli_overrides: Vec::new(),
-            loader_overrides: LoaderOverrides::default(),
-            feedback: codex_feedback::CodexFeedback::new(),
-            config_warnings: Vec::new(),
-            session_source: SessionSource::Cli,
-            enable_codex_api_key_env: false,
-            client_name: "codex-tui-test".to_string(),
-            client_version: "0.0.0-test".to_string(),
-            experimental_api: true,
-            opt_out_notification_methods: Vec::new(),
-            channel_capacity: codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-        })
-        .await
-        .expect("in-process app server should start")
+    async fn start_test_app_server(config: Config) -> AppServerClient {
+        let client =
+            InProcessAppServerClient::start(codex_app_server_client::InProcessClientStartArgs {
+                arg0_paths: Arg0DispatchPaths::default(),
+                config: Arc::new(config),
+                cli_overrides: Vec::new(),
+                loader_overrides: LoaderOverrides::default(),
+                feedback: codex_feedback::CodexFeedback::new(),
+                config_warnings: Vec::new(),
+                session_source: SessionSource::Cli,
+                enable_codex_api_key_env: false,
+                client_name: "codex-tui-test".to_string(),
+                client_version: "0.0.0-test".to_string(),
+                experimental_api: true,
+                opt_out_notification_methods: Vec::new(),
+                channel_capacity: codex_app_server_client::DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+            })
+            .await
+            .expect("in-process app server should start");
+        AppServerClient::in_process(client)
     }
 
     #[test]
@@ -4477,7 +4509,9 @@ mod tests {
             App::should_wait_for_initial_session(&SessionSelection::Resume(
                 crate::resume_picker::SessionTarget {
                     path: PathBuf::from("/tmp/restore"),
+                    rollout_path: Some(PathBuf::from("/tmp/restore")),
                     thread_id: ThreadId::new(),
+                    cwd: None,
                 }
             )),
             false
@@ -4486,7 +4520,9 @@ mod tests {
             App::should_wait_for_initial_session(&SessionSelection::Fork(
                 crate::resume_picker::SessionTarget {
                     path: PathBuf::from("/tmp/fork"),
+                    rollout_path: Some(PathBuf::from("/tmp/fork")),
                     thread_id: ThreadId::new(),
+                    cwd: None,
                 }
             )),
             false
@@ -4526,7 +4562,9 @@ mod tests {
         let wait_for_resume = App::should_wait_for_initial_session(&SessionSelection::Resume(
             crate::resume_picker::SessionTarget {
                 path: PathBuf::from("/tmp/restore"),
+                rollout_path: Some(PathBuf::from("/tmp/restore")),
                 thread_id: ThreadId::new(),
+                cwd: None,
             },
         ));
         assert_eq!(
@@ -4536,7 +4574,9 @@ mod tests {
         let wait_for_fork = App::should_wait_for_initial_session(&SessionSelection::Fork(
             crate::resume_picker::SessionTarget {
                 path: PathBuf::from("/tmp/fork"),
+                rollout_path: Some(PathBuf::from("/tmp/fork")),
                 thread_id: ThreadId::new(),
+                cwd: None,
             },
         ));
         assert_eq!(

@@ -1,4 +1,4 @@
-use codex_app_server_client::InProcessAppServerClient;
+use codex_app_server_client::AppServerClient;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
@@ -30,7 +30,7 @@ pub(crate) struct OnboardingAccountApi {
 impl OnboardingAccountApi {
     pub(crate) async fn read_account(
         &mut self,
-        app_server: &InProcessAppServerClient,
+        app_server: &AppServerClient,
     ) -> Result<GetAccountResponse, String> {
         send_request_with_response(
             app_server,
@@ -47,7 +47,7 @@ impl OnboardingAccountApi {
 
     pub(crate) async fn start_api_key_login(
         &mut self,
-        app_server: &InProcessAppServerClient,
+        app_server: &AppServerClient,
         api_key: String,
     ) -> Result<LoginAccountResponse, String> {
         send_request_with_response(
@@ -63,7 +63,7 @@ impl OnboardingAccountApi {
 
     pub(crate) async fn start_chatgpt_login(
         &mut self,
-        app_server: &InProcessAppServerClient,
+        app_server: &AppServerClient,
     ) -> Result<LoginAccountResponse, String> {
         send_request_with_response(
             app_server,
@@ -78,7 +78,7 @@ impl OnboardingAccountApi {
 
     pub(crate) async fn cancel_chatgpt_login(
         &mut self,
-        app_server: &InProcessAppServerClient,
+        app_server: &AppServerClient,
         login_id: String,
     ) -> Result<CancelLoginAccountResponse, String> {
         send_request_with_response(
@@ -120,15 +120,13 @@ fn login_status_from_account_read_result(
     }
 }
 
-pub(crate) async fn read_login_status_via_app_server(
-    app_server: &InProcessAppServerClient,
-) -> LoginStatus {
+pub(crate) async fn read_login_status_via_app_server(app_server: &AppServerClient) -> LoginStatus {
     let mut api = OnboardingAccountApi::default();
     login_status_from_account_read_result(api.read_account(app_server).await)
 }
 
 async fn send_request_with_response<T>(
-    app_server: &InProcessAppServerClient,
+    app_server: &AppServerClient,
     request: ClientRequest,
     method: &str,
 ) -> Result<T, String>

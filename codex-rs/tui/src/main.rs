@@ -11,7 +11,16 @@ struct TopCli {
     config_overrides: CliConfigOverrides,
 
     #[clap(flatten)]
+    remote: InteractiveRemoteOptions,
+
+    #[clap(flatten)]
     inner: Cli,
+}
+
+#[derive(Parser, Debug, Default)]
+struct InteractiveRemoteOptions {
+    #[arg(long = "remote", value_name = "ADDR")]
+    remote: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -26,6 +35,7 @@ fn main() -> anyhow::Result<()> {
             inner,
             arg0_paths,
             codex_core::config_loader::LoaderOverrides::default(),
+            top_cli.remote.remote,
         )
         .await?;
         let token_usage = exit_info.token_usage;

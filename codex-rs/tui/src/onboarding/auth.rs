@@ -200,6 +200,7 @@ pub(crate) struct AuthModeWidget {
     pub login_status: LoginStatus,
     pub forced_chatgpt_workspace_id: Option<String>,
     pub forced_login_method: Option<ForcedLoginMethod>,
+    pub allow_device_code_login: bool,
     pub animations_enabled: bool,
 }
 
@@ -214,7 +215,7 @@ impl AuthModeWidget {
 
     fn displayed_sign_in_options(&self) -> Vec<SignInOption> {
         let mut options = vec![SignInOption::ChatGpt];
-        if self.is_chatgpt_login_allowed() {
+        if self.is_chatgpt_login_allowed() && self.allow_device_code_login {
             options.push(SignInOption::DeviceCode);
         }
         if self.is_api_login_allowed() {
@@ -881,6 +882,7 @@ mod tests {
             login_status: LoginStatus::NotAuthenticated,
             forced_chatgpt_workspace_id: None,
             forced_login_method,
+            allow_device_code_login: true,
             animations_enabled: true,
         }
     }
@@ -1012,6 +1014,17 @@ mod tests {
         widget.render_ref(area, &mut buf);
 
         assert_snapshot!("device_code_login_pending", format!("{buf:?}"));
+    }
+
+    #[test]
+    fn device_code_option_hidden_when_not_allowed() {
+        let mut widget = auth_widget(None, SignInOption::ChatGpt);
+        widget.allow_device_code_login = false;
+
+        assert_eq!(
+            widget.displayed_sign_in_options(),
+            vec![SignInOption::ChatGpt, SignInOption::ApiKey]
+        );
     }
 
     #[test]
