@@ -293,9 +293,16 @@ impl ToolEmitter {
         ctx: ToolEventCtx<'_>,
     ) -> String {
         match self {
-            Self::Shell { freeform: true, .. } => {
-                super::format_exec_output_for_model_freeform(output, ctx.turn.truncation_policy)
-            }
+            Self::Shell {
+                freeform: true,
+                command,
+                is_command_overridden,
+                ..
+            } => super::format_exec_output_for_model_freeform(
+                output,
+                ctx.turn.truncation_policy,
+                is_command_overridden.then_some(command.as_slice()),
+            ),
             Self::Shell {
                 command,
                 is_command_overridden,

@@ -286,6 +286,7 @@ impl ToolOrchestrator {
                 let bypass_retry_approval = tool
                     .should_bypass_approval(approval_policy, already_approved)
                     && network_approval_context.is_none();
+                let mut command_overridden_on_retry = false;
                 if !bypass_retry_approval {
                     let approval_ctx = ApprovalCtx {
                         session: &effective_tool_ctx.session,
@@ -299,6 +300,7 @@ impl ToolOrchestrator {
                     let decision = tool.start_approval_async(req, approval_ctx).await;
                     otel.tool_decision(otel_tn, otel_ci, &decision, otel_user);
                     if let Some(command) = decision.override_command() {
+                        command_overridden_on_retry = true;
                         effective_tool_ctx.command_override = Some(command.to_vec());
                         if let Some(effective_command) = &effective_tool_ctx.effective_command {
                             *effective_command.lock().await = command.to_vec();
@@ -329,15 +331,37 @@ impl ToolOrchestrator {
                     }
                 }
 
-                let escalated_attempt = SandboxAttempt {
-                    sandbox: crate::exec::SandboxType::None,
+                let retry_sandbox = if command_overridden_on_retry {
+                    match tool.sandbox_mode_for_first_attempt(req) {
+                        SandboxOverride::BypassSandboxFirstAttempt => {
+                            crate::exec::SandboxType::None
+                        }
+                        SandboxOverride::NoOverride => self.sandbox.select_initial(
+                            &turn_ctx.file_system_sandbox_policy,
+                            turn_ctx.network_sandbox_policy,
+                            tool.sandbox_preference(),
+                            turn_ctx.windows_sandbox_level,
+                            has_managed_network_requirements,
+                        ),
+                    }
+                } else {
+                    crate::exec::SandboxType::None
+                };
+                let retry_codex_linux_sandbox_exe = if command_overridden_on_retry {
+                    turn_ctx.codex_linux_sandbox_exe.as_ref()
+                } else {
+                    None
+                };
+
+                let retry_attempt = SandboxAttempt {
+                    sandbox: retry_sandbox,
                     policy: &turn_ctx.sandbox_policy,
                     file_system_policy: &turn_ctx.file_system_sandbox_policy,
                     network_policy: turn_ctx.network_sandbox_policy,
                     enforce_managed_network: has_managed_network_requirements,
                     manager: &self.sandbox,
                     sandbox_cwd: &turn_ctx.cwd,
-                    codex_linux_sandbox_exe: None,
+                    codex_linux_sandbox_exe: retry_codex_linux_sandbox_exe,
                     use_legacy_landlock,
                     windows_sandbox_level: turn_ctx.windows_sandbox_level,
                     windows_sandbox_private_desktop: turn_ctx
@@ -351,7 +375,7 @@ impl ToolOrchestrator {
                     tool,
                     req,
                     &effective_tool_ctx,
-                    &escalated_attempt,
+                    &retry_attempt,
                     has_managed_network_requirements,
                 )
                 .await;

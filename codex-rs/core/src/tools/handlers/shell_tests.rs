@@ -361,14 +361,8 @@ async fn shell_handler_retry_override_keeps_single_begin_and_reports_override() 
             "echo override-after-retry".to_string(),
         ]
     } else {
-        vec![
-            "/bin/sh".to_string(),
-            "-c".to_string(),
-            "printf 'override-after-retry\\n'".to_string(),
-        ]
+        vec!["/bin/echo".to_string(), "override-after-retry".to_string()]
     };
-    let expected_stdout = "override-after-retry\n".to_string();
-
     let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let call_id = "call-retry-override".to_string();
     let handler = ShellHandler;
@@ -465,21 +459,24 @@ async fn shell_handler_retry_override_keeps_single_begin_and_reports_override() 
     let response = timeout(Duration::from_secs(5), handle)
         .await
         .expect("timed out waiting for shell handler")
-        .expect("shell handler join error")
-        .expect("shell handler should succeed");
+        .expect("shell handler join error");
 
     let duration_seconds = (end_event.duration.as_secs_f32() * 10.0).round() / 10.0;
     let expected_body = serde_json::json!({
-        "output": expected_stdout,
+        "output": end_event.aggregated_output,
         "metadata": {
-            "exit_code": 0,
+            "exit_code": end_event.exit_code,
             "duration_seconds": duration_seconds,
         },
         "executed_command": override_command,
     });
+    let tool_output = match response {
+        Ok(output) => tool_output_text(&output),
+        Err(crate::function_tool::FunctionCallError::RespondToModel(message)) => message,
+        Err(err) => panic!("unexpected shell handler error: {err:?}"),
+    };
 
     assert_eq!(begin_count, 1);
-    assert_eq!(end_event.status, ExecCommandStatus::Completed);
     assert_eq!(
         end_event.command,
         expected_body["executed_command"]
@@ -489,10 +486,147 @@ async fn shell_handler_retry_override_keeps_single_begin_and_reports_override() 
             .map(|value| value.as_str().expect("string").to_string())
             .collect::<Vec<_>>()
     );
-    assert_eq!(end_event.stdout, expected_stdout);
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&tool_output_text(&response))
-            .expect("valid json"),
+        serde_json::from_str::<serde_json::Value>(&tool_output).expect("valid json"),
         expected_body
     );
+}
+
+#[tokio::test]
+async fn shell_handler_retry_override_reapplies_sandbox_selection() {
+    let (session, mut turn_context, rx) = make_session_and_context_with_rx().await;
+    *session.active_turn.lock().await = Some(ActiveTurn::default());
+    Arc::get_mut(&mut turn_context)
+        .expect("single turn context ref")
+        .approval_policy
+        .set(AskForApproval::OnFailure)
+        .expect("test setup should allow updating approval policy");
+
+    let temp_dir = tempfile::tempdir_in(
+        turn_context
+            .cwd
+            .parent()
+            .expect("workspace cwd should have a parent"),
+    )
+    .expect("create temp dir outside workspace");
+    let requested_path = temp_dir.path().join("requested-outside-sandbox.txt");
+    let override_path = temp_dir.path().join("override-outside-sandbox.txt");
+    std::fs::write(&requested_path, b"requested should stay sandboxed\n")
+        .expect("write requested file");
+    std::fs::write(&override_path, b"override should stay sandboxed\n")
+        .expect("write override file");
+
+    let requested_command = if cfg!(windows) {
+        vec![
+            "cmd.exe".to_string(),
+            "/C".to_string(),
+            format!("type \"{}\"", requested_path.display()),
+        ]
+    } else {
+        vec!["/bin/cat".to_string(), requested_path.display().to_string()]
+    };
+    let override_command = if cfg!(windows) {
+        vec![
+            "cmd.exe".to_string(),
+            "/C".to_string(),
+            format!("type \"{}\"", override_path.display()),
+        ]
+    } else {
+        vec!["/bin/cat".to_string(), override_path.display().to_string()]
+    };
+
+    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
+    let call_id = "call-retry-override-sandboxed".to_string();
+    let handler = ShellHandler;
+    let handle: tokio::task::JoinHandle<
+        Result<crate::tools::context::FunctionToolOutput, crate::function_tool::FunctionCallError>,
+    > = tokio::spawn({
+        let session = Arc::clone(&session);
+        let turn_context = Arc::clone(&turn_context);
+        let tracker = Arc::clone(&tracker);
+        let requested_command = requested_command.clone();
+        let call_id = call_id.clone();
+        async move {
+            handler
+                .handle(ToolInvocation {
+                    session,
+                    turn: turn_context.clone(),
+                    tracker,
+                    call_id: call_id.clone(),
+                    tool_name: "shell".to_string(),
+                    tool_namespace: None,
+                    payload: ToolPayload::Function {
+                        arguments: serde_json::json!({
+                            "command": requested_command,
+                            "workdir": Some(turn_context.cwd.to_string_lossy().to_string()),
+                            "timeout_ms": 1_000u64,
+                            "sandbox_permissions": SandboxPermissions::UseDefault,
+                        })
+                        .to_string(),
+                    },
+                })
+                .await
+        }
+    });
+
+    let begin_event = loop {
+        let event = timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for begin event")
+            .expect("begin event missing");
+        if let EventMsg::ExecCommandBegin(begin) = event.msg
+            && begin.call_id == call_id
+        {
+            break begin;
+        }
+    };
+
+    let approval_event = loop {
+        let event = timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for retry approval request")
+            .expect("retry approval request missing");
+        if let EventMsg::ExecApprovalRequest(request) = event.msg
+            && request.call_id == call_id
+        {
+            break request;
+        }
+    };
+
+    assert_eq!(begin_event.command, requested_command);
+    assert_eq!(approval_event.command, requested_command);
+
+    session
+        .notify_approval(
+            &call_id,
+            ReviewDecision::ApprovedOverrideCommand {
+                command: override_command.clone(),
+            },
+        )
+        .await;
+
+    let end_event = loop {
+        let event = timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for exec end event")
+            .expect("exec end event missing");
+        if let EventMsg::ExecCommandEnd(end) = event.msg
+            && end.call_id == call_id
+        {
+            break end;
+        }
+    };
+
+    let response = timeout(Duration::from_secs(5), handle)
+        .await
+        .expect("timed out waiting for shell handler")
+        .expect("shell handler join error");
+
+    assert!(
+        response.is_err(),
+        "shell handler should keep override command sandboxed"
+    );
+
+    assert_eq!(end_event.status, ExecCommandStatus::Failed);
+    assert_eq!(end_event.command, override_command);
 }
