@@ -156,6 +156,7 @@ mod app_server_requests;
 mod loaded_threads;
 mod fork_session_overlay;
 mod fork_session_overlay_mouse;
+mod fork_session_overlay_stack;
 mod fork_session_terminal;
 mod pending_interactive_replay;
 
@@ -164,6 +165,7 @@ use self::agent_navigation::AgentNavigationState;
 use self::app_server_requests::PendingAppServerRequests;
 use self::loaded_threads::find_loaded_subagent_threads_for_primary;
 use self::fork_session_overlay::ForkSessionOverlayState;
+use self::fork_session_overlay_stack::ForkSessionOverlayStack;
 use self::pending_interactive_replay::PendingInteractiveReplayState;
 
 const EXTERNAL_EDITOR_HINT: &str = "Save and close external editor to continue.";
@@ -956,7 +958,7 @@ pub(crate) struct App {
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
-    pub(crate) fork_session_overlay: Option<ForkSessionOverlayState>,
+    pub(crate) fork_session_overlay: Option<ForkSessionOverlayStack>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
     has_emitted_history_lines: bool,
 
@@ -4110,13 +4112,6 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::ForkCurrentSession => {
-                if self.fork_session_overlay.is_some() {
-                    self.chat_widget.add_error_message(
-                        "A forked session overlay is already open. Press Ctrl+] then q to return to the original session."
-                            .to_string(),
-                    );
-                    return Ok(AppRunControl::Continue);
-                }
                 self.session_telemetry.counter(
                     "codex.thread.fork",
                     /*inc*/ 1,

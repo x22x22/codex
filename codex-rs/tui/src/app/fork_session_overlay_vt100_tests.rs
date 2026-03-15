@@ -210,13 +210,12 @@ async fn fork_session_overlay_open_from_inline_viewport_snapshot() {
         Terminal::with_options(VT100Backend::new(width, height)).expect("create vt100 terminal");
     terminal.set_viewport_area(Rect::new(0, height - 7, width, 7));
 
-    app.fork_session_overlay = Some(ForkSessionOverlayState {
+    app.fork_session_overlay = Some(ForkSessionOverlayStack::new(ForkSessionOverlayState {
         terminal: ForkSessionTerminal::for_test(child, None),
         popup: default_popup_rect(Rect::new(0, 0, width, height)),
         command_state: OverlayCommandState::PassThrough,
-        focused_pane: OverlayFocusedPane::Popup,
         drag_state: None,
-    });
+    }));
 
     let mut pending_history_lines = Vec::new();
     draw_vt100_terminal_frame(&mut terminal, &mut pending_history_lines, height, |frame| {

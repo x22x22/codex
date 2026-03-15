@@ -13,30 +13,40 @@ pub(crate) struct PopupDragState {
 pub(crate) enum OverlayMouseAction {
     Ignore,
     FocusBackground,
-    FocusPopup(PopupDragState),
+    FocusPopup {
+        popup_index: usize,
+        drag_state: PopupDragState,
+    },
     MovePopup(Rect),
     EndDrag,
 }
 
 pub(crate) fn overlay_mouse_action(
     area: Rect,
-    popup: Rect,
+    popups: &[Rect],
     drag_state: Option<PopupDragState>,
     mouse_event: MouseEvent,
 ) -> OverlayMouseAction {
     match mouse_event.kind {
         MouseEventKind::Down(MouseButton::Left) => {
-            if popup_contains_position(popup, mouse_event.column, mouse_event.row) {
-                OverlayMouseAction::FocusPopup(PopupDragState {
-                    column_offset: mouse_event.column.saturating_sub(popup.x),
-                    row_offset: mouse_event.row.saturating_sub(popup.y),
-                })
+            if let Some((popup_index, popup)) =
+                hit_popup(popups, mouse_event.column, mouse_event.row)
+            {
+                OverlayMouseAction::FocusPopup {
+                    popup_index,
+                    drag_state: PopupDragState {
+                        column_offset: mouse_event.column.saturating_sub(popup.x),
+                        row_offset: mouse_event.row.saturating_sub(popup.y),
+                    },
+                }
             } else {
                 OverlayMouseAction::FocusBackground
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            if let Some(drag_state) = drag_state {
+            if let Some(drag_state) = drag_state
+                && let Some(popup) = popups.last().copied()
+            {
                 let max_x = area.right().saturating_sub(popup.width);
                 let max_y = area.bottom().saturating_sub(popup.height);
                 let x = mouse_event
@@ -68,6 +78,15 @@ fn popup_contains_position(popup: Rect, column: u16, row: u16) -> bool {
     column >= popup.x && column < popup.right() && row >= popup.y && row < popup.bottom()
 }
 
+fn hit_popup(popups: &[Rect], column: u16, row: u16) -> Option<(usize, Rect)> {
+    popups
+        .iter()
+        .copied()
+        .enumerate()
+        .rev()
+        .find(|(_, popup)| popup_contains_position(*popup, column, row))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -75,7 +94,7 @@ mod tests {
 
     #[test]
     fn mouse_down_outside_popup_focuses_background() {
-        let popup = Rect::new(20, 8, 40, 16);
+        let popups = [Rect::new(20, 8, 40, 16)];
         let area = Rect::new(0, 0, 120, 40);
         let mouse_event = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -85,14 +104,14 @@ mod tests {
         };
 
         assert_eq!(
-            overlay_mouse_action(area, popup, None, mouse_event),
+            overlay_mouse_action(area, &popups, None, mouse_event),
             OverlayMouseAction::FocusBackground
         );
     }
 
     #[test]
     fn mouse_down_inside_popup_starts_drag() {
-        let popup = Rect::new(20, 8, 40, 16);
+        let popups = [Rect::new(20, 8, 40, 16)];
         let area = Rect::new(0, 0, 120, 40);
         let mouse_event = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -102,18 +121,21 @@ mod tests {
         };
 
         assert_eq!(
-            overlay_mouse_action(area, popup, None, mouse_event),
-            OverlayMouseAction::FocusPopup(PopupDragState {
-                column_offset: 7,
-                row_offset: 2,
-            })
+            overlay_mouse_action(area, &popups, None, mouse_event),
+            OverlayMouseAction::FocusPopup {
+                popup_index: 0,
+                drag_state: PopupDragState {
+                    column_offset: 7,
+                    row_offset: 2,
+                },
+            }
         );
     }
 
     #[test]
     fn mouse_drag_moves_popup_and_clamps_to_viewport() {
         let area = Rect::new(0, 0, 120, 40);
-        let popup = Rect::new(20, 8, 40, 16);
+        let popups = [Rect::new(20, 8, 40, 16)];
         let drag_state = PopupDragState {
             column_offset: 7,
             row_offset: 2,
@@ -126,14 +148,14 @@ mod tests {
         };
 
         assert_eq!(
-            overlay_mouse_action(area, popup, Some(drag_state), mouse_event),
+            overlay_mouse_action(area, &popups, Some(drag_state), mouse_event),
             OverlayMouseAction::MovePopup(Rect::new(80, 24, 40, 16))
         );
     }
 
     #[test]
     fn mouse_up_ends_drag() {
-        let popup = Rect::new(20, 8, 40, 16);
+        let popups = [Rect::new(20, 8, 40, 16)];
         let area = Rect::new(0, 0, 120, 40);
         let mouse_event = MouseEvent {
             kind: MouseEventKind::Up(MouseButton::Left),
@@ -143,8 +165,31 @@ mod tests {
         };
 
         assert_eq!(
-            overlay_mouse_action(area, popup, None, mouse_event),
+            overlay_mouse_action(area, &popups, None, mouse_event),
             OverlayMouseAction::EndDrag
+        );
+    }
+
+    #[test]
+    fn mouse_down_hits_topmost_popup_first() {
+        let popups = [Rect::new(20, 8, 40, 16), Rect::new(30, 12, 40, 16)];
+        let area = Rect::new(0, 0, 120, 40);
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 35,
+            row: 15,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        };
+
+        assert_eq!(
+            overlay_mouse_action(area, &popups, None, mouse_event),
+            OverlayMouseAction::FocusPopup {
+                popup_index: 1,
+                drag_state: PopupDragState {
+                    column_offset: 5,
+                    row_offset: 3,
+                },
+            }
         );
     }
 }

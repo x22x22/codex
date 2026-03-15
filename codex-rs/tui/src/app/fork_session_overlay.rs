@@ -29,8 +29,10 @@ use crate::vt100_backend::VT100Backend;
 use crate::vt100_render::render_screen;
 
 use super::fork_session_overlay_mouse::OverlayMouseAction;
-use super::fork_session_overlay_mouse::PopupDragState;
 use super::fork_session_overlay_mouse::overlay_mouse_action;
+use super::fork_session_overlay_stack::ForkSessionOverlayStack;
+use super::fork_session_overlay_stack::ForkSessionOverlayState;
+use super::fork_session_overlay_stack::OverlayFocusedPane;
 use super::fork_session_terminal::ForkSessionTerminal;
 
 const DEFAULT_POPUP_WIDTH_NUMERATOR: u16 = 2;
@@ -41,29 +43,16 @@ const POPUP_MIN_WIDTH: u16 = 44;
 const POPUP_MIN_HEIGHT: u16 = 10;
 const POPUP_HORIZONTAL_MARGIN: u16 = 2;
 const POPUP_VERTICAL_MARGIN: u16 = 1;
+const POPUP_CASCADE_STEP_X: u16 = 4;
+const POPUP_CASCADE_STEP_Y: u16 = 2;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum OverlayCommandState {
+pub(crate) enum OverlayCommandState {
     #[default]
     PassThrough,
     AwaitingPrefix,
     Move,
     Resize,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum OverlayFocusedPane {
-    Background,
-    #[default]
-    Popup,
-}
-
-pub(crate) struct ForkSessionOverlayState {
-    pub(crate) terminal: ForkSessionTerminal,
-    popup: Rect,
-    command_state: OverlayCommandState,
-    focused_pane: OverlayFocusedPane,
-    drag_state: Option<PopupDragState>,
 }
 
 fn popup_size_bounds(area: Rect) -> Rect {
@@ -110,6 +99,13 @@ fn default_popup_rect(area: Rect) -> Rect {
         width,
         height,
     )
+}
+
+fn stacked_popup_rect(area: Rect, existing_popups: usize) -> Rect {
+    let popup = default_popup_rect(area);
+    let dx = i32::from(POPUP_CASCADE_STEP_X) * existing_popups as i32;
+    let dy = i32::from(POPUP_CASCADE_STEP_Y) * existing_popups as i32;
+    move_popup_rect(area, popup, dx, dy)
 }
 
 fn clamp_popup_rect(area: Rect, popup: Rect) -> Rect {
@@ -340,7 +336,12 @@ impl App {
     ) -> Result<()> {
         tui.clear_pending_history_lines();
         let size = tui.terminal.size()?;
-        let popup = default_popup_rect(Rect::new(0, 0, size.width, size.height));
+        let area = Rect::new(0, 0, size.width, size.height);
+        let existing_popups = self
+            .fork_session_overlay
+            .as_ref()
+            .map_or(0, |stack| stack.popups().len());
+        let popup = stacked_popup_rect(area, existing_popups);
         let terminal_size = popup_terminal_size(popup);
         let program = std::env::current_exe()?.to_string_lossy().into_owned();
         let env = child_overlay_env(std::env::vars().collect::<HashMap<_, _>>());
@@ -355,22 +356,31 @@ impl App {
         )
         .await?;
 
-        self.fork_session_overlay = Some(ForkSessionOverlayState {
+        let popup_state = ForkSessionOverlayState {
             terminal,
             popup,
             command_state: OverlayCommandState::PassThrough,
-            focused_pane: OverlayFocusedPane::Popup,
             drag_state: None,
-        });
-        tui.set_mouse_capture_enabled(true)?;
+        };
+        if let Some(stack) = self.fork_session_overlay.as_mut() {
+            stack.push_popup(popup_state);
+        } else {
+            self.fork_session_overlay = Some(ForkSessionOverlayStack::new(popup_state));
+            tui.set_mouse_capture_enabled(true)?;
+        }
         tui.frame_requester().schedule_frame();
         Ok(())
     }
 
     pub(crate) async fn close_fork_session_overlay(&mut self, tui: &mut tui::Tui) -> Result<()> {
-        self.fork_session_overlay = None;
-        tui.set_mouse_capture_enabled(false)?;
-        self.restore_inline_view_after_fork_overlay_close(tui)?;
+        if let Some(stack) = self.fork_session_overlay.as_mut() {
+            let _ = stack.close_active_popup();
+            if stack.is_empty() {
+                self.fork_session_overlay = None;
+                tui.set_mouse_capture_enabled(false)?;
+                self.restore_inline_view_after_fork_overlay_close(tui)?;
+            }
+        }
         tui.frame_requester().schedule_frame();
         Ok(())
     }
@@ -386,24 +396,31 @@ impl App {
                 let mut forward_key = None;
                 let viewport = tui.terminal.size()?;
                 let area = Rect::new(0, 0, viewport.width, viewport.height);
-                if let Some(state) = self.fork_session_overlay.as_mut() {
+                if let Some(stack) = self.fork_session_overlay.as_mut() {
                     let is_ctrl_prefix =
                         matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                             && matches!(key_event.code, KeyCode::Char(']'))
                             && key_event.modifiers.contains(KeyModifiers::CONTROL);
-                    match state.command_state {
+                    let Some(command_state) = stack.active_popup().map(|popup| popup.command_state)
+                    else {
+                        return Ok(());
+                    };
+                    match command_state {
                         OverlayCommandState::PassThrough => {
                             if focus_toggle_shortcut(key_event) {
-                                state.focused_pane = match state.focused_pane {
+                                let focused_pane = match stack.focused_pane() {
                                     OverlayFocusedPane::Background => OverlayFocusedPane::Popup,
                                     OverlayFocusedPane::Popup => OverlayFocusedPane::Background,
                                 };
+                                stack.set_focused_pane(focused_pane);
                                 tui.frame_requester().schedule_frame();
                             } else if is_ctrl_prefix {
-                                state.command_state = OverlayCommandState::AwaitingPrefix;
+                                if let Some(popup) = stack.active_popup_mut() {
+                                    popup.command_state = OverlayCommandState::AwaitingPrefix;
+                                }
                                 tui.frame_requester().schedule_frame();
                             } else {
-                                match state.focused_pane {
+                                match stack.focused_pane() {
                                     OverlayFocusedPane::Background => {
                                         self.handle_key_event(tui, key_event).await;
                                     }
@@ -420,31 +437,39 @@ impl App {
                                     key_event.code,
                                     KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
                                 ) {
-                                    if let Some((dx, dy)) = move_popup_delta(key_event) {
-                                        state.command_state = OverlayCommandState::Move;
-                                        state.popup = move_popup_rect(area, state.popup, dx, dy);
+                                    if let Some((dx, dy)) = move_popup_delta(key_event)
+                                        && let Some(popup) = stack.active_popup_mut()
+                                    {
+                                        popup.command_state = OverlayCommandState::Move;
+                                        popup.popup = move_popup_rect(area, popup.popup, dx, dy);
                                     }
                                 } else if matches!(
                                     key_event.code,
                                     KeyCode::Char('=') | KeyCode::Char('+') | KeyCode::Char('-')
                                 ) {
-                                    state.command_state = OverlayCommandState::Resize;
                                     let delta = match key_event.code {
                                         KeyCode::Char('=') | KeyCode::Char('+') => 1,
                                         KeyCode::Char('-') => -1,
                                         _ => unreachable!(),
                                     };
-                                    state.popup = resize_all_edges(area, state.popup, delta);
+                                    if let Some(popup) = stack.active_popup_mut() {
+                                        popup.command_state = OverlayCommandState::Resize;
+                                        popup.popup = resize_all_edges(area, popup.popup, delta);
+                                    }
                                 } else {
                                     match key_event.code {
                                         KeyCode::Char('m') | KeyCode::Char('M') => {
-                                            state.command_state = OverlayCommandState::Move;
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.command_state = OverlayCommandState::Move;
+                                            }
                                         }
                                         KeyCode::Char('r') | KeyCode::Char('R') => {
-                                            state.command_state = OverlayCommandState::Resize;
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.command_state = OverlayCommandState::Resize;
+                                            }
                                         }
                                         KeyCode::Char('o') | KeyCode::Char('O') => {
-                                            state.focused_pane = match state.focused_pane {
+                                            let focused_pane = match stack.focused_pane() {
                                                 OverlayFocusedPane::Background => {
                                                     OverlayFocusedPane::Popup
                                                 }
@@ -452,7 +477,7 @@ impl App {
                                                     OverlayFocusedPane::Background
                                                 }
                                             };
-                                            state.command_state = OverlayCommandState::PassThrough;
+                                            stack.set_focused_pane(focused_pane);
                                         }
                                         KeyCode::Char('q') | KeyCode::Char('Q') => {
                                             close_overlay = true;
@@ -466,19 +491,26 @@ impl App {
                                         }
                                         KeyCode::Char(']') => {
                                             if is_ctrl_prefix {
-                                                state.command_state =
-                                                    OverlayCommandState::PassThrough;
+                                                if let Some(popup) = stack.active_popup_mut() {
+                                                    popup.command_state =
+                                                        OverlayCommandState::PassThrough;
+                                                }
                                             } else {
                                                 forward_key = Some(KeyEvent::new(
                                                     KeyCode::Char(']'),
                                                     KeyModifiers::CONTROL,
                                                 ));
-                                                state.command_state =
-                                                    OverlayCommandState::PassThrough;
+                                                if let Some(popup) = stack.active_popup_mut() {
+                                                    popup.command_state =
+                                                        OverlayCommandState::PassThrough;
+                                                }
                                             }
                                         }
                                         KeyCode::Esc | KeyCode::Enter => {
-                                            state.command_state = OverlayCommandState::PassThrough;
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.command_state =
+                                                    OverlayCommandState::PassThrough;
+                                            }
                                         }
                                         _ => {
                                             if is_ctrl_prefix {
@@ -487,7 +519,10 @@ impl App {
                                                     KeyModifiers::CONTROL,
                                                 ));
                                             }
-                                            state.command_state = OverlayCommandState::PassThrough;
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.command_state =
+                                                    OverlayCommandState::PassThrough;
+                                            }
                                         }
                                     }
                                 }
@@ -498,13 +533,20 @@ impl App {
                             if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                             {
                                 if is_ctrl_prefix {
-                                    state.command_state = OverlayCommandState::PassThrough;
+                                    if let Some(popup) = stack.active_popup_mut() {
+                                        popup.command_state = OverlayCommandState::PassThrough;
+                                    }
                                 } else if let Some((dx, dy)) = move_popup_delta(key_event) {
-                                    state.popup = move_popup_rect(area, state.popup, dx, dy);
+                                    if let Some(popup) = stack.active_popup_mut() {
+                                        popup.popup = move_popup_rect(area, popup.popup, dx, dy);
+                                    }
                                 } else {
                                     match key_event.code {
                                         KeyCode::Esc | KeyCode::Enter => {
-                                            state.command_state = OverlayCommandState::PassThrough;
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.command_state =
+                                                    OverlayCommandState::PassThrough;
+                                            }
                                         }
                                         _ => {}
                                     }
@@ -516,7 +558,9 @@ impl App {
                             if matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
                             {
                                 if is_ctrl_prefix {
-                                    state.command_state = OverlayCommandState::PassThrough;
+                                    if let Some(popup) = stack.active_popup_mut() {
+                                        popup.command_state = OverlayCommandState::PassThrough;
+                                    }
                                 } else {
                                     match key_event.code {
                                         KeyCode::Left => {
@@ -528,8 +572,10 @@ impl App {
                                             } else {
                                                 -1
                                             };
-                                            state.popup =
-                                                resize_left_edge(area, state.popup, delta);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_left_edge(area, popup.popup, delta);
+                                            }
                                         }
                                         KeyCode::Right => {
                                             let delta = if key_event
@@ -540,8 +586,10 @@ impl App {
                                             } else {
                                                 1
                                             };
-                                            state.popup =
-                                                resize_right_edge(area, state.popup, delta);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_right_edge(area, popup.popup, delta);
+                                            }
                                         }
                                         KeyCode::Up => {
                                             let delta = if key_event
@@ -552,7 +600,10 @@ impl App {
                                             } else {
                                                 -1
                                             };
-                                            state.popup = resize_top_edge(area, state.popup, delta);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_top_edge(area, popup.popup, delta);
+                                            }
                                         }
                                         KeyCode::Down => {
                                             let delta = if key_event
@@ -563,41 +614,75 @@ impl App {
                                             } else {
                                                 1
                                             };
-                                            state.popup =
-                                                resize_bottom_edge(area, state.popup, delta);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_bottom_edge(area, popup.popup, delta);
+                                            }
                                         }
                                         KeyCode::Char('h') => {
-                                            state.popup = resize_left_edge(area, state.popup, -1);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_left_edge(area, popup.popup, -1);
+                                            }
                                         }
                                         KeyCode::Char('H') => {
-                                            state.popup = resize_left_edge(area, state.popup, 1);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_left_edge(area, popup.popup, 1);
+                                            }
                                         }
                                         KeyCode::Char('j') => {
-                                            state.popup = resize_bottom_edge(area, state.popup, 1);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_bottom_edge(area, popup.popup, 1);
+                                            }
                                         }
                                         KeyCode::Char('J') => {
-                                            state.popup = resize_bottom_edge(area, state.popup, -1);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_bottom_edge(area, popup.popup, -1);
+                                            }
                                         }
                                         KeyCode::Char('k') => {
-                                            state.popup = resize_top_edge(area, state.popup, -1);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_top_edge(area, popup.popup, -1);
+                                            }
                                         }
                                         KeyCode::Char('K') => {
-                                            state.popup = resize_top_edge(area, state.popup, 1);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup = resize_top_edge(area, popup.popup, 1);
+                                            }
                                         }
                                         KeyCode::Char('l') => {
-                                            state.popup = resize_right_edge(area, state.popup, 1);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_right_edge(area, popup.popup, 1);
+                                            }
                                         }
                                         KeyCode::Char('L') => {
-                                            state.popup = resize_right_edge(area, state.popup, -1);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_right_edge(area, popup.popup, -1);
+                                            }
                                         }
                                         KeyCode::Char('=') | KeyCode::Char('+') => {
-                                            state.popup = resize_all_edges(area, state.popup, 1);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_all_edges(area, popup.popup, 1);
+                                            }
                                         }
                                         KeyCode::Char('-') => {
-                                            state.popup = resize_all_edges(area, state.popup, -1);
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.popup =
+                                                    resize_all_edges(area, popup.popup, -1);
+                                            }
                                         }
                                         KeyCode::Esc | KeyCode::Enter => {
-                                            state.command_state = OverlayCommandState::PassThrough;
+                                            if let Some(popup) = stack.active_popup_mut() {
+                                                popup.command_state =
+                                                    OverlayCommandState::PassThrough;
+                                            }
                                         }
                                         _ => {}
                                     }
@@ -610,18 +695,21 @@ impl App {
                 if close_overlay {
                     self.close_fork_session_overlay(tui).await?;
                 } else if let Some(key_event) = forward_key
-                    && let Some(state) = self.fork_session_overlay.as_ref()
+                    && let Some(stack) = self.fork_session_overlay.as_ref()
+                    && let Some(popup) = stack.active_popup()
                 {
-                    let _ = state.terminal.handle_key_event(key_event).await;
+                    let _ = popup.terminal.handle_key_event(key_event).await;
                 }
             }
             TuiEvent::Paste(pasted) => {
-                if let Some(state) = self.fork_session_overlay.as_ref() {
+                if let Some(stack) = self.fork_session_overlay.as_ref() {
                     let pasted = pasted.replace("\r", "\n");
-                    match state.focused_pane {
+                    match stack.focused_pane() {
                         OverlayFocusedPane::Background => self.chat_widget.handle_paste(pasted),
                         OverlayFocusedPane::Popup => {
-                            let _ = state.terminal.handle_paste(&pasted).await;
+                            if let Some(popup) = stack.active_popup() {
+                                let _ = popup.terminal.handle_paste(&pasted).await;
+                            }
                         }
                     }
                 }
@@ -629,40 +717,53 @@ impl App {
             TuiEvent::Mouse(mouse_event) => {
                 let viewport = tui.terminal.size()?;
                 let area = Rect::new(0, 0, viewport.width, viewport.height);
-                if let Some(state) = self.fork_session_overlay.as_mut() {
-                    match overlay_mouse_action(area, state.popup, state.drag_state, mouse_event) {
+                if let Some(stack) = self.fork_session_overlay.as_mut() {
+                    let popup_rects = stack
+                        .popups()
+                        .iter()
+                        .map(|popup| popup.popup)
+                        .collect::<Vec<_>>();
+                    let drag_state = stack.active_popup().and_then(|popup| popup.drag_state);
+                    match overlay_mouse_action(area, &popup_rects, drag_state, mouse_event) {
                         OverlayMouseAction::Ignore => {}
                         OverlayMouseAction::FocusBackground => {
-                            state.focused_pane = OverlayFocusedPane::Background;
-                            state.command_state = OverlayCommandState::PassThrough;
-                            state.drag_state = None;
+                            stack.set_focused_pane(OverlayFocusedPane::Background);
                             tui.frame_requester().schedule_frame();
                         }
-                        OverlayMouseAction::FocusPopup(drag_state) => {
-                            state.focused_pane = OverlayFocusedPane::Popup;
-                            state.command_state = OverlayCommandState::PassThrough;
-                            state.drag_state = Some(drag_state);
+                        OverlayMouseAction::FocusPopup {
+                            popup_index,
+                            drag_state,
+                        } => {
+                            if let Some(popup) = stack.bring_popup_to_front(popup_index) {
+                                popup.drag_state = Some(drag_state);
+                            }
                             tui.frame_requester().schedule_frame();
                         }
                         OverlayMouseAction::MovePopup(popup) => {
-                            state.focused_pane = OverlayFocusedPane::Popup;
-                            state.command_state = OverlayCommandState::PassThrough;
-                            state.popup = popup;
+                            if let Some(active_popup) = stack.active_popup_mut() {
+                                active_popup.popup = popup;
+                            }
                             tui.frame_requester().schedule_frame();
                         }
                         OverlayMouseAction::EndDrag => {
-                            state.drag_state = None;
+                            if let Some(active_popup) = stack.active_popup_mut() {
+                                active_popup.drag_state = None;
+                            }
                         }
                     }
                 }
             }
             TuiEvent::Draw => {
-                if self
-                    .fork_session_overlay
-                    .as_ref()
-                    .is_some_and(|state| state.terminal.exit_code().is_some())
-                {
-                    self.close_fork_session_overlay(tui).await?;
+                let close_all_overlays = if let Some(stack) = self.fork_session_overlay.as_mut() {
+                    let _ = stack.remove_exited_popups();
+                    stack.is_empty()
+                } else {
+                    false
+                };
+                if close_all_overlays {
+                    self.fork_session_overlay = None;
+                    tui.set_mouse_capture_enabled(false)?;
+                    self.restore_inline_view_after_fork_overlay_close(tui)?;
                     return Ok(());
                 }
                 if self.backtrack_render_pending {
@@ -670,12 +771,13 @@ impl App {
                     self.render_transcript_once(tui);
                 }
                 self.chat_widget.maybe_post_pending_notification(tui);
-                let skip_draw_for_background_paste_burst =
-                    self.chat_widget
-                        .handle_paste_burst_tick(tui.frame_requester())
-                        && self.fork_session_overlay.as_ref().is_some_and(|state| {
-                            state.focused_pane == OverlayFocusedPane::Background
-                        });
+                let skip_draw_for_background_paste_burst = self
+                    .chat_widget
+                    .handle_paste_burst_tick(tui.frame_requester())
+                    && self
+                        .fork_session_overlay
+                        .as_ref()
+                        .is_some_and(super::fork_session_overlay_stack::ForkSessionOverlayStack::has_background_focus);
                 if skip_draw_for_background_paste_burst {
                     return Ok(());
                 }
@@ -749,7 +851,7 @@ impl App {
         let background_focused = self
             .fork_session_overlay
             .as_ref()
-            .is_some_and(|state| state.focused_pane == OverlayFocusedPane::Background);
+            .is_some_and(ForkSessionOverlayStack::has_background_focus);
 
         let Ok(mut terminal) = crate::custom_terminal::Terminal::with_options(VT100Backend::new(
             area.width,
@@ -789,29 +891,45 @@ impl App {
         &mut self,
         frame: &mut Frame<'_>,
     ) -> Option<(u16, u16)> {
-        let state = self.fork_session_overlay.as_mut()?;
-        state.popup = clamp_popup_rect(frame.area(), state.popup);
-        let popup = state.popup;
-        Clear.render(popup, frame.buffer);
+        let stack = self.fork_session_overlay.as_mut()?;
+        let popup_focused = stack.focused_pane() == OverlayFocusedPane::Popup;
+        let active_popup_index = stack.active_popup_index()?;
+        let mut active_cursor = None;
 
-        let exit_code = state.terminal.exit_code();
-        let block = popup_block(exit_code, state.command_state, state.focused_pane);
-        let inner = block.inner(popup);
-        block.render(popup, frame.buffer);
+        for (popup_index, state) in stack.popups_mut().iter_mut().enumerate() {
+            state.popup = clamp_popup_rect(frame.area(), state.popup);
+            let popup = state.popup;
+            Clear.render(popup, frame.buffer);
 
-        if inner.is_empty() {
-            return None;
+            let is_active_popup = popup_index == active_popup_index;
+            let exit_code = state.terminal.exit_code();
+            let block = popup_block(
+                exit_code,
+                state.command_state,
+                if is_active_popup && popup_focused {
+                    OverlayFocusedPane::Popup
+                } else {
+                    OverlayFocusedPane::Background
+                },
+            );
+            let inner = block.inner(popup);
+            block.render(popup, frame.buffer);
+
+            if inner.is_empty() {
+                continue;
+            }
+
+            state.terminal.resize(codex_utils_pty::TerminalSize {
+                rows: inner.height.max(1),
+                cols: inner.width.max(1),
+            });
+            let cursor = state.terminal.render(inner, frame.buffer);
+            if is_active_popup && popup_focused {
+                active_cursor = cursor;
+            }
         }
 
-        state.terminal.resize(codex_utils_pty::TerminalSize {
-            rows: inner.height.max(1),
-            cols: inner.width.max(1),
-        });
-        let cursor = state.terminal.render(inner, frame.buffer);
-        match state.focused_pane {
-            OverlayFocusedPane::Background => None,
-            OverlayFocusedPane::Popup => cursor,
-        }
+        active_cursor
     }
 
     fn build_fork_session_overlay_args(&self, thread_id: codex_protocol::ThreadId) -> Vec<String> {
@@ -1110,13 +1228,12 @@ mod tests {
 \r\n\
 ready for a fresh turn\r\n",
         );
-        app.fork_session_overlay = Some(ForkSessionOverlayState {
+        app.fork_session_overlay = Some(ForkSessionOverlayStack::new(ForkSessionOverlayState {
             terminal: ForkSessionTerminal::for_test(parser, None),
             popup: default_popup_rect(Rect::new(0, 0, 100, 28)),
             command_state: OverlayCommandState::PassThrough,
-            focused_pane: OverlayFocusedPane::Popup,
             drag_state: None,
-        });
+        }));
 
         let area = Rect::new(0, 0, 100, 28);
         let mut buf = Buffer::empty(area);
@@ -1130,6 +1247,61 @@ ready for a fresh turn\r\n",
         let _ = app.render_fork_session_overlay_frame(&mut frame);
 
         insta::assert_snapshot!("fork_session_overlay_popup", snapshot_buffer(&buf));
+    }
+
+    #[tokio::test]
+    async fn fork_session_overlay_multiple_popups_snapshot() {
+        let mut app = make_test_app().await;
+        app.transcript_cells = vec![Arc::new(crate::history_cell::new_user_prompt(
+            "background session".to_string(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        ))];
+
+        let mut first_popup = vt100::Parser::new(12, 50, 0);
+        first_popup.process(
+            b"\x1b[32mFirst fork session\x1b[0m\r\n\
+\r\n\
+> /tmp/first\r\n",
+        );
+
+        let mut second_popup = vt100::Parser::new(12, 50, 0);
+        second_popup.process(
+            b"\x1b[32mSecond fork session\x1b[0m\r\n\
+\r\n\
+> /tmp/second\r\n",
+        );
+
+        let mut stack = ForkSessionOverlayStack::new(ForkSessionOverlayState {
+            terminal: ForkSessionTerminal::for_test(first_popup, None),
+            popup: Rect::new(14, 7, 52, 12),
+            command_state: OverlayCommandState::PassThrough,
+            drag_state: None,
+        });
+        stack.push_popup(ForkSessionOverlayState {
+            terminal: ForkSessionTerminal::for_test(second_popup, None),
+            popup: Rect::new(28, 11, 52, 12),
+            command_state: OverlayCommandState::PassThrough,
+            drag_state: None,
+        });
+        app.fork_session_overlay = Some(stack);
+
+        let area = Rect::new(0, 0, 100, 28);
+        let mut buf = Buffer::empty(area);
+        let mut frame = Frame {
+            cursor_position: None,
+            viewport_area: area,
+            buffer: &mut buf,
+        };
+
+        app.render_fork_session_background(&mut frame);
+        let _ = app.render_fork_session_overlay_frame(&mut frame);
+
+        insta::assert_snapshot!(
+            "fork_session_overlay_multiple_popups",
+            snapshot_buffer(&buf)
+        );
     }
 
     #[tokio::test]
@@ -1150,13 +1322,14 @@ ready for a fresh turn\r\n",
 \r\n\
 ready for a fresh turn\r\n",
         );
-        app.fork_session_overlay = Some(ForkSessionOverlayState {
+        let mut stack = ForkSessionOverlayStack::new(ForkSessionOverlayState {
             terminal: ForkSessionTerminal::for_test(parser, None),
             popup: default_popup_rect(Rect::new(0, 0, 100, 28)),
             command_state: OverlayCommandState::PassThrough,
-            focused_pane: OverlayFocusedPane::Background,
             drag_state: None,
         });
+        stack.set_focused_pane(OverlayFocusedPane::Background);
+        app.fork_session_overlay = Some(stack);
 
         let area = Rect::new(0, 0, 100, 28);
         let mut buf = Buffer::empty(area);
@@ -1194,13 +1367,14 @@ ready for a fresh turn\r\n",
             Vec::new(),
             Vec::new(),
         );
-        app.fork_session_overlay = Some(ForkSessionOverlayState {
+        let mut stack = ForkSessionOverlayStack::new(ForkSessionOverlayState {
             terminal: ForkSessionTerminal::for_test(vt100::Parser::new(1, 1, 0), None),
             popup: default_popup_rect(Rect::new(0, 0, 80, 18)),
             command_state: OverlayCommandState::PassThrough,
-            focused_pane: OverlayFocusedPane::Background,
             drag_state: None,
         });
+        stack.set_focused_pane(OverlayFocusedPane::Background);
+        app.fork_session_overlay = Some(stack);
 
         let area = Rect::new(0, 0, 80, 18);
         let mut buf = Buffer::empty(area);
