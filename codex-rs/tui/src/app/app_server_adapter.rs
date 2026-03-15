@@ -62,6 +62,7 @@ use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::ThreadUnsubscribeParams;
 use codex_app_server_protocol::ThreadUnsubscribeResponse;
+use codex_app_server_protocol::ThreadUnsubscribeStatus;
 use codex_app_server_protocol::ToolRequestUserInputResponse as ApiToolRequestUserInputResponse;
 use codex_app_server_protocol::TurnInterruptParams;
 use codex_app_server_protocol::TurnInterruptResponse;
@@ -293,7 +294,7 @@ impl App {
         app_server_client: &AppServerClient,
         thread_id: ThreadId,
     ) -> Result<(), String> {
-        let _: ThreadUnsubscribeResponse = send_request_with_response(
+        let response: ThreadUnsubscribeResponse = send_request_with_response(
             app_server_client,
             ClientRequest::ThreadUnsubscribe {
                 request_id: self.next_app_server_request_id(),
@@ -304,8 +305,18 @@ impl App {
             "thread/unsubscribe",
         )
         .await?;
-        self.active_turn_ids.remove(&thread_id);
-        Ok(())
+        match response.status {
+            ThreadUnsubscribeStatus::Unsubscribed => {
+                self.active_turn_ids.remove(&thread_id);
+                Ok(())
+            }
+            ThreadUnsubscribeStatus::NotLoaded => Err(format!(
+                "thread {thread_id} is not loaded by the app server"
+            )),
+            ThreadUnsubscribeStatus::NotSubscribed => Err(format!(
+                "thread {thread_id} is not subscribed by the app server"
+            )),
+        }
     }
 
     pub(super) async fn submit_app_server_op(

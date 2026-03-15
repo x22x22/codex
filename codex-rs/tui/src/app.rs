@@ -1827,6 +1827,12 @@ impl App {
         self.active_thread_rx = None;
         self.primary_thread_id = None;
         self.pending_primary_updates.clear();
+        self.pending_exec_approval_request_ids.clear();
+        self.pending_patch_approval_request_ids.clear();
+        self.pending_elicitation_request_ids.clear();
+        self.pending_permissions_request_ids.clear();
+        self.pending_user_input_request_ids.clear();
+        self.pending_dynamic_tool_request_ids.clear();
         self.chat_widget.set_pending_thread_approvals(Vec::new());
         self.sync_active_agent_label();
     }
@@ -4779,6 +4785,59 @@ mod tests {
             .await
             .expect("timed out waiting for listener task abort")
             .expect("listener task drop notification should succeed");
+    }
+
+    #[tokio::test]
+    async fn reset_thread_event_state_clears_pending_request_id_maps() {
+        let mut app = make_test_app().await;
+
+        app.pending_exec_approval_request_ids
+            .insert("exec".to_string(), RequestId::Integer(1));
+        app.pending_patch_approval_request_ids
+            .insert("patch".to_string(), RequestId::Integer(2));
+        app.pending_elicitation_request_ids.insert(
+            (
+                "turn".to_string(),
+                RequestId::String("elicitation".to_string()),
+            ),
+            RequestId::Integer(3),
+        );
+        app.pending_permissions_request_ids
+            .insert("permissions".to_string(), RequestId::Integer(4));
+        app.pending_user_input_request_ids
+            .insert("turn".to_string(), VecDeque::from([RequestId::Integer(5)]));
+        app.pending_dynamic_tool_request_ids
+            .insert("tool".to_string(), RequestId::Integer(6));
+
+        app.reset_thread_event_state();
+
+        assert!(app.pending_exec_approval_request_ids.is_empty());
+        assert!(app.pending_patch_approval_request_ids.is_empty());
+        assert!(app.pending_elicitation_request_ids.is_empty());
+        assert!(app.pending_permissions_request_ids.is_empty());
+        assert!(app.pending_user_input_request_ids.is_empty());
+        assert!(app.pending_dynamic_tool_request_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unsubscribe_thread_via_app_server_errors_when_thread_is_not_loaded() {
+        let mut app = make_test_app().await;
+        let app_server = start_test_app_server(app.config.clone()).await;
+        let thread_id = ThreadId::new();
+
+        let err = app
+            .unsubscribe_thread_via_app_server(&app_server, thread_id)
+            .await
+            .expect_err("unsubscribing an unknown thread should fail");
+
+        assert_eq!(
+            err,
+            format!("thread {thread_id} is not loaded by the app server")
+        );
+        app_server
+            .shutdown()
+            .await
+            .expect("shutdown should complete");
     }
 
     #[tokio::test]
