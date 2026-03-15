@@ -13,7 +13,9 @@ use crate::tui::TuiEvent;
 use chrono::DateTime;
 use chrono::Utc;
 use codex_app_server_client::AppServerClient;
+use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadListParams;
@@ -1003,23 +1005,36 @@ async fn fetch_remote_threads(
     show_all: bool,
     search_term: Option<String>,
 ) -> Result<Vec<Thread>> {
-    let response: ThreadListResponse = app_server
-        .request_typed(ClientRequest::ThreadList {
-            request_id: RequestId::Integer(0),
-            params: ThreadListParams {
-                cursor: None,
-                limit: Some(100),
-                sort_key: Some(ApiThreadSortKey::UpdatedAt),
-                model_providers: Some(vec![config.model_provider_id.to_string()]),
-                source_kinds: Some(vec![ThreadSourceKind::Cli]),
-                archived: Some(false),
-                cwd: (!show_all).then(|| config.cwd.to_string_lossy().to_string()),
-                search_term,
-            },
-        })
-        .await
-        .map_err(color_eyre::Report::from)?;
-    Ok(response.data)
+    let mut request_id = 0i64;
+    let mut cursor = None;
+    let mut threads = Vec::new();
+
+    loop {
+        let response: ThreadListResponse = app_server
+            .request_typed(ClientRequest::ThreadList {
+                request_id: RequestId::Integer(request_id),
+                params: ThreadListParams {
+                    cursor: cursor.clone(),
+                    limit: Some(100),
+                    sort_key: Some(ApiThreadSortKey::UpdatedAt),
+                    model_providers: Some(vec![config.model_provider_id.to_string()]),
+                    source_kinds: Some(vec![ThreadSourceKind::Cli]),
+                    archived: Some(false),
+                    cwd: (!show_all).then(|| config.cwd.to_string_lossy().to_string()),
+                    search_term: search_term.clone(),
+                },
+            })
+            .await
+            .map_err(color_eyre::Report::from)?;
+        threads.extend(response.data);
+        let Some(next_cursor) = response.next_cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+        request_id += 1;
+    }
+
+    Ok(threads)
 }
 
 pub async fn find_remote_session_target(
@@ -1028,7 +1043,7 @@ pub async fn find_remote_session_target(
     id_or_name: &str,
 ) -> Result<Option<SessionTarget>> {
     if let Ok(thread_id) = ThreadId::from_string(id_or_name) {
-        let response: ThreadReadResponse = app_server
+        let response: ThreadReadResponse = match app_server
             .request_typed(ClientRequest::ThreadRead {
                 request_id: RequestId::Integer(0),
                 params: ThreadReadParams {
@@ -1037,7 +1052,11 @@ pub async fn find_remote_session_target(
                 },
             })
             .await
-            .map_err(color_eyre::Report::from)?;
+        {
+            Ok(response) => response,
+            Err(err) if is_missing_remote_thread_error(&err) => return Ok(None),
+            Err(err) => return Err(color_eyre::Report::from(err)),
+        };
         let row = remote_thread_to_row(response.thread);
         return Ok(Some(SessionTarget {
             path: row.path,
@@ -1061,6 +1080,16 @@ pub async fn find_remote_session_target(
             cwd: row.cwd,
         })
     }))
+}
+
+fn is_missing_remote_thread_error(err: &TypedRequestError) -> bool {
+    matches!(
+        err,
+        TypedRequestError::Server {
+            source: JSONRPCErrorError { message, .. },
+            ..
+        } if message.starts_with("thread not found:")
+    )
 }
 
 pub async fn latest_remote_session_target(
@@ -1555,6 +1584,8 @@ fn column_visibility(
 mod tests {
     use super::*;
     use chrono::Duration;
+    use codex_app_server_client::TypedRequestError;
+    use codex_app_server_protocol::JSONRPCErrorError;
     use codex_protocol::ThreadId;
 
     use crossterm::event::KeyCode;
@@ -1732,6 +1763,20 @@ mod tests {
         // Preserve the given order even if timestamps differ; backend already provides newest-first.
         assert!(rows[0].preview.contains('A'));
         assert!(rows[1].preview.contains('B'));
+    }
+
+    #[test]
+    fn missing_remote_thread_error_matches_thread_not_found_rpc() {
+        let err = TypedRequestError::Server {
+            method: "thread/read".to_string(),
+            source: JSONRPCErrorError {
+                code: -32602,
+                data: None,
+                message: "thread not found: 123".to_string(),
+            },
+        };
+
+        assert_eq!(is_missing_remote_thread_error(&err), true);
     }
 
     #[test]
