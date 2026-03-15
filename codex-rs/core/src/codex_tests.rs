@@ -3885,7 +3885,7 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
                     metadata: Some(metadata),
                     ..
                 } if metadata.user_message_type
-                    == Some(codex_protocol::items::UserMessageType::PromptQueued)
+                    == Some(codex_protocol::models::UserMessageType::PromptQueued)
             )
     ));
 
@@ -4007,7 +4007,7 @@ async fn steer_input_returns_active_turn_id() {
         pending_input
             .first()
             .and_then(|(_, user_message_type)| user_message_type.as_ref()),
-        Some(&codex_protocol::items::UserMessageType::PromptSteering)
+        Some(&codex_protocol::models::UserMessageType::PromptSteering)
     );
 }
 

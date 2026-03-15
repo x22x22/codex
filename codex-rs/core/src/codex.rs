@@ -85,10 +85,10 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
-use codex_protocol::items::UserMessageType;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::UserMessageType;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -6699,7 +6699,6 @@ impl ProposedPlanItemState {
         let item = TurnItem::Plan(PlanItem {
             id: self.item_id.clone(),
             text: String::new(),
-            metadata: None,
         });
         sess.emit_turn_item_started(turn_context, &item).await;
     }
@@ -6734,7 +6733,6 @@ impl ProposedPlanItemState {
         let item = TurnItem::Plan(PlanItem {
             id: self.item_id.clone(),
             text,
-            metadata: None,
         });
         sess.emit_turn_item_completed(turn_context, item).await;
     }
@@ -7048,7 +7046,6 @@ async fn emit_agent_message_in_plan_mode(
                     id: agent_message_id.clone(),
                     content: Vec::new(),
                     phase: None,
-                    metadata: None,
                 })
             });
         sess.emit_turn_item_started(turn_context, &start_item).await;

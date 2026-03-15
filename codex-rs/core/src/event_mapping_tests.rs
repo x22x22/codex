@@ -330,7 +330,6 @@ fn parses_web_search_call() {
                     query: Some("weather".to_string()),
                     queries: None,
                 },
-                metadata: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -358,7 +357,6 @@ fn parses_web_search_open_page_call() {
                 action: WebSearchAction::OpenPage {
                     url: Some("https://example.com".to_string()),
                 },
-                metadata: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -388,7 +386,6 @@ fn parses_web_search_find_in_page_call() {
                     url: Some("https://example.com".to_string()),
                     pattern: Some("needle".to_string()),
                 },
-                metadata: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),
@@ -411,7 +408,6 @@ fn parses_partial_web_search_call_without_action_as_other() {
                 id: "ws_partial".to_string(),
                 query: String::new(),
                 action: WebSearchAction::Other,
-                metadata: None,
             }
         ),
         other => panic!("expected TurnItem::WebSearch, got {other:?}"),

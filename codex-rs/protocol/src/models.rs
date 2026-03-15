@@ -11,7 +11,6 @@ use ts_rs::TS;
 
 use crate::config_types::CollaborationMode;
 use crate::config_types::SandboxMode;
-use crate::items::UserMessageType;
 use crate::protocol::AskForApproval;
 use crate::protocol::COLLABORATION_MODE_CLOSE_TAG;
 use crate::protocol::COLLABORATION_MODE_OPEN_TAG;
@@ -252,6 +251,15 @@ pub enum ResponseInputItem {
         #[ts(type = "unknown[]")]
         tools: Vec<serde_json::Value>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum UserMessageType {
+    Prompt,
+    PromptSteering,
+    PromptQueued,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]

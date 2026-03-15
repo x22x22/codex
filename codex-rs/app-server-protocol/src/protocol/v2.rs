@@ -7409,7 +7409,6 @@ mod tests {
                     path: "app://demo-app".to_string(),
                 },
             ],
-            metadata: None,
         });
 
         assert_eq!(
@@ -7450,7 +7449,6 @@ mod tests {
                 },
             ],
             phase: None,
-            metadata: None,
         });
 
         assert_eq!(
@@ -7468,7 +7466,6 @@ mod tests {
                 text: "final".to_string(),
             }],
             phase: Some(MessagePhase::FinalAnswer),
-            metadata: None,
         });
 
         assert_eq!(
@@ -7484,7 +7481,6 @@ mod tests {
             id: "reasoning-1".to_string(),
             summary_text: vec!["line one".to_string(), "line two".to_string()],
             raw_content: vec![],
-            metadata: None,
         });
 
         assert_eq!(
@@ -7503,7 +7499,6 @@ mod tests {
                 query: Some("docs".to_string()),
                 queries: None,
             },
-            metadata: None,
         });
 
         assert_eq!(
