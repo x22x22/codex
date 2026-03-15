@@ -692,8 +692,11 @@ impl App {
                     "thread/rollback",
                 )
                 .await?;
-                self.route_thread_update(ThreadUpdate::ThreadRolledBack { num_turns })
-                    .await;
+                self.route_thread_update(ThreadUpdate::ThreadRolledBack {
+                    thread_id: thread_id.to_string(),
+                    num_turns,
+                })
+                .await;
             }
             Op::Review { review_request } => {
                 let response: ReviewStartResponse = send_request_with_response(
@@ -819,7 +822,7 @@ impl App {
         request_id
     }
 
-    async fn route_thread_update(&mut self, update: ThreadUpdate) {
+    pub(super) async fn route_thread_update(&mut self, update: ThreadUpdate) {
         let Some(thread_id_text) = update.thread_id() else {
             self.handle_thread_update_now(update);
             return;

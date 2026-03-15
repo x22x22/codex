@@ -99,6 +99,7 @@ pub(crate) enum ThreadUpdate {
         params: DynamicToolCallParams,
     },
     ThreadRolledBack {
+        thread_id: String,
         num_turns: u32,
     },
 }
@@ -150,7 +151,8 @@ impl ThreadUpdate {
             Self::PermissionsRequestApproval { params, .. } => Some(params.thread_id.clone()),
             Self::ToolRequestUserInput { params, .. } => Some(params.thread_id.clone()),
             Self::DynamicToolCall { params, .. } => Some(params.thread_id.clone()),
-            Self::DeprecationNotice(_) | Self::ThreadRolledBack { .. } => None,
+            Self::ThreadRolledBack { thread_id, .. } => Some(thread_id.clone()),
+            Self::DeprecationNotice(_) => None,
         }
     }
 

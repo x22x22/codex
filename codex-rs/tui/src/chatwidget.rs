@@ -5079,7 +5079,7 @@ impl ChatWidget {
             ThreadUpdate::ThreadStarted(_)
             | ThreadUpdate::ThreadStatusChanged(_)
             | ThreadUpdate::ThreadClosed(_) => {}
-            ThreadUpdate::ThreadRolledBack { num_turns } => {
+            ThreadUpdate::ThreadRolledBack { num_turns, .. } => {
                 self.last_copyable_output = None;
                 if from_replay {
                     self.app_event_tx

@@ -3911,12 +3911,19 @@ impl App {
             self.suppress_shutdown_complete = false;
             return;
         }
-        if let ThreadUpdate::ThreadRolledBack { num_turns } = update {
+        if let ThreadUpdate::ThreadRolledBack {
+            thread_id,
+            num_turns,
+        } = update
+        {
             self.handle_backtrack_event(&codex_protocol::protocol::EventMsg::ThreadRolledBack(
                 codex_protocol::protocol::ThreadRolledBackEvent { num_turns },
             ));
             self.chat_widget
-                .handle_thread_update(ThreadUpdate::ThreadRolledBack { num_turns });
+                .handle_thread_update(ThreadUpdate::ThreadRolledBack {
+                    thread_id,
+                    num_turns,
+                });
             return;
         }
         self.chat_widget.handle_thread_update(update.clone());
@@ -4649,6 +4656,53 @@ mod tests {
         );
         assert_eq!(app.active_thread_id, None);
         assert_eq!(app.primary_thread_id, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn routed_thread_rollback_stays_on_target_thread() -> Result<()> {
+        let mut app = make_test_app().await;
+        let primary_thread_id = ThreadId::new();
+        let secondary_thread_id = ThreadId::new();
+        app.primary_thread_id = Some(primary_thread_id);
+        app.thread_event_channels.insert(
+            primary_thread_id,
+            ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY),
+        );
+        app.thread_event_channels.insert(
+            secondary_thread_id,
+            ThreadEventChannel::new(THREAD_EVENT_CHANNEL_CAPACITY),
+        );
+
+        app.route_thread_update(ThreadUpdate::ThreadRolledBack {
+            thread_id: secondary_thread_id.to_string(),
+            num_turns: 1,
+        })
+        .await;
+
+        let secondary_store = Arc::clone(
+            &app.thread_event_channels
+                .get(&secondary_thread_id)
+                .expect("missing secondary thread channel")
+                .store,
+        );
+        let secondary_snapshot = secondary_store.lock().await.snapshot();
+        assert!(matches!(
+            secondary_snapshot.updates.as_slice(),
+            [ThreadUpdate::ThreadRolledBack {
+                thread_id,
+                num_turns: 1,
+            }] if thread_id == &secondary_thread_id.to_string()
+        ));
+
+        let primary_store = Arc::clone(
+            &app.thread_event_channels
+                .get(&primary_thread_id)
+                .expect("missing primary thread channel")
+                .store,
+        );
+        let primary_snapshot = primary_store.lock().await.snapshot();
+        assert!(primary_snapshot.updates.is_empty());
         Ok(())
     }
 
