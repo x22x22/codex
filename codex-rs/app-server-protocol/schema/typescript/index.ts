@@ -60,6 +60,7 @@ export type { ResourceTemplate } from "./ResourceTemplate";
 export type { ResponseItem } from "./ResponseItem";
 export type { ResponseItemMetadata } from "./ResponseItemMetadata";
 export type { ReviewDecision } from "./ReviewDecision";
+export type { ReviewDecisionMetadata } from "./ReviewDecisionMetadata";
 export type { ServerNotification } from "./ServerNotification";
 export type { ServerRequest } from "./ServerRequest";
 export type { ServiceTier } from "./ServiceTier";
