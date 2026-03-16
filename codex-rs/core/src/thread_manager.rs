@@ -1,7 +1,6 @@
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::ModelProviderInfo;
-use crate::OPENAI_PROVIDER_ID;
 use crate::agent::AgentControl;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnArgs;
@@ -9,6 +8,7 @@ use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+use crate::endpoint_config_telemetry::resolve_endpoint_config_telemetry_source_for_provider;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
@@ -46,6 +46,8 @@ use tokio::runtime::RuntimeFlavor;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 use tracing::warn;
+
+use crate::model_provider_info::OPENAI_PROVIDER_ID;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 /// Test-only override for enabling thread-manager behaviors used by integration
@@ -173,7 +175,14 @@ impl ThreadManager {
             .model_providers
             .get(OPENAI_PROVIDER_ID)
             .cloned()
-            .unwrap_or_else(|| ModelProviderInfo::create_openai_provider(/* base_url */ None));
+            .unwrap_or_else(|| ModelProviderInfo::create_openai_provider(None));
+        let openai_endpoint_telemetry_source =
+            resolve_endpoint_config_telemetry_source_for_provider(
+                config,
+                OPENAI_PROVIDER_ID,
+                &openai_models_provider,
+                session_source.clone(),
+            );
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
@@ -187,13 +196,16 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: Arc::new(ModelsManager::new_with_provider(
-                    codex_home,
-                    auth_manager.clone(),
-                    config.model_catalog.clone(),
-                    collaboration_modes_config,
-                    openai_models_provider,
-                )),
+                models_manager: Arc::new(
+                    ModelsManager::new_with_provider_and_endpoint_telemetry_source(
+                        codex_home,
+                        auth_manager.clone(),
+                        config.model_catalog.clone(),
+                        collaboration_modes_config,
+                        openai_models_provider,
+                        openai_endpoint_telemetry_source,
+                    ),
+                ),
                 skills_manager,
                 plugins_manager,
                 mcp_manager,

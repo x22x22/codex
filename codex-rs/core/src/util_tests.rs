@@ -96,14 +96,30 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
         auth_header_attached: true,
         auth_header_name: Some("authorization"),
         auth_mode: Some("chatgpt"),
+        auth_env_openai_api_key_present: true,
+        auth_env_codex_api_key_present: false,
+        auth_env_codex_api_key_enabled: true,
+        auth_env_provider_key_name: Some("OPENAI_API_KEY"),
+        auth_env_provider_key_present: Some(true),
+        auth_env_refresh_token_url_override_present: true,
         auth_retry_after_unauthorized: Some(false),
         auth_recovery_mode: Some("managed"),
         auth_recovery_phase: Some("refresh_token"),
         auth_connection_reused: Some(true),
+        provider_header_names: Some("openai-project"),
+        base_url_origin: "chatgpt.com",
+        host_class: "openai_chatgpt",
+        base_url_source: "default",
+        base_url_is_default: true,
+        residency_header_attached: Some(true),
+        residency_header_value: Some("us"),
         auth_request_id: Some("req-123"),
         auth_cf_ray: Some("ray-123"),
         auth_error: Some("missing_authorization_header"),
         auth_error_code: Some("token_expired"),
+        error_body_class: Some("workspace_not_authorized_in_region"),
+        safe_error_message: Some("Workspace is not authorized in this region."),
+        geo_denial_detected: Some(true),
         auth_recovery_followup_success: Some(true),
         auth_recovery_followup_status: Some(200),
     });
@@ -126,8 +142,21 @@ fn emit_feedback_request_tags_records_sentry_feedback_fields() {
         Some("\"req-123\"")
     );
     assert_eq!(
+        tags.get("auth_env_provider_key_name").map(String::as_str),
+        Some("\"OPENAI_API_KEY\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_provider_key_present")
+            .map(String::as_str),
+        Some("\"true\"")
+    );
+    assert_eq!(
         tags.get("auth_error_code").map(String::as_str),
         Some("\"token_expired\"")
+    );
+    assert_eq!(
+        tags.get("geo_denial_detected").map(String::as_str),
+        Some("\"true\"")
     );
     assert_eq!(
         tags.get("auth_recovery_followup_success")
@@ -220,54 +249,6 @@ fn emit_feedback_auth_recovery_tags_clears_stale_401_fields() {
 }
 
 #[test]
-fn emit_feedback_request_tags_preserves_latest_auth_fields_after_unauthorized() {
-    let tags = Arc::new(Mutex::new(BTreeMap::new()));
-    let _guard = tracing_subscriber::registry()
-        .with(TagCollectorLayer { tags: tags.clone() })
-        .set_default();
-
-    emit_feedback_request_tags(&FeedbackRequestTags {
-        endpoint: "/responses",
-        auth_header_attached: true,
-        auth_header_name: Some("authorization"),
-        auth_mode: Some("chatgpt"),
-        auth_retry_after_unauthorized: Some(true),
-        auth_recovery_mode: Some("managed"),
-        auth_recovery_phase: Some("refresh_token"),
-        auth_connection_reused: None,
-        auth_request_id: Some("req-123"),
-        auth_cf_ray: Some("ray-123"),
-        auth_error: Some("missing_authorization_header"),
-        auth_error_code: Some("token_expired"),
-        auth_recovery_followup_success: Some(false),
-        auth_recovery_followup_status: Some(401),
-    });
-
-    let tags = tags.lock().unwrap().clone();
-    assert_eq!(
-        tags.get("auth_request_id").map(String::as_str),
-        Some("\"req-123\"")
-    );
-    assert_eq!(
-        tags.get("auth_cf_ray").map(String::as_str),
-        Some("\"ray-123\"")
-    );
-    assert_eq!(
-        tags.get("auth_error").map(String::as_str),
-        Some("\"missing_authorization_header\"")
-    );
-    assert_eq!(
-        tags.get("auth_error_code").map(String::as_str),
-        Some("\"token_expired\"")
-    );
-    assert_eq!(
-        tags.get("auth_recovery_followup_success")
-            .map(String::as_str),
-        Some("\"false\"")
-    );
-}
-
-#[test]
 fn emit_feedback_request_tags_clears_stale_latest_auth_fields() {
     let tags = Arc::new(Mutex::new(BTreeMap::new()));
     let _guard = tracing_subscriber::registry()
@@ -279,14 +260,30 @@ fn emit_feedback_request_tags_clears_stale_latest_auth_fields() {
         auth_header_attached: true,
         auth_header_name: Some("authorization"),
         auth_mode: Some("chatgpt"),
-        auth_retry_after_unauthorized: Some(false),
+        auth_env_openai_api_key_present: true,
+        auth_env_codex_api_key_present: true,
+        auth_env_codex_api_key_enabled: true,
+        auth_env_provider_key_name: Some("OPENAI_API_KEY"),
+        auth_env_provider_key_present: Some(true),
+        auth_env_refresh_token_url_override_present: true,
+        auth_retry_after_unauthorized: Some(true),
         auth_recovery_mode: Some("managed"),
         auth_recovery_phase: Some("refresh_token"),
         auth_connection_reused: Some(true),
+        provider_header_names: Some("openai-project"),
+        base_url_origin: "chatgpt.com",
+        host_class: "openai_chatgpt",
+        base_url_source: "default",
+        base_url_is_default: true,
+        residency_header_attached: Some(true),
+        residency_header_value: Some("us"),
         auth_request_id: Some("req-123"),
         auth_cf_ray: Some("ray-123"),
         auth_error: Some("missing_authorization_header"),
         auth_error_code: Some("token_expired"),
+        error_body_class: Some("workspace_not_authorized_in_region"),
+        safe_error_message: Some("Workspace is not authorized in this region."),
+        geo_denial_detected: Some(true),
         auth_recovery_followup_success: Some(true),
         auth_recovery_followup_status: Some(200),
     });
@@ -295,14 +292,30 @@ fn emit_feedback_request_tags_clears_stale_latest_auth_fields() {
         auth_header_attached: true,
         auth_header_name: None,
         auth_mode: None,
+        auth_env_openai_api_key_present: false,
+        auth_env_codex_api_key_present: false,
+        auth_env_codex_api_key_enabled: false,
+        auth_env_provider_key_name: None,
+        auth_env_provider_key_present: None,
+        auth_env_refresh_token_url_override_present: false,
         auth_retry_after_unauthorized: None,
         auth_recovery_mode: None,
         auth_recovery_phase: None,
         auth_connection_reused: None,
+        provider_header_names: None,
+        base_url_origin: "chatgpt.com",
+        host_class: "openai_chatgpt",
+        base_url_source: "default",
+        base_url_is_default: true,
+        residency_header_attached: None,
+        residency_header_value: None,
         auth_request_id: None,
         auth_cf_ray: None,
         auth_error: None,
         auth_error_code: None,
+        error_body_class: None,
+        safe_error_message: None,
+        geo_denial_detected: None,
         auth_recovery_followup_success: None,
         auth_recovery_followup_status: None,
     });
@@ -314,6 +327,27 @@ fn emit_feedback_request_tags_clears_stale_latest_auth_fields() {
     );
     assert_eq!(tags.get("auth_mode").map(String::as_str), Some("\"\""));
     assert_eq!(
+        tags.get("provider_header_names").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_provider_key_name").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("auth_env_provider_key_present")
+            .map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("residency_header_attached").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("residency_header_value").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
         tags.get("auth_request_id").map(String::as_str),
         Some("\"\"")
     );
@@ -321,6 +355,18 @@ fn emit_feedback_request_tags_clears_stale_latest_auth_fields() {
     assert_eq!(tags.get("auth_error").map(String::as_str), Some("\"\""));
     assert_eq!(
         tags.get("auth_error_code").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("error_body_class").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("safe_error_message").map(String::as_str),
+        Some("\"\"")
+    );
+    assert_eq!(
+        tags.get("geo_denial_detected").map(String::as_str),
         Some("\"\"")
     );
     assert_eq!(

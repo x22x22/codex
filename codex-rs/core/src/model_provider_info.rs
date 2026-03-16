@@ -15,6 +15,7 @@ use http::header::HeaderValue;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
@@ -42,15 +43,6 @@ pub enum WireApi {
     Responses,
 }
 
-impl fmt::Display for WireApi {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let value = match self {
-            Self::Responses => "responses",
-        };
-        f.write_str(value)
-    }
-}
-
 impl<'de> Deserialize<'de> for WireApi {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -62,6 +54,15 @@ impl<'de> Deserialize<'de> for WireApi {
             "chat" => Err(serde::de::Error::custom(CHAT_WIRE_API_REMOVED_ERROR)),
             _ => Err(serde::de::Error::unknown_variant(&value, &["responses"])),
         }
+    }
+}
+
+impl fmt::Display for WireApi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::Responses => "responses",
+        };
+        f.write_str(value)
     }
 }
 
@@ -125,6 +126,38 @@ pub struct ModelProviderInfo {
 }
 
 impl ModelProviderInfo {
+    pub(crate) fn telemetry_header_names(&self) -> Option<String> {
+        let mut names = BTreeSet::new();
+
+        if let Some(headers) = &self.http_headers {
+            for (name, value) in headers {
+                if let (Ok(name), Ok(_value)) =
+                    (HeaderName::try_from(name), HeaderValue::try_from(value))
+                {
+                    names.insert(name.as_str().to_string());
+                }
+            }
+        }
+
+        if let Some(env_headers) = &self.env_http_headers {
+            for (header, env_var) in env_headers {
+                if let Ok(value) = std::env::var(env_var)
+                    && !value.trim().is_empty()
+                    && let (Ok(name), Ok(_value)) =
+                        (HeaderName::try_from(header), HeaderValue::try_from(value))
+                {
+                    names.insert(name.as_str().to_string());
+                }
+            }
+        }
+
+        if names.is_empty() {
+            None
+        } else {
+            Some(names.into_iter().collect::<Vec<_>>().join(","))
+        }
+    }
+
     fn build_header_map(&self) -> crate::error::Result<HeaderMap> {
         let capacity = self.http_headers.as_ref().map_or(0, HashMap::len)
             + self.env_http_headers.as_ref().map_or(0, HashMap::len);
@@ -226,7 +259,6 @@ impl ModelProviderInfo {
             .map(Duration::from_millis)
             .unwrap_or(Duration::from_millis(DEFAULT_STREAM_IDLE_TIMEOUT_MS))
     }
-
     pub fn create_openai_provider(base_url: Option<String>) -> ModelProviderInfo {
         ModelProviderInfo {
             name: OPENAI_PROVIDER_NAME.into(),
@@ -277,14 +309,13 @@ pub fn built_in_model_providers(
     openai_base_url: Option<String>,
 ) -> HashMap<String, ModelProviderInfo> {
     use ModelProviderInfo as P;
-    let openai_provider = P::create_openai_provider(openai_base_url);
 
     // We do not want to be in the business of adjucating which third-party
     // providers are bundled with Codex CLI, so we only include the OpenAI and
     // open source ("oss") providers by default. Users are encouraged to add to
     // `model_providers` in config.toml to add their own providers.
     [
-        (OPENAI_PROVIDER_ID, openai_provider),
+        ("openai", P::create_openai_provider(openai_base_url)),
         (
             OLLAMA_OSS_PROVIDER_ID,
             create_oss_provider(DEFAULT_OLLAMA_PORT, WireApi::Responses),

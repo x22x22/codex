@@ -30,6 +30,12 @@ pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ResidencyHeaderTelemetry {
+    pub attached: bool,
+    pub value: Option<&'static str>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Originator {
     pub value: String,
@@ -87,6 +93,20 @@ pub fn set_default_client_residency_requirement(enforce_residency: Option<Reside
         return;
     };
     *guard = enforce_residency;
+}
+
+pub fn current_residency_header_telemetry() -> ResidencyHeaderTelemetry {
+    let Ok(guard) = REQUIREMENTS_RESIDENCY.read() else {
+        tracing::warn!("Failed to acquire requirements residency lock");
+        return ResidencyHeaderTelemetry::default();
+    };
+    let Some(requirement) = guard.as_ref() else {
+        return ResidencyHeaderTelemetry::default();
+    };
+    ResidencyHeaderTelemetry {
+        attached: true,
+        value: Some(residency_header_value(*requirement)),
+    }
 }
 
 pub fn originator() -> Originator {
@@ -184,12 +204,6 @@ pub fn create_client() -> CodexHttpClient {
     CodexHttpClient::new(inner)
 }
 
-/// Builds the default reqwest client used for ordinary Codex HTTP traffic.
-///
-/// This starts from the standard Codex user agent, default headers, and sandbox-specific proxy
-/// policy, then layers in shared custom CA handling from `CODEX_CA_CERTIFICATE` /
-/// `SSL_CERT_FILE`. The function remains infallible for compatibility with existing call sites, so
-/// a custom-CA or builder failure is logged and falls back to `reqwest::Client::new()`.
 pub fn build_reqwest_client() -> reqwest::Client {
     try_build_reqwest_client().unwrap_or_else(|error| {
         tracing::warn!(error = %error, "failed to build default reqwest client");
@@ -197,10 +211,6 @@ pub fn build_reqwest_client() -> reqwest::Client {
     })
 }
 
-/// Tries to build the default reqwest client used for ordinary Codex HTTP traffic.
-///
-/// Callers that need a structured CA-loading failure instead of the legacy logged fallback can use
-/// this method directly.
 pub fn try_build_reqwest_client() -> Result<reqwest::Client, BuildCustomCaTransportError> {
     let ua = get_codex_user_agent();
 
@@ -222,12 +232,18 @@ pub fn default_headers() -> HeaderMap {
         && let Some(requirement) = guard.as_ref()
         && !headers.contains_key(RESIDENCY_HEADER_NAME)
     {
-        let value = match requirement {
-            ResidencyRequirement::Us => HeaderValue::from_static("us"),
-        };
-        headers.insert(RESIDENCY_HEADER_NAME, value);
+        headers.insert(
+            RESIDENCY_HEADER_NAME,
+            HeaderValue::from_static(residency_header_value(*requirement)),
+        );
     }
     headers
+}
+
+fn residency_header_value(requirement: ResidencyRequirement) -> &'static str {
+    match requirement {
+        ResidencyRequirement::Us => "us",
+    }
 }
 
 fn is_sandboxed() -> bool {

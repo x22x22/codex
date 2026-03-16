@@ -25,6 +25,7 @@ use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
 use crate::connectors;
+use crate::endpoint_config_telemetry::resolve_endpoint_config_telemetry_source;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
@@ -153,6 +154,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::ModelProviderInfo;
+use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::client::ModelClient;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
@@ -1601,8 +1603,41 @@ impl Session {
             )],
         );
 
-        session_telemetry.conversation_starts(
+        let auth_env_telemetry = collect_auth_env_telemetry(
+            &config.model_provider,
+            auth_manager.codex_api_key_env_enabled(),
+        );
+        let conversation_start_base_url = if auth.is_none()
+            && config.model_provider.requires_openai_auth
+            && config.model_provider.base_url.is_none()
+            && !auth_env_telemetry.has_api_key_override()
+        {
+            "https://chatgpt.com/backend-api/codex".to_string()
+        } else {
+            config
+                .model_provider
+                .to_api_provider(auth.map(CodexAuth::auth_mode))
+                .map(|provider| provider.base_url)
+                .unwrap_or_default()
+        };
+        let endpoint_telemetry = resolve_endpoint_config_telemetry_source(
+            &config,
+            session_configuration.session_source.clone(),
+        )
+        .classify(&conversation_start_base_url);
+
+        session_telemetry.conversation_starts_with_endpoint_details(
             config.model_provider.name.as_str(),
+            endpoint_telemetry.base_url_origin,
+            endpoint_telemetry.host_class,
+            endpoint_telemetry.base_url_source,
+            endpoint_telemetry.base_url_is_default,
+            auth_env_telemetry.openai_api_key_env_present,
+            auth_env_telemetry.codex_api_key_env_present,
+            auth_env_telemetry.codex_api_key_env_enabled,
+            auth_env_telemetry.provider_env_key_name.as_deref(),
+            auth_env_telemetry.provider_env_key_present,
+            auth_env_telemetry.refresh_token_url_override_present,
             session_configuration.collaboration_mode.reasoning_effort(),
             config
                 .model_reasoning_summary
@@ -1781,10 +1816,14 @@ impl Session {
             network_proxy,
             network_approval: Arc::clone(&network_approval),
             state_db: state_db_ctx.clone(),
-            model_client: ModelClient::new(
+            model_client: ModelClient::new_with_endpoint_telemetry_source(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
                 session_configuration.provider.clone(),
+                resolve_endpoint_config_telemetry_source(
+                    &config,
+                    session_configuration.session_source.clone(),
+                ),
                 session_configuration.session_source.clone(),
                 config.model_verbosity,
                 ws_version_from_features(config.as_ref()),

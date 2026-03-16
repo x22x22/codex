@@ -2,6 +2,15 @@ use super::*;
 use pretty_assertions::assert_eq;
 
 #[test]
+fn openai_auth_provider_defaults_to_api_before_login() {
+    let provider = ModelProviderInfo::create_openai_provider(None);
+
+    let api_provider = provider.to_api_provider(None).unwrap();
+
+    assert_eq!(api_provider.base_url, "https://api.openai.com/v1");
+}
+
+#[test]
 fn test_deserialize_ollama_model_provider_toml() {
     let azure_provider_toml = r#"
 name = "Ollama"
