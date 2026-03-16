@@ -32,6 +32,9 @@ use std::borrow::Cow;
 use std::ops::Range;
 use textwrap::Options;
 
+use crate::osc8::osc8_hyperlink;
+use crate::osc8::parse_osc8_hyperlink;
+use crate::osc8::strip_osc8_hyperlinks;
 use crate::render::line_utils::push_owned_lines;
 
 /// Returns byte-ranges into `text` for each wrapped line, including
@@ -177,12 +180,7 @@ fn map_owned_wrapped_line_to_range(
 ///
 /// Concatenates all span contents and delegates to [`text_contains_url_like`].
 pub(crate) fn line_contains_url_like(line: &Line<'_>) -> bool {
-    let text: String = line
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
-    text_contains_url_like(&text)
+    text_contains_url_like(&visible_line_text(line))
 }
 
 /// Returns `true` if `line` contains both a URL-like token and at least one
@@ -191,12 +189,15 @@ pub(crate) fn line_contains_url_like(line: &Line<'_>) -> bool {
 /// Decorative marker tokens (for example list prefixes like `-`, `1.`, `|`,
 /// `│`) are ignored for the non-URL side of this check.
 pub(crate) fn line_has_mixed_url_and_non_url_tokens(line: &Line<'_>) -> bool {
-    let text: String = line
-        .spans
+    text_has_mixed_url_and_non_url_tokens(&visible_line_text(line))
+}
+
+fn visible_line_text(line: &Line<'_>) -> String {
+    line.spans
         .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
-    text_has_mixed_url_and_non_url_tokens(&text)
+        .map(|span| strip_osc8_hyperlinks(span.content.as_ref()))
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 /// Returns `true` if any whitespace-delimited token in `text` looks like a URL.
@@ -644,11 +645,16 @@ where
     let mut span_bounds = Vec::new();
     let mut acc = 0usize;
     for s in &line.spans {
-        let text = s.content.as_ref();
+        let parsed = parse_osc8_hyperlink(s.content.as_ref());
+        let text = parsed.map_or_else(|| s.content.as_ref(), |link| link.text);
         let start = acc;
         flat.push_str(text);
         acc += text.len();
-        span_bounds.push((start..acc, s.style));
+        span_bounds.push(SpanBound {
+            range: start..acc,
+            style: s.style,
+            osc8_destination: parsed.map(|link| link.destination),
+        });
     }
 
     let rt_opts: RtOptions<'a> = width_or_options.into();
@@ -841,15 +847,15 @@ where
 
 fn slice_line_spans<'a>(
     original: &'a Line<'a>,
-    span_bounds: &[(Range<usize>, ratatui::style::Style)],
+    span_bounds: &[SpanBound<'a>],
     range: &Range<usize>,
 ) -> Line<'a> {
     let start_byte = range.start;
     let end_byte = range.end;
     let mut acc: Vec<Span<'a>> = Vec::new();
-    for (i, (range, style)) in span_bounds.iter().enumerate() {
-        let s = range.start;
-        let e = range.end;
+    for (i, bound) in span_bounds.iter().enumerate() {
+        let s = bound.range.start;
+        let e = bound.range.end;
         if e <= start_byte {
             continue;
         }
@@ -861,11 +867,15 @@ fn slice_line_spans<'a>(
         if seg_end > seg_start {
             let local_start = seg_start - s;
             let local_end = seg_end - s;
-            let content = original.spans[i].content.as_ref();
-            let slice = &content[local_start..local_end];
+            let slice = slice_span_content(
+                original.spans[i].content.as_ref(),
+                bound,
+                local_start,
+                local_end,
+            );
             acc.push(Span {
-                style: *style,
-                content: std::borrow::Cow::Borrowed(slice),
+                style: bound.style,
+                content: slice,
             });
         }
         if e >= end_byte {
@@ -879,9 +889,39 @@ fn slice_line_spans<'a>(
     }
 }
 
+#[derive(Clone, Debug)]
+struct SpanBound<'a> {
+    range: Range<usize>,
+    style: ratatui::style::Style,
+    osc8_destination: Option<&'a str>,
+}
+
+fn slice_span_content<'a>(
+    content: &'a str,
+    bound: &SpanBound<'a>,
+    local_start: usize,
+    local_end: usize,
+) -> Cow<'a, str> {
+    if let Some(destination) = bound.osc8_destination {
+        if let Some(parsed) = parse_osc8_hyperlink(content) {
+            Cow::Owned(osc8_hyperlink(
+                destination,
+                &parsed.text[local_start..local_end],
+            ))
+        } else {
+            Cow::Borrowed(&content[local_start..local_end])
+        }
+    } else {
+        Cow::Borrowed(&content[local_start..local_end])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::osc8::osc8_hyperlink;
+    use crate::osc8::parse_osc8_hyperlink;
+    use crate::osc8::strip_osc8_hyperlinks;
     use itertools::Itertools as _;
     use pretty_assertions::assert_eq;
     use ratatui::style::Color;
@@ -998,6 +1038,34 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(concat_line(&out[0]), "hello-");
         assert_eq!(concat_line(&out[1]), "world");
+    }
+
+    #[test]
+    fn osc8_wrapped_span_wraps_by_visible_text() {
+        let url = "https://example.com/docs";
+        let line = Line::from(vec![osc8_hyperlink(url, "abcdefghij").cyan().underlined()]);
+        let out = word_wrap_line(&line, 5);
+        assert_eq!(out.len(), 2);
+
+        let first = concat_line(&out[0]);
+        let second = concat_line(&out[1]);
+
+        assert_eq!(strip_osc8_hyperlinks(&first), "abcde");
+        assert_eq!(strip_osc8_hyperlinks(&second), "fghij");
+        assert_eq!(
+            parse_osc8_hyperlink(&first).expect("first line should stay hyperlinked"),
+            crate::osc8::ParsedOsc8 {
+                destination: url,
+                text: "abcde",
+            }
+        );
+        assert_eq!(
+            parse_osc8_hyperlink(&second).expect("second line should stay hyperlinked"),
+            crate::osc8::ParsedOsc8 {
+                destination: url,
+                text: "fghij",
+            }
+        );
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! transcripts show the real file target (including normalized location suffixes) and can shorten
 //! absolute paths relative to a known working directory.
 
+use crate::osc8::osc8_hyperlink;
 use crate::render::highlight::highlight_code_to_lines;
 use crate::render::line_utils::line_to_static;
 use crate::wrapping::RtOptions;
@@ -46,6 +47,15 @@ struct MarkdownStyles {
     blockquote: Style,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MarkdownRenderOptions {
+    pub(crate) emit_osc8: bool,
+}
+
+impl MarkdownRenderOptions {
+    pub(crate) const INTERACTIVE: Self = Self { emit_osc8: true };
+}
+
 impl Default for MarkdownStyles {
     fn default() -> Self {
         use ratatui::style::Stylize;
@@ -63,7 +73,7 @@ impl Default for MarkdownStyles {
             strikethrough: Style::new().crossed_out(),
             ordered_list_marker: Style::new().light_blue(),
             unordered_list_marker: Style::new(),
-            link: Style::new().cyan().underlined(),
+            link: Style::new().blue().underlined(),
             blockquote: Style::new().green(),
         }
     }
@@ -87,13 +97,28 @@ impl IndentContext {
 }
 
 pub fn render_markdown_text(input: &str) -> Text<'static> {
-    render_markdown_text_with_width(input, None)
+    render_markdown_text_with_options(input, MarkdownRenderOptions::default())
+}
+
+pub(crate) fn render_markdown_text_with_options(
+    input: &str,
+    options: MarkdownRenderOptions,
+) -> Text<'static> {
+    render_markdown_text_with_width_and_options(input, None, options)
 }
 
 /// Render markdown using the current process working directory for local file-link display.
 pub(crate) fn render_markdown_text_with_width(input: &str, width: Option<usize>) -> Text<'static> {
+    render_markdown_text_with_width_and_options(input, width, MarkdownRenderOptions::default())
+}
+
+pub(crate) fn render_markdown_text_with_width_and_options(
+    input: &str,
+    width: Option<usize>,
+    options: MarkdownRenderOptions,
+) -> Text<'static> {
     let cwd = std::env::current_dir().ok();
-    render_markdown_text_with_width_and_cwd(input, width, cwd.as_deref())
+    render_markdown_text_with_width_and_cwd_and_options(input, width, cwd.as_deref(), options)
 }
 
 /// Render markdown with an explicit working directory for local file links.
@@ -106,10 +131,24 @@ pub(crate) fn render_markdown_text_with_width_and_cwd(
     width: Option<usize>,
     cwd: Option<&Path>,
 ) -> Text<'static> {
-    let mut options = Options::empty();
-    options.insert(Options::ENABLE_STRIKETHROUGH);
-    let parser = Parser::new_ext(input, options);
-    let mut w = Writer::new(parser, width, cwd);
+    render_markdown_text_with_width_and_cwd_and_options(
+        input,
+        width,
+        cwd,
+        MarkdownRenderOptions::default(),
+    )
+}
+
+pub(crate) fn render_markdown_text_with_width_and_cwd_and_options(
+    input: &str,
+    width: Option<usize>,
+    cwd: Option<&Path>,
+    options: MarkdownRenderOptions,
+) -> Text<'static> {
+    let mut parser_options = Options::empty();
+    parser_options.insert(Options::ENABLE_STRIKETHROUGH);
+    let parser = Parser::new_ext(input, parser_options);
+    let mut w = Writer::new(parser, width, cwd, options);
     w.run();
     w.text
 }
@@ -170,13 +209,19 @@ where
     current_subsequent_indent: Vec<Span<'static>>,
     current_line_style: Style,
     current_line_in_code_block: bool,
+    render_options: MarkdownRenderOptions,
 }
 
 impl<'a, I> Writer<'a, I>
 where
     I: Iterator<Item = Event<'a>>,
 {
-    fn new(iter: I, wrap_width: Option<usize>, cwd: Option<&Path>) -> Self {
+    fn new(
+        iter: I,
+        wrap_width: Option<usize>,
+        cwd: Option<&Path>,
+        render_options: MarkdownRenderOptions,
+    ) -> Self {
         Self {
             iter,
             text: Text::default(),
@@ -200,6 +245,7 @@ where
             current_subsequent_indent: Vec::new(),
             current_line_style: Style::default(),
             current_line_in_code_block: false,
+            render_options,
         }
     }
 
@@ -272,7 +318,12 @@ where
             Tag::Emphasis => self.push_inline_style(self.styles.emphasis),
             Tag::Strong => self.push_inline_style(self.styles.strong),
             Tag::Strikethrough => self.push_inline_style(self.styles.strikethrough),
-            Tag::Link { dest_url, .. } => self.push_link(dest_url.to_string()),
+            Tag::Link { dest_url, .. } => {
+                self.push_link(dest_url.to_string());
+                if self.remote_link_destination().is_some() {
+                    self.push_inline_style(self.styles.link);
+                }
+            }
             Tag::HtmlBlock
             | Tag::FootnoteDefinition(_)
             | Tag::Table(_)
@@ -404,7 +455,7 @@ where
             if i > 0 {
                 self.push_line(Line::default());
             }
-            let content = line.to_string();
+            let content = self.maybe_wrap_remote_link_text(line);
             let span = Span::styled(
                 content,
                 self.inline_styles.last().copied().unwrap_or_default(),
@@ -423,7 +474,18 @@ where
             self.push_line(Line::default());
             self.pending_marker_line = false;
         }
-        let span = Span::from(code.into_string()).style(self.styles.code);
+        let style = self
+            .inline_styles
+            .last()
+            .copied()
+            .unwrap_or_default()
+            .patch(self.styles.code)
+            .patch(
+                self.remote_link_destination()
+                    .map(|_| self.styles.link)
+                    .unwrap_or_default(),
+            );
+        let span = Span::from(self.maybe_wrap_remote_link_text(code.as_ref())).style(style);
         self.push_span(span);
     }
 
@@ -442,7 +504,7 @@ where
                 self.push_line(Line::default());
             }
             let style = self.inline_styles.last().copied().unwrap_or_default();
-            self.push_span(Span::styled(line.to_string(), style));
+            self.push_span(Span::styled(self.maybe_wrap_remote_link_text(line), style));
         }
         self.needs_newline = !inline;
     }
@@ -590,6 +652,7 @@ where
     fn pop_link(&mut self) {
         if let Some(link) = self.link.take() {
             if link.show_destination {
+                self.pop_inline_style();
                 self.push_span(" (".into());
                 self.push_span(Span::styled(link.destination, self.styles.link));
                 self.push_span(")".into());
@@ -616,6 +679,26 @@ where
             .as_ref()
             .and_then(|link| link.local_target_display.as_ref())
             .is_some()
+    }
+
+    fn remote_link_destination(&self) -> Option<&str> {
+        self.link
+            .as_ref()
+            .filter(|link| link.show_destination)
+            .map(|link| link.destination.as_str())
+    }
+
+    fn maybe_wrap_remote_link_text(&self, text: &str) -> String {
+        self.remote_link_destination().map_or_else(
+            || text.to_string(),
+            |destination| {
+                if self.render_options.emit_osc8 {
+                    osc8_hyperlink(destination, text)
+                } else {
+                    text.to_string()
+                }
+            },
+        )
     }
 
     fn flush_current_line(&mut self) {

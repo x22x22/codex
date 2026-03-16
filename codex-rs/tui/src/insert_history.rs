@@ -333,6 +333,7 @@ where
 mod tests {
     use super::*;
     use crate::markdown_render::render_markdown_text;
+    use crate::osc8::osc8_hyperlink;
     use crate::test_backend::VT100Backend;
     use ratatui::layout::Rect;
     use ratatui::style::Color;
@@ -363,6 +364,20 @@ mod tests {
             String::from_utf8(actual).unwrap(),
             String::from_utf8(expected).unwrap()
         );
+    }
+
+    #[test]
+    fn write_spans_preserves_osc8_wrapped_content() {
+        use ratatui::style::Stylize;
+
+        let wrapped = osc8_hyperlink("https://example.com/docs", "docs");
+        let spans = [wrapped.cyan().underlined()];
+
+        let mut actual: Vec<u8> = Vec::new();
+        write_spans(&mut actual, spans.iter()).unwrap();
+
+        let actual = String::from_utf8(actual).unwrap();
+        assert!(actual.contains("\u{1b}]8;;https://example.com/docs\u{7}docs\u{1b}]8;;\u{7}"));
     }
 
     #[test]

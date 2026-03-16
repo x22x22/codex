@@ -699,6 +699,7 @@ impl ModifierDiff {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::osc8::osc8_hyperlink;
     use pretty_assertions::assert_eq;
     use ratatui::layout::Rect;
     use ratatui::style::Style;
@@ -746,6 +747,14 @@ mod tests {
                 .iter()
                 .any(|command| matches!(command, DrawCommand::ClearToEnd { x: 2, y: 0, .. })),
             "expected clear-to-end to start after the remaining wide char; commands: {commands:?}"
+        );
+    }
+
+    #[test]
+    fn display_width_ignores_osc8_payload() {
+        assert_eq!(
+            display_width(&osc8_hyperlink("https://example.com/docs", "docs")),
+            4
         );
     }
 }

@@ -40,6 +40,8 @@ use uuid::Uuid;
 use crate::LoginStatus;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
+use crate::osc8::osc8_hyperlink;
+use crate::osc8::sanitize_osc8_destination;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 
@@ -54,10 +56,7 @@ pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
     // Sanitize: strip any characters that could break out of the OSC 8
     // sequence (ESC or BEL) to prevent terminal escape injection from a
     // malformed or compromised upstream URL.
-    let safe_url: String = url
-        .chars()
-        .filter(|&c| c != '\x1B' && c != '\x07')
-        .collect();
+    let safe_url = sanitize_osc8_destination(url);
     if safe_url.is_empty() {
         return;
     }
@@ -73,7 +72,7 @@ pub(crate) fn mark_url_hyperlink(buf: &mut Buffer, area: Rect, url: &str) {
             if sym.trim().is_empty() {
                 continue;
             }
-            cell.set_symbol(&format!("\x1B]8;;{safe_url}\x07{sym}\x1B]8;;\x07"));
+            cell.set_symbol(&osc8_hyperlink(&safe_url, &sym));
         }
     }
 }

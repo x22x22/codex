@@ -1,5 +1,6 @@
 use crate::key_hint;
-use crate::markdown_render::render_markdown_text_with_width;
+use crate::markdown_render::MarkdownRenderOptions;
+use crate::markdown_render::render_markdown_text_with_width_and_options;
 use crate::render::Insets;
 use crate::render::renderable::ColumnRenderable;
 use crate::render::renderable::Renderable;
@@ -321,7 +322,11 @@ impl ModelMigrationScreen {
         let horizontal_inset = 2;
         let content_width = area_width.saturating_sub(horizontal_inset);
         let wrap_width = (content_width > 0).then_some(content_width as usize);
-        let rendered = render_markdown_text_with_width(markdown, wrap_width);
+        let rendered = render_markdown_text_with_width_and_options(
+            markdown,
+            wrap_width,
+            MarkdownRenderOptions::INTERACTIVE,
+        );
         for line in rendered.lines {
             column.push(
                 Paragraph::new(line)
