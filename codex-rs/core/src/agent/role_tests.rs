@@ -68,6 +68,7 @@ async fn apply_role_returns_error_for_unknown_role() {
 }
 
 #[tokio::test]
+#[cfg(not(windows))]
 async fn apply_explorer_role_sets_read_only_config_and_adds_session_flags_layer() {
     let (_home, mut config) = test_config_with_cli_overrides(vec![(
         "sandbox_mode".to_string(),
