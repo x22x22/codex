@@ -714,10 +714,16 @@ async fn dynamic_tool_call_round_trip_uses_approved_arguments_for_completed_item
             )
         })
         .context("expected approved-arguments steering note in developer input")?;
+    let (_, steering_payload) = steering_message
+        .split_once('\n')
+        .context("expected approved-arguments steering payload")?;
     assert!(
-        steering_message.contains(
-            r#"{"approvedArguments":{"city":"Tokyo"},"callId":"dyn-call-approved-1","tool":"demo_tool"}"#,
-        ),
+        serde_json::from_str::<Value>(steering_payload)?
+            == json!({
+                "tool": "demo_tool",
+                "callId": "dyn-call-approved-1",
+                "approvedArguments": { "city": "Tokyo" },
+            }),
         "expected approved-arguments metadata JSON in steering note, got {steering_message:?}"
     );
     assert!(
