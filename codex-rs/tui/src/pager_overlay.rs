@@ -27,6 +27,7 @@ use crate::render::Insets;
 use crate::render::renderable::InsetRenderable;
 use crate::render::renderable::Renderable;
 use crate::style::user_message_style;
+use crate::text_formatting::truncate_text;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
@@ -437,6 +438,8 @@ pub(crate) struct TranscriptOverlay {
     highlight_cell: Option<usize>,
     /// Cache key for the render-only live tail appended after committed cells.
     live_tail_key: Option<LiveTailKey>,
+    anchors: Vec<TranscriptAnchor>,
+    selected_anchor: Option<usize>,
     anchors_visible: bool,
     focus: TranscriptOverlayFocus,
     is_done: bool,
@@ -446,6 +449,12 @@ pub(crate) struct TranscriptOverlay {
 enum TranscriptOverlayFocus {
     Transcript,
     Anchors,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct TranscriptAnchor {
+    cell_idx: usize,
+    label: String,
 }
 
 /// Cache key for the active-cell "live tail" appended to the transcript overlay.
@@ -469,17 +478,29 @@ impl TranscriptOverlay {
     /// This overlay does not own the "active cell"; callers may optionally append a live tail via
     /// `sync_live_tail` during draws to reflect in-flight activity.
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
+        let anchors = Self::build_anchors(&transcript_cells);
+        let selected_anchor = anchors.len().checked_sub(1);
+        let focus = if anchors.is_empty() {
+            TranscriptOverlayFocus::Transcript
+        } else {
+            TranscriptOverlayFocus::Anchors
+        };
         Self {
             view: PagerView::new(
-                Self::render_cells(&transcript_cells, None),
+                Self::render_cells(
+                    &transcript_cells,
+                    selected_anchor.and_then(|idx| anchors.get(idx).map(|anchor| anchor.cell_idx)),
+                ),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
             ),
             cells: transcript_cells,
             highlight_cell: None,
             live_tail_key: None,
+            anchors,
+            selected_anchor,
             anchors_visible: true,
-            focus: TranscriptOverlayFocus::Transcript,
+            focus,
             is_done: false,
         }
     }
@@ -490,6 +511,90 @@ impl TranscriptOverlay {
 
     fn anchor_pane_width(&self, area: Rect) -> u16 {
         area.width.clamp(24, 36)
+    }
+
+    fn build_anchors(cells: &[Arc<dyn HistoryCell>]) -> Vec<TranscriptAnchor> {
+        let mut anchors = Vec::new();
+        for (cell_idx, cell) in cells.iter().enumerate() {
+            let Some(user_cell) = cell.as_any().downcast_ref::<UserHistoryCell>() else {
+                continue;
+            };
+            let turn_number = anchors.len() + 1;
+            let message_preview = user_cell
+                .message
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map(ToOwned::to_owned)
+                .or_else(|| {
+                    (!user_cell.remote_image_urls.is_empty()).then(|| "[image attachment]".to_string())
+                })
+                .unwrap_or_else(|| "(empty prompt)".to_string());
+            anchors.push(TranscriptAnchor {
+                cell_idx,
+                label: format!("{turn_number}. {}", truncate_text(&message_preview, 48)),
+            });
+        }
+        anchors
+    }
+
+    fn selected_transcript_cell(&self) -> Option<usize> {
+        self.highlight_cell.or_else(|| {
+            self.selected_anchor
+                .and_then(|idx| self.anchors.get(idx))
+                .map(|anchor| anchor.cell_idx)
+        })
+    }
+
+    fn refresh_anchors(&mut self) {
+        let previously_selected_cell = self
+            .selected_anchor
+            .and_then(|idx| self.anchors.get(idx))
+            .map(|anchor| anchor.cell_idx);
+        self.anchors = Self::build_anchors(&self.cells);
+        self.selected_anchor = previously_selected_cell
+            .and_then(|cell_idx| {
+                self.anchors
+                    .iter()
+                    .position(|anchor| anchor.cell_idx == cell_idx)
+            })
+            .or_else(|| self.anchors.len().checked_sub(1));
+    }
+
+    fn select_anchor(&mut self, anchor_idx: usize) {
+        let Some(cell_idx) = self.anchors.get(anchor_idx).map(|anchor| anchor.cell_idx) else {
+            return;
+        };
+        self.selected_anchor = Some(anchor_idx);
+        self.rebuild_renderables();
+        self.view.scroll_chunk_into_view(cell_idx);
+    }
+
+    fn move_selected_anchor_to(&mut self, anchor_idx: usize, tui: &mut tui::Tui) {
+        if self.selected_anchor == Some(anchor_idx) {
+            return;
+        }
+        self.select_anchor(anchor_idx);
+        tui.frame_requester()
+            .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+    }
+
+    fn handle_anchor_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
+        if self.anchors.is_empty() {
+            return Ok(());
+        }
+
+        let last_anchor = self.anchors.len().saturating_sub(1);
+        let current = self.selected_anchor.unwrap_or(last_anchor).min(last_anchor);
+        let next = match key_event {
+            e if KEY_UP.is_press(e) || KEY_K.is_press(e) => current.saturating_sub(1),
+            e if KEY_DOWN.is_press(e) || KEY_J.is_press(e) => current.saturating_add(1).min(last_anchor),
+            e if KEY_HOME.is_press(e) => 0,
+            e if KEY_END.is_press(e) => last_anchor,
+            _ => return Ok(()),
+        };
+        self.move_selected_anchor_to(next, tui);
+        Ok(())
     }
 
     fn render_cells(
@@ -543,7 +648,8 @@ impl TranscriptOverlay {
         let had_prior_cells = !self.cells.is_empty();
         let tail_renderable = self.take_live_tail_renderable();
         self.cells.push(cell);
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.refresh_anchors();
+        self.view.renderables = Self::render_cells(&self.cells, self.selected_transcript_cell());
         if let Some(tail) = tail_renderable {
             let tail = if !had_prior_cells
                 && self
@@ -578,6 +684,7 @@ impl TranscriptOverlay {
         {
             self.highlight_cell = None;
         }
+        self.refresh_anchors();
         self.rebuild_renderables();
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
@@ -634,8 +741,16 @@ impl TranscriptOverlay {
 
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell;
+        if let Some(cell_idx) = cell
+            && let Some(anchor_idx) = self
+                .anchors
+                .iter()
+                .position(|anchor| anchor.cell_idx == cell_idx)
+        {
+            self.selected_anchor = Some(anchor_idx);
+        }
         self.rebuild_renderables();
-        if let Some(idx) = self.highlight_cell {
+        if let Some(idx) = self.selected_transcript_cell() {
             self.view.scroll_chunk_into_view(idx);
         }
     }
@@ -650,7 +765,7 @@ impl TranscriptOverlay {
 
     fn rebuild_renderables(&mut self) {
         let tail_renderable = self.take_live_tail_renderable();
-        self.view.renderables = Self::render_cells(&self.cells, self.highlight_cell);
+        self.view.renderables = Self::render_cells(&self.cells, self.selected_transcript_cell());
         if let Some(tail) = tail_renderable {
             self.view.renderables.push(tail);
         }
@@ -717,17 +832,42 @@ impl TranscriptOverlay {
             return;
         }
 
-        let placeholder = vec![
-            Line::from("Anchor browser"),
-            Line::from(""),
-            Line::from("This pane will list"),
-            Line::from("conversation anchors"),
-            Line::from("for quick jumping."),
-            Line::from(""),
-            Line::from("Tab switches focus."),
-            Line::from("Press 'a' to hide."),
-        ];
-        Paragraph::new(Text::from(placeholder))
+        let anchor_lines = if self.anchors.is_empty() {
+            vec![
+                Line::from("No user prompts yet."),
+                Line::from(""),
+                Line::from("Add another turn"),
+                Line::from("and reopen Ctrl+T."),
+            ]
+        } else {
+            let visible_rows = inner.height.max(1) as usize;
+            let selected = self
+                .selected_anchor
+                .unwrap_or_else(|| self.anchors.len().saturating_sub(1));
+            let start = selected
+                .saturating_sub(visible_rows / 2)
+                .min(self.anchors.len().saturating_sub(visible_rows));
+            self.anchors
+                .iter()
+                .enumerate()
+                .skip(start)
+                .take(visible_rows)
+                .map(|(idx, anchor)| {
+                    let is_selected = Some(idx) == self.selected_anchor;
+                    let prefix = if is_selected { "› " } else { "  " };
+                    let style = if is_selected {
+                        Style::default().cyan().bold()
+                    } else {
+                        Style::default()
+                    };
+                    Line::from(vec![
+                        Span::styled(prefix.to_string(), style),
+                        Span::styled(anchor.label.clone(), style),
+                    ])
+                })
+                .collect()
+        };
+        Paragraph::new(Text::from(anchor_lines))
             .wrap(Wrap { trim: false })
             .render(inner, buf);
     }
@@ -780,7 +920,7 @@ impl TranscriptOverlay {
                 }
                 other => match self.focus {
                     TranscriptOverlayFocus::Transcript => self.view.handle_key_event(tui, other),
-                    TranscriptOverlayFocus::Anchors => Ok(()),
+                    TranscriptOverlayFocus::Anchors => self.handle_anchor_key_event(tui, other),
                 },
             },
             TuiEvent::Draw => {
