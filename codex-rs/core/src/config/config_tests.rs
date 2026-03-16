@@ -1535,6 +1535,23 @@ fn web_search_mode_capability_override_false_disables_tool() {
 }
 
 #[test]
+fn web_search_mode_explicit_disabled_wins_when_capability_enabled() {
+    let cfg = ConfigToml {
+        web_search: Some(WebSearchMode::Disabled),
+        ..Default::default()
+    };
+    let profile = ConfigProfile::default();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::WebSearchCached);
+    let enabled_tools = BTreeSet::from(["web_search".to_string()]);
+
+    assert_eq!(
+        resolve_web_search_mode(&cfg, &profile, &features, Some(&enabled_tools)),
+        Some(WebSearchMode::Disabled)
+    );
+}
+
+#[test]
 fn resolve_enabled_tool_capabilities_returns_none_when_omitted() {
     let cfg: ConfigToml = toml::from_str(
         r#"

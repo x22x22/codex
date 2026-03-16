@@ -141,7 +141,7 @@ impl BuiltinToolKey {
             Self::SpawnAgent => &["spawn_agent"],
             Self::SendInput => &["send_input"],
             Self::ResumeAgent => &["resume_agent"],
-            Self::Wait => &["wait"],
+            Self::Wait => &["wait_agent"],
             Self::CloseAgent => &["close_agent"],
             Self::SpawnAgentsOnCsv => &["spawn_agents_on_csv"],
             Self::ReportAgentJobResult => &["report_agent_job_result"],

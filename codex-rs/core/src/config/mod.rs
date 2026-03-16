@@ -2073,9 +2073,7 @@ fn resolve_web_search_mode(
 
     match enabled_tool_capabilities {
         Some(enabled_tool_capabilities) if enabled_tool_capabilities.contains("web_search") => {
-            explicit_mode()
-                .filter(|mode| *mode != WebSearchMode::Disabled)
-                .or_else(feature_default_mode)
+            explicit_mode().or_else(feature_default_mode)
         }
         Some(_) => Some(WebSearchMode::Disabled),
         None => explicit_mode().or_else(feature_default_mode),

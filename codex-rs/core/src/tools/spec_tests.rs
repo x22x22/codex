@@ -13,6 +13,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use super::*;
@@ -515,12 +516,49 @@ fn test_build_specs_collab_tools_enabled() {
         sandbox_policy: &SandboxPolicy::DangerFullAccess,
         windows_sandbox_level: WindowsSandboxLevel::Disabled,
     });
-    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+    let (tools, registry) = build_specs(&tools_config, None, None, &[]).build();
     assert_contains_tool_names(
         &tools,
         &["spawn_agent", "send_input", "wait_agent", "close_agent"],
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
+    assert!(registry.has_handler("spawn_agent", None));
+    assert!(registry.has_handler("send_input", None));
+    assert!(registry.has_handler("resume_agent", None));
+    assert!(registry.has_handler("wait_agent", None));
+    assert!(registry.has_handler("close_agent", None));
+}
+
+#[test]
+fn test_build_specs_multi_agent_handlers_omitted_when_capability_disabled() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_enabled_tool_capabilities(Some(BTreeSet::new()));
+
+    let (tools, registry) = build_specs(&tools_config, None, None, &[]).build();
+
+    for tool_name in [
+        "spawn_agent",
+        "send_input",
+        "resume_agent",
+        "wait_agent",
+        "close_agent",
+    ] {
+        assert_lacks_tool_name(&tools, tool_name);
+        assert!(!registry.has_handler(tool_name, None));
+    }
 }
 
 #[test]
