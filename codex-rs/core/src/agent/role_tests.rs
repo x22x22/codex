@@ -2,7 +2,6 @@ use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use crate::config_loader::ConfigLayerStackOrdering;
-use crate::features::Feature;
 use crate::plugins::PluginsManager;
 use crate::skills::SkillsManager;
 use codex_protocol::openai_models::ReasoningEffort;
@@ -70,24 +69,16 @@ async fn apply_role_returns_error_for_unknown_role() {
 
 #[tokio::test]
 async fn apply_explorer_role_sets_read_only_config_and_adds_session_flags_layer() {
-    let (_home, mut config) = test_config_with_cli_overrides(vec![
-        (
-            "sandbox_mode".to_string(),
-            TomlValue::String("workspace-write".to_string()),
-        ),
-        (
-            "include_apply_patch_tool".to_string(),
-            TomlValue::Boolean(true),
-        ),
-    ])
+    let (_home, mut config) = test_config_with_cli_overrides(vec![(
+        "sandbox_mode".to_string(),
+        TomlValue::String("workspace-write".to_string()),
+    )])
     .await;
     let before_layers = session_flags_layer_count(&config);
     assert!(matches!(
         config.permissions.sandbox_policy.get(),
         SandboxPolicy::WorkspaceWrite { .. }
     ));
-    assert!(config.features.enabled(Feature::ApplyPatchFreeform));
-    assert!(config.include_apply_patch_tool);
 
     apply_role_to_config(&mut config, Some("explorer"))
         .await
@@ -96,14 +87,6 @@ async fn apply_explorer_role_sets_read_only_config_and_adds_session_flags_layer(
     assert_eq!(
         config.permissions.sandbox_policy.get(),
         &SandboxPolicy::new_read_only_policy()
-    );
-    assert!(!config.features.enabled(Feature::ApplyPatchFreeform));
-    assert!(!config.include_apply_patch_tool);
-    assert!(
-        config
-            .developer_instructions
-            .as_deref()
-            .is_some_and(|instructions| instructions.contains("You must remain read-only"))
     );
     assert_eq!(session_flags_layer_count(&config), before_layers + 1);
 }
@@ -700,6 +683,10 @@ fn spawn_tool_spec_marks_role_locked_reasoning_effort_only() {
 
 #[test]
 fn built_in_config_file_contents_resolves_explorer_only() {
+    let explorer =
+        built_in::config_file_contents(Path::new("explorer.toml")).expect("explorer config");
+    assert!(explorer.contains("sandbox_mode = \"read-only\""));
+    assert!(explorer.contains("include_apply_patch_tool = false"));
     assert_eq!(
         built_in::config_file_contents(Path::new("missing.toml")),
         None
