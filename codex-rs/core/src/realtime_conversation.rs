@@ -24,7 +24,6 @@ use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
-use codex_protocol::protocol::ConversationAudioTruncateParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
@@ -83,6 +82,12 @@ enum HandoffOutput {
 #[derive(Debug, PartialEq, Eq)]
 struct OutputAudioState {
     item_id: String,
+    audio_end_ms: u32,
+}
+
+struct OutputAudioTruncate {
+    item_id: String,
+    content_index: u32,
     audio_end_ms: u32,
 }
 
@@ -259,32 +264,6 @@ impl RealtimeConversationManager {
                 "conversation is not running".to_string(),
             )),
         }
-    }
-
-    pub(crate) async fn audio_truncate(
-        &self,
-        params: ConversationAudioTruncateParams,
-    ) -> CodexResult<()> {
-        let writer = {
-            let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.writer.clone())
-        };
-
-        let Some(writer) = writer else {
-            return Err(CodexErr::InvalidRequest(
-                "conversation is not running".to_string(),
-            ));
-        };
-
-        writer
-            .send_conversation_item_truncate(
-                params.item_id,
-                params.content_index,
-                params.audio_end_ms,
-            )
-            .await
-            .map_err(map_api_error)?;
-        Ok(())
     }
 
     pub(crate) async fn text_in(&self, text: String) -> CodexResult<()> {
@@ -495,17 +474,6 @@ pub(crate) async fn handle_audio(
 ) {
     if let Err(err) = sess.conversation.audio_in(params.frame).await {
         error!("failed to append realtime audio: {err}");
-        send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
-    }
-}
-
-pub(crate) async fn handle_audio_truncate(
-    sess: &Arc<Session>,
-    sub_id: String,
-    params: ConversationAudioTruncateParams,
-) {
-    if let Err(err) = sess.conversation.audio_truncate(params).await {
-        error!("failed to truncate realtime audio: {err}");
         send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
     }
 }
@@ -882,7 +850,7 @@ fn decoded_samples_per_channel(frame: &RealtimeAudioFrame) -> Option<u32> {
 fn output_audio_truncate_params(
     output_audio_state: &mut Option<OutputAudioState>,
     item_id: Option<&str>,
-) -> Option<ConversationAudioTruncateParams> {
+) -> Option<OutputAudioTruncate> {
     let state = output_audio_state.take()?;
     if let Some(item_id) = item_id
         && item_id != state.item_id
@@ -890,7 +858,7 @@ fn output_audio_truncate_params(
         return None;
     }
 
-    Some(ConversationAudioTruncateParams {
+    Some(OutputAudioTruncate {
         item_id: state.item_id,
         content_index: 0,
         audio_end_ms: state.audio_end_ms,

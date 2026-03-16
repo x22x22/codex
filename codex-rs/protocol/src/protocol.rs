@@ -191,13 +191,6 @@ pub struct ConversationAudioParams {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
-pub struct ConversationAudioTruncateParams {
-    pub item_id: String,
-    pub content_index: u32,
-    pub audio_end_ms: u32,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema, TS)]
 pub struct ConversationTextParams {
     pub text: String,
 }
@@ -220,9 +213,6 @@ pub enum Op {
 
     /// Send audio input to the running realtime conversation stream.
     RealtimeConversationAudio(ConversationAudioParams),
-
-    /// Truncate output audio for the running realtime conversation stream.
-    RealtimeConversationAudioTruncate(ConversationAudioTruncateParams),
 
     /// Send text input to the running realtime conversation stream.
     RealtimeConversationText(ConversationTextParams),
@@ -517,7 +507,6 @@ impl Op {
             Self::CleanBackgroundTerminals => "clean_background_terminals",
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
-            Self::RealtimeConversationAudioTruncate(_) => "realtime_conversation_audio_truncate",
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
             Self::RealtimeConversationClose => "realtime_conversation_close",
             Self::UserInput { .. } => "user_input",
@@ -4086,11 +4075,6 @@ mod tests {
                 item_id: None,
             },
         });
-        let truncate = Op::RealtimeConversationAudioTruncate(ConversationAudioTruncateParams {
-            item_id: "item_1".to_string(),
-            content_index: 0,
-            audio_end_ms: 123,
-        });
         let start = Op::RealtimeConversationStart(ConversationStartParams {
             prompt: "be helpful".to_string(),
             session_id: Some("conv_1".to_string()),
@@ -4118,15 +4102,6 @@ mod tests {
                     "num_channels": 1,
                     "samples_per_channel": 480
                 }
-            })
-        );
-        assert_eq!(
-            serde_json::to_value(&truncate).unwrap(),
-            json!({
-                "type": "realtime_conversation_audio_truncate",
-                "item_id": "item_1",
-                "content_index": 0,
-                "audio_end_ms": 123
             })
         );
         assert_eq!(

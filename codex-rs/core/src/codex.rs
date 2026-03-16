@@ -37,7 +37,6 @@ use crate::parse_command::parse_command;
 use crate::parse_turn_item;
 use crate::realtime_conversation::RealtimeConversationManager;
 use crate::realtime_conversation::handle_audio as handle_realtime_conversation_audio;
-use crate::realtime_conversation::handle_audio_truncate as handle_realtime_conversation_audio_truncate;
 use crate::realtime_conversation::handle_close as handle_realtime_conversation_close;
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
@@ -4152,11 +4151,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handle_realtime_conversation_audio(&sess, sub.id.clone(), params).await;
                     false
                 }
-                Op::RealtimeConversationAudioTruncate(params) => {
-                    handle_realtime_conversation_audio_truncate(&sess, sub.id.clone(), params)
-                        .await;
-                    false
-                }
                 Op::RealtimeConversationText(params) => {
                     handle_realtime_conversation_text(&sess, sub.id.clone(), params).await;
                     false
@@ -4358,7 +4352,7 @@ fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
     let op_name = sub.op.kind();
     let span_name = format!("op.dispatch.{op_name}");
     let dispatch_span = match &sub.op {
-        Op::RealtimeConversationAudio(_) | Op::RealtimeConversationAudioTruncate(_) => {
+        Op::RealtimeConversationAudio(_) => {
             debug_span!(
                 "submission_dispatch",
                 otel.name = span_name.as_str(),
