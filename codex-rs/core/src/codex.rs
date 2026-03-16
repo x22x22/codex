@@ -694,20 +694,6 @@ impl Codex {
         self.session.steer_input(input, expected_turn_id).await
     }
 
-    /// Use sparingly: wrapper for integration tests and callers that only hold a
-    /// `Codex` handle.
-    ///
-    /// This keeps `Session` internals encapsulated while still allowing queued
-    /// response-input behavior to be exercised from public APIs.
-    /// Returns the input unchanged when there is no active turn.
-    #[doc(hidden)]
-    pub async fn inject_response_items(
-        &self,
-        input: Vec<ResponseInputItem>,
-    ) -> Result<(), Vec<ResponseInputItem>> {
-        self.session.inject_response_items(input).await
-    }
-
     pub(crate) async fn set_app_server_client_name(
         &self,
         app_server_client_name: Option<String>,
