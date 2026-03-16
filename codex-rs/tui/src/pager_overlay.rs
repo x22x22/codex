@@ -111,6 +111,7 @@ const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
 const KEY_TAB: KeyBinding = key_hint::plain(KeyCode::Tab);
 const KEY_A: KeyBinding = key_hint::plain(KeyCode::Char('a'));
 const KEY_E: KeyBinding = key_hint::plain(KeyCode::Char('e'));
+const MAX_ANCHOR_LINES: usize = 2;
 
 // Common pager navigation hints rendered on the first line
 const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
@@ -131,7 +132,9 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&[KeyBinding], &str)
             if i > 0 {
                 spans.push("/".into());
             }
+            spans.push("<".into());
             spans.push(Span::from(key));
+            spans.push(">".into());
         }
         spans.push(" ".into());
         spans.push(Span::from(desc.to_string()));
@@ -534,14 +537,14 @@ pub(crate) struct TranscriptOverlay {
     selected_anchor: Option<usize>,
     anchors_visible: bool,
     expand_all: bool,
-    focus: TranscriptOverlayFocus,
+    mode: TranscriptBrowseMode,
     is_done: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum TranscriptOverlayFocus {
-    Transcript,
-    Anchors,
+enum TranscriptBrowseMode {
+    FreeForm,
+    ByPrompt,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -573,10 +576,10 @@ impl TranscriptOverlay {
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         let anchors = Self::build_anchors(&transcript_cells);
         let selected_anchor = anchors.len().checked_sub(1);
-        let focus = if anchors.is_empty() {
-            TranscriptOverlayFocus::Transcript
+        let mode = if anchors.is_empty() {
+            TranscriptBrowseMode::FreeForm
         } else {
-            TranscriptOverlayFocus::Anchors
+            TranscriptBrowseMode::ByPrompt
         };
         let mut overlay = Self {
             view: PagerView::new(
@@ -598,7 +601,7 @@ impl TranscriptOverlay {
             selected_anchor,
             anchors_visible: true,
             expand_all: false,
-            focus,
+            mode,
             is_done: false,
         };
         if let Some(anchor_idx) = overlay.selected_anchor {
@@ -1051,11 +1054,25 @@ impl TranscriptOverlay {
 
         let mut pairs: Vec<(&[KeyBinding], &str)> = vec![
             (&[KEY_Q], "to quit"),
-            (&[KEY_A], "anchors"),
+            (
+                &[KEY_A],
+                if self.anchors_visible {
+                    "hide side panel"
+                } else {
+                    "show side panel"
+                },
+            ),
             (&[KEY_E], if self.expand_all { "collapse all" } else { "expand all" }),
         ];
         if self.anchors_visible {
-            pairs.push((&[KEY_TAB], "focus"));
+            pairs.push((
+                &[KEY_TAB],
+                if self.mode == TranscriptBrowseMode::ByPrompt {
+                    "main panel"
+                } else {
+                    "side panel"
+                },
+            ));
         }
         if self.highlight_cell.is_some() {
             pairs.push((&[KEY_ESC, KEY_LEFT], "to edit prev"));
@@ -1068,13 +1085,13 @@ impl TranscriptOverlay {
     }
 
     fn render_anchor_shell(&self, area: Rect, buf: &mut Buffer) {
-        let border_style = if self.focus == TranscriptOverlayFocus::Anchors {
+        let border_style = if self.mode == TranscriptBrowseMode::ByPrompt {
             Style::default().cyan().bold()
         } else {
             Style::default().dim()
         };
         let block = Block::default()
-            .title("Anchors")
+            .title("User Prompts")
             .borders(Borders::ALL)
             .border_style(border_style);
         let inner = block.inner(area);
@@ -1084,44 +1101,98 @@ impl TranscriptOverlay {
             return;
         }
 
-        let anchor_lines = if self.anchors.is_empty() {
-            vec![
+        if self.anchors.is_empty() {
+            Paragraph::new(Text::from(vec![
                 Line::from("No user prompts yet."),
                 Line::from(""),
                 Line::from("Add another turn"),
                 Line::from("and reopen Ctrl+T."),
-            ]
-        } else {
-            let visible_rows = inner.height.max(1) as usize;
-            let selected = self
-                .selected_anchor
-                .unwrap_or_else(|| self.anchors.len().saturating_sub(1));
-            let start = selected
-                .saturating_sub(visible_rows / 2)
-                .min(self.anchors.len().saturating_sub(visible_rows));
-            self.anchors
-                .iter()
-                .enumerate()
-                .skip(start)
-                .take(visible_rows)
-                .map(|(idx, anchor)| {
-                    let is_selected = Some(idx) == self.selected_anchor;
-                    let prefix = if is_selected { "› " } else { "  " };
-                    let style = if is_selected {
-                        Style::default().cyan().bold()
-                    } else {
-                        Style::default()
-                    };
-                    Line::from(vec![
-                        Span::styled(prefix.to_string(), style),
-                        Span::styled(anchor.label.clone(), style),
-                    ])
-                })
-                .collect()
-        };
-        Paragraph::new(Text::from(anchor_lines))
-            .wrap(Wrap { trim: false })
+            ]))
             .render(inner, buf);
+            return;
+        }
+
+        let available_height = inner.height.max(1) as usize;
+        let selected = self
+            .selected_anchor
+            .unwrap_or_else(|| self.anchors.len().saturating_sub(1));
+        let heights: Vec<usize> = self
+            .anchors
+            .iter()
+            .enumerate()
+            .map(|(idx, anchor)| {
+                self.anchor_paragraph(
+                    anchor,
+                    inner.width,
+                    Some(idx) == self.selected_anchor,
+                )
+                .line_count(inner.width)
+                .min(MAX_ANCHOR_LINES)
+            })
+            .collect();
+
+        let mut start = selected;
+        let mut used_before = 0usize;
+        let before_budget = available_height / 2;
+        while start > 0 {
+            let next_height = heights[start - 1];
+            if used_before + next_height > before_budget {
+                break;
+            }
+            used_before += next_height;
+            start -= 1;
+        }
+
+        let mut end = start;
+        let mut used_height = 0usize;
+        while end < self.anchors.len() && used_height + heights[end] <= available_height {
+            used_height += heights[end];
+            end += 1;
+        }
+        while end < self.anchors.len() && start < selected {
+            used_height = used_height.saturating_sub(heights[start]);
+            start += 1;
+            while end < self.anchors.len() && used_height + heights[end] <= available_height {
+                used_height += heights[end];
+                end += 1;
+            }
+        }
+
+        let mut y = inner.y;
+        for idx in start..end {
+            let height = heights[idx] as u16;
+            let row_area = Rect::new(inner.x, y, inner.width, height);
+            self.anchor_paragraph(&self.anchors[idx], inner.width, Some(idx) == self.selected_anchor)
+                .render(row_area, buf);
+            y = y.saturating_add(height);
+            if y >= inner.bottom() {
+                break;
+            }
+        }
+    }
+
+    fn anchor_paragraph(
+        &self,
+        anchor: &TranscriptAnchor,
+        width: u16,
+        is_selected: bool,
+    ) -> Paragraph<'static> {
+        let prefix = if is_selected { "› " } else { "  " };
+        let label_budget = width
+            .saturating_mul(MAX_ANCHOR_LINES as u16)
+            .saturating_sub(prefix.len() as u16)
+            .max(8) as usize;
+        let style = if is_selected {
+            Style::default().cyan().bold()
+        } else {
+            Style::default()
+        };
+        Paragraph::new(format!(
+            "{prefix}{}",
+            truncate_preview_text(&anchor.label, label_budget)
+        ))
+        .style(style)
+        .wrap(Wrap { trim: false })
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
@@ -1155,16 +1226,21 @@ impl TranscriptOverlay {
                 e if KEY_A.is_press(e) => {
                     self.anchors_visible = !self.anchors_visible;
                     if !self.anchors_visible {
-                        self.focus = TranscriptOverlayFocus::Transcript;
+                        self.mode = TranscriptBrowseMode::FreeForm;
                     }
                     tui.frame_requester()
                         .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
                     Ok(())
                 }
                 e if KEY_TAB.is_press(e) && self.anchors_visible => {
-                    self.focus = match self.focus {
-                        TranscriptOverlayFocus::Transcript => TranscriptOverlayFocus::Anchors,
-                        TranscriptOverlayFocus::Anchors => TranscriptOverlayFocus::Transcript,
+                    self.mode = match self.mode {
+                        TranscriptBrowseMode::FreeForm => {
+                            if let Some(anchor_idx) = self.selected_anchor {
+                                self.select_anchor(anchor_idx);
+                            }
+                            TranscriptBrowseMode::ByPrompt
+                        }
+                        TranscriptBrowseMode::ByPrompt => TranscriptBrowseMode::FreeForm,
                     };
                     tui.frame_requester()
                         .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
@@ -1177,9 +1253,9 @@ impl TranscriptOverlay {
                         .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
                     Ok(())
                 }
-                other => match self.focus {
-                    TranscriptOverlayFocus::Transcript => self.view.handle_key_event(tui, other),
-                    TranscriptOverlayFocus::Anchors => self.handle_anchor_key_event(tui, other),
+                other => match self.mode {
+                    TranscriptBrowseMode::FreeForm => self.view.handle_key_event(tui, other),
+                    TranscriptBrowseMode::ByPrompt => self.handle_anchor_key_event(tui, other),
                 },
             },
             TuiEvent::Draw => {
