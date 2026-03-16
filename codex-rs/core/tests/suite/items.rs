@@ -344,6 +344,13 @@ async fn user_message_type_prompt_steering_metadata_is_emitted_when_feature_enab
             .and_then(Value::as_str),
         Some("prompt_steering")
     );
+    assert_eq!(
+        steered_message
+            .get("metadata")
+            .and_then(|metadata| metadata.get("sandbox_policy"))
+            .and_then(Value::as_str),
+        Some("full_access")
+    );
 
     Ok(())
 }
@@ -475,6 +482,13 @@ async fn user_message_type_prompt_queued_metadata_is_emitted_when_feature_enable
             .and_then(|metadata| metadata.get("user_message_type"))
             .and_then(Value::as_str),
         Some("prompt_queued")
+    );
+    assert_eq!(
+        queued_message
+            .get("metadata")
+            .and_then(|metadata| metadata.get("sandbox_policy"))
+            .and_then(Value::as_str),
+        Some("full_access")
     );
 
     Ok(())

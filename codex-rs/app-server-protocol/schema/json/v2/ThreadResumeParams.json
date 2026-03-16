@@ -939,6 +939,16 @@
             }
           ]
         },
+        "sandbox_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxPolicyMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "user_message_type": {
           "anyOf": [
             {
@@ -1070,6 +1080,14 @@
         "read-only",
         "workspace-write",
         "danger-full-access"
+      ],
+      "type": "string"
+    },
+    "SandboxPolicyMetadata": {
+      "enum": [
+        "read_only",
+        "sandbox",
+        "full_access"
       ],
       "type": "string"
     },

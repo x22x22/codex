@@ -10661,6 +10661,16 @@
               }
             ]
           },
+          "sandbox_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/SandboxPolicyMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "user_message_type": {
             "anyOf": [
               {
@@ -11058,6 +11068,14 @@
             "type": "object"
           }
         ]
+      },
+      "SandboxPolicyMetadata": {
+        "enum": [
+          "read_only",
+          "sandbox",
+          "full_access"
+        ],
+        "type": "string"
       },
       "SandboxWorkspaceWrite": {
         "properties": {

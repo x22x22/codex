@@ -873,6 +873,16 @@
             }
           ]
         },
+        "sandbox_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxPolicyMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "user_message_type": {
           "anyOf": [
             {
@@ -996,6 +1006,14 @@
         "approved_with_amendment",
         "approved_with_network_policy_allow",
         "denied_with_network_policy_deny"
+      ],
+      "type": "string"
+    },
+    "SandboxPolicyMetadata": {
+      "enum": [
+        "read_only",
+        "sandbox",
+        "full_access"
       ],
       "type": "string"
     },

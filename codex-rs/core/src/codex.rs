@@ -323,6 +323,7 @@ use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::models::ReviewDecisionMetadata;
+use codex_protocol::models::SandboxPolicyMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -1009,6 +1010,31 @@ fn stamp_user_message_type_on_input_item(item: &mut ResponseInputItem, kind: Use
     }
     let mut metadata_value = metadata.take().unwrap_or_default();
     metadata_value.user_message_type = Some(kind);
+    *metadata = Some(metadata_value);
+}
+
+fn sandbox_policy_to_metadata(policy: &SandboxPolicy) -> SandboxPolicyMetadata {
+    match policy {
+        SandboxPolicy::ReadOnly { .. } => SandboxPolicyMetadata::ReadOnly,
+        SandboxPolicy::WorkspaceWrite { .. } | SandboxPolicy::ExternalSandbox { .. } => {
+            SandboxPolicyMetadata::Sandbox
+        }
+        SandboxPolicy::DangerFullAccess => SandboxPolicyMetadata::FullAccess,
+    }
+}
+
+fn stamp_sandbox_policy_on_input_item(
+    item: &mut ResponseInputItem,
+    sandbox_policy: SandboxPolicyMetadata,
+) {
+    let ResponseInputItem::Message { role, metadata, .. } = item else {
+        return;
+    };
+    if role != "user" {
+        return;
+    }
+    let mut metadata_value = metadata.take().unwrap_or_default();
+    metadata_value.sandbox_policy = Some(sandbox_policy);
     *metadata = Some(metadata_value);
 }
 
@@ -3383,7 +3409,7 @@ impl Session {
 
     async fn stamp_tool_approval_metadata(
         &self,
-        _turn_context: &TurnContext,
+        turn_context: &TurnContext,
         response_item: ResponseItem,
     ) -> ResponseItem {
         if !self.enabled(Feature::ItemMetadata) {
@@ -3410,6 +3436,9 @@ impl Session {
             | ResponseItem::CustomToolCall { metadata, .. } => metadata.clone().unwrap_or_default(),
             _ => return response_item,
         };
+        metadata.sandbox_policy = Some(sandbox_policy_to_metadata(
+            turn_context.sandbox_policy.get(),
+        ));
 
         match outcome {
             Some(review_decision) => {
@@ -3421,7 +3450,7 @@ impl Session {
                 metadata.review_decision = None;
             }
             None => {
-                return response_item;
+                return stamp_tool_metadata_on_response_item(response_item, metadata);
             }
         }
 
@@ -3944,13 +3973,18 @@ impl Session {
         response_item: ResponseItem,
         user_message_type: Option<UserMessageType>,
     ) {
-        let user_message_type = if self.enabled(Feature::ItemMetadata) {
-            user_message_type
+        let (user_message_type, sandbox_policy) = if self.enabled(Feature::ItemMetadata) {
+            (
+                user_message_type,
+                Some(sandbox_policy_to_metadata(
+                    turn_context.sandbox_policy.get(),
+                )),
+            )
         } else {
-            None
+            (None, None)
         };
 
-        let response_item = match (response_item, user_message_type.clone()) {
+        let response_item = match (response_item, user_message_type.clone(), sandbox_policy) {
             (
                 ResponseItem::Message {
                     id,
@@ -3960,10 +3994,12 @@ impl Session {
                     end_turn,
                     phase,
                 },
-                Some(kind),
+                user_message_type,
+                sandbox_policy,
             ) if role == "user" => {
                 let mut metadata = metadata.unwrap_or_default();
-                metadata.user_message_type = Some(kind);
+                metadata.user_message_type = user_message_type;
+                metadata.sandbox_policy = sandbox_policy;
                 ResponseItem::Message {
                     id,
                     role,
@@ -3973,7 +4009,7 @@ impl Session {
                     phase,
                 }
             }
-            (response_item, _) => response_item,
+            (response_item, _, _) => response_item,
         };
 
         // Persist the user message to history, but emit the turn item from `UserInput` so
@@ -4061,7 +4097,7 @@ impl Session {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
-        let Some((active_turn_id, _)) = active_turn.tasks.first() else {
+        let Some((active_turn_id, active_task)) = active_turn.tasks.first() else {
             return Err(SteerInputError::NoActiveTurn(input));
         };
 
@@ -4070,18 +4106,22 @@ impl Session {
         {
             return Err(SteerInputError::ExpectedTurnMismatch {
                 expected: expected_turn_id.to_string(),
-                actual: active_turn_id.clone(),
+                actual: active_turn_id.to_string(),
             });
         }
 
         let mut input_item: ResponseInputItem = input.into();
         if self.enabled(Feature::ItemMetadata) {
             stamp_user_message_type_on_input_item(&mut input_item, UserMessageType::PromptSteering);
+            stamp_sandbox_policy_on_input_item(
+                &mut input_item,
+                sandbox_policy_to_metadata(active_task.turn_context.sandbox_policy.get()),
+            );
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
         turn_state.push_pending_input(input_item, Some(UserMessageType::PromptSteering));
-        Ok(active_turn_id.clone())
+        Ok(active_turn_id.to_string())
     }
 
     /// Returns the input if there was no task running to inject into
@@ -4092,6 +4132,9 @@ impl Session {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
+                let sandbox_policy = at.tasks.first().map(|(_, turn_context)| {
+                    sandbox_policy_to_metadata(turn_context.turn_context.sandbox_policy.get())
+                });
                 let mut ts = at.turn_state.lock().await;
                 for mut item in input {
                     let user_message_type = match &item {
@@ -4102,6 +4145,9 @@ impl Session {
                         && let Some(kind) = user_message_type.clone()
                     {
                         stamp_user_message_type_on_input_item(&mut item, kind);
+                        if let Some(sandbox_policy) = sandbox_policy.clone() {
+                            stamp_sandbox_policy_on_input_item(&mut item, sandbox_policy);
+                        }
                     }
                     ts.push_pending_input(item, user_message_type);
                 }
@@ -5887,6 +5933,10 @@ pub(crate) async fn run_turn(
     let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
     if sess.enabled(Feature::ItemMetadata) {
         stamp_user_message_type_on_input_item(&mut initial_input_for_turn, UserMessageType::Prompt);
+        stamp_sandbox_policy_on_input_item(
+            &mut initial_input_for_turn,
+            sandbox_policy_to_metadata(turn_context.sandbox_policy.get()),
+        );
     }
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(

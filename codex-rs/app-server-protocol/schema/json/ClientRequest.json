@@ -2032,6 +2032,16 @@
             }
           ]
         },
+        "sandbox_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SandboxPolicyMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "user_message_type": {
           "anyOf": [
             {
@@ -2409,6 +2419,14 @@
           "type": "object"
         }
       ]
+    },
+    "SandboxPolicyMetadata": {
+      "enum": [
+        "read_only",
+        "sandbox",
+        "full_access"
+      ],
+      "type": "string"
     },
     "ServiceTier": {
       "enum": [

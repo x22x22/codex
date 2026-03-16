@@ -3940,9 +3940,26 @@ fn review_decision_metadata_mapping_is_stable() {
     );
 }
 
+#[test]
+fn sandbox_policy_metadata_mapping_is_stable() {
+    assert_eq!(
+        sandbox_policy_to_metadata(&SandboxPolicy::DangerFullAccess),
+        codex_protocol::models::SandboxPolicyMetadata::FullAccess
+    );
+    assert_eq!(
+        sandbox_policy_to_metadata(&SandboxPolicy::new_read_only_policy()),
+        codex_protocol::models::SandboxPolicyMetadata::ReadOnly
+    );
+    assert_eq!(
+        sandbox_policy_to_metadata(&SandboxPolicy::new_workspace_write_policy()),
+        codex_protocol::models::SandboxPolicyMetadata::Sandbox
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enabled() {
     let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
@@ -3993,6 +4010,7 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
                 } if metadata.is_tool_call_escalated == Some(true)
                     && metadata.review_decision
                         == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
+                    && metadata.sandbox_policy == Some(expected_sandbox_policy)
             )
     ));
 }
@@ -4000,6 +4018,7 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
     let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
@@ -4047,6 +4066,7 @@ async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
                     ..
                 } if metadata.is_tool_call_escalated == Some(false)
                     && metadata.review_decision.is_none()
+                    && metadata.sandbox_policy == Some(expected_sandbox_policy)
             )
     ));
 }

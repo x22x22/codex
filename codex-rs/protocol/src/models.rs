@@ -275,11 +275,23 @@ pub enum ReviewDecisionMetadata {
     DeniedWithNetworkPolicyDeny,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SandboxPolicyMetadata {
+    ReadOnly,
+    Sandbox,
+    FullAccess,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, JsonSchema, TS)]
 pub struct ResponseItemMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub user_message_type: Option<UserMessageType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sandbox_policy: Option<SandboxPolicyMetadata>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub is_tool_call_escalated: Option<bool>,
