@@ -136,7 +136,7 @@ async fn user_message_type_metadata_is_emitted_when_feature_enabled() -> anyhow:
         .with_config(|config| {
             config
                 .features
-                .enable(Feature::UserMessageTypeMetadata)
+                .enable(Feature::ItemMetadata)
                 .expect("feature flag should be enabled for this test");
         })
         .build(&server)
@@ -259,7 +259,7 @@ async fn user_message_type_prompt_steering_metadata_is_emitted_when_feature_enab
         .with_config(|config| {
             config
                 .features
-                .enable(Feature::UserMessageTypeMetadata)
+                .enable(Feature::ItemMetadata)
                 .expect("feature flag should be enabled for this test");
         })
         .build(&server)
@@ -389,7 +389,7 @@ async fn user_message_type_prompt_queued_metadata_is_emitted_when_feature_enable
         .with_config(|config| {
             config
                 .features
-                .enable(Feature::UserMessageTypeMetadata)
+                .enable(Feature::ItemMetadata)
                 .expect("feature flag should be enabled for this test");
         })
         .build(&server)
