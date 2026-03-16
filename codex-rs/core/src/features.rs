@@ -124,6 +124,8 @@ pub enum Feature {
     CodexGitCommit,
     /// Enable runtime metrics snapshots via a manual reader.
     RuntimeMetrics,
+    /// Enable additive enterprise audit OTEL log fan-out.
+    EnterpriseAudit,
     /// Persist rollout metadata to a local SQLite database.
     Sqlite,
     /// Enable startup memory extraction and file-backed memory consolidation.
@@ -581,6 +583,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::EnterpriseAudit,
+        key: "enterprise_audit",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Sqlite,
         key: "sqlite",
         stage: Stage::Removed,
@@ -989,6 +997,16 @@ mod tests {
     fn image_generation_is_under_development() {
         assert_eq!(Feature::ImageGeneration.stage(), Stage::UnderDevelopment);
         assert_eq!(Feature::ImageGeneration.default_enabled(), false);
+    }
+
+    #[test]
+    fn enterprise_audit_is_under_development() {
+        assert_eq!(Feature::EnterpriseAudit.stage(), Stage::UnderDevelopment);
+        assert_eq!(Feature::EnterpriseAudit.default_enabled(), false);
+        assert_eq!(
+            feature_for_key("enterprise_audit"),
+            Some(Feature::EnterpriseAudit)
+        );
     }
 
     #[test]

@@ -3670,6 +3670,7 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
             crate::config_loader::WebSearchModeRequirement::Cached,
         ]),
         feature_requirements: None,
+        enterprise_audit_enabled: None,
         mcp_servers: None,
         rules: None,
         enforce_residency: None,
@@ -4268,6 +4269,7 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         allowed_sandbox_modes: Some(vec![crate::config_loader::SandboxModeRequirement::ReadOnly]),
         allowed_web_search_modes: None,
         feature_requirements: None,
+        enterprise_audit_enabled: None,
         mcp_servers: None,
         rules: None,
         enforce_residency: None,
@@ -4287,6 +4289,22 @@ async fn explicit_sandbox_mode_falls_back_when_disallowed_by_requirements() -> s
         SandboxPolicy::new_read_only_policy()
     );
     Ok(())
+}
+
+#[test]
+fn enterprise_audit_enabled_reads_managed_requirement_flag() {
+    let mut config = crate::config::test_config();
+    config.config_layer_stack = crate::config_loader::ConfigLayerStack::new(
+        Vec::new(),
+        Default::default(),
+        crate::config_loader::ConfigRequirementsToml {
+            enterprise_audit_enabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .expect("config layer stack");
+
+    assert!(config.enterprise_audit_enabled());
 }
 
 #[tokio::test]

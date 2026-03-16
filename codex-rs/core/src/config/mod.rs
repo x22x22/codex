@@ -1821,6 +1821,7 @@ impl Config {
             sandbox_policy: mut constrained_sandbox_policy,
             web_search_mode: mut constrained_web_search_mode,
             feature_requirements,
+            enterprise_audit_enabled: _,
             mcp_servers,
             exec_policy: _,
             enforce_residency,
@@ -2680,6 +2681,13 @@ impl Config {
             .requirements_toml()
             .network
             .is_some()
+    }
+
+    pub fn enterprise_audit_enabled(&self) -> bool {
+        self.config_layer_stack
+            .requirements_toml()
+            .enterprise_audit_enabled
+            .unwrap_or(false)
     }
 
     pub fn bundled_skills_enabled(&self) -> bool {

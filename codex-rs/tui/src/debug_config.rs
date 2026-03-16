@@ -526,6 +526,7 @@ mod tests {
             allowed_sandbox_modes: Some(vec![SandboxModeRequirement::ReadOnly]),
             allowed_web_search_modes: Some(vec![WebSearchModeRequirement::Cached]),
             feature_requirements: None,
+            enterprise_audit_enabled: None,
             mcp_servers: Some(BTreeMap::from([(
                 "docs".to_string(),
                 McpServerRequirement {
@@ -652,6 +653,7 @@ approval_policy = "never"
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
             feature_requirements: None,
+            enterprise_audit_enabled: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,

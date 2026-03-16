@@ -80,6 +80,7 @@ pub struct ConfigRequirements {
     pub sandbox_policy: ConstrainedWithSource<SandboxPolicy>,
     pub web_search_mode: ConstrainedWithSource<WebSearchMode>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+    pub enterprise_audit_enabled: Option<Sourced<bool>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub exec_policy: Option<Sourced<RequirementsExecPolicy>>,
     pub enforce_residency: ConstrainedWithSource<Option<ResidencyRequirement>>,
@@ -103,6 +104,7 @@ impl Default for ConfigRequirements {
                 None,
             ),
             feature_requirements: None,
+            enterprise_audit_enabled: None,
             mcp_servers: None,
             exec_policy: None,
             enforce_residency: ConstrainedWithSource::new(Constrained::allow_any(None), None),
@@ -253,6 +255,7 @@ pub struct ConfigRequirementsToml {
     pub allowed_web_search_modes: Option<Vec<WebSearchModeRequirement>>,
     #[serde(rename = "features", alias = "feature_requirements")]
     pub feature_requirements: Option<FeatureRequirementsToml>,
+    pub enterprise_audit_enabled: Option<bool>,
     pub mcp_servers: Option<BTreeMap<String, McpServerRequirement>>,
     pub rules: Option<RequirementsExecPolicyToml>,
     pub enforce_residency: Option<ResidencyRequirement>,
@@ -288,6 +291,7 @@ pub struct ConfigRequirementsWithSources {
     pub allowed_sandbox_modes: Option<Sourced<Vec<SandboxModeRequirement>>>,
     pub allowed_web_search_modes: Option<Sourced<Vec<WebSearchModeRequirement>>>,
     pub feature_requirements: Option<Sourced<FeatureRequirementsToml>>,
+    pub enterprise_audit_enabled: Option<Sourced<bool>>,
     pub mcp_servers: Option<Sourced<BTreeMap<String, McpServerRequirement>>>,
     pub rules: Option<Sourced<RequirementsExecPolicyToml>>,
     pub enforce_residency: Option<Sourced<ResidencyRequirement>>,
@@ -324,6 +328,7 @@ impl ConfigRequirementsWithSources {
                 allowed_sandbox_modes,
                 allowed_web_search_modes,
                 feature_requirements,
+                enterprise_audit_enabled,
                 mcp_servers,
                 rules,
                 enforce_residency,
@@ -338,6 +343,7 @@ impl ConfigRequirementsWithSources {
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
+            enterprise_audit_enabled,
             mcp_servers,
             rules,
             enforce_residency,
@@ -348,6 +354,7 @@ impl ConfigRequirementsWithSources {
             allowed_sandbox_modes: allowed_sandbox_modes.map(|sourced| sourced.value),
             allowed_web_search_modes: allowed_web_search_modes.map(|sourced| sourced.value),
             feature_requirements: feature_requirements.map(|sourced| sourced.value),
+            enterprise_audit_enabled: enterprise_audit_enabled.map(|sourced| sourced.value),
             mcp_servers: mcp_servers.map(|sourced| sourced.value),
             rules: rules.map(|sourced| sourced.value),
             enforce_residency: enforce_residency.map(|sourced| sourced.value),
@@ -398,6 +405,7 @@ impl ConfigRequirementsToml {
                 .feature_requirements
                 .as_ref()
                 .is_none_or(FeatureRequirementsToml::is_empty)
+            && self.enterprise_audit_enabled.is_none()
             && self.mcp_servers.is_none()
             && self.rules.is_none()
             && self.enforce_residency.is_none()
@@ -414,6 +422,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
+            enterprise_audit_enabled,
             mcp_servers,
             rules,
             enforce_residency,
@@ -585,6 +594,7 @@ impl TryFrom<ConfigRequirementsWithSources> for ConfigRequirements {
             sandbox_policy,
             web_search_mode,
             feature_requirements,
+            enterprise_audit_enabled,
             mcp_servers,
             exec_policy,
             enforce_residency,
@@ -621,6 +631,7 @@ mod tests {
             allowed_sandbox_modes,
             allowed_web_search_modes,
             feature_requirements,
+            enterprise_audit_enabled,
             mcp_servers,
             rules,
             enforce_residency,
@@ -634,6 +645,8 @@ mod tests {
             allowed_web_search_modes: allowed_web_search_modes
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             feature_requirements: feature_requirements
+                .map(|value| Sourced::new(value, RequirementSource::Unknown)),
+            enterprise_audit_enabled: enterprise_audit_enabled
                 .map(|value| Sourced::new(value, RequirementSource::Unknown)),
             mcp_servers: mcp_servers.map(|value| Sourced::new(value, RequirementSource::Unknown)),
             rules: rules.map(|value| Sourced::new(value, RequirementSource::Unknown)),
@@ -660,6 +673,7 @@ mod tests {
         let feature_requirements = FeatureRequirementsToml {
             entries: BTreeMap::from([("personality".to_string(), true)]),
         };
+        let enterprise_audit_enabled = true;
         let enforce_residency = ResidencyRequirement::Us;
         let enforce_source = source.clone();
 
@@ -670,6 +684,7 @@ mod tests {
             allowed_sandbox_modes: Some(allowed_sandbox_modes.clone()),
             allowed_web_search_modes: Some(allowed_web_search_modes.clone()),
             feature_requirements: Some(feature_requirements.clone()),
+            enterprise_audit_enabled: Some(enterprise_audit_enabled),
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(enforce_residency),
@@ -692,6 +707,10 @@ mod tests {
                 )),
                 feature_requirements: Some(Sourced::new(
                     feature_requirements,
+                    enforce_source.clone(),
+                )),
+                enterprise_audit_enabled: Some(Sourced::new(
+                    enterprise_audit_enabled,
                     enforce_source.clone(),
                 )),
                 mcp_servers: None,
@@ -727,6 +746,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
+                enterprise_audit_enabled: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
@@ -768,6 +788,7 @@ mod tests {
                 allowed_sandbox_modes: None,
                 allowed_web_search_modes: None,
                 feature_requirements: None,
+                enterprise_audit_enabled: None,
                 mcp_servers: None,
                 rules: None,
                 enforce_residency: None,
@@ -1116,6 +1137,32 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn deserialize_enterprise_audit_enabled() -> Result<()> {
+        let config: ConfigRequirementsToml = from_str(
+            r#"
+                enterprise_audit_enabled = true
+            "#,
+        )?;
+        let requirements: ConfigRequirements = with_unknown_source(config.clone()).try_into()?;
+
+        assert_eq!(
+            requirements.enterprise_audit_enabled,
+            Some(Sourced::new(true, RequirementSource::Unknown))
+        );
+        assert!(!config.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn default_requirements_leave_enterprise_audit_disabled() {
+        let requirements = ConfigRequirements::default();
+
+        assert_eq!(requirements.enterprise_audit_enabled, None);
+        assert!(ConfigRequirementsToml::default().is_empty());
     }
 
     #[test]

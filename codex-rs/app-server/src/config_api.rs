@@ -163,6 +163,7 @@ fn map_requirements_toml_to_api(requirements: ConfigRequirementsToml) -> ConfigR
         feature_requirements: requirements
             .feature_requirements
             .map(|requirements| requirements.entries),
+        enterprise_audit_enabled: requirements.enterprise_audit_enabled,
         enforce_residency: requirements
             .enforce_residency
             .map(map_residency_requirement_to_api),
@@ -269,6 +270,7 @@ mod tests {
                     ("personality".to_string(), true),
                 ]),
             }),
+            enterprise_audit_enabled: Some(true),
             mcp_servers: None,
             rules: None,
             enforce_residency: Some(CoreResidencyRequirement::Us),
@@ -311,6 +313,7 @@ mod tests {
                 ("personality".to_string(), true),
             ])),
         );
+        assert_eq!(mapped.enterprise_audit_enabled, Some(true));
         assert_eq!(
             mapped.enforce_residency,
             Some(codex_app_server_protocol::ResidencyRequirement::Us),
@@ -339,6 +342,7 @@ mod tests {
             allowed_sandbox_modes: None,
             allowed_web_search_modes: Some(Vec::new()),
             feature_requirements: None,
+            enterprise_audit_enabled: None,
             mcp_servers: None,
             rules: None,
             enforce_residency: None,

@@ -403,7 +403,31 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         }
     };
 
+    let enterprise_audit_otel = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        codex_core::otel_init::build_enterprise_audit_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            None,
+        )
+    })) {
+        Ok(Ok(otel)) => otel,
+        Ok(Err(e)) => {
+            eprintln!("Could not create enterprise audit otel exporter: {e}");
+            codex_core::otel_init::EnterpriseAuditOtelProviderInit::default()
+        }
+        Err(_) => {
+            eprintln!(
+                "Could not create enterprise audit otel exporter: panicked during initialization"
+            );
+            codex_core::otel_init::EnterpriseAuditOtelProviderInit::default()
+        }
+    };
+
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
+    let enterprise_audit_logger_layer = enterprise_audit_otel
+        .provider
+        .as_ref()
+        .and_then(|o| o.logger_layer());
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
@@ -411,7 +435,11 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .with(fmt_layer)
         .with(otel_tracing_layer)
         .with(otel_logger_layer)
+        .with(enterprise_audit_logger_layer)
         .try_init();
+    if let Some(warning) = enterprise_audit_otel.warning.as_deref() {
+        warn!("{warning}");
+    }
 
     let exec_span = exec_root_span();
     if let Some(context) = traceparent_context_from_env() {

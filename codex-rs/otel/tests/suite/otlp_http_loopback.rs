@@ -1,8 +1,10 @@
 use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;
+use codex_otel::config::OtelSettings;
 use codex_otel::metrics::MetricsClient;
 use codex_otel::metrics::MetricsConfig;
 use codex_otel::metrics::Result;
+use codex_otel::otel_provider::OtelProvider;
 use std::collections::HashMap;
 use std::io::Read as _;
 use std::io::Write as _;
@@ -12,9 +14,11 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use tracing_subscriber::prelude::*;
 
 struct CapturedRequest {
     path: String,
+    headers: HashMap<String, String>,
     content_type: Option<String>,
     body: Vec<u8>,
 }
@@ -147,6 +151,7 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
                     if let Ok((path, headers, body)) = result {
                         captured.push(CapturedRequest {
                             path,
+                            headers: headers.clone(),
                             content_type: headers.get("content-type").cloned(),
                             body,
                         });
@@ -207,6 +212,132 @@ fn otlp_http_exporter_sends_metrics_to_collector() -> Result<()> {
     assert!(
         body.contains("codex.turns"),
         "expected metric name not found; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
+
+    Ok(())
+}
+
+#[test]
+fn otlp_http_exporter_sends_logs_to_enterprise_audit_collector()
+-> std::result::Result<(), Box<dyn std::error::Error>> {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let addr = listener.local_addr().expect("local_addr");
+    listener.set_nonblocking(true).expect("set_nonblocking");
+
+    let (tx, rx) = mpsc::channel::<Vec<CapturedRequest>>();
+    let server = thread::spawn(move || {
+        let mut captured = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(3);
+
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let result = read_http_request(&mut stream);
+                    let _ = write_http_response(&mut stream, "202 Accepted");
+                    if let Ok((path, headers, body)) = result {
+                        captured.push(CapturedRequest {
+                            path,
+                            headers: headers.clone(),
+                            content_type: headers.get("content-type").cloned(),
+                            body,
+                        });
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+
+        let _ = tx.send(captured);
+    });
+
+    let provider = OtelProvider::from(&OtelSettings {
+        environment: "test".to_string(),
+        service_name: "codex-cli".to_string(),
+        service_version: env!("CARGO_PKG_VERSION").to_string(),
+        codex_home: std::env::temp_dir(),
+        exporter: OtelExporter::OtlpHttp {
+            endpoint: format!("http://{addr}/api/codex/audit"),
+            headers: HashMap::from([
+                ("Authorization".to_string(), "Bearer biscuit".to_string()),
+                ("ChatGPT-Account-Id".to_string(), "account-id".to_string()),
+            ]),
+            protocol: OtelHttpProtocol::Json,
+            tls: None,
+        },
+        trace_exporter: OtelExporter::None,
+        metrics_exporter: OtelExporter::None,
+        runtime_metrics: false,
+    })?
+    .expect("provider");
+
+    let subscriber = tracing_subscriber::registry().with(
+        provider
+            .logger_layer()
+            .expect("enterprise audit logger layer"),
+    );
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::callsite::rebuild_interest_cache();
+        tracing::event!(
+            target: "codex_otel.log_only",
+            tracing::Level::INFO,
+            event.name = "codex.enterprise_audit.test",
+            test_field = "test-value",
+            "enterprise audit event"
+        );
+    });
+    provider.shutdown();
+
+    server.join().expect("server join");
+    let captured = rx.recv_timeout(Duration::from_secs(1)).expect("captured");
+
+    let request = captured
+        .iter()
+        .find(|req| req.path == "/api/codex/audit")
+        .unwrap_or_else(|| {
+            let paths = captured
+                .iter()
+                .map(|req| req.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            panic!(
+                "missing /api/codex/audit request; got {}: {paths}",
+                captured.len()
+            );
+        });
+    assert_eq!(
+        request.headers.get("authorization").map(String::as_str),
+        Some("Bearer biscuit")
+    );
+    assert_eq!(
+        request
+            .headers
+            .get("chatgpt-account-id")
+            .map(String::as_str),
+        Some("account-id")
+    );
+
+    let content_type = request
+        .content_type
+        .as_deref()
+        .unwrap_or("<missing content-type>");
+    assert!(
+        content_type.starts_with("application/json"),
+        "unexpected content-type: {content_type}"
+    );
+
+    let body = String::from_utf8_lossy(&request.body);
+    assert!(
+        body.contains("codex.enterprise_audit.test"),
+        "expected event name not found; body prefix: {}",
+        &body.chars().take(2000).collect::<String>()
+    );
+    assert!(
+        body.contains("resourceLogs"),
+        "expected OTLP log payload not found; body prefix: {}",
         &body.chars().take(2000).collect::<String>()
     );
 

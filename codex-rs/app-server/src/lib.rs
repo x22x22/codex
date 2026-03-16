@@ -481,6 +481,18 @@ pub async fn run_main_with_transport(
             format!("error loading otel config: {e}"),
         )
     })?;
+    let (enterprise_audit_otel, enterprise_audit_init_warning) =
+        match codex_core::otel_init::build_enterprise_audit_provider(
+            &config,
+            env!("CARGO_PKG_VERSION"),
+            Some("codex-app-server"),
+        ) {
+            Ok(otel) => (otel, None),
+            Err(e) => (
+                codex_core::otel_init::EnterpriseAuditOtelProviderInit::default(),
+                Some(format!("error loading enterprise audit otel config: {e}")),
+            ),
+        };
 
     // Install a simple subscriber so `tracing` output is visible. Users can
     // control the log level with `RUST_LOG` and switch to JSON logs with
@@ -512,6 +524,10 @@ pub async fn run_main_with_transport(
         .clone()
         .map(|layer| layer.with_filter(Targets::new().with_default(Level::TRACE)));
     let otel_logger_layer = otel.as_ref().and_then(|o| o.logger_layer());
+    let enterprise_audit_logger_layer = enterprise_audit_otel
+        .provider
+        .as_ref()
+        .and_then(|o| o.logger_layer());
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
     let _ = tracing_subscriber::registry()
@@ -520,8 +536,15 @@ pub async fn run_main_with_transport(
         .with(feedback_metadata_layer)
         .with(log_db_layer)
         .with(otel_logger_layer)
+        .with(enterprise_audit_logger_layer)
         .with(otel_tracing_layer)
         .try_init();
+    if let Some(warning) = enterprise_audit_init_warning.as_deref() {
+        warn!("{warning}");
+    }
+    if let Some(warning) = enterprise_audit_otel.warning.as_deref() {
+        warn!("{warning}");
+    }
     for warning in &config_warnings {
         match &warning.details {
             Some(details) => error!("{} {}", warning.summary, details),
