@@ -33,12 +33,16 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::buffer::Cell;
+use ratatui::layout::Constraint;
+use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::text::Text;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
 use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
@@ -102,6 +106,8 @@ const KEY_ESC: KeyBinding = key_hint::plain(KeyCode::Esc);
 const KEY_ENTER: KeyBinding = key_hint::plain(KeyCode::Enter);
 const KEY_CTRL_T: KeyBinding = key_hint::ctrl(KeyCode::Char('t'));
 const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
+const KEY_TAB: KeyBinding = key_hint::plain(KeyCode::Tab);
+const KEY_A: KeyBinding = key_hint::plain(KeyCode::Char('a'));
 
 // Common pager navigation hints rendered on the first line
 const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
@@ -431,7 +437,15 @@ pub(crate) struct TranscriptOverlay {
     highlight_cell: Option<usize>,
     /// Cache key for the render-only live tail appended after committed cells.
     live_tail_key: Option<LiveTailKey>,
+    anchors_visible: bool,
+    focus: TranscriptOverlayFocus,
     is_done: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TranscriptOverlayFocus {
+    Transcript,
+    Anchors,
 }
 
 /// Cache key for the active-cell "live tail" appended to the transcript overlay.
@@ -464,8 +478,18 @@ impl TranscriptOverlay {
             cells: transcript_cells,
             highlight_cell: None,
             live_tail_key: None,
+            anchors_visible: true,
+            focus: TranscriptOverlayFocus::Transcript,
             is_done: false,
         }
+    }
+
+    fn anchors_are_effectively_visible(&self, area: Rect) -> bool {
+        self.anchors_visible && area.width >= 80
+    }
+
+    fn anchor_pane_width(&self, area: Rect) -> u16 {
+        area.width.clamp(24, 36)
     }
 
     fn render_cells(
@@ -659,7 +683,13 @@ impl TranscriptOverlay {
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
         render_key_hints(line1, buf, PAGER_KEY_HINTS);
 
-        let mut pairs: Vec<(&[KeyBinding], &str)> = vec![(&[KEY_Q], "to quit")];
+        let mut pairs: Vec<(&[KeyBinding], &str)> = vec![
+            (&[KEY_Q], "to quit"),
+            (&[KEY_A], "anchors"),
+        ];
+        if self.anchors_visible {
+            pairs.push((&[KEY_TAB], "focus"));
+        }
         if self.highlight_cell.is_some() {
             pairs.push((&[KEY_ESC, KEY_LEFT], "to edit prev"));
             pairs.push((&[KEY_RIGHT], "to edit next"));
@@ -670,11 +700,54 @@ impl TranscriptOverlay {
         render_key_hints(line2, buf, &pairs);
     }
 
+    fn render_anchor_shell(&self, area: Rect, buf: &mut Buffer) {
+        let border_style = if self.focus == TranscriptOverlayFocus::Anchors {
+            Style::default().cyan().bold()
+        } else {
+            Style::default().dim()
+        };
+        let block = Block::default()
+            .title("Anchors")
+            .borders(Borders::ALL)
+            .border_style(border_style);
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        if inner.is_empty() {
+            return;
+        }
+
+        let placeholder = vec![
+            Line::from("Anchor browser"),
+            Line::from(""),
+            Line::from("This pane will list"),
+            Line::from("conversation anchors"),
+            Line::from("for quick jumping."),
+            Line::from(""),
+            Line::from("Tab switches focus."),
+            Line::from("Press 'a' to hide."),
+        ];
+        Paragraph::new(Text::from(placeholder))
+            .wrap(Wrap { trim: false })
+            .render(inner, buf);
+    }
+
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
         let top_h = area.height.saturating_sub(3);
         let top = Rect::new(area.x, area.y, area.width, top_h);
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
-        self.view.render(top, buf);
+        if self.anchors_are_effectively_visible(top) {
+            let anchor_width = self.anchor_pane_width(top);
+            let [transcript_area, anchors_area] = Layout::horizontal([
+                Constraint::Min(top.width.saturating_sub(anchor_width)),
+                Constraint::Length(anchor_width),
+            ])
+            .areas(top);
+            self.view.render(transcript_area, buf);
+            self.render_anchor_shell(anchors_area, buf);
+        } else {
+            self.view.render(top, buf);
+        }
         self.render_hints(bottom, buf);
     }
 }
@@ -687,7 +760,28 @@ impl TranscriptOverlay {
                     self.is_done = true;
                     Ok(())
                 }
-                other => self.view.handle_key_event(tui, other),
+                e if KEY_A.is_press(e) => {
+                    self.anchors_visible = !self.anchors_visible;
+                    if !self.anchors_visible {
+                        self.focus = TranscriptOverlayFocus::Transcript;
+                    }
+                    tui.frame_requester()
+                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                    Ok(())
+                }
+                e if KEY_TAB.is_press(e) && self.anchors_visible => {
+                    self.focus = match self.focus {
+                        TranscriptOverlayFocus::Transcript => TranscriptOverlayFocus::Anchors,
+                        TranscriptOverlayFocus::Anchors => TranscriptOverlayFocus::Transcript,
+                    };
+                    tui.frame_requester()
+                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                    Ok(())
+                }
+                other => match self.focus {
+                    TranscriptOverlayFocus::Transcript => self.view.handle_key_event(tui, other),
+                    TranscriptOverlayFocus::Anchors => Ok(()),
+                },
             },
             TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
