@@ -187,10 +187,10 @@ expression: popup
     Usage:
         /ps
 
-  /clean
+  /stop
     stop all background terminals
     Usage:
-        /clean
+        /stop
 
   /clear
     clear the terminal and start a new chat

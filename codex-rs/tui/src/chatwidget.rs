@@ -5620,7 +5620,7 @@ impl ChatWidget {
             | SlashCommand::Exit
             | SlashCommand::Rollout
             | SlashCommand::Ps
-            | SlashCommand::Clean
+            | SlashCommand::Stop
             | SlashCommand::Clear
             | SlashCommand::Realtime
             | SlashCommand::TestApproval

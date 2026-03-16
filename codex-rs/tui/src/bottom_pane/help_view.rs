@@ -389,8 +389,13 @@ impl BottomPaneView for SlashHelpView {
                 ..
             } => self.move_to_match(1),
             KeyEvent {
-                code: KeyCode::Char('p' | 'N'),
-                modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('N'),
+                modifiers: KeyModifiers::SHIFT,
                 ..
             } => self.move_to_match(-1),
             _ => {}
