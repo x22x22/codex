@@ -3363,8 +3363,7 @@ impl Session {
     /// lock.
     ///
     /// When live history diverges in any other way, replacement still happens,
-    /// concurrent writes are dropped, and a warning is emitted instead of
-    /// propagating that detail through the return value.
+    /// concurrent writes are dropped, and a warning is emitted.
     pub(crate) async fn replace_compacted_history(
         &self,
         mut items: Vec<ResponseItem>,
