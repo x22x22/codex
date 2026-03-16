@@ -162,7 +162,6 @@ async fn run_remote_compact_task_inner_impl(
         reference_context_item,
         compacted_item,
         history_snapshot.raw_items(),
-        &turn_context.sub_id,
     )
     .await;
     sess.recompute_token_usage(turn_context).await;

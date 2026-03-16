@@ -223,7 +223,6 @@ async fn run_compact_task_inner(
         reference_context_item,
         compacted_item,
         history_items,
-        &turn_context.sub_id,
     )
     .await;
     sess.recompute_token_usage(&turn_context).await;
@@ -276,41 +275,28 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
 }
 
-/// Appends ghost snapshots added after `base_history` only when
-/// `latest_history` still preserves `base_history` as an exact prefix.
+/// Appends ghost snapshots added after `base_history` when `latest_history`
+/// still preserves `base_history` as an exact prefix and only appends
+/// `GhostSnapshot` items.
 ///
 /// Ghost snapshots are appended by detached background tasks for `/undo`, but
 /// `ContextManager::for_prompt()` strips them before any model request. That
-/// makes it safe to preserve a concurrent append-only ghost-snapshot tail while
+/// makes it safe to preserve the concurrent ghost-snapshot-only case while
 /// avoiding model-visible items that the compaction request never saw.
-///
-/// Returns `true` when no concurrent history change occurred or when the newer
-/// history differs only by append-only ghost snapshots, in which case that tail
-/// is appended to `new_history`. Returns `false` when concurrent history
-/// mutation rewrote or removed earlier items, or appended any non-ghost item,
-/// since this helper cannot safely merge those shapes.
-pub(crate) fn append_concurrent_ghost_snapshot_tail_if_append_only(
+pub(crate) fn append_concurrent_ghost_snapshot_tail(
     new_history: &mut Vec<ResponseItem>,
     base_history: &[ResponseItem],
     latest_history: &[ResponseItem],
-) -> bool {
-    if latest_history == base_history {
-        return true;
-    }
-    if !latest_history.starts_with(base_history) {
-        return false;
-    }
-
-    let appended_items = &latest_history[base_history.len()..];
-    if !appended_items
+) {
+    let Some(appended_items) = latest_history.strip_prefix(base_history) else {
+        return;
+    };
+    if appended_items
         .iter()
         .all(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
     {
-        return false;
+        new_history.extend_from_slice(appended_items);
     }
-
-    new_history.extend_from_slice(appended_items);
-    true
 }
 
 /// Inserts canonical initial context into compacted replacement history at the

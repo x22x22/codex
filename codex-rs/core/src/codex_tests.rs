@@ -807,7 +807,6 @@ async fn replace_compacted_history_persists_merged_ghost_snapshot_tail() {
             replacement_history: Some(vec![summary_item.clone()]),
         },
         &base_history,
-        &tc.sub_id,
     )
     .await;
 

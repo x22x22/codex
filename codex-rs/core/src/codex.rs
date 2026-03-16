@@ -3358,34 +3358,29 @@ impl Session {
         state.replace_history(items, reference_context_item);
     }
 
-    /// Replaces session history with a compacted transcript and preserves any
-    /// append-only concurrent `GhostSnapshot` tail seen under the same state
-    /// lock.
-    ///
-    /// When live history diverges in any other way, replacement still happens,
-    /// concurrent writes are dropped, and a warning is emitted.
+    /// Replaces session history with a compacted transcript and, under the same
+    /// state lock, preserves a concurrent append-only `GhostSnapshot` tail when
+    /// the live history still extends the compacted prefix.
     pub(crate) async fn replace_compacted_history(
         &self,
         mut items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         mut compacted_item: CompactedItem,
         base_history: &[ResponseItem],
-        turn_id: &str,
     ) {
         // Compaction snapshots history and waits on a model/API call. Preserve
         // any append-only ghost snapshot tail while holding the same lock that
         // replaces history so detached `/undo` metadata writes are not lost in
         // the gap before replacement.
-        let merged_ghost_snapshot_tail = {
+        {
             let mut state = self.state.lock().await;
-            let merged = compact::append_concurrent_ghost_snapshot_tail_if_append_only(
+            compact::append_concurrent_ghost_snapshot_tail(
                 &mut items,
                 base_history,
                 state.history.raw_items(),
             );
             state.replace_history(items.clone(), reference_context_item.clone());
-            merged
-        };
+        }
         compacted_item.replacement_history = Some(items);
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
@@ -3393,12 +3388,6 @@ impl Session {
         if let Some(turn_context_item) = reference_context_item {
             self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item)])
                 .await;
-        }
-        if !merged_ghost_snapshot_tail {
-            warn!(
-                turn_id,
-                "session history changed beyond append-only ghost snapshots during compaction; dropping concurrent writes"
-            );
         }
     }
 

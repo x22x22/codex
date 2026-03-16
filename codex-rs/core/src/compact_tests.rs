@@ -186,7 +186,7 @@ fn build_token_limited_compacted_history_appends_summary_message() {
 }
 
 #[test]
-fn append_concurrent_ghost_snapshot_tail_if_append_only_appends_concurrent_tail() {
+fn append_concurrent_ghost_snapshot_tail_appends_concurrent_tail() {
     let base_history = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -215,13 +215,7 @@ fn append_concurrent_ghost_snapshot_tail_if_append_only_appends_concurrent_tail(
         phase: None,
     }];
 
-    let merged = append_concurrent_ghost_snapshot_tail_if_append_only(
-        &mut compacted_history,
-        &base_history,
-        &latest_history,
-    );
-
-    assert!(merged);
+    append_concurrent_ghost_snapshot_tail(&mut compacted_history, &base_history, &latest_history);
     assert_eq!(
         compacted_history,
         vec![
@@ -240,7 +234,7 @@ fn append_concurrent_ghost_snapshot_tail_if_append_only_appends_concurrent_tail(
 }
 
 #[test]
-fn append_concurrent_ghost_snapshot_tail_if_append_only_rejects_model_visible_tail() {
+fn append_concurrent_ghost_snapshot_tail_ignores_model_visible_tail() {
     let base_history = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -272,13 +266,7 @@ fn append_concurrent_ghost_snapshot_tail_if_append_only_rejects_model_visible_ta
         phase: None,
     }];
 
-    let merged = append_concurrent_ghost_snapshot_tail_if_append_only(
-        &mut compacted_history,
-        &base_history,
-        &latest_history,
-    );
-
-    assert!(!merged);
+    append_concurrent_ghost_snapshot_tail(&mut compacted_history, &base_history, &latest_history);
     assert_eq!(
         compacted_history,
         vec![ResponseItem::Message {
@@ -294,7 +282,7 @@ fn append_concurrent_ghost_snapshot_tail_if_append_only_rejects_model_visible_ta
 }
 
 #[test]
-fn append_concurrent_ghost_snapshot_tail_if_append_only_rejects_non_append_only_changes() {
+fn append_concurrent_ghost_snapshot_tail_ignores_non_append_only_changes() {
     let base_history = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -323,13 +311,7 @@ fn append_concurrent_ghost_snapshot_tail_if_append_only_rejects_non_append_only_
         phase: None,
     }];
 
-    let merged = append_concurrent_ghost_snapshot_tail_if_append_only(
-        &mut compacted_history,
-        &base_history,
-        &latest_history,
-    );
-
-    assert!(!merged);
+    append_concurrent_ghost_snapshot_tail(&mut compacted_history, &base_history, &latest_history);
     assert_eq!(
         compacted_history,
         vec![ResponseItem::Message {
