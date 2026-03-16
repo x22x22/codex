@@ -298,6 +298,14 @@ pub(crate) enum AppEvent {
         approvals_reviewer: ApprovalsReviewer,
     },
 
+    /// Result of the elevated Windows sandbox setup flow.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    WindowsSandboxElevatedSetupCompleted {
+        preset: ApprovalPreset,
+        approvals_reviewer: ApprovalsReviewer,
+        setup_succeeded: bool,
+    },
+
     /// Begin the non-elevated Windows sandbox setup flow.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     BeginWindowsSandboxLegacySetup {
@@ -325,6 +333,10 @@ pub(crate) enum AppEvent {
         path: PathBuf,
         error: Option<String>,
     },
+
+    /// Result of the asynchronous Windows world-writable scan.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    WorldWritableScanCompleted,
 
     /// Enable the Windows sandbox feature and switch to Agent mode.
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]

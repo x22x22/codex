@@ -730,6 +730,7 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+    pending_async_queue_resume_barriers: usize,
 }
 
 #[derive(Default)]
@@ -757,8 +758,22 @@ fn normalize_harness_overrides_for_cwd(
 }
 
 impl App {
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    fn begin_async_queue_resume_barrier(&mut self) {
+        self.pending_async_queue_resume_barriers += 1;
+    }
+
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    fn finish_async_queue_resume_barrier(&mut self) {
+        if self.pending_async_queue_resume_barriers == 0 {
+            tracing::warn!("finished async queue-resume barrier with no pending barrier");
+            return;
+        }
+        self.pending_async_queue_resume_barriers -= 1;
+    }
+
     fn maybe_resume_queued_inputs_after_app_events(&mut self, app_events_drained: bool) {
-        if !app_events_drained {
+        if !app_events_drained || self.pending_async_queue_resume_barriers != 0 {
             return;
         }
 
@@ -2301,6 +2316,7 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            pending_async_queue_resume_barriers: 0,
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -2319,6 +2335,7 @@ impl App {
                     .hide_world_writable_warning
                     .unwrap_or(false);
             if should_check {
+                app.begin_async_queue_resume_barrier();
                 let cwd = app.config.cwd.clone();
                 let env_map: std::collections::HashMap<String, String> = std::env::vars().collect();
                 let tx = app.app_event_tx.clone();
@@ -2429,10 +2446,10 @@ impl App {
                 ) {
                     waiting_for_initial_session_configured = false;
                 }
-                // Some replayed slash commands pause queue draining until their app-side updates
-                // or popup flows settle. Only resume once the app-event queue is fully drained so
-                // multi-event commands (for example approvals updates) cannot interleave later
-                // queued input.
+                // Some replayed slash commands pause queue draining until their app-side updates,
+                // popup flows, or async follow-up work settle. Only resume once the app-event
+                // queue is fully drained and no background slash-command completions are still
+                // pending, so later queued input cannot interleave with those updates.
                 app.maybe_resume_queued_inputs_after_app_events(app_event_rx.is_empty());
                 match control {
                     AppRunControl::Continue => {}
@@ -2890,6 +2907,7 @@ impl App {
 
                     self.chat_widget.show_windows_sandbox_setup_status();
                     self.windows_sandbox.setup_started_at = Some(Instant::now());
+                    self.begin_async_queue_resume_barrier();
                     let session_telemetry = self.session_telemetry.clone();
                     tokio::task::spawn_blocking(move || {
                         let result = codex_core::windows_sandbox::run_elevated_setup(
@@ -2906,10 +2924,10 @@ impl App {
                                     1,
                                     &[],
                                 );
-                                AppEvent::EnableWindowsSandboxForAgentMode {
+                                AppEvent::WindowsSandboxElevatedSetupCompleted {
                                     preset: preset.clone(),
-                                    mode: WindowsSandboxEnableMode::Elevated,
                                     approvals_reviewer,
+                                    setup_succeeded: true,
                                 }
                             }
                             Err(err) => {
@@ -2941,9 +2959,10 @@ impl App {
                                     error = %err,
                                     "failed to run elevated Windows sandbox setup"
                                 );
-                                AppEvent::OpenWindowsSandboxFallbackPrompt {
+                                AppEvent::WindowsSandboxElevatedSetupCompleted {
                                     preset,
                                     approvals_reviewer,
+                                    setup_succeeded: false,
                                 }
                             }
                         };
@@ -2953,6 +2972,33 @@ impl App {
                 #[cfg(not(target_os = "windows"))]
                 {
                     let _ = (preset, approvals_reviewer);
+                }
+            }
+            AppEvent::WindowsSandboxElevatedSetupCompleted {
+                preset,
+                approvals_reviewer,
+                setup_succeeded,
+            } => {
+                #[cfg(target_os = "windows")]
+                {
+                    self.finish_async_queue_resume_barrier();
+                    let event = if setup_succeeded {
+                        AppEvent::EnableWindowsSandboxForAgentMode {
+                            preset,
+                            mode: WindowsSandboxEnableMode::Elevated,
+                            approvals_reviewer,
+                        }
+                    } else {
+                        AppEvent::OpenWindowsSandboxFallbackPrompt {
+                            preset,
+                            approvals_reviewer,
+                        }
+                    };
+                    self.app_event_tx.send(event);
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = (preset, approvals_reviewer, setup_succeeded);
                 }
             }
             AppEvent::BeginWindowsSandboxLegacySetup {
@@ -2969,6 +3015,7 @@ impl App {
                     let codex_home = self.config.codex_home.clone();
                     let tx = self.app_event_tx.clone();
 
+                    self.begin_async_queue_resume_barrier();
                     tokio::task::spawn_blocking(move || {
                         let preset_for_error = preset.clone();
                         let result = codex_core::windows_sandbox::run_legacy_setup_preflight(
@@ -3010,19 +3057,22 @@ impl App {
                 error,
             } => {
                 #[cfg(target_os = "windows")]
-                match error {
-                    None => {
-                        self.app_event_tx
-                            .send(AppEvent::EnableWindowsSandboxForAgentMode {
-                                preset,
-                                mode: WindowsSandboxEnableMode::Legacy,
-                                approvals_reviewer,
-                            });
-                    }
-                    Some(err) => {
-                        self.chat_widget.add_error_message(format!(
-                            "Failed to enable the Windows sandbox feature: {err}"
-                        ));
+                {
+                    self.finish_async_queue_resume_barrier();
+                    match error {
+                        None => {
+                            self.app_event_tx
+                                .send(AppEvent::EnableWindowsSandboxForAgentMode {
+                                    preset,
+                                    mode: WindowsSandboxEnableMode::Legacy,
+                                    approvals_reviewer,
+                                });
+                        }
+                        Some(err) => {
+                            self.chat_widget.add_error_message(format!(
+                                "Failed to enable the Windows sandbox feature: {err}"
+                            ));
+                        }
                     }
                 }
                 #[cfg(not(target_os = "windows"))]
@@ -3419,6 +3469,7 @@ impl App {
                         && policy_is_workspace_write_or_ro
                         && !self.chat_widget.world_writable_warning_hidden();
                     if should_check {
+                        self.begin_async_queue_resume_barrier();
                         let cwd = self.config.cwd.clone();
                         let env_map: std::collections::HashMap<String, String> =
                             std::env::vars().collect();
@@ -3590,6 +3641,10 @@ impl App {
             }
             AppEvent::OpenApprovalsPopup => {
                 self.chat_widget.open_approvals_popup();
+            }
+            AppEvent::WorldWritableScanCompleted => {
+                #[cfg(target_os = "windows")]
+                self.finish_async_queue_resume_barrier();
             }
             AppEvent::OpenAgentPicker => {
                 self.open_agent_picker().await;
@@ -4285,6 +4340,7 @@ impl App {
                     failed_scan: true,
                 });
             }
+            tx.send(AppEvent::WorldWritableScanCompleted);
         });
     }
 }
@@ -6555,6 +6611,7 @@ guardian_approval = true
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            pending_async_queue_resume_barriers: 0,
         }
     }
 
@@ -6615,6 +6672,7 @@ guardian_approval = true
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                pending_async_queue_resume_barriers: 0,
             },
             rx,
             op_rx,
@@ -7710,6 +7768,109 @@ guardian_approval = true
             }
         }
 
+        app.maybe_resume_queued_inputs_after_app_events(true);
+
+        match next_user_turn_op(&mut op_rx) {
+            Op::UserTurn {
+                items,
+                personality: Some(Personality::Pragmatic),
+                ..
+            } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "followup".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected Op::UserTurn with pragmatic personality, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_followup_waits_for_pending_async_resume_barrier() {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget.set_model("gpt-5.2-codex");
+        app.chat_widget
+            .set_feature_enabled(Feature::Personality, true);
+        app.chat_widget.handle_codex_event(Event {
+            id: "configured".into(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-5.2-codex".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: Some(ReasoningEffortConfig::default()),
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: None,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-started".into(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        });
+        while app_event_rx.try_recv().is_ok() {}
+        while op_rx.try_recv().is_ok() {}
+
+        app.chat_widget
+            .handle_serialized_slash_command(UserMessage::from("/personality pragmatic"));
+        app.chat_widget
+            .set_composer_text("followup".to_string(), Vec::new(), Vec::new());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-complete".into(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".to_string(),
+                last_agent_message: None,
+            }),
+        });
+
+        loop {
+            match app_event_rx.try_recv() {
+                Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    personality: Some(Personality::Pragmatic),
+                    ..
+                })) => continue,
+                Ok(AppEvent::UpdatePersonality(Personality::Pragmatic)) => {
+                    app.on_update_personality(Personality::Pragmatic);
+                    break;
+                }
+                Ok(AppEvent::PersistPersonalitySelection {
+                    personality: Personality::Pragmatic,
+                }) => continue,
+                Ok(_) => continue,
+                Err(TryRecvError::Empty) => panic!("expected personality update events"),
+                Err(TryRecvError::Disconnected) => panic!("expected personality update events"),
+            }
+        }
+
+        app.pending_async_queue_resume_barriers = 1;
+        app.maybe_resume_queued_inputs_after_app_events(true);
+
+        assert_eq!(
+            app.chat_widget.queued_user_message_texts(),
+            vec!["followup".to_string()]
+        );
+        assert!(
+            op_rx.try_recv().is_err(),
+            "queued follow-up should stay queued while async replay barriers are pending"
+        );
+
+        app.pending_async_queue_resume_barriers = 0;
         app.maybe_resume_queued_inputs_after_app_events(true);
 
         match next_user_turn_op(&mut op_rx) {
