@@ -1,7 +1,6 @@
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::ModelProviderInfo;
-use crate::OPENAI_PROVIDER_ID;
 use crate::agent::AgentControl;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnArgs;
@@ -9,6 +8,7 @@ use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_thread::CodexThread;
 use crate::config::Config;
+use crate::endpoint_config_telemetry::resolve_endpoint_config_telemetry_source_for_provider;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::file_watcher::FileWatcher;
@@ -46,6 +46,8 @@ use tokio::runtime::RuntimeFlavor;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 use tracing::warn;
+
+use crate::model_provider_info::OPENAI_PROVIDER_ID;
 
 const THREAD_CREATED_CHANNEL_CAPACITY: usize = 1024;
 /// Test-only override for enabling thread-manager behaviors used by integration
@@ -173,7 +175,14 @@ impl ThreadManager {
             .model_providers
             .get(OPENAI_PROVIDER_ID)
             .cloned()
-            .unwrap_or_else(|| ModelProviderInfo::create_openai_provider(/*base_url*/ None));
+            .unwrap_or_else(|| ModelProviderInfo::create_openai_provider(None));
+        let openai_endpoint_telemetry_source =
+            resolve_endpoint_config_telemetry_source_for_provider(
+                config,
+                OPENAI_PROVIDER_ID,
+                &openai_models_provider,
+                session_source.clone(),
+            );
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
         let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
@@ -187,13 +196,16 @@ impl ThreadManager {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: Arc::new(ModelsManager::new_with_provider(
-                    codex_home,
-                    auth_manager.clone(),
-                    config.model_catalog.clone(),
-                    collaboration_modes_config,
-                    openai_models_provider,
-                )),
+                models_manager: Arc::new(
+                    ModelsManager::new_with_provider_and_endpoint_telemetry_source(
+                        codex_home,
+                        auth_manager.clone(),
+                        config.model_catalog.clone(),
+                        collaboration_modes_config,
+                        openai_models_provider,
+                        openai_endpoint_telemetry_source,
+                    ),
+                ),
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
@@ -213,7 +225,7 @@ impl ThreadManager {
         auth: CodexAuth,
         provider: ModelProviderInfo,
     ) -> Self {
-        set_thread_manager_test_mode_for_tests(/*enabled*/ true);
+        set_thread_manager_test_mode_for_tests(true);
         let codex_home = std::env::temp_dir().join(format!(
             "codex-thread-manager-test-{}",
             uuid::Uuid::new_v4()
@@ -233,7 +245,7 @@ impl ThreadManager {
         provider: ModelProviderInfo,
         codex_home: PathBuf,
     ) -> Self {
-        set_thread_manager_test_mode_for_tests(/*enabled*/ true);
+        set_thread_manager_test_mode_for_tests(true);
         let auth_manager = AuthManager::from_auth_for_testing(auth);
         let (thread_created_tx, _) = broadcast::channel(THREAD_CREATED_CHANNEL_CAPACITY);
         let plugins_manager = Arc::new(PluginsManager::new(codex_home.clone()));
@@ -241,7 +253,7 @@ impl ThreadManager {
         let skills_manager = Arc::new(SkillsManager::new(
             codex_home.clone(),
             Arc::clone(&plugins_manager),
-            /*bundled_skills_enabled*/ true,
+            true,
         ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
         Self {
@@ -340,12 +352,7 @@ impl ThreadManager {
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
         // Box delegated thread-spawn futures so these convenience wrappers do
         // not inline the full spawn path into every caller's async state.
-        Box::pin(self.start_thread_with_tools(
-            config,
-            Vec::new(),
-            /*persist_extended_history*/ false,
-        ))
-        .await
+        Box::pin(self.start_thread_with_tools(config, Vec::new(), false)).await
     }
 
     pub async fn start_thread_with_tools(
@@ -358,8 +365,8 @@ impl ThreadManager {
             config,
             dynamic_tools,
             persist_extended_history,
-            /*metrics_service_name*/ None,
-            /*parent_trace*/ None,
+            None,
+            None,
         ))
         .await
     }
@@ -381,7 +388,6 @@ impl ThreadManager {
             persist_extended_history,
             metrics_service_name,
             parent_trace,
-            /*user_shell_override*/ None,
         ))
         .await
     }
@@ -398,7 +404,7 @@ impl ThreadManager {
             config,
             initial_history,
             auth_manager,
-            /*persist_extended_history*/ false,
+            false,
             parent_trace,
         ))
         .await
@@ -419,50 +425,8 @@ impl ThreadManager {
             self.agent_control(),
             Vec::new(),
             persist_extended_history,
-            /*metrics_service_name*/ None,
+            None,
             parent_trace,
-            /*user_shell_override*/ None,
-        ))
-        .await
-    }
-
-    pub(crate) async fn start_thread_with_user_shell_override_for_tests(
-        &self,
-        config: Config,
-        user_shell_override: crate::shell::Shell,
-    ) -> CodexResult<NewThread> {
-        Box::pin(self.state.spawn_thread(
-            config,
-            InitialHistory::New,
-            Arc::clone(&self.state.auth_manager),
-            self.agent_control(),
-            Vec::new(),
-            /*persist_extended_history*/ false,
-            /*metrics_service_name*/ None,
-            /*parent_trace*/ None,
-            /*user_shell_override*/ Some(user_shell_override),
-        ))
-        .await
-    }
-
-    pub(crate) async fn resume_thread_from_rollout_with_user_shell_override_for_tests(
-        &self,
-        config: Config,
-        rollout_path: PathBuf,
-        auth_manager: Arc<AuthManager>,
-        user_shell_override: crate::shell::Shell,
-    ) -> CodexResult<NewThread> {
-        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
-        Box::pin(self.state.spawn_thread(
-            config,
-            initial_history,
-            auth_manager,
-            self.agent_control(),
-            Vec::new(),
-            /*persist_extended_history*/ false,
-            /*metrics_service_name*/ None,
-            /*parent_trace*/ None,
-            /*user_shell_override*/ Some(user_shell_override),
         ))
         .await
     }
@@ -546,9 +510,8 @@ impl ThreadManager {
             self.agent_control(),
             Vec::new(),
             persist_extended_history,
-            /*metrics_service_name*/ None,
+            None,
             parent_trace,
-            /*user_shell_override*/ None,
         ))
         .await
     }
@@ -607,9 +570,9 @@ impl ThreadManagerState {
             config,
             agent_control,
             self.session_source.clone(),
-            /*persist_extended_history*/ false,
-            /*metrics_service_name*/ None,
-            /*inherited_shell_snapshot*/ None,
+            false,
+            None,
+            None,
         ))
         .await
     }
@@ -633,8 +596,7 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
-            /*parent_trace*/ None,
-            /*user_shell_override*/ None,
+            None,
         ))
         .await
     }
@@ -655,11 +617,10 @@ impl ThreadManagerState {
             agent_control,
             session_source,
             Vec::new(),
-            /*persist_extended_history*/ false,
-            /*metrics_service_name*/ None,
+            false,
+            None,
             inherited_shell_snapshot,
-            /*parent_trace*/ None,
-            /*user_shell_override*/ None,
+            None,
         ))
         .await
     }
@@ -681,10 +642,9 @@ impl ThreadManagerState {
             session_source,
             Vec::new(),
             persist_extended_history,
-            /*metrics_service_name*/ None,
+            None,
             inherited_shell_snapshot,
-            /*parent_trace*/ None,
-            /*user_shell_override*/ None,
+            None,
         ))
         .await
     }
@@ -701,7 +661,6 @@ impl ThreadManagerState {
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
         parent_trace: Option<W3cTraceContext>,
-        user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -712,9 +671,8 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
-            /*inherited_shell_snapshot*/ None,
+            None,
             parent_trace,
-            user_shell_override,
         ))
         .await
     }
@@ -732,7 +690,6 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         parent_trace: Option<W3cTraceContext>,
-        user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
         let watch_registration = self
             .file_watcher
@@ -754,7 +711,6 @@ impl ThreadManagerState {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
-            user_shell_override,
             parent_trace,
         })
         .await?;
