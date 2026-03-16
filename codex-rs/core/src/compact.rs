@@ -27,7 +27,6 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use futures::prelude::*;
 use tracing::error;
-use tracing::warn;
 
 pub const SUMMARIZATION_PROMPT: &str = include_str!("../templates/compact/prompt.md");
 pub const SUMMARY_PREFIX: &str = include_str!("../templates/compact/summary_prefix.md");
@@ -219,20 +218,14 @@ async fn run_compact_task_inner(
         message: summary_text.clone(),
         replacement_history: Some(new_history.clone()),
     };
-    if !sess
-        .replace_compacted_history(
-            new_history,
-            reference_context_item,
-            compacted_item,
-            history_items,
-        )
-        .await
-    {
-        warn!(
-            turn_id = %turn_context.sub_id,
-            "session history changed beyond append-only ghost snapshots during compaction; skipping concurrent ghost snapshot merge"
-        );
-    }
+    sess.replace_compacted_history(
+        new_history,
+        reference_context_item,
+        compacted_item,
+        history_items,
+        &turn_context.sub_id,
+    )
+    .await;
     sess.recompute_token_usage(&turn_context).await;
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)

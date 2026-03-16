@@ -24,7 +24,6 @@ use futures::TryFutureExt;
 use tokio_util::sync::CancellationToken;
 use tracing::error;
 use tracing::info;
-use tracing::warn;
 
 pub(crate) async fn run_inline_remote_auto_compact_task(
     sess: Arc<Session>,
@@ -158,20 +157,14 @@ async fn run_remote_compact_task_inner_impl(
         message: String::new(),
         replacement_history: Some(new_history.clone()),
     };
-    if !sess
-        .replace_compacted_history(
-            new_history,
-            reference_context_item,
-            compacted_item,
-            history_snapshot.raw_items(),
-        )
-        .await
-    {
-        warn!(
-            turn_id = %turn_context.sub_id,
-            "session history changed beyond append-only ghost snapshots during remote compaction; skipping concurrent ghost snapshot merge"
-        );
-    }
+    sess.replace_compacted_history(
+        new_history,
+        reference_context_item,
+        compacted_item,
+        history_snapshot.raw_items(),
+        &turn_context.sub_id,
+    )
+    .await;
     sess.recompute_token_usage(turn_context).await;
 
     sess.emit_turn_item_completed(turn_context, compaction_item)

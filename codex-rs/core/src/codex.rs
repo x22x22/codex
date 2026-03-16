@@ -3362,18 +3362,17 @@ impl Session {
     /// append-only concurrent `GhostSnapshot` tail seen under the same state
     /// lock.
     ///
-    /// Returns `true` when live history was unchanged or when the only
-    /// concurrent writes were appended `GhostSnapshot` items that were merged
-    /// into `items` before replacement. Returns `false` when live history
-    /// diverged in any other way, in which case replacement still happens but
-    /// no concurrent tail is merged.
+    /// When live history diverges in any other way, replacement still happens,
+    /// concurrent writes are dropped, and a warning is emitted instead of
+    /// propagating that detail through the return value.
     pub(crate) async fn replace_compacted_history(
         &self,
         mut items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
         mut compacted_item: CompactedItem,
         base_history: &[ResponseItem],
-    ) -> bool {
+        turn_id: &str,
+    ) {
         // Compaction snapshots history and waits on a model/API call. Preserve
         // any append-only ghost snapshot tail while holding the same lock that
         // replaces history so detached `/undo` metadata writes are not lost in
@@ -3396,7 +3395,12 @@ impl Session {
             self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item)])
                 .await;
         }
-        merged_ghost_snapshot_tail
+        if !merged_ghost_snapshot_tail {
+            warn!(
+                turn_id,
+                "session history changed beyond append-only ghost snapshots during compaction; dropping concurrent writes"
+            );
+        }
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {

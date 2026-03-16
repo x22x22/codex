@@ -799,19 +799,18 @@ async fn replace_compacted_history_persists_merged_ghost_snapshot_tail() {
     sess.record_conversation_items(tc.as_ref(), std::slice::from_ref(&ghost_snapshot))
         .await;
 
-    let merged = sess
-        .replace_compacted_history(
-            vec![summary_item.clone()],
-            Some(tc.to_turn_context_item()),
-            CompactedItem {
-                message: String::new(),
-                replacement_history: Some(vec![summary_item.clone()]),
-            },
-            &base_history,
-        )
-        .await;
+    sess.replace_compacted_history(
+        vec![summary_item.clone()],
+        Some(tc.to_turn_context_item()),
+        CompactedItem {
+            message: String::new(),
+            replacement_history: Some(vec![summary_item.clone()]),
+        },
+        &base_history,
+        &tc.sub_id,
+    )
+    .await;
 
-    assert!(merged);
     let expected_history = vec![summary_item.clone(), ghost_snapshot.clone()];
     assert_eq!(sess.clone_history().await.raw_items(), expected_history);
 
