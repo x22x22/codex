@@ -198,6 +198,79 @@ where
     qualified_tools
 }
 
+fn parsed_tool_name(tool: &ToolInfo) -> (String, String) {
+    (tool.server_name.clone(), tool.tool.name.to_string())
+}
+
+fn normalize_requested_tool_name(name: &str) -> String {
+    sanitize_name(name).replace('-', "_")
+}
+
+fn trim_optional_leading_underscore(value: &str) -> &str {
+    value.strip_prefix('_').unwrap_or(value)
+}
+
+fn tool_name_matches_requested_name(tool: &ToolInfo, requested_name: &str) -> bool {
+    if tool.tool_name == requested_name || tool.tool.name.as_ref() == requested_name {
+        return true;
+    }
+
+    if normalize_requested_tool_name(tool.tool.name.as_ref()) == requested_name {
+        return true;
+    }
+
+    tool.server_name == CODEX_APPS_MCP_SERVER_NAME
+        && trim_optional_leading_underscore(tool.tool_name.as_str())
+            == trim_optional_leading_underscore(requested_name)
+}
+
+fn find_unique_matching_tool<'a>(
+    tools: &'a HashMap<String, ToolInfo>,
+    requested_name: &str,
+    namespace: Option<&str>,
+) -> Option<&'a ToolInfo> {
+    let mut matches = tools.values().filter(|tool| {
+        namespace.map_or_else(
+            || tool.server_name == CODEX_APPS_MCP_SERVER_NAME,
+            |namespace| tool.tool_namespace == namespace,
+        ) && tool_name_matches_requested_name(tool, requested_name)
+    });
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+fn parse_tool_name_from_tools(
+    tools: &HashMap<String, ToolInfo>,
+    tool_name: &str,
+    namespace: Option<&str>,
+) -> Option<(String, String)> {
+    if let Some(tool) = tools.get(tool_name) {
+        return Some(parsed_tool_name(tool));
+    }
+
+    if let Some(namespace) = namespace {
+        let qualified_name = if tool_name.starts_with(namespace) {
+            tool_name.to_string()
+        } else {
+            format!("{namespace}{tool_name}")
+        };
+        if let Some(tool) = tools.get(qualified_name.as_str()) {
+            return Some(parsed_tool_name(tool));
+        }
+
+        if let Some(stripped_name) = tool_name.strip_prefix(namespace)
+            && let Some(tool) = find_unique_matching_tool(tools, stripped_name, Some(namespace))
+        {
+            return Some(parsed_tool_name(tool));
+        }
+    }
+
+    find_unique_matching_tool(tools, tool_name, namespace).map(parsed_tool_name)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ToolInfo {
     pub(crate) server_name: String,
@@ -1095,11 +1168,13 @@ impl McpConnectionManager {
             .with_context(|| format!("resources/read failed for `{server}` ({uri})"))
     }
 
-    pub async fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
-        self.list_all_tools()
-            .await
-            .get(tool_name)
-            .map(|tool| (tool.server_name.clone(), tool.tool.name.to_string()))
+    pub async fn parse_tool_name(
+        &self,
+        tool_name: &str,
+        namespace: Option<&str>,
+    ) -> Option<(String, String)> {
+        let tools = self.list_all_tools().await;
+        parse_tool_name_from_tools(&tools, tool_name, namespace)
     }
 
     pub async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {

@@ -1,7 +1,9 @@
 use super::*;
 use codex_protocol::protocol::GranularApprovalConfig;
 use codex_protocol::protocol::McpAuthStatus;
+use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
+use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tempfile::tempdir;
@@ -43,6 +45,39 @@ fn create_test_tool_with_connector(
     tool.connector_id = Some(connector_id.to_string());
     tool.connector_name = connector_name.map(ToOwned::to_owned);
     tool
+}
+
+fn create_namespaced_codex_app_tool(
+    qualified_name: &str,
+    tool_name: &str,
+    raw_tool_name: &str,
+    namespace: &str,
+    connector_id: &str,
+    connector_name: &str,
+) -> (String, ToolInfo) {
+    (
+        qualified_name.to_string(),
+        ToolInfo {
+            server_name: CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            tool_name: tool_name.to_string(),
+            tool_namespace: namespace.to_string(),
+            tool: Tool {
+                name: raw_tool_name.to_string().into(),
+                title: None,
+                description: Some(format!("Test tool: {raw_tool_name}").into()),
+                input_schema: Arc::new(JsonObject::default()),
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: None,
+                meta: None,
+            },
+            connector_id: Some(connector_id.to_string()),
+            connector_name: Some(connector_name.to_string()),
+            plugin_display_names: Vec::new(),
+            connector_description: None,
+        },
+    )
 }
 
 fn create_codex_apps_tools_cache_context(
@@ -178,6 +213,77 @@ fn test_qualify_tools_sanitizes_invalid_characters() {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
         "qualified name must be Responses API compatible: {qualified_name:?}"
+    );
+}
+
+#[test]
+fn parse_tool_name_from_tools_matches_unique_codex_app_alias_without_namespace() {
+    let tools = HashMap::from([create_namespaced_codex_app_tool(
+        "mcp__codex_apps__google_docs_create_document",
+        "_create_document",
+        "google_docs_create_document",
+        "mcp__codex_apps__google_docs",
+        "google_docs",
+        "Google Docs",
+    )]);
+
+    assert_eq!(
+        parse_tool_name_from_tools(&tools, "_create_document", None),
+        Some((
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            "google_docs_create_document".to_string(),
+        ))
+    );
+}
+
+#[test]
+fn parse_tool_name_from_tools_rejects_ambiguous_codex_app_alias_without_namespace() {
+    let tools = HashMap::from([
+        create_namespaced_codex_app_tool(
+            "mcp__codex_apps__google_docs_create_document",
+            "_create_document",
+            "google_docs_create_document",
+            "mcp__codex_apps__google_docs",
+            "google_docs",
+            "Google Docs",
+        ),
+        create_namespaced_codex_app_tool(
+            "mcp__codex_apps__notion_create_document",
+            "_create_document",
+            "notion_create_document",
+            "mcp__codex_apps__notion",
+            "notion",
+            "Notion",
+        ),
+    ]);
+
+    assert_eq!(
+        parse_tool_name_from_tools(&tools, "_create_document", None),
+        None
+    );
+}
+
+#[test]
+fn parse_tool_name_from_tools_matches_namespaced_codex_app_raw_name() {
+    let tools = HashMap::from([create_namespaced_codex_app_tool(
+        "mcp__codex_apps__google_docs_create_document",
+        "_create_document",
+        "google_docs_create_document",
+        "mcp__codex_apps__google_docs",
+        "google_docs",
+        "Google Docs",
+    )]);
+
+    assert_eq!(
+        parse_tool_name_from_tools(
+            &tools,
+            "google_docs_create_document",
+            Some("mcp__codex_apps__google_docs"),
+        ),
+        Some((
+            CODEX_APPS_MCP_SERVER_NAME.to_string(),
+            "google_docs_create_document".to_string(),
+        ))
     );
 }
 

@@ -3952,20 +3952,11 @@ impl Session {
         name: &str,
         namespace: &Option<String>,
     ) -> Option<(String, String)> {
-        let tool_name = if let Some(namespace) = namespace {
-            if name.starts_with(namespace.as_str()) {
-                name
-            } else {
-                &format!("{namespace}{name}")
-            }
-        } else {
-            name
-        };
         self.services
             .mcp_connection_manager
             .read()
             .await
-            .parse_tool_name(tool_name)
+            .parse_tool_name(name, namespace.as_deref())
             .await
     }
 
