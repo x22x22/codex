@@ -2589,6 +2589,103 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mid_turn_auto_compaction_stall_emits_specific_error_after_limit() {
+    skip_if_no_network!();
+
+    let server = start_mock_server().await;
+
+    let context_window = 100;
+    let limit = context_window * 90 / 100;
+    let over_limit_tokens = context_window * 95 / 100 + 1;
+    let responses = vec![
+        sse(vec![
+            ev_function_call("call-stall-1", DUMMY_FUNCTION_NAME, "{}"),
+            ev_completed_with_tokens("r1", over_limit_tokens),
+        ]),
+        sse(vec![
+            ev_assistant_message("m2", &auto_summary("STALL_SUMMARY_1")),
+            ev_completed_with_tokens("r2", 10),
+        ]),
+        sse(vec![
+            ev_function_call("call-stall-2", DUMMY_FUNCTION_NAME, "{}"),
+            ev_completed_with_tokens("r3", over_limit_tokens),
+        ]),
+        sse(vec![
+            ev_assistant_message("m4", &auto_summary("STALL_SUMMARY_2")),
+            ev_completed_with_tokens("r4", 10),
+        ]),
+        sse(vec![
+            ev_function_call("call-stall-3", DUMMY_FUNCTION_NAME, "{}"),
+            ev_completed_with_tokens("r5", over_limit_tokens),
+        ]),
+        sse(vec![
+            ev_assistant_message("m6", &auto_summary("STALL_SUMMARY_3")),
+            ev_completed_with_tokens("r6", 10),
+        ]),
+        sse(vec![
+            ev_function_call("call-stall-4", DUMMY_FUNCTION_NAME, "{}"),
+            ev_completed_with_tokens("r7", over_limit_tokens),
+        ]),
+    ];
+    let request_log = mount_sse_sequence(&server, responses).await;
+
+    let model_provider = non_openai_model_provider(&server);
+    let codex = test_codex()
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            set_test_compact_prompt(config);
+            config.model_context_window = Some(context_window);
+            config.model_auto_compact_token_limit = Some(limit);
+        })
+        .build(&server)
+        .await
+        .expect("build codex")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "STALL_AUTO_COMPACT".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .expect("submit stalled auto compact turn");
+
+    let error_message = wait_for_event_match(&codex, |event| match event {
+        EventMsg::Error(err) => Some(err.message.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    assert!(
+        error_message.contains("Mid-turn auto-compaction stalled after 3 attempts"),
+        "expected stalled auto-compaction error, got {error_message}"
+    );
+
+    let request_bodies: Vec<String> = request_log
+        .requests()
+        .into_iter()
+        .map(|request| request.body_json().to_string())
+        .collect();
+    assert_eq!(
+        request_bodies.len(),
+        7,
+        "expected three auto compactions and no fourth compaction request"
+    );
+    assert_eq!(
+        request_bodies
+            .iter()
+            .filter(|body| body_contains_text(body, SUMMARIZATION_PROMPT))
+            .count(),
+        3,
+        "stalled safeguard should stop before a fourth auto compaction request"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn snapshot_request_shape_mid_turn_continuation_compaction() {
     skip_if_no_network!();
 

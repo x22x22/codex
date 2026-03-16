@@ -379,7 +379,7 @@ pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 512;
 const CYBER_VERIFY_URL: &str = "https://chatgpt.com/cyber";
 const CYBER_SAFETY_URL: &str = "https://developers.openai.com/codex/concepts/cyber-safety";
 const DIRECT_APP_TOOL_EXPOSURE_THRESHOLD: usize = 100;
-const MAX_MID_TURN_COMPACTION_ATTEMPTS: u32 = 3;
+const MAX_MID_TURN_AUTO_COMPACTION_ATTEMPTS: u32 = 3;
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -5680,7 +5680,7 @@ pub(crate) async fn run_turn(
     // many turns, from the perspective of the user, it is a single turn.
     let turn_diff_tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
     let mut server_model_warning_emitted_for_turn = false;
-    let mut mid_turn_compaction_attempts = 0_u32;
+    let mut mid_turn_auto_compaction_attempts = 0_u32;
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
@@ -5818,19 +5818,30 @@ pub(crate) async fn run_turn(
                     "post sampling token usage"
                 );
 
-                // as long as compaction works well in getting us way below the token limit, we shouldn't worry about being in an infinite loop.
+                // Guard against a pathological loop where mid-turn auto-compaction
+                // keeps succeeding, but the turn still remains over the token
+                // threshold and still needs follow-up. Treat that as stalled
+                // auto-compaction so we fail explicitly instead of hot-looping.
                 if token_limit_reached && needs_follow_up {
-                    mid_turn_compaction_attempts += 1;
-                    if mid_turn_compaction_attempts > MAX_MID_TURN_COMPACTION_ATTEMPTS {
+                    mid_turn_auto_compaction_attempts += 1;
+                    if mid_turn_auto_compaction_attempts > MAX_MID_TURN_AUTO_COMPACTION_ATTEMPTS {
+                        let _ = sess.services.session_telemetry.counter(
+                            "codex.auto_compaction.stalled",
+                            1,
+                            &[("phase", "mid_turn")],
+                        );
                         error!(
                             turn_id = %turn_context.sub_id,
-                            mid_turn_compaction_attempts,
-                            "mid-turn compaction exceeded retry limit"
+                            mid_turn_auto_compaction_attempts,
+                            total_usage_tokens,
+                            estimated_token_count = ?estimated_token_count,
+                            auto_compact_limit,
+                            "mid-turn auto-compaction stalled"
                         );
                         let event = EventMsg::Error(CodexErr::ContextWindowExceeded.to_error_event(
                             Some(
                                 format!(
-                                    "Mid-turn compaction exceeded retry limit ({MAX_MID_TURN_COMPACTION_ATTEMPTS} attempts); start a new thread or compact manually"
+                                    "Mid-turn auto-compaction stalled after {MAX_MID_TURN_AUTO_COMPACTION_ATTEMPTS} attempts without getting this turn back under the token threshold. Start a new thread or compact manually."
                                 ),
                             ),
                         ));
@@ -5849,7 +5860,7 @@ pub(crate) async fn run_turn(
                     }
                     continue;
                 }
-                mid_turn_compaction_attempts = 0;
+                mid_turn_auto_compaction_attempts = 0;
 
                 if !needs_follow_up {
                     last_agent_message = sampling_request_last_agent_message;
