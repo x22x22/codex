@@ -20,6 +20,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use crate::chatwidget::ActiveCellTranscriptKey;
+use crate::history_cell::AgentMessageCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::UserHistoryCell;
 use crate::key_hint;
@@ -111,7 +112,9 @@ const KEY_CTRL_C: KeyBinding = key_hint::ctrl(KeyCode::Char('c'));
 const KEY_TAB: KeyBinding = key_hint::plain(KeyCode::Tab);
 const KEY_A: KeyBinding = key_hint::plain(KeyCode::Char('a'));
 const KEY_E: KeyBinding = key_hint::plain(KeyCode::Char('e'));
+const KEY_D: KeyBinding = key_hint::plain(KeyCode::Char('d'));
 const MAX_ANCHOR_LINES: usize = 2;
+const DETAILS_PLACEHOLDER_LABEL: &str = "Details...";
 
 // Common pager navigation hints rendered on the first line
 const PAGER_KEY_HINTS: &[(&[KeyBinding], &str)] = &[
@@ -479,25 +482,30 @@ impl Renderable for CellRenderable {
 
 struct CollapsedTurnRenderable {
     prompt: String,
+    show_details_placeholder: bool,
     response: String,
 }
 
 impl CollapsedTurnRenderable {
     fn lines(&self, width: u16) -> Vec<Line<'static>> {
         let budget = width.saturating_sub(4).max(8) as usize;
-        vec![
+        let mut lines = vec![
             Line::from(vec![
                 Span::styled("› ".to_string(), user_message_style().bold().dim()),
                 Span::styled(truncate_preview_text(&self.prompt, budget), user_message_style()),
             ]),
-            Line::from(vec![
-                Span::styled("• ".to_string(), Style::default().dim()),
-                Span::styled(
-                    truncate_preview_text(&self.response, budget),
-                    Style::default().dim(),
-                ),
-            ]),
-        ]
+        ];
+        if self.show_details_placeholder {
+            lines.push(details_line(budget));
+        }
+        lines.push(Line::from(vec![
+            Span::styled("• ".to_string(), Style::default().dim()),
+            Span::styled(
+                truncate_preview_text(&self.response, budget),
+                Style::default().dim(),
+            ),
+        ]));
+        lines
     }
 }
 
@@ -534,6 +542,55 @@ fn truncate_preview_text(text: &str, max_graphemes: usize) -> String {
     }
 }
 
+fn details_line(budget: usize) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("  ".to_string(), Style::default().dim()),
+        Span::styled(
+            truncate_preview_text(DETAILS_PLACEHOLDER_LABEL, budget),
+            Style::default().dim().italic(),
+        ),
+    ])
+}
+
+struct DetailsPlaceholderRenderable;
+
+impl Renderable for DetailsPlaceholderRenderable {
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(Text::from(vec![details_line(
+            area.width.saturating_sub(2).max(8) as usize,
+        )]))
+        .wrap(Wrap { trim: false })
+        .render(area, buf);
+    }
+
+    fn desired_height(&self, width: u16) -> u16 {
+        Paragraph::new(Text::from(vec![details_line(
+            width.saturating_sub(2).max(8) as usize,
+        )]))
+        .wrap(Wrap { trim: false })
+        .line_count(width)
+        .try_into()
+        .unwrap_or(0)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TurnDisplay {
+    prompt_idx: usize,
+    details_indices: Vec<usize>,
+    final_answer_indices: Vec<usize>,
+}
+
+impl TurnDisplay {
+    fn has_details(&self) -> bool {
+        !self.details_indices.is_empty()
+    }
+
+    fn has_final_answer(&self) -> bool {
+        !self.final_answer_indices.is_empty()
+    }
+}
+
 pub(crate) struct TranscriptOverlay {
     /// Pager UI state and the renderables currently displayed.
     ///
@@ -550,6 +607,7 @@ pub(crate) struct TranscriptOverlay {
     selected_anchor: Option<usize>,
     anchors_visible: bool,
     expand_all: bool,
+    show_details: bool,
     mode: TranscriptBrowseMode,
     is_done: bool,
 }
@@ -601,6 +659,7 @@ impl TranscriptOverlay {
                     &anchors,
                     selected_anchor,
                     false,
+                    false,
                     selected_anchor.and_then(|idx| anchors.get(idx).map(|anchor| anchor.cell_idx)),
                 ),
                 "T R A N S C R I P T".to_string(),
@@ -614,6 +673,7 @@ impl TranscriptOverlay {
             selected_anchor,
             anchors_visible: true,
             expand_all: false,
+            show_details: false,
             mode,
             is_done: false,
         };
@@ -736,6 +796,7 @@ impl TranscriptOverlay {
         anchors: &[TranscriptAnchor],
         selected_anchor: Option<usize>,
         expand_all: bool,
+        show_details: bool,
         highlight_cell: Option<usize>,
     ) -> Vec<Box<dyn Renderable>> {
         let mut renderables: Vec<Box<dyn Renderable>> = Vec::new();
@@ -750,22 +811,72 @@ impl TranscriptOverlay {
         }
 
         for (anchor_idx, turn_range) in turn_ranges.iter().enumerate() {
+            let turn_display = Self::turn_display(cells, turn_range.clone());
             if expand_all || anchor_idx == selected_anchor {
-                for cell_idx in turn_range.clone() {
-                    let cell = &cells[cell_idx];
-                    let renderable = Self::cell_renderable(cell.clone(), cell_idx, highlight_cell);
-                    renderables.push(Self::with_spacing(renderable, !cell.is_stream_continuation(), renderables.len()));
-                }
+                Self::push_expanded_turn_renderables(
+                    &mut renderables,
+                    cells,
+                    &turn_display,
+                    show_details,
+                    highlight_cell,
+                );
             } else if let Some(anchor) = anchors.get(anchor_idx) {
                 let collapsed = Box::new(CachedRenderable::new(CollapsedTurnRenderable {
                     prompt: anchor.label.clone(),
-                    response: Self::collapsed_response_summary(cells, turn_range.clone()),
+                    show_details_placeholder: turn_display.has_details(),
+                    response: Self::collapsed_final_answer_summary(cells, &turn_display),
                 })) as Box<dyn Renderable>;
                 renderables.push(Self::with_spacing(collapsed, true, renderables.len()));
             }
         }
 
         renderables
+    }
+
+    fn push_expanded_turn_renderables(
+        renderables: &mut Vec<Box<dyn Renderable>>,
+        cells: &[Arc<dyn HistoryCell>],
+        turn_display: &TurnDisplay,
+        show_details: bool,
+        highlight_cell: Option<usize>,
+    ) {
+        let prompt_cell = &cells[turn_display.prompt_idx];
+        let prompt_renderable = Self::cell_renderable(
+            prompt_cell.clone(),
+            turn_display.prompt_idx,
+            highlight_cell,
+        );
+        renderables.push(Self::with_spacing(
+            prompt_renderable,
+            !prompt_cell.is_stream_continuation(),
+            renderables.len(),
+        ));
+
+        if show_details {
+            for &cell_idx in &turn_display.details_indices {
+                let cell = &cells[cell_idx];
+                let renderable = Self::cell_renderable(cell.clone(), cell_idx, highlight_cell);
+                renderables.push(Self::with_spacing(
+                    renderable,
+                    !cell.is_stream_continuation(),
+                    renderables.len(),
+                ));
+            }
+        } else if turn_display.has_details() {
+            let placeholder = Box::new(CachedRenderable::new(DetailsPlaceholderRenderable))
+                as Box<dyn Renderable>;
+            renderables.push(Self::with_spacing(placeholder, true, renderables.len()));
+        }
+
+        for &cell_idx in &turn_display.final_answer_indices {
+            let cell = &cells[cell_idx];
+            let renderable = Self::cell_renderable(cell.clone(), cell_idx, highlight_cell);
+            renderables.push(Self::with_spacing(
+                renderable,
+                !cell.is_stream_continuation(),
+                renderables.len(),
+            ));
+        }
     }
 
     fn cell_renderable(
@@ -813,6 +924,82 @@ impl TranscriptOverlay {
             .collect()
     }
 
+    fn turn_display(cells: &[Arc<dyn HistoryCell>], turn_range: Range<usize>) -> TurnDisplay {
+        let prompt_idx = turn_range.start;
+        let final_answer_indices = Self::final_answer_indices(cells, turn_range.clone());
+        let detail_start = turn_range.start.saturating_add(1);
+        let mut details_indices = Vec::new();
+        for cell_idx in detail_start..turn_range.end {
+            if final_answer_indices.contains(&cell_idx) {
+                continue;
+            }
+            details_indices.push(cell_idx);
+        }
+        TurnDisplay {
+            prompt_idx,
+            details_indices,
+            final_answer_indices,
+        }
+    }
+
+    fn is_agent_message_cell(cell: &dyn HistoryCell) -> bool {
+        cell.as_any().is::<AgentMessageCell>()
+    }
+
+    fn final_answer_indices(cells: &[Arc<dyn HistoryCell>], turn_range: Range<usize>) -> Vec<usize> {
+        if let Some(range) = Self::latest_agent_message_range(cells, turn_range.clone()) {
+            return range.collect();
+        }
+        Self::latest_meaningful_block_range(cells, turn_range)
+            .map(Iterator::collect)
+            .unwrap_or_default()
+    }
+
+    fn latest_agent_message_range(
+        cells: &[Arc<dyn HistoryCell>],
+        turn_range: Range<usize>,
+    ) -> Option<Range<usize>> {
+        let response_start = turn_range.start.saturating_add(1);
+        for cell_idx in (response_start..turn_range.end).rev() {
+            if !Self::is_agent_message_cell(cells[cell_idx].as_ref()) {
+                continue;
+            }
+            let mut start = cell_idx;
+            while start > response_start
+                && Self::is_agent_message_cell(cells[start - 1].as_ref())
+                && cells[start].is_stream_continuation()
+            {
+                start -= 1;
+            }
+            return Some(start..cell_idx + 1);
+        }
+        None
+    }
+
+    fn latest_meaningful_block_range(
+        cells: &[Arc<dyn HistoryCell>],
+        turn_range: Range<usize>,
+    ) -> Option<Range<usize>> {
+        let response_start = turn_range.start.saturating_add(1);
+        for cell_idx in (response_start..turn_range.end).rev() {
+            if !Self::has_meaningful_transcript(cells[cell_idx].as_ref()) {
+                continue;
+            }
+            let mut start = cell_idx;
+            while start > response_start && cells[start].is_stream_continuation() {
+                start -= 1;
+            }
+            return Some(start..cell_idx + 1);
+        }
+        None
+    }
+
+    fn has_meaningful_transcript(cell: &dyn HistoryCell) -> bool {
+        cell.transcript_lines(200)
+            .iter()
+            .any(|line| line.spans.iter().any(|span| !span.content.trim().is_empty()))
+    }
+
     fn collapsed_response_summary(
         cells: &[Arc<dyn HistoryCell>],
         turn_range: Range<usize>,
@@ -844,6 +1031,23 @@ impl TranscriptOverlay {
         "(no response yet)".to_string()
     }
 
+    fn collapsed_final_answer_summary(cells: &[Arc<dyn HistoryCell>], turn_display: &TurnDisplay) -> String {
+        if turn_display.has_final_answer() {
+            let start = *turn_display
+                .final_answer_indices
+                .first()
+                .unwrap_or(&turn_display.prompt_idx);
+            let end = turn_display
+                .final_answer_indices
+                .last()
+                .map(|idx| idx + 1)
+                .unwrap_or(start + 1);
+            Self::collapsed_response_summary(cells, start..end)
+        } else {
+            "(no final answer)".to_string()
+        }
+    }
+
     fn chunk_index_for_cell(&self, cell_idx: usize) -> Option<usize> {
         let turn_ranges = Self::turn_ranges(&self.cells, &self.anchors);
         let selected_anchor = self
@@ -861,16 +1065,32 @@ impl TranscriptOverlay {
 
         let mut chunk_idx = first_anchor_idx;
         for (anchor_idx, turn_range) in turn_ranges.iter().enumerate() {
-            if anchor_idx == selected_anchor || self.expand_all {
-                if turn_range.contains(&cell_idx) {
-                    return Some(chunk_idx + cell_idx.saturating_sub(turn_range.start));
+            let turn_display = Self::turn_display(&self.cells, turn_range.clone());
+            if self.expand_all || anchor_idx == selected_anchor {
+                let mut visible_indices = vec![turn_display.prompt_idx];
+                if self.show_details {
+                    visible_indices.extend(turn_display.details_indices.iter().copied());
                 }
-                chunk_idx += turn_range.end.saturating_sub(turn_range.start);
+                visible_indices.extend(turn_display.final_answer_indices.iter().copied());
+                if let Some(offset) = visible_indices.iter().position(|idx| *idx == cell_idx) {
+                    return Some(chunk_idx + offset);
+                }
+                if !self.show_details && turn_display.has_details() && cell_idx == turn_display.prompt_idx {
+                    return Some(chunk_idx);
+                }
+                chunk_idx += 1
+                    + usize::from(turn_display.has_details() || self.show_details && !turn_display.details_indices.is_empty())
+                    + turn_display.final_answer_indices.len()
+                    + if self.show_details {
+                        turn_display.details_indices.len()
+                    } else {
+                        0
+                    };
             } else {
                 if turn_range.start == cell_idx {
                     return Some(chunk_idx);
                 }
-                chunk_idx += 1;
+                chunk_idx += 2 + usize::from(turn_display.has_details());
             }
         }
         None
@@ -897,6 +1117,7 @@ impl TranscriptOverlay {
             &self.anchors,
             self.selected_anchor,
             self.expand_all,
+            self.show_details,
             self.selected_transcript_cell(),
         );
         if let Some(tail) = tail_renderable {
@@ -1022,6 +1243,7 @@ impl TranscriptOverlay {
             &self.anchors,
             self.selected_anchor,
             self.expand_all,
+            self.show_details,
             self.selected_transcript_cell(),
         );
         if let Some(tail) = tail_renderable {
@@ -1073,6 +1295,14 @@ impl TranscriptOverlay {
                 },
             ),
             (&[KEY_E], if self.expand_all { "collapse all" } else { "expand all" }),
+            (
+                &[KEY_D],
+                if self.show_details {
+                    "hide details"
+                } else {
+                    "show details"
+                },
+            ),
         ];
         if self.anchors_visible {
             pairs.push((
@@ -1258,6 +1488,13 @@ impl TranscriptOverlay {
                 }
                 e if KEY_E.is_press(e) => {
                     self.expand_all = !self.expand_all;
+                    self.rebuild_renderables();
+                    tui.frame_requester()
+                        .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
+                    Ok(())
+                }
+                e if KEY_D.is_press(e) => {
+                    self.show_details = !self.show_details;
                     self.rebuild_renderables();
                     tui.frame_requester()
                         .schedule_frame_in(crate::tui::TARGET_FRAME_INTERVAL);
