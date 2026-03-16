@@ -594,6 +594,7 @@ pub async fn run_main_with_transport(
             config.codex_home.clone(),
             auth_manager.clone(),
             transport_event_tx.clone(),
+            matches!(transport, AppServerTransport::Headless),
             transport_shutdown_token.clone(),
         )
         .await?;

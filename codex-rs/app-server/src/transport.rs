@@ -73,9 +73,13 @@ const REMOTE_CONTROL_IDLE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 const REMOTE_CONTROL_ENROLL_TIMEOUT: Duration = Duration::from_secs(30);
 const REMOTE_CONTROL_RECONNECT_INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const REMOTE_CONTROL_RECONNECT_MAX_BACKOFF: Duration = Duration::from_secs(30);
+const REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES: usize = 4096;
 const REMOTE_CONTROL_PROTOCOL_VERSION: &str = "2";
 const REMOTE_CONTROL_SERVER_NAME: &str = "codex-app-server";
 const REMOTE_CONTROL_ACCOUNT_ID_HEADER: &str = "chatgpt-account-id";
+const REMOTE_CONTROL_REQUEST_ID_HEADER: &str = "x-request-id";
+const REMOTE_CONTROL_OAI_REQUEST_ID_HEADER: &str = "x-oai-request-id";
+const REMOTE_CONTROL_CF_RAY_HEADER: &str = "cf-ray";
 const REMOTE_CONTROL_STATE_FILE: &str = "remote_control.toml";
 
 fn colorize(text: &str, style: Style) -> String {
@@ -802,6 +806,11 @@ struct RemoteControlConnectionAuth {
     account_id: Option<String>,
 }
 
+struct RemoteControlWebsocketConnection {
+    websocket_stream: WebSocketStream<MaybeTlsStream<TcpStream>>,
+    request_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct RemoteControlStateToml {
     #[serde(default)]
@@ -942,6 +951,7 @@ pub(crate) async fn start_remote_control(
     codex_home: PathBuf,
     auth_manager: Arc<AuthManager>,
     transport_event_tx: mpsc::Sender<TransportEvent>,
+    print_request_id_on_connect: bool,
     shutdown_token: CancellationToken,
 ) -> IoResult<JoinHandle<()>> {
     let remote_control_url = normalize_remote_control_url(&remote_control_url)?;
@@ -958,6 +968,7 @@ pub(crate) async fn start_remote_control(
             auth_manager,
             client_event_tx,
             server_event_rx,
+            print_request_id_on_connect,
             local_shutdown_token.clone(),
         ));
         let mut manager_task = tokio::spawn(run_remote_control_manager(
@@ -1281,6 +1292,68 @@ pub(crate) async fn validate_remote_control_auth(auth_manager: &AuthManager) -> 
     load_remote_control_auth(auth_manager).await.map(|_| ())
 }
 
+fn preview_remote_control_response_body(body: &[u8]) -> String {
+    let body = String::from_utf8_lossy(body);
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+    if trimmed.len() <= REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES {
+        return trimmed.to_string();
+    }
+
+    let mut cut = REMOTE_CONTROL_RESPONSE_BODY_MAX_BYTES;
+    while !trimmed.is_char_boundary(cut) {
+        cut = cut.saturating_sub(1);
+    }
+    let mut truncated = trimmed[..cut].to_string();
+    truncated.push_str("...");
+    truncated
+}
+
+fn remote_control_header_value(
+    headers: &tungstenite::http::HeaderMap,
+    header_name: &str,
+) -> Option<String> {
+    headers
+        .get(header_name)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+}
+
+fn remote_control_request_id(headers: &tungstenite::http::HeaderMap) -> Option<String> {
+    remote_control_header_value(headers, REMOTE_CONTROL_REQUEST_ID_HEADER)
+        .or_else(|| remote_control_header_value(headers, REMOTE_CONTROL_OAI_REQUEST_ID_HEADER))
+}
+
+fn format_remote_control_websocket_connect_error(
+    websocket_url: &str,
+    err: &tungstenite::Error,
+) -> String {
+    let mut message =
+        format!("failed to connect app-server remote control websocket `{websocket_url}`: {err}");
+    let tungstenite::Error::Http(response) = err else {
+        return message;
+    };
+
+    if let Some(request_id) = remote_control_request_id(response.headers()) {
+        message.push_str(&format!(", request id: {request_id}"));
+    }
+    if let Some(cf_ray) =
+        remote_control_header_value(response.headers(), REMOTE_CONTROL_CF_RAY_HEADER)
+    {
+        message.push_str(&format!(", cf-ray: {cf_ray}"));
+    }
+    if let Some(body) = response.body().as_ref()
+        && !body.is_empty()
+    {
+        let body_preview = preview_remote_control_response_body(body);
+        message.push_str(&format!(", body: {body_preview}"));
+    }
+
+    message
+}
+
 async fn enroll_remote_control_server(
     remote_control_target: &RemoteControlTarget,
     auth: &RemoteControlConnectionAuth,
@@ -1313,21 +1386,23 @@ async fn enroll_remote_control_server(
         ))
     })?;
     let status = response.status();
+    let body = response.bytes().await.map_err(|err| {
+        std::io::Error::other(format!(
+            "failed to read remote control enrollment response from `{enroll_url}`: {err}"
+        ))
+    })?;
+    let body_preview = preview_remote_control_response_body(&body);
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
         return Err(std::io::Error::other(format!(
-            "remote control server enrollment failed at `{enroll_url}`: HTTP {status} {body}"
+            "remote control server enrollment failed at `{enroll_url}`: HTTP {status}, body: {body_preview}"
         )));
     }
 
-    let enrollment = response
-        .json::<EnrollRemoteServerResponse>()
-        .await
-        .map_err(|err| {
-            std::io::Error::other(format!(
-                "failed to parse remote control enrollment response from `{enroll_url}`: {err}"
-            ))
-        })?;
+    let enrollment = serde_json::from_slice::<EnrollRemoteServerResponse>(&body).map_err(|err| {
+        std::io::Error::other(format!(
+            "failed to parse remote control enrollment response from `{enroll_url}`: HTTP {status}, body: {body_preview}, decode error: {err}"
+        ))
+    })?;
 
     Ok(RemoteControlEnrollment {
         server_id: enrollment.server_id,
@@ -1385,91 +1460,100 @@ async fn connect_remote_control_websocket(
     remote_control_state_path: &Path,
     auth_manager: &AuthManager,
     enrollment: &mut Option<RemoteControlEnrollment>,
-) -> IoResult<WebSocketStream<MaybeTlsStream<TcpStream>>> {
+) -> IoResult<RemoteControlWebsocketConnection> {
     ensure_rustls_crypto_provider();
 
-    if remote_control_target.enroll_url.is_none() {
-        return connect_async(remote_control_target.websocket_url.as_str())
+    let (websocket_stream, response) = if remote_control_target.enroll_url.is_none() {
+        connect_async(remote_control_target.websocket_url.as_str())
             .await
-            .map(|(websocket_stream, _response)| websocket_stream)
+            .map(|(websocket_stream, response)| (websocket_stream, response))
             .map_err(|err| {
-                std::io::Error::other(format!(
-                    "failed to connect app-server remote control websocket `{}`: {err}",
-                    remote_control_target.websocket_url
+                std::io::Error::other(format_remote_control_websocket_connect_error(
+                    &remote_control_target.websocket_url,
+                    &err,
                 ))
-            });
-    }
-
-    let auth = load_remote_control_auth(auth_manager).await?;
-    if enrollment.is_none() {
-        *enrollment = load_persisted_remote_control_enrollment(
-            remote_control_state_path,
-            remote_control_target,
-            auth.account_id.as_deref(),
-        )
-        .await;
-    }
-
-    if enrollment.is_none() {
-        let new_enrollment = enroll_remote_control_server(remote_control_target, &auth).await?;
-        if let Err(err) = update_persisted_remote_control_enrollment(
-            remote_control_state_path,
-            remote_control_target,
-            auth.account_id.as_deref(),
-            Some(&new_enrollment),
-        )
-        .await
-        {
-            warn!(
-                "failed to persist remote control enrollment in `{}`: {err}",
-                remote_control_state_path.display()
-            );
+            })?
+    } else {
+        let auth = load_remote_control_auth(auth_manager).await?;
+        if enrollment.is_none() {
+            *enrollment = load_persisted_remote_control_enrollment(
+                remote_control_state_path,
+                remote_control_target,
+                auth.account_id.as_deref(),
+            )
+            .await;
         }
-        *enrollment = Some(new_enrollment);
-    }
 
-    let enrollment_ref = match enrollment.as_ref() {
-        Some(enrollment) => enrollment,
-        None => {
-            return Err(std::io::Error::other(
-                "missing remote control enrollment after enrollment step",
-            ));
+        if enrollment.is_none() {
+            let new_enrollment = enroll_remote_control_server(remote_control_target, &auth).await?;
+            if let Err(err) = update_persisted_remote_control_enrollment(
+                remote_control_state_path,
+                remote_control_target,
+                auth.account_id.as_deref(),
+                Some(&new_enrollment),
+            )
+            .await
+            {
+                warn!(
+                    "failed to persist remote control enrollment in `{}`: {err}",
+                    remote_control_state_path.display()
+                );
+            }
+            *enrollment = Some(new_enrollment);
+        }
+
+        let enrollment_ref = match enrollment.as_ref() {
+            Some(enrollment) => enrollment,
+            None => {
+                return Err(std::io::Error::other(
+                    "missing remote control enrollment after enrollment step",
+                ));
+            }
+        };
+        let request = build_remote_control_websocket_request(
+            &remote_control_target.websocket_url,
+            enrollment_ref,
+            &auth,
+        )?;
+
+        match connect_async(request).await {
+            Ok((websocket_stream, response)) => (websocket_stream, response),
+            Err(err) => {
+                if matches!(
+                    &err,
+                    tungstenite::Error::Http(response) if response.status().as_u16() == 404
+                ) {
+                    if let Err(clear_err) = update_persisted_remote_control_enrollment(
+                        remote_control_state_path,
+                        remote_control_target,
+                        auth.account_id.as_deref(),
+                        None,
+                    )
+                    .await
+                    {
+                        warn!(
+                            "failed to clear stale remote control enrollment in `{}`: {clear_err}",
+                            remote_control_state_path.display()
+                        );
+                    }
+                    *enrollment = None;
+                }
+                return Err(std::io::Error::other(
+                    format_remote_control_websocket_connect_error(
+                        &remote_control_target.websocket_url,
+                        &err,
+                    ),
+                ));
+            }
         }
     };
-    let request = build_remote_control_websocket_request(
-        &remote_control_target.websocket_url,
-        enrollment_ref,
-        &auth,
-    )?;
 
-    match connect_async(request).await {
-        Ok((websocket_stream, _response)) => Ok(websocket_stream),
-        Err(err) => {
-            if matches!(
-                &err,
-                tungstenite::Error::Http(response) if response.status().as_u16() == 404
-            ) {
-                if let Err(clear_err) = update_persisted_remote_control_enrollment(
-                    remote_control_state_path,
-                    remote_control_target,
-                    auth.account_id.as_deref(),
-                    None,
-                )
-                .await
-                {
-                    warn!(
-                        "failed to clear stale remote control enrollment in `{}`: {clear_err}",
-                        remote_control_state_path.display()
-                    );
-                }
-                *enrollment = None;
-            }
-            Err(std::io::Error::other(format!(
-                "failed to connect app-server remote control websocket `{}`: {err}",
-                remote_control_target.websocket_url
-            )))
-        }
-    }
+    let request_id = remote_control_request_id(response.headers());
+
+    Ok(RemoteControlWebsocketConnection {
+        websocket_stream,
+        request_id,
+    })
 }
 
 #[allow(clippy::print_stderr)]
@@ -1479,6 +1563,7 @@ async fn run_remote_control_websocket_loop(
     auth_manager: Arc<AuthManager>,
     client_event_tx: mpsc::Sender<ClientEvent>,
     mut server_event_rx: mpsc::Receiver<ServerEvent>,
+    print_request_id_on_connect: bool,
     shutdown_token: CancellationToken,
 ) {
     let mut reconnect_backoff = REMOTE_CONTROL_RECONNECT_INITIAL_BACKOFF;
@@ -1527,7 +1612,7 @@ async fn run_remote_control_websocket_loop(
             eprintln!("  {control_server_label} {control_server_url}");
         }
 
-        let websocket_stream = tokio::select! {
+        let websocket_connection = tokio::select! {
             _ = shutdown_token.cancelled() => {
                 break;
             }
@@ -1538,14 +1623,26 @@ async fn run_remote_control_websocket_loop(
                 &mut enrollment,
             ) => {
                 match connect_result {
-                    Ok(websocket_stream) => {
+                    Ok(websocket_connection) => {
                         reconnect_backoff = REMOTE_CONTROL_RECONNECT_INITIAL_BACKOFF;
                         reconnect_attempt = 0;
+                        if print_request_id_on_connect {
+                            let request_id_label =
+                                colorize("request id:", Style::new().dimmed());
+                            let request_id = colorize(
+                                websocket_connection
+                                    .request_id
+                                    .as_deref()
+                                    .unwrap_or("<unknown>"),
+                                Style::new().green(),
+                            );
+                            eprintln!("  {request_id_label} {request_id}");
+                        }
                         info!(
                             "connected to app-server remote control websocket: {}",
                             remote_control_target.websocket_url
                         );
-                        websocket_stream
+                        websocket_connection
                     }
                     Err(err) => {
                         warn!("{err}");
@@ -1561,7 +1658,8 @@ async fn run_remote_control_websocket_loop(
             }
         };
 
-        let (mut websocket_writer, mut websocket_reader) = websocket_stream.split();
+        let (mut websocket_writer, mut websocket_reader) =
+            websocket_connection.websocket_stream.split();
         loop {
             if let Some(server_event) = pending_server_event.take() {
                 let payload = match serde_json::to_string(&server_event) {
@@ -2396,6 +2494,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connect_remote_control_websocket_captures_handshake_request_id() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let remote_control_url = format!(
+            "ws://{}/remote/control",
+            listener
+                .local_addr()
+                .expect("listener should have a local addr")
+        );
+        let remote_control_target =
+            normalize_remote_control_url(&remote_control_url).expect("target should parse");
+        let accept_task = tokio::spawn(async move {
+            accept_remote_control_backend_connection(&listener, Some("req-control-123")).await
+        });
+        let codex_home = TempDir::new().expect("temp dir should create");
+        let auth_manager = remote_control_auth_manager();
+        let mut enrollment = None;
+
+        let connection = connect_remote_control_websocket(
+            &remote_control_target,
+            remote_control_state_path(codex_home.path()).as_path(),
+            auth_manager.as_ref(),
+            &mut enrollment,
+        )
+        .await
+        .expect("websocket connection should succeed");
+
+        assert_eq!(connection.request_id.as_deref(), Some("req-control-123"));
+
+        let (_request, server_websocket) = accept_task.await.expect("accept task should succeed");
+        drop(server_websocket);
+        drop(connection.websocket_stream);
+    }
+
+    #[tokio::test]
+    async fn connect_remote_control_websocket_includes_http_error_details() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let remote_control_url = format!(
+            "ws://{}/remote/control",
+            listener
+                .local_addr()
+                .expect("listener should have a local addr")
+        );
+        let remote_control_target =
+            normalize_remote_control_url(&remote_control_url).expect("target should parse");
+        let expected_error = format!(
+            "failed to connect app-server remote control websocket `{remote_control_url}`: HTTP error: 503 Service Unavailable, request id: req-503, cf-ray: ray-503, body: upstream unavailable"
+        );
+        let server_task = tokio::spawn(async move {
+            let request = accept_http_request(&listener).await;
+            assert_eq!(request.request_line, "GET /remote/control HTTP/1.1");
+            respond_with_status_and_headers(
+                request.stream,
+                "503 Service Unavailable",
+                &[
+                    (REMOTE_CONTROL_REQUEST_ID_HEADER, "req-503"),
+                    (REMOTE_CONTROL_CF_RAY_HEADER, "ray-503"),
+                ],
+                "upstream unavailable",
+            )
+            .await;
+        });
+        let codex_home = TempDir::new().expect("temp dir should create");
+        let auth_manager = remote_control_auth_manager();
+        let mut enrollment = None;
+
+        let err = match connect_remote_control_websocket(
+            &remote_control_target,
+            remote_control_state_path(codex_home.path()).as_path(),
+            auth_manager.as_ref(),
+            &mut enrollment,
+        )
+        .await
+        {
+            Ok(_) => panic!("http error response should fail the websocket connect"),
+            Err(err) => err,
+        };
+
+        server_task.await.expect("server task should succeed");
+        assert_eq!(err.to_string(), expected_error);
+    }
+
+    #[tokio::test]
     async fn persisted_remote_control_enrollment_round_trips_by_target_and_account() {
         let codex_home = TempDir::new().expect("temp dir should create");
         let state_path = remote_control_state_path(codex_home.path());
@@ -2560,6 +2744,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             remote_control_auth_manager(),
             transport_event_tx,
+            false,
             shutdown_token.clone(),
         )
         .await
@@ -2783,6 +2968,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             remote_control_auth_manager(),
             transport_event_tx,
+            false,
             shutdown_token.clone(),
         )
         .await
@@ -2848,6 +3034,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             remote_control_auth_manager(),
             transport_event_tx,
+            false,
             shutdown_token.clone(),
         )
         .await
@@ -2879,7 +3066,7 @@ mod tests {
         respond_with_json(enroll_request.stream, json!({ "server_id": "srv_e_test" })).await;
 
         let (handshake_request, mut websocket) =
-            accept_remote_control_backend_connection(&listener).await;
+            accept_remote_control_backend_connection(&listener, None).await;
         assert_eq!(
             handshake_request.path,
             "/backend-api/wham/remote/control/server"
@@ -3014,6 +3201,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn enroll_remote_control_server_parse_failure_includes_response_body() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let remote_control_url = format!(
+            "http://{}/backend-api/wham",
+            listener
+                .local_addr()
+                .expect("listener should have a local addr")
+        );
+        let remote_control_target =
+            normalize_remote_control_url(&remote_control_url).expect("target should parse");
+        let enroll_url = remote_control_target
+            .enroll_url
+            .clone()
+            .expect("http target should include enroll url");
+        let response_body = json!({
+            "error": "not enrolled",
+        });
+        let expected_body = response_body.to_string();
+        let server_task = tokio::spawn(async move {
+            let enroll_request = accept_http_request(&listener).await;
+            respond_with_json(enroll_request.stream, response_body).await;
+        });
+
+        let err = enroll_remote_control_server(
+            &remote_control_target,
+            &RemoteControlConnectionAuth {
+                bearer_token: "Access Token".to_string(),
+                account_id: Some("account_id".to_string()),
+            },
+        )
+        .await
+        .expect_err("invalid response should fail to parse");
+
+        server_task.await.expect("server task should succeed");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "failed to parse remote control enrollment response from `{enroll_url}`: HTTP 200 OK, body: {expected_body}, decode error: missing field `server_id` at line 1 column {}",
+                expected_body.len()
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn remote_control_http_mode_reuses_persisted_enrollment_before_reenrolling() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -3048,13 +3281,14 @@ mod tests {
             codex_home.path().to_path_buf(),
             remote_control_auth_manager_with_home(&codex_home),
             transport_event_tx,
+            false,
             shutdown_token.clone(),
         )
         .await
         .expect("remote control should start");
 
         let (handshake_request, _websocket) =
-            accept_remote_control_backend_connection(&listener).await;
+            accept_remote_control_backend_connection(&listener, None).await;
         assert_eq!(
             handshake_request.path,
             "/backend-api/wham/remote/control/server"
@@ -3117,6 +3351,7 @@ mod tests {
             codex_home.path().to_path_buf(),
             remote_control_auth_manager_with_home(&codex_home),
             transport_event_tx,
+            false,
             shutdown_token.clone(),
         )
         .await
@@ -3145,7 +3380,7 @@ mod tests {
         .await;
 
         let (handshake_request, _websocket) =
-            accept_remote_control_backend_connection(&listener).await;
+            accept_remote_control_backend_connection(&listener, None).await;
         assert_eq!(
             handshake_request.headers.get("x-codex-server-id"),
             Some(&refreshed_enrollment.server_id)
@@ -3250,10 +3485,23 @@ mod tests {
         stream.flush().await.expect("response should flush");
     }
 
-    async fn respond_with_status(mut stream: TcpStream, status: &str, body: &str) {
+    async fn respond_with_status(stream: TcpStream, status: &str, body: &str) {
+        respond_with_status_and_headers(stream, status, &[], body).await;
+    }
+
+    async fn respond_with_status_and_headers(
+        mut stream: TcpStream,
+        status: &str,
+        headers: &[(&str, &str)],
+        body: &str,
+    ) {
+        let extra_headers = headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect::<String>();
         let response = format!(
-            "HTTP/1.1 {status}\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-            body.len()
+            "HTTP/1.1 {status}\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n{extra_headers}\r\n{body}",
+            body.len(),
         );
         stream
             .write_all(response.as_bytes())
@@ -3264,6 +3512,7 @@ mod tests {
 
     async fn accept_remote_control_backend_connection(
         listener: &TcpListener,
+        request_id: Option<&str>,
     ) -> (CapturedWebSocketRequest, WebSocketStream<TcpStream>) {
         let (stream, _) = timeout(Duration::from_secs(5), listener.accept())
             .await
@@ -3271,10 +3520,11 @@ mod tests {
             .expect("listener accept should succeed");
         let captured_request = Arc::new(std::sync::Mutex::new(None::<CapturedWebSocketRequest>));
         let captured_request_for_callback = captured_request.clone();
+        let request_id = request_id.map(str::to_owned);
         let websocket = accept_hdr_async(
             stream,
             move |request: &tungstenite::handshake::server::Request,
-                  response: tungstenite::handshake::server::Response| {
+                  mut response: tungstenite::handshake::server::Response| {
                 let headers = request
                     .headers()
                     .iter()
@@ -3294,6 +3544,13 @@ mod tests {
                     path: request.uri().path().to_string(),
                     headers,
                 });
+                if let Some(request_id) = request_id.as_deref() {
+                    response.headers_mut().insert(
+                        REMOTE_CONTROL_REQUEST_ID_HEADER,
+                        HeaderValue::from_str(request_id)
+                            .expect("request id should be a valid header value"),
+                    );
+                }
                 Ok(response)
             },
         )
