@@ -63,6 +63,7 @@ export type { ResponseItemMessageMetadata } from "./ResponseItemMessageMetadata"
 export type { ResponseItemMetadata } from "./ResponseItemMetadata";
 export type { ReviewDecision } from "./ReviewDecision";
 export type { ReviewDecisionMetadata } from "./ReviewDecisionMetadata";
+export type { SandboxPolicyMetadata } from "./SandboxPolicyMetadata";
 export type { ServerNotification } from "./ServerNotification";
 export type { ServerRequest } from "./ServerRequest";
 export type { ServiceTier } from "./ServiceTier";
