@@ -3381,6 +3381,9 @@ impl Session {
             );
             state.replace_history(items.clone(), reference_context_item.clone());
         }
+        // `items` may have gained a concurrent ghost snapshot tail under the
+        // state lock, so refresh the persisted replacement history to match the
+        // in-memory install.
         compacted_item.replacement_history = Some(items);
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
