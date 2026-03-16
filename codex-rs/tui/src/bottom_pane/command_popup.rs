@@ -154,6 +154,29 @@ impl CommandPopup {
         let prompt_prefix_len = PROMPTS_CMD_PREFIX.chars().count() + 1;
         let indices_for = |offset| Some((offset..offset + filter_chars).collect());
 
+        for cmd in self.builtins.iter() {
+            if cmd.command() == filter_lower.as_str() {
+                exact.push((CommandItem::Builtin(*cmd), indices_for(0)));
+                continue;
+            }
+            if cmd.command().starts_with(&filter_lower) {
+                prefix.push((CommandItem::Builtin(*cmd), indices_for(0)));
+                continue;
+            }
+            // Keep the popup searchable by accepted aliases, but keep rendering the
+            // canonical command name so the list stays deduplicated and stable.
+            if cmd.command_aliases().contains(&filter_lower.as_str()) {
+                exact.push((CommandItem::Builtin(*cmd), None));
+                continue;
+            }
+            if cmd
+                .command_aliases()
+                .iter()
+                .any(|alias| alias.starts_with(&filter_lower))
+            {
+                prefix.push((CommandItem::Builtin(*cmd), None));
+            }
+        }
         let mut push_match =
             |item: CommandItem, display: &str, name: Option<&str>, name_offset: usize| {
                 let display_lower = display.to_lowercase();
@@ -174,10 +197,6 @@ impl CommandPopup {
                     prefix.push((item, indices_for(offset)));
                 }
             };
-
-        for cmd in self.builtins.iter() {
-            push_match(CommandItem::Builtin(*cmd), cmd.command(), None, 0);
-        }
         // Support both search styles:
         // - Typing "name" should surface "/prompts:name" results.
         // - Typing "prompts:name" should also work.
@@ -357,7 +376,7 @@ mod tests {
                 CommandItem::UserPrompt(_) => None,
             })
             .collect();
-        assert_eq!(cmds, vec!["model", "mention", "mcp"]);
+        assert_eq!(cmds, vec!["model", "mention", "mcp", "subagents"]);
     }
 
     #[test]
@@ -506,6 +525,32 @@ mod tests {
         popup.on_composer_text_change("/qu".to_string());
         let items = popup.filtered_items();
         assert!(items.contains(&CommandItem::Builtin(SlashCommand::Quit)));
+    }
+
+    #[test]
+    fn multi_agents_alias_matches_subagents_entry() {
+        let mut popup = CommandPopup::new(Vec::new(), CommandPopupFlags::default());
+        popup.on_composer_text_change("/multi".to_string());
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Builtin(SlashCommand::MultiAgents))
+        );
+
+        let cmds: Vec<&str> = popup
+            .filtered_items()
+            .into_iter()
+            .filter_map(|item| match item {
+                CommandItem::Builtin(cmd) => Some(cmd.command()),
+                CommandItem::UserPrompt(_) => None,
+            })
+            .collect();
+        assert_eq!(cmds, vec!["subagents"]);
+
+        popup.on_composer_text_change("/multi-agents".to_string());
+        assert_eq!(
+            popup.selected_item(),
+            Some(CommandItem::Builtin(SlashCommand::MultiAgents))
+        );
     }
 
     #[test]
