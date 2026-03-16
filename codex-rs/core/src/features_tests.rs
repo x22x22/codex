@@ -143,12 +143,6 @@ fn collab_is_legacy_alias_for_multi_agent() {
 }
 
 #[test]
-fn user_message_type_metadata_is_legacy_alias_for_item_metadata() {
-    assert_eq!(feature_for_key("user_message_type_metadata"), Some(Feature::ItemMetadata));
-    assert_eq!(feature_for_key("item_metadata"), Some(Feature::ItemMetadata));
-}
-
-#[test]
 fn item_metadata_is_under_development_and_disabled_by_default() {
     assert_eq!(Feature::ItemMetadata.stage(), Stage::UnderDevelopment);
     assert_eq!(Feature::ItemMetadata.default_enabled(), false);
