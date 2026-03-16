@@ -730,7 +730,6 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
-    resume_queued_inputs_after_app_events: bool,
 }
 
 #[derive(Default)]
@@ -758,16 +757,11 @@ fn normalize_harness_overrides_for_cwd(
 }
 
 impl App {
-    fn on_bottom_pane_view_completed(&mut self) {
-        self.resume_queued_inputs_after_app_events = true;
-    }
-
     fn maybe_resume_queued_inputs_after_app_events(&mut self, app_events_drained: bool) {
-        if !self.resume_queued_inputs_after_app_events || !app_events_drained {
+        if !app_events_drained {
             return;
         }
 
-        self.resume_queued_inputs_after_app_events = false;
         self.chat_widget.maybe_resume_queued_inputs_when_idle();
     }
 
@@ -2307,7 +2301,6 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
-            resume_queued_inputs_after_app_events: false,
         };
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
@@ -2785,9 +2778,7 @@ impl App {
                 self.chat_widget.handle_serialized_slash_command(draft);
                 self.refresh_status_line();
             }
-            AppEvent::BottomPaneViewCompleted => {
-                self.on_bottom_pane_view_completed();
-            }
+            AppEvent::BottomPaneViewCompleted => {}
             AppEvent::UpdateCollaborationMode(mask) => {
                 self.chat_widget.set_collaboration_mask(mask);
                 self.refresh_status_line();
@@ -6564,7 +6555,6 @@ guardian_approval = true
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
-            resume_queued_inputs_after_app_events: false,
         }
     }
 
@@ -6625,7 +6615,6 @@ guardian_approval = true
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
-                resume_queued_inputs_after_app_events: false,
             },
             rx,
             op_rx,
@@ -7637,6 +7626,105 @@ guardian_approval = true
             Ok(Op::Shutdown) => {}
             Ok(other) => panic!("expected Op::Shutdown, got {other:?}"),
             Err(_) => panic!("expected shutdown op to be sent"),
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_personality_selection_resumes_followup_after_app_events_drain() {
+        let (mut app, mut app_event_rx, mut op_rx) = make_test_app_with_channels().await;
+        app.chat_widget.set_model("gpt-5.2-codex");
+        app.chat_widget
+            .set_feature_enabled(Feature::Personality, true);
+        app.chat_widget.handle_codex_event(Event {
+            id: "configured".into(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: ThreadId::new(),
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-5.2-codex".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                approvals_reviewer: ApprovalsReviewer::User,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/home/user/project"),
+                reasoning_effort: Some(ReasoningEffortConfig::default()),
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: None,
+            }),
+        });
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-started".into(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: Default::default(),
+            }),
+        });
+        while app_event_rx.try_recv().is_ok() {}
+        while op_rx.try_recv().is_ok() {}
+
+        app.chat_widget
+            .handle_serialized_slash_command(UserMessage::from("/personality pragmatic"));
+        app.chat_widget
+            .set_composer_text("followup".to_string(), Vec::new(), Vec::new());
+        app.chat_widget
+            .handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-complete".into(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".to_string(),
+                last_agent_message: None,
+            }),
+        });
+
+        assert_eq!(
+            app.chat_widget.queued_user_message_texts(),
+            vec!["followup".to_string()]
+        );
+        assert!(
+            op_rx.try_recv().is_err(),
+            "queued follow-up should not submit before app events drain"
+        );
+
+        loop {
+            match app_event_rx.try_recv() {
+                Ok(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    personality: Some(Personality::Pragmatic),
+                    ..
+                })) => continue,
+                Ok(AppEvent::UpdatePersonality(Personality::Pragmatic)) => {
+                    app.on_update_personality(Personality::Pragmatic);
+                    break;
+                }
+                Ok(AppEvent::PersistPersonalitySelection {
+                    personality: Personality::Pragmatic,
+                }) => continue,
+                Ok(_) => continue,
+                Err(TryRecvError::Empty) => panic!("expected personality update events"),
+                Err(TryRecvError::Disconnected) => panic!("expected personality update events"),
+            }
+        }
+
+        app.maybe_resume_queued_inputs_after_app_events(true);
+
+        match next_user_turn_op(&mut op_rx) {
+            Op::UserTurn {
+                items,
+                personality: Some(Personality::Pragmatic),
+                ..
+            } => assert_eq!(
+                items,
+                vec![UserInput::Text {
+                    text: "followup".to_string(),
+                    text_elements: Vec::new(),
+                }]
+            ),
+            other => panic!("expected Op::UserTurn with pragmatic personality, got {other:?}"),
         }
     }
 
