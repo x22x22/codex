@@ -5840,7 +5840,7 @@ pub(crate) async fn run_turn(
                 if token_limit_reached && needs_follow_up {
                     mid_turn_auto_compaction_attempts += 1;
                     if mid_turn_auto_compaction_attempts > MAX_MID_TURN_AUTO_COMPACTION_ATTEMPTS {
-                        let _ = sess.services.session_telemetry.counter(
+                        sess.services.session_telemetry.counter(
                             "codex.auto_compaction.stalled",
                             1,
                             &[("phase", "mid_turn")],
