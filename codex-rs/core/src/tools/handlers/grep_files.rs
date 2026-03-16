@@ -138,7 +138,7 @@ async fn run_rg_search(
         })?
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
-                "failed to launch ripgrep at `{}`: {err}. Ensure ripgrep is installed and on PATH or bundled with this native install.",
+                "failed to launch ripgrep at `{}`: {err}. Ensure ripgrep is installed and on PATH or bundled with this standalone install.",
                 rg_program.display()
             ))
         })?;
