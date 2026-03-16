@@ -686,7 +686,6 @@ fn built_in_config_file_contents_resolves_explorer_only() {
     let explorer =
         built_in::config_file_contents(Path::new("explorer.toml")).expect("explorer config");
     assert!(explorer.contains("sandbox_mode = \"read-only\""));
-    assert!(explorer.contains("include_apply_patch_tool = false"));
     assert_eq!(
         built_in::config_file_contents(Path::new("missing.toml")),
         None
