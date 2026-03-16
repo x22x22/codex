@@ -1,11 +1,19 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Deserialize;
+use std::io::Read;
 use std::path::Path;
 use std::process::Command;
+use std::process::Output;
+use std::process::Stdio;
 use std::sync::LazyLock;
+use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 
 const POWERSHELL_PARSER_SCRIPT: &str = include_str!("powershell_parser.ps1");
+const POWERSHELL_PARSER_TIMEOUT: Duration = Duration::from_secs(5);
+const POWERSHELL_PARSER_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 /// On Windows, we conservatively allow only clearly read-only PowerShell invocations
 /// that match a small safelist. Anything else (including direct CMD commands) is unsafe.
@@ -127,7 +135,7 @@ fn is_powershell_executable(exe: &str) -> bool {
 fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseOutcome {
     let encoded_script = encode_powershell_base64(script);
     let encoded_parser_script = encoded_parser_script();
-    match Command::new(executable)
+    let mut child = match Command::new(executable)
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -136,18 +144,65 @@ fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseO
             encoded_parser_script,
         ])
         .env("CODEX_POWERSHELL_PAYLOAD", &encoded_script)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
     {
-        Ok(output) if output.status.success() => {
-            if let Ok(result) =
-                serde_json::from_slice::<PowershellParserOutput>(output.stdout.as_slice())
-            {
+        Ok(child) => child,
+        Err(_) => return PowershellParseOutcome::Failed,
+    };
+
+    let deadline = Instant::now() + POWERSHELL_PARSER_TIMEOUT;
+    let output = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+
+                if let Some(mut reader) = child.stdout.take()
+                    && reader.read_to_end(&mut stdout).is_err()
+                {
+                    return PowershellParseOutcome::Failed;
+                }
+
+                if let Some(mut reader) = child.stderr.take()
+                    && reader.read_to_end(&mut stderr).is_err()
+                {
+                    return PowershellParseOutcome::Failed;
+                }
+
+                break Output {
+                    status,
+                    stdout,
+                    stderr,
+                };
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return PowershellParseOutcome::Failed;
+                }
+
+                thread::sleep(POWERSHELL_PARSER_POLL_INTERVAL);
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return PowershellParseOutcome::Failed;
+            }
+        }
+    };
+
+    match output.status.success() {
+        true => {
+            if let Ok(result) = serde_json::from_slice::<PowershellParserOutput>(&output.stdout) {
                 result.into_outcome()
             } else {
                 PowershellParseOutcome::Failed
             }
         }
-        _ => PowershellParseOutcome::Failed,
+        false => PowershellParseOutcome::Failed,
     }
 }
 
@@ -348,7 +403,11 @@ fn is_safe_git_command(words: &[String]) -> bool {
 mod tests {
     use super::*;
     use crate::powershell::try_find_pwsh_executable_blocking;
+    use std::fs;
     use std::string::ToString;
+    use std::time::Duration;
+    use std::time::Instant;
+    use std::time::SystemTime;
 
     /// Converts a slice of string literals into owned `String`s for the tests.
     fn vec_str(args: &[&str]) -> Vec<String> {
@@ -619,5 +678,27 @@ mod tests {
                 "`{chain}` should be considered safe to pwsh.exe"
             );
         }
+    }
+
+    #[test]
+    fn powershell_ast_parser_times_out_for_stuck_child() {
+        let unique = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let script_path =
+            std::env::temp_dir().join(format!("codex-powershell-parser-timeout-{unique}.cmd"));
+        fs::write(&script_path, "@echo off\r\ntimeout /t 10 /nobreak >nul\r\n")
+            .expect("write fake powershell");
+
+        let started = Instant::now();
+        let outcome = parse_with_powershell_ast(
+            script_path.to_str().expect("utf8 temp path"),
+            "Write-Output ok",
+        );
+        let _ = fs::remove_file(&script_path);
+
+        assert!(matches!(outcome, PowershellParseOutcome::Failed));
+        assert!(started.elapsed() < POWERSHELL_PARSER_TIMEOUT + Duration::from_secs(1));
     }
 }
