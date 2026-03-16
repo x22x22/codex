@@ -3358,6 +3358,15 @@ impl Session {
         state.replace_history(items, reference_context_item);
     }
 
+    /// Replaces session history with a compacted transcript and preserves any
+    /// append-only concurrent `GhostSnapshot` tail seen under the same state
+    /// lock.
+    ///
+    /// Returns `true` when live history was unchanged or when the only
+    /// concurrent writes were appended `GhostSnapshot` items that were merged
+    /// into `items` before replacement. Returns `false` when live history
+    /// diverged in any other way, in which case replacement still happens but
+    /// no concurrent tail is merged.
     pub(crate) async fn replace_compacted_history(
         &self,
         mut items: Vec<ResponseItem>,
