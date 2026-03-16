@@ -2,9 +2,11 @@ use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
 use crate::config_loader::ConfigLayerStackOrdering;
+use crate::features::Feature;
 use crate::plugins::PluginsManager;
 use crate::skills::SkillsManager;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::SandboxPolicy;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
@@ -67,17 +69,42 @@ async fn apply_role_returns_error_for_unknown_role() {
 }
 
 #[tokio::test]
-#[ignore = "No role requiring it for now"]
-async fn apply_explorer_role_sets_model_and_adds_session_flags_layer() {
-    let (_home, mut config) = test_config_with_cli_overrides(Vec::new()).await;
+async fn apply_explorer_role_sets_read_only_config_and_adds_session_flags_layer() {
+    let (_home, mut config) = test_config_with_cli_overrides(vec![
+        (
+            "sandbox_mode".to_string(),
+            TomlValue::String("workspace-write".to_string()),
+        ),
+        (
+            "include_apply_patch_tool".to_string(),
+            TomlValue::Boolean(true),
+        ),
+    ])
+    .await;
     let before_layers = session_flags_layer_count(&config);
+    assert!(matches!(
+        config.permissions.sandbox_policy.get(),
+        SandboxPolicy::WorkspaceWrite { .. }
+    ));
+    assert!(config.features.enabled(Feature::ApplyPatchFreeform));
+    assert!(config.include_apply_patch_tool);
 
     apply_role_to_config(&mut config, Some("explorer"))
         .await
         .expect("explorer role should apply");
 
-    assert_eq!(config.model.as_deref(), Some("gpt-5.1-codex-mini"));
-    assert_eq!(config.model_reasoning_effort, Some(ReasoningEffort::Medium));
+    assert_eq!(
+        config.permissions.sandbox_policy.get(),
+        &SandboxPolicy::new_read_only_policy()
+    );
+    assert!(!config.features.enabled(Feature::ApplyPatchFreeform));
+    assert!(!config.include_apply_patch_tool);
+    assert!(
+        config
+            .developer_instructions
+            .as_deref()
+            .is_some_and(|instructions| instructions.contains("You must remain read-only"))
+    );
     assert_eq!(session_flags_layer_count(&config), before_layers + 1);
 }
 
