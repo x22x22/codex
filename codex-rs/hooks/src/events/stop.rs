@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::items::HookPromptFragment;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
@@ -34,7 +35,7 @@ pub struct StopOutcome {
     pub stop_reason: Option<String>,
     pub should_block: bool,
     pub block_reason: Option<String>,
-    pub continuation_prompt: Option<String>,
+    pub continuation_fragments: Vec<HookPromptFragment>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -43,7 +44,7 @@ struct StopHandlerData {
     stop_reason: Option<String>,
     should_block: bool,
     block_reason: Option<String>,
-    continuation_prompt: Option<String>,
+    continuation_fragments: Vec<HookPromptFragment>,
 }
 
 pub(crate) fn preview(
@@ -77,7 +78,7 @@ pub(crate) async fn run(
             stop_reason: None,
             should_block: false,
             block_reason: None,
-            continuation_prompt: None,
+            continuation_fragments: Vec::new(),
         };
     }
 
@@ -118,7 +119,7 @@ pub(crate) async fn run(
         stop_reason: aggregate.stop_reason,
         should_block: aggregate.should_block,
         block_reason: aggregate.block_reason,
-        continuation_prompt: aggregate.continuation_prompt,
+        continuation_fragments: aggregate.continuation_fragments,
     }
 }
 
@@ -240,6 +241,14 @@ fn parse_completed(
         turn_id,
         run: dispatcher::completed_summary(handler, &run_result, status, entries),
     };
+    let continuation_fragments = continuation_prompt
+        .map(|prompt| {
+            vec![HookPromptFragment::from_single_hook(
+                prompt,
+                completed.run.id.clone(),
+            )]
+        })
+        .unwrap_or_default();
 
     dispatcher::ParsedHandler {
         completed,
@@ -248,7 +257,7 @@ fn parse_completed(
             stop_reason,
             should_block,
             block_reason,
-            continuation_prompt,
+            continuation_fragments,
         },
     }
 }
@@ -267,12 +276,14 @@ fn aggregate_results<'a>(
     } else {
         None
     };
-    let continuation_prompt = if should_block {
-        join_block_text(results.iter().copied(), |result| {
-            result.continuation_prompt.as_deref()
-        })
+    let continuation_fragments = if should_block {
+        results
+            .iter()
+            .filter(|result| result.should_block)
+            .flat_map(|result| result.continuation_fragments.clone())
+            .collect()
     } else {
-        None
+        Vec::new()
     };
 
     StopHandlerData {
@@ -280,7 +291,7 @@ fn aggregate_results<'a>(
         stop_reason,
         should_block,
         block_reason,
-        continuation_prompt,
+        continuation_fragments,
     }
 }
 
@@ -336,7 +347,7 @@ fn serialization_failure_outcome(
         stop_reason: None,
         should_block: false,
         block_reason: None,
-        continuation_prompt: None,
+        continuation_fragments: Vec::new(),
     }
 }
 
@@ -349,6 +360,8 @@ mod tests {
     use codex_protocol::protocol::HookOutputEntryKind;
     use codex_protocol::protocol::HookRunStatus;
     use pretty_assertions::assert_eq;
+
+    use codex_protocol::items::HookPromptFragment;
 
     use super::StopHandlerData;
     use super::aggregate_results;
@@ -375,7 +388,10 @@ mod tests {
                 stop_reason: None,
                 should_block: true,
                 block_reason: Some("retry with tests".to_string()),
-                continuation_prompt: Some("retry with tests".to_string()),
+                continuation_fragments: vec![HookPromptFragment {
+                    text: "retry with tests".to_string(),
+                    hook_run_ids: vec![parsed.completed.run.id.clone()],
+                }],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -419,7 +435,7 @@ mod tests {
                 stop_reason: Some("done".to_string()),
                 should_block: false,
                 block_reason: None,
-                continuation_prompt: None,
+                continuation_fragments: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
@@ -440,7 +456,10 @@ mod tests {
                 stop_reason: None,
                 should_block: true,
                 block_reason: Some("retry with tests".to_string()),
-                continuation_prompt: Some("retry with tests".to_string()),
+                continuation_fragments: vec![HookPromptFragment {
+                    text: "retry with tests".to_string(),
+                    hook_run_ids: vec![parsed.completed.run.id.clone()],
+                }],
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -509,14 +528,18 @@ mod tests {
                 stop_reason: None,
                 should_block: true,
                 block_reason: Some("first".to_string()),
-                continuation_prompt: Some("first".to_string()),
+                continuation_fragments: vec![HookPromptFragment::from_single_hook(
+                    "first", "run-1",
+                )],
             },
             &StopHandlerData {
                 should_stop: false,
                 stop_reason: None,
                 should_block: true,
                 block_reason: Some("second".to_string()),
-                continuation_prompt: Some("second".to_string()),
+                continuation_fragments: vec![HookPromptFragment::from_single_hook(
+                    "second", "run-2",
+                )],
             },
         ]);
 
@@ -527,7 +550,10 @@ mod tests {
                 stop_reason: None,
                 should_block: true,
                 block_reason: Some("first\n\nsecond".to_string()),
-                continuation_prompt: Some("first\n\nsecond".to_string()),
+                continuation_fragments: vec![
+                    HookPromptFragment::from_single_hook("first", "run-1"),
+                    HookPromptFragment::from_single_hook("second", "run-2"),
+                ],
             }
         );
     }
