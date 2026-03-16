@@ -448,14 +448,27 @@ impl Renderable for CachedRenderable {
 
 struct CellRenderable {
     cell: Arc<dyn HistoryCell>,
-    style: Style,
+    highlight_style: Option<Style>,
 }
 
 impl Renderable for CellRenderable {
     fn render(&self, area: Rect, buf: &mut Buffer) {
-        let p = Paragraph::new(Text::from(self.cell.transcript_lines(area.width)))
-            .style(self.style)
-            .wrap(Wrap { trim: false });
+        let mut lines = self.cell.transcript_lines(area.width);
+        if let Some(style) = self.highlight_style
+            && let Some(line) = lines.iter_mut().find(|line| {
+                line.spans
+                    .iter()
+                    .any(|span| !span.content.trim().is_empty())
+            })
+        {
+            line.spans = line
+                .spans
+                .clone()
+                .into_iter()
+                .map(|span| span.patch_style(style))
+                .collect();
+        }
+        let p = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
         p.render(area, buf);
     }
 
@@ -763,16 +776,13 @@ impl TranscriptOverlay {
         if cell.as_any().is::<UserHistoryCell>() {
             Box::new(CachedRenderable::new(CellRenderable {
                 cell,
-                style: if highlight_cell == Some(cell_idx) {
-                    user_message_style().reversed()
-                } else {
-                    user_message_style()
-                },
+                highlight_style: (highlight_cell == Some(cell_idx))
+                    .then(|| user_message_style().reversed()),
             })) as Box<dyn Renderable>
         } else {
             Box::new(CachedRenderable::new(CellRenderable {
                 cell,
-                style: Style::default(),
+                highlight_style: None,
             })) as Box<dyn Renderable>
         }
     }
