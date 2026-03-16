@@ -186,7 +186,7 @@ fn build_token_limited_compacted_history_appends_summary_message() {
 }
 
 #[test]
-fn append_concurrent_history_tail_if_append_only_appends_concurrent_tail() {
+fn append_concurrent_ghost_snapshot_tail_if_append_only_appends_concurrent_tail() {
     let base_history = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -215,7 +215,7 @@ fn append_concurrent_history_tail_if_append_only_appends_concurrent_tail() {
         phase: None,
     }];
 
-    let merged = append_concurrent_history_tail_if_append_only(
+    let merged = append_concurrent_ghost_snapshot_tail_if_append_only(
         &mut compacted_history,
         &base_history,
         &latest_history,
@@ -240,7 +240,61 @@ fn append_concurrent_history_tail_if_append_only_appends_concurrent_tail() {
 }
 
 #[test]
-fn append_concurrent_history_tail_if_append_only_rejects_non_append_only_changes() {
+fn append_concurrent_ghost_snapshot_tail_if_append_only_rejects_model_visible_tail() {
+    let base_history = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "before compact".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+    let latest_history = vec![
+        base_history[0].clone(),
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "not compacted".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        },
+    ];
+    let mut compacted_history = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "summary".to_string(),
+        }],
+        end_turn: None,
+        phase: None,
+    }];
+
+    let merged = append_concurrent_ghost_snapshot_tail_if_append_only(
+        &mut compacted_history,
+        &base_history,
+        &latest_history,
+    );
+
+    assert!(!merged);
+    assert_eq!(
+        compacted_history,
+        vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "summary".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }]
+    );
+}
+
+#[test]
+fn append_concurrent_ghost_snapshot_tail_if_append_only_rejects_non_append_only_changes() {
     let base_history = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -269,7 +323,7 @@ fn append_concurrent_history_tail_if_append_only_rejects_non_append_only_changes
         phase: None,
     }];
 
-    let merged = append_concurrent_history_tail_if_append_only(
+    let merged = append_concurrent_ghost_snapshot_tail_if_append_only(
         &mut compacted_history,
         &base_history,
         &latest_history,

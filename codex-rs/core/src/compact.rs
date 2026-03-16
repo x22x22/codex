@@ -212,17 +212,20 @@ async fn run_compact_task_inner(
         .collect();
     new_history.extend(ghost_snapshots);
     // Compaction snapshots history, waits on a model call, then replaces
-    // session history wholesale. Background writers can append during that
-    // window, so re-snapshot here and preserve any append-only tail items.
+    // session history wholesale. Detached ghost snapshot tasks can finish in
+    // that window and append `/undo` metadata directly into session history.
+    // Those entries are stripped from `for_prompt()`, so re-snapshot here to
+    // preserve an append-only ghost-snapshot tail without reintroducing
+    // model-visible items that were never compacted.
     let latest_history_snapshot = sess.clone_history().await;
-    if !append_concurrent_history_tail_if_append_only(
+    if !append_concurrent_ghost_snapshot_tail_if_append_only(
         &mut new_history,
         history_items,
         latest_history_snapshot.raw_items(),
     ) {
         warn!(
             turn_id = %turn_context.sub_id,
-            "session history changed non-append-only during compaction; skipping concurrent tail merge"
+            "session history changed beyond append-only ghost snapshots during compaction; skipping concurrent ghost snapshot merge"
         );
     }
     let reference_context_item = match initial_context_injection {
@@ -285,15 +288,20 @@ pub(crate) fn is_summary_message(message: &str) -> bool {
     message.starts_with(format!("{SUMMARY_PREFIX}\n").as_str())
 }
 
-/// Appends items added after `base_history` only when `latest_history` still
-/// preserves `base_history` as an exact prefix.
+/// Appends ghost snapshots added after `base_history` only when
+/// `latest_history` still preserves `base_history` as an exact prefix.
+///
+/// Ghost snapshots are appended by detached background tasks for `/undo`, but
+/// `ContextManager::for_prompt()` strips them before any model request. That
+/// makes it safe to preserve a concurrent append-only ghost-snapshot tail while
+/// avoiding model-visible items that the compaction request never saw.
 ///
 /// Returns `true` when no concurrent history change occurred or when the newer
-/// history differs only by append-only tail growth, in which case that tail is
-/// appended to `new_history`. Returns `false` when concurrent history mutation
-/// rewrote or removed earlier items, since this helper cannot safely merge that
-/// shape.
-pub(crate) fn append_concurrent_history_tail_if_append_only(
+/// history differs only by append-only ghost snapshots, in which case that tail
+/// is appended to `new_history`. Returns `false` when concurrent history
+/// mutation rewrote or removed earlier items, or appended any non-ghost item,
+/// since this helper cannot safely merge those shapes.
+pub(crate) fn append_concurrent_ghost_snapshot_tail_if_append_only(
     new_history: &mut Vec<ResponseItem>,
     base_history: &[ResponseItem],
     latest_history: &[ResponseItem],
@@ -305,7 +313,15 @@ pub(crate) fn append_concurrent_history_tail_if_append_only(
         return false;
     }
 
-    new_history.extend_from_slice(&latest_history[base_history.len()..]);
+    let appended_items = &latest_history[base_history.len()..];
+    if !appended_items
+        .iter()
+        .all(|item| matches!(item, ResponseItem::GhostSnapshot { .. }))
+    {
+        return false;
+    }
+
+    new_history.extend_from_slice(appended_items);
     true
 }
 

@@ -6,7 +6,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::built_tools;
 use crate::compact::InitialContextInjection;
-use crate::compact::append_concurrent_history_tail_if_append_only;
+use crate::compact::append_concurrent_ghost_snapshot_tail_if_append_only;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
@@ -152,17 +152,20 @@ async fn run_remote_compact_task_inner_impl(
         new_history.extend(ghost_snapshots);
     }
     // Remote compaction snapshots history, waits on an API call, then replaces
-    // session history wholesale. Background writers can append during that
-    // window, so re-snapshot here and preserve any append-only tail items.
+    // session history wholesale. Detached ghost snapshot tasks can finish in
+    // that window and append `/undo` metadata directly into session history.
+    // Those entries are stripped from `for_prompt()`, so re-snapshot here to
+    // preserve an append-only ghost-snapshot tail without reintroducing
+    // model-visible items that were never compacted.
     let latest_history_snapshot = sess.clone_history().await;
-    if !append_concurrent_history_tail_if_append_only(
+    if !append_concurrent_ghost_snapshot_tail_if_append_only(
         &mut new_history,
         history_snapshot.raw_items(),
         latest_history_snapshot.raw_items(),
     ) {
         warn!(
             turn_id = %turn_context.sub_id,
-            "session history changed non-append-only during remote compaction; skipping concurrent tail merge"
+            "session history changed beyond append-only ghost snapshots during remote compaction; skipping concurrent ghost snapshot merge"
         );
     }
     let reference_context_item = match initial_context_injection {
