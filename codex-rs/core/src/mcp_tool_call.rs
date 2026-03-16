@@ -376,6 +376,89 @@ pub(crate) struct McpToolApprovalMetadata {
     tool_description: Option<String>,
 }
 
+#[derive(Default)]
+struct McpToolApprovalProjection {
+    connector_id: Option<String>,
+    connector_name: Option<String>,
+    connector_description: Option<String>,
+    tool_title: Option<String>,
+    tool_description: Option<String>,
+    annotations: Option<GuardianMcpAnnotations>,
+}
+
+impl McpToolApprovalProjection {
+    fn from_metadata(metadata: Option<&McpToolApprovalMetadata>) -> Self {
+        let Some(metadata) = metadata else {
+            return Self::default();
+        };
+        Self {
+            connector_id: metadata.connector_id.clone(),
+            connector_name: metadata.connector_name.clone(),
+            connector_description: metadata.connector_description.clone(),
+            tool_title: metadata.tool_title.clone(),
+            tool_description: metadata.tool_description.clone(),
+            annotations: metadata
+                .annotations
+                .as_ref()
+                .map(|annotations| GuardianMcpAnnotations {
+                    destructive_hint: annotations.destructive_hint,
+                    open_world_hint: annotations.open_world_hint,
+                    read_only_hint: annotations.read_only_hint,
+                }),
+        }
+    }
+
+    fn has_connector_source(&self, server: &str) -> bool {
+        server == CODEX_APPS_MCP_SERVER_NAME
+            && (self.connector_id.is_some()
+                || self.connector_name.is_some()
+                || self.connector_description.is_some())
+    }
+
+    fn add_elicitation_meta(
+        &self,
+        server: &str,
+        meta: &mut serde_json::Map<String, serde_json::Value>,
+    ) {
+        if let Some(tool_title) = self.tool_title.as_ref() {
+            meta.insert(
+                MCP_TOOL_APPROVAL_TOOL_TITLE_KEY.to_string(),
+                serde_json::Value::String(tool_title.clone()),
+            );
+        }
+        if let Some(tool_description) = self.tool_description.as_ref() {
+            meta.insert(
+                MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY.to_string(),
+                serde_json::Value::String(tool_description.clone()),
+            );
+        }
+        if self.has_connector_source(server) {
+            meta.insert(
+                MCP_TOOL_APPROVAL_SOURCE_KEY.to_string(),
+                serde_json::Value::String(MCP_TOOL_APPROVAL_SOURCE_CONNECTOR.to_string()),
+            );
+            if let Some(connector_id) = self.connector_id.as_deref() {
+                meta.insert(
+                    MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY.to_string(),
+                    serde_json::Value::String(connector_id.to_string()),
+                );
+            }
+            if let Some(connector_name) = self.connector_name.as_ref() {
+                meta.insert(
+                    MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY.to_string(),
+                    serde_json::Value::String(connector_name.clone()),
+                );
+            }
+            if let Some(connector_description) = self.connector_description.as_ref() {
+                meta.insert(
+                    MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY.to_string(),
+                    serde_json::Value::String(connector_description.clone()),
+                );
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct McpToolApprovalPromptOptions {
     allow_session_remember: bool,
@@ -664,23 +747,18 @@ pub(crate) fn build_guardian_mcp_tool_review_request(
     invocation: &McpInvocation,
     metadata: Option<&McpToolApprovalMetadata>,
 ) -> GuardianApprovalRequest {
+    let projection = McpToolApprovalProjection::from_metadata(metadata);
     GuardianApprovalRequest::McpToolCall {
         id: call_id.to_string(),
         server: invocation.server.clone(),
         tool_name: invocation.tool.clone(),
         arguments: invocation.arguments.clone(),
-        connector_id: metadata.and_then(|metadata| metadata.connector_id.clone()),
-        connector_name: metadata.and_then(|metadata| metadata.connector_name.clone()),
-        connector_description: metadata.and_then(|metadata| metadata.connector_description.clone()),
-        tool_title: metadata.and_then(|metadata| metadata.tool_title.clone()),
-        tool_description: metadata.and_then(|metadata| metadata.tool_description.clone()),
-        annotations: metadata
-            .and_then(|metadata| metadata.annotations.as_ref())
-            .map(|annotations| GuardianMcpAnnotations {
-                destructive_hint: annotations.destructive_hint,
-                open_world_hint: annotations.open_world_hint,
-                read_only_hint: annotations.read_only_hint,
-            }),
+        connector_id: projection.connector_id,
+        connector_name: projection.connector_name,
+        connector_description: projection.connector_description,
+        tool_title: projection.tool_title,
+        tool_description: projection.tool_description,
+        annotations: projection.annotations,
     }
 }
 
@@ -902,6 +980,7 @@ fn build_mcp_tool_approval_elicitation_meta(
     prompt_options: McpToolApprovalPromptOptions,
 ) -> Option<serde_json::Value> {
     let mut meta = serde_json::Map::new();
+    let projection = McpToolApprovalProjection::from_metadata(metadata);
     meta.insert(
         MCP_TOOL_APPROVAL_KIND_KEY.to_string(),
         serde_json::Value::String(MCP_TOOL_APPROVAL_KIND_MCP_TOOL_CALL.to_string()),
@@ -933,48 +1012,7 @@ fn build_mcp_tool_approval_elicitation_meta(
         }
         (false, false) => {}
     }
-    if let Some(metadata) = metadata {
-        if let Some(tool_title) = metadata.tool_title.as_ref() {
-            meta.insert(
-                MCP_TOOL_APPROVAL_TOOL_TITLE_KEY.to_string(),
-                serde_json::Value::String(tool_title.clone()),
-            );
-        }
-        if let Some(tool_description) = metadata.tool_description.as_ref() {
-            meta.insert(
-                MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY.to_string(),
-                serde_json::Value::String(tool_description.clone()),
-            );
-        }
-        if server == CODEX_APPS_MCP_SERVER_NAME
-            && (metadata.connector_id.is_some()
-                || metadata.connector_name.is_some()
-                || metadata.connector_description.is_some())
-        {
-            meta.insert(
-                MCP_TOOL_APPROVAL_SOURCE_KEY.to_string(),
-                serde_json::Value::String(MCP_TOOL_APPROVAL_SOURCE_CONNECTOR.to_string()),
-            );
-            if let Some(connector_id) = metadata.connector_id.as_deref() {
-                meta.insert(
-                    MCP_TOOL_APPROVAL_CONNECTOR_ID_KEY.to_string(),
-                    serde_json::Value::String(connector_id.to_string()),
-                );
-            }
-            if let Some(connector_name) = metadata.connector_name.as_ref() {
-                meta.insert(
-                    MCP_TOOL_APPROVAL_CONNECTOR_NAME_KEY.to_string(),
-                    serde_json::Value::String(connector_name.clone()),
-                );
-            }
-            if let Some(connector_description) = metadata.connector_description.as_ref() {
-                meta.insert(
-                    MCP_TOOL_APPROVAL_CONNECTOR_DESCRIPTION_KEY.to_string(),
-                    serde_json::Value::String(connector_description.clone()),
-                );
-            }
-        }
-    }
+    projection.add_elicitation_meta(server, &mut meta);
     if let Some(tool_params) = tool_params {
         meta.insert(
             MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY.to_string(),

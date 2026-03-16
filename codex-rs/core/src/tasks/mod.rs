@@ -256,9 +256,9 @@ impl Session {
         }
         drop(active);
         if !pending_input.is_empty() {
-            for (pending_input, user_message_type) in pending_input
+            for (pending_input, message_metadata) in pending_input
                 .into_iter()
-                .map(|item| (item.input, item.user_message_type))
+                .map(|item| (item.input, item.metadata))
             {
                 let response_item = ResponseItem::from(pending_input);
                 if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
@@ -269,7 +269,7 @@ impl Session {
                         turn_context.as_ref(),
                         &user_message.content,
                         response_item,
-                        user_message_type,
+                        message_metadata,
                     )
                     .await;
                 } else {

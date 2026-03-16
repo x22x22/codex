@@ -987,7 +987,13 @@ fn local_time_context() -> (String, String) {
     }
 }
 
-fn stamp_user_message_type_on_input_item(item: &mut ResponseInputItem, kind: UserMessageType) {
+fn stamp_message_metadata_on_input_item(
+    item: &mut ResponseInputItem,
+    patch: &ResponseItemMetadata,
+) {
+    if patch.is_empty() {
+        return;
+    }
     let ResponseInputItem::Message { role, metadata, .. } = item else {
         return;
     };
@@ -995,8 +1001,8 @@ fn stamp_user_message_type_on_input_item(item: &mut ResponseInputItem, kind: Use
         return;
     }
     let mut metadata_value = metadata.take().unwrap_or_default();
-    metadata_value.user_message_type = Some(kind);
-    *metadata = Some(metadata_value);
+    metadata_value.merge_from(patch.clone());
+    *metadata = (!metadata_value.is_empty()).then_some(metadata_value);
 }
 
 fn sandbox_policy_to_metadata(policy: &SandboxPolicy) -> SandboxPolicyMetadata {
@@ -1009,19 +1015,51 @@ fn sandbox_policy_to_metadata(policy: &SandboxPolicy) -> SandboxPolicyMetadata {
     }
 }
 
-fn stamp_sandbox_policy_on_input_item(
-    item: &mut ResponseInputItem,
-    sandbox_policy: SandboxPolicyMetadata,
-) {
-    let ResponseInputItem::Message { role, metadata, .. } = item else {
-        return;
-    };
-    if role != "user" {
-        return;
+fn user_message_metadata_patch(
+    kind: UserMessageType,
+    sandbox_policy: Option<SandboxPolicyMetadata>,
+) -> ResponseItemMetadata {
+    ResponseItemMetadata {
+        user_message_type: Some(kind),
+        sandbox_policy,
+        ..ResponseItemMetadata::default()
     }
-    let mut metadata_value = metadata.take().unwrap_or_default();
-    metadata_value.sandbox_policy = Some(sandbox_policy);
-    *metadata = Some(metadata_value);
+}
+
+fn stamp_message_metadata_on_response_item(
+    item: ResponseItem,
+    patch: Option<ResponseItemMetadata>,
+) -> ResponseItem {
+    let Some(patch) = patch else {
+        return item;
+    };
+    if patch.is_empty() {
+        return item;
+    }
+
+    match item {
+        ResponseItem::Message {
+            id,
+            role,
+            content,
+            metadata,
+            end_turn,
+            phase,
+        } if role == "user" => {
+            let mut metadata_value = metadata.unwrap_or_default();
+            metadata_value.merge_from(patch);
+            let metadata = (!metadata_value.is_empty()).then_some(metadata_value);
+            ResponseItem::Message {
+                id,
+                role,
+                content,
+                metadata,
+                end_turn,
+                phase,
+            }
+        }
+        other => other,
+    }
 }
 
 fn review_decision_to_metadata(decision: &ReviewDecision) -> ReviewDecisionMetadata {
@@ -1058,55 +1096,41 @@ fn response_item_tool_call_id(item: &ResponseItem) -> Option<&str> {
     }
 }
 
-fn stamp_tool_metadata_on_response_item(
-    item: ResponseItem,
-    metadata: ResponseItemMetadata,
-) -> ResponseItem {
+fn tool_call_metadata_slot_mut(
+    item: &mut ResponseItem,
+) -> Option<&mut Option<ResponseItemMetadata>> {
     match item {
-        ResponseItem::LocalShellCall {
-            id,
-            call_id,
-            status,
-            action,
-            ..
-        } => ResponseItem::LocalShellCall {
-            id,
-            call_id,
-            status,
-            action,
-            metadata: Some(metadata),
-        },
-        ResponseItem::FunctionCall {
-            id,
-            name,
-            namespace,
-            arguments,
-            call_id,
-            ..
-        } => ResponseItem::FunctionCall {
-            id,
-            name,
-            namespace,
-            arguments,
-            call_id,
-            metadata: Some(metadata),
-        },
-        ResponseItem::CustomToolCall {
-            id,
-            status,
-            call_id,
-            name,
-            input,
-            ..
-        } => ResponseItem::CustomToolCall {
-            id,
-            status,
-            call_id,
-            name,
-            input,
-            metadata: Some(metadata),
-        },
-        other => other,
+        ResponseItem::LocalShellCall { metadata, .. }
+        | ResponseItem::FunctionCall { metadata, .. }
+        | ResponseItem::CustomToolCall { metadata, .. } => Some(metadata),
+        _ => None,
+    }
+}
+
+fn stamp_tool_metadata_on_response_item(
+    mut item: ResponseItem,
+    patch: ResponseItemMetadata,
+) -> ResponseItem {
+    if patch.is_empty() {
+        return item;
+    }
+    let Some(metadata_slot) = tool_call_metadata_slot_mut(&mut item) else {
+        return item;
+    };
+    let mut metadata = metadata_slot.take().unwrap_or_default();
+    metadata.merge_from(patch);
+    *metadata_slot = (!metadata.is_empty()).then_some(metadata);
+    item
+}
+
+fn tool_call_metadata_or_default(item: &ResponseItem) -> Option<ResponseItemMetadata> {
+    match item {
+        ResponseItem::LocalShellCall { metadata, .. }
+        | ResponseItem::FunctionCall { metadata, .. }
+        | ResponseItem::CustomToolCall { metadata, .. } => {
+            Some(metadata.clone().unwrap_or_default())
+        }
+        _ => None,
     }
 }
 
@@ -3416,11 +3440,9 @@ impl Session {
             (outcome, has_pending_approval)
         };
 
-        let mut metadata = match &response_item {
-            ResponseItem::LocalShellCall { metadata, .. }
-            | ResponseItem::FunctionCall { metadata, .. }
-            | ResponseItem::CustomToolCall { metadata, .. } => metadata.clone().unwrap_or_default(),
-            _ => return response_item,
+        let mut metadata = match tool_call_metadata_or_default(&response_item) {
+            Some(metadata) => metadata,
+            None => return response_item,
         };
         metadata.sandbox_policy = Some(sandbox_policy_to_metadata(
             turn_context.sandbox_policy.get(),
@@ -3957,46 +3979,18 @@ impl Session {
         turn_context: &TurnContext,
         input: &[UserInput],
         response_item: ResponseItem,
-        user_message_type: Option<UserMessageType>,
+        message_metadata: Option<ResponseItemMetadata>,
     ) {
-        let (user_message_type, sandbox_policy) = if self.enabled(Feature::ItemMetadata) {
-            (
-                user_message_type,
-                Some(sandbox_policy_to_metadata(
-                    turn_context.sandbox_policy.get(),
-                )),
-            )
+        let metadata_patch = if self.enabled(Feature::ItemMetadata) {
+            let mut patch = message_metadata.unwrap_or_default();
+            patch.sandbox_policy = Some(sandbox_policy_to_metadata(
+                turn_context.sandbox_policy.get(),
+            ));
+            Some(patch)
         } else {
-            (None, None)
+            None
         };
-
-        let response_item = match (response_item, user_message_type.clone(), sandbox_policy) {
-            (
-                ResponseItem::Message {
-                    id,
-                    role,
-                    content,
-                    metadata,
-                    end_turn,
-                    phase,
-                },
-                user_message_type,
-                sandbox_policy,
-            ) if role == "user" => {
-                let mut metadata = metadata.unwrap_or_default();
-                metadata.user_message_type = user_message_type;
-                metadata.sandbox_policy = sandbox_policy;
-                ResponseItem::Message {
-                    id,
-                    role,
-                    content,
-                    metadata: Some(metadata),
-                    end_turn,
-                    phase,
-                }
-            }
-            (response_item, _, _) => response_item,
-        };
+        let response_item = stamp_message_metadata_on_response_item(response_item, metadata_patch);
 
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
@@ -4097,16 +4091,19 @@ impl Session {
         }
 
         let mut input_item: ResponseInputItem = input.into();
-        if self.enabled(Feature::ItemMetadata) {
-            stamp_user_message_type_on_input_item(&mut input_item, UserMessageType::PromptSteering);
-            stamp_sandbox_policy_on_input_item(
-                &mut input_item,
-                sandbox_policy_to_metadata(active_task.turn_context.sandbox_policy.get()),
-            );
+        let metadata = Some(user_message_metadata_patch(
+            UserMessageType::PromptSteering,
+            self.enabled(Feature::ItemMetadata)
+                .then(|| sandbox_policy_to_metadata(active_task.turn_context.sandbox_policy.get())),
+        ));
+        if self.enabled(Feature::ItemMetadata)
+            && let Some(metadata_patch) = metadata.as_ref()
+        {
+            stamp_message_metadata_on_input_item(&mut input_item, metadata_patch);
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input_item, Some(UserMessageType::PromptSteering));
+        turn_state.push_pending_input(input_item, metadata);
         Ok(active_turn_id.to_string())
     }
 
@@ -4123,19 +4120,24 @@ impl Session {
                 });
                 let mut ts = at.turn_state.lock().await;
                 for mut item in input {
-                    let user_message_type = match &item {
-                        ResponseInputItem::Message { .. } => Some(UserMessageType::PromptQueued),
+                    let metadata = match &item {
+                        ResponseInputItem::Message { .. } => Some(user_message_metadata_patch(
+                            UserMessageType::PromptQueued,
+                            if self.enabled(Feature::ItemMetadata) {
+                                sandbox_policy.clone()
+                            } else {
+                                None
+                            },
+                        )),
                         _ => None,
                     };
+
                     if self.enabled(Feature::ItemMetadata)
-                        && let Some(kind) = user_message_type.clone()
+                        && let Some(metadata_patch) = metadata.as_ref()
                     {
-                        stamp_user_message_type_on_input_item(&mut item, kind);
-                        if let Some(sandbox_policy) = sandbox_policy.clone() {
-                            stamp_sandbox_policy_on_input_item(&mut item, sandbox_policy);
-                        }
+                        stamp_message_metadata_on_input_item(&mut item, metadata_patch);
                     }
-                    ts.push_pending_input(item, user_message_type);
+                    ts.push_pending_input(item, metadata);
                 }
                 Ok(())
             }
@@ -4145,14 +4147,14 @@ impl Session {
 
     pub async fn get_pending_input_with_metadata(
         &self,
-    ) -> Vec<(ResponseInputItem, Option<UserMessageType>)> {
+    ) -> Vec<(ResponseInputItem, Option<ResponseItemMetadata>)> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
                 ts.take_pending_input_with_metadata()
                     .into_iter()
-                    .map(|item| (item.input, item.user_message_type))
+                    .map(|item| (item.input, item.metadata))
                     .collect()
             }
             None => Vec::with_capacity(0),
@@ -5917,19 +5919,22 @@ pub(crate) async fn run_turn(
         .await;
 
     let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    if sess.enabled(Feature::ItemMetadata) {
-        stamp_user_message_type_on_input_item(&mut initial_input_for_turn, UserMessageType::Prompt);
-        stamp_sandbox_policy_on_input_item(
-            &mut initial_input_for_turn,
-            sandbox_policy_to_metadata(turn_context.sandbox_policy.get()),
-        );
+    let initial_message_metadata = Some(user_message_metadata_patch(
+        UserMessageType::Prompt,
+        sess.enabled(Feature::ItemMetadata)
+            .then(|| sandbox_policy_to_metadata(turn_context.sandbox_policy.get())),
+    ));
+    if sess.enabled(Feature::ItemMetadata)
+        && let Some(metadata_patch) = initial_message_metadata.as_ref()
+    {
+        stamp_message_metadata_on_input_item(&mut initial_input_for_turn, metadata_patch);
     }
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(
         turn_context.as_ref(),
         &input,
         response_item,
-        Some(UserMessageType::Prompt),
+        initial_message_metadata,
     )
     .await;
     // Track the previous-turn baseline from the regular user-turn path only so
@@ -6020,7 +6025,7 @@ pub(crate) async fn run_turn(
         let pending_response_items = sess.get_pending_input_with_metadata().await;
 
         if !pending_response_items.is_empty() {
-            for (pending_input, user_message_type) in pending_response_items {
+            for (pending_input, message_metadata) in pending_response_items {
                 let response_item = ResponseItem::from(pending_input);
                 if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
                     // todo(aibrahim): move pending input to be UserInput only to keep TextElements. context: https://github.com/openai/codex/pull/10656#discussion_r2765522480
@@ -6028,7 +6033,7 @@ pub(crate) async fn run_turn(
                         turn_context.as_ref(),
                         &user_message.content,
                         response_item,
-                        user_message_type,
+                        message_metadata,
                     )
                     .await;
                 } else {

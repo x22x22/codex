@@ -10,8 +10,8 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::models::ReviewDecisionMetadata;
-use codex_protocol::models::UserMessageType;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -61,7 +61,7 @@ pub(crate) struct RunningTask {
 #[derive(Debug, Clone)]
 pub(crate) struct PendingInputItem {
     pub(crate) input: ResponseInputItem,
-    pub(crate) user_message_type: Option<UserMessageType>,
+    pub(crate) metadata: Option<ResponseItemMetadata>,
 }
 
 impl ActiveTurn {
@@ -223,12 +223,10 @@ impl TurnState {
     pub(crate) fn push_pending_input(
         &mut self,
         input: ResponseInputItem,
-        user_message_type: Option<UserMessageType>,
+        metadata: Option<ResponseItemMetadata>,
     ) {
-        self.pending_input.push(PendingInputItem {
-            input,
-            user_message_type,
-        });
+        self.pending_input
+            .push(PendingInputItem { input, metadata });
     }
 
     pub(crate) fn take_pending_input_with_metadata(&mut self) -> Vec<PendingInputItem> {

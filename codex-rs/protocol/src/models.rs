@@ -300,6 +300,30 @@ pub struct ResponseItemMetadata {
     pub review_decision: Option<ReviewDecisionMetadata>,
 }
 
+impl ResponseItemMetadata {
+    pub fn is_empty(&self) -> bool {
+        self.user_message_type.is_none()
+            && self.sandbox_policy.is_none()
+            && self.is_tool_call_escalated.is_none()
+            && self.review_decision.is_none()
+    }
+
+    pub fn merge_from(&mut self, other: Self) {
+        if other.user_message_type.is_some() {
+            self.user_message_type = other.user_message_type;
+        }
+        if other.sandbox_policy.is_some() {
+            self.sandbox_policy = other.sandbox_policy;
+        }
+        if other.is_tool_call_escalated.is_some() {
+            self.is_tool_call_escalated = other.is_tool_call_escalated;
+        }
+        if other.review_decision.is_some() {
+            self.review_decision = other.review_decision;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, JsonSchema, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentItem {

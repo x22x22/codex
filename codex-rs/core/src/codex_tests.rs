@@ -4157,7 +4157,8 @@ async fn steer_input_returns_active_turn_id() {
     assert_eq!(
         pending_input
             .first()
-            .and_then(|(_, user_message_type)| user_message_type.as_ref()),
+            .and_then(|(_, metadata)| metadata.as_ref())
+            .and_then(|metadata| metadata.user_message_type.as_ref()),
         Some(&codex_protocol::models::UserMessageType::PromptSteering)
     );
 }
