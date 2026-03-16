@@ -1,9 +1,25 @@
-use keyring::Entry;
 use keyring::Error as KeyringError;
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use tracing::trace;
+
+#[cfg(target_os = "macos")]
+mod macos;
+
+#[cfg(not(target_os = "macos"))]
+use keyring::Entry;
+
+#[cfg(not(target_os = "macos"))]
+pub fn migrate_existing_codex_items_to_access_group() -> Result<(), CredentialStoreError> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn migrate_existing_codex_items_to_access_group() -> Result<(), CredentialStoreError> {
+    macos::migrate_existing_codex_items_to_access_group()
+        .map_err(|error| CredentialStoreError::new(KeyringError::PlatformFailure(Box::new(error))))
+}
 
 #[derive(Debug)]
 pub enum CredentialStoreError {
@@ -51,7 +67,19 @@ pub struct DefaultKeyringStore;
 impl KeyringStore for DefaultKeyringStore {
     fn load(&self, service: &str, account: &str) -> Result<Option<String>, CredentialStoreError> {
         trace!("keyring.load start, service={service}, account={account}");
+        #[cfg(target_os = "macos")]
+        {
+            macos::load_password(service, account).map_err(|error| {
+                trace!(
+                    "keyring.load macos native error, service={service}, account={account}, error={error}"
+                );
+                CredentialStoreError::new(KeyringError::PlatformFailure(Box::new(error)))
+            })
+        }
+
+        #[cfg(not(target_os = "macos"))]
         let entry = Entry::new(service, account).map_err(CredentialStoreError::new)?;
+        #[cfg(not(target_os = "macos"))]
         match entry.get_password() {
             Ok(password) => {
                 trace!("keyring.load success, service={service}, account={account}");
@@ -73,7 +101,19 @@ impl KeyringStore for DefaultKeyringStore {
             "keyring.save start, service={service}, account={account}, value_len={}",
             value.len()
         );
+        #[cfg(target_os = "macos")]
+        {
+            macos::save_password(service, account, value).map_err(|error| {
+                trace!(
+                    "keyring.save macos native error, service={service}, account={account}, error={error}"
+                );
+                CredentialStoreError::new(KeyringError::PlatformFailure(Box::new(error)))
+            })
+        }
+
+        #[cfg(not(target_os = "macos"))]
         let entry = Entry::new(service, account).map_err(CredentialStoreError::new)?;
+        #[cfg(not(target_os = "macos"))]
         match entry.set_password(value) {
             Ok(()) => {
                 trace!("keyring.save success, service={service}, account={account}");
@@ -88,7 +128,19 @@ impl KeyringStore for DefaultKeyringStore {
 
     fn delete(&self, service: &str, account: &str) -> Result<bool, CredentialStoreError> {
         trace!("keyring.delete start, service={service}, account={account}");
+        #[cfg(target_os = "macos")]
+        {
+            macos::delete_password(service, account).map_err(|error| {
+                trace!(
+                    "keyring.delete macos native error, service={service}, account={account}, error={error}"
+                );
+                CredentialStoreError::new(KeyringError::PlatformFailure(Box::new(error)))
+            })
+        }
+
+        #[cfg(not(target_os = "macos"))]
         let entry = Entry::new(service, account).map_err(CredentialStoreError::new)?;
+        #[cfg(not(target_os = "macos"))]
         match entry.delete_credential() {
             Ok(()) => {
                 trace!("keyring.delete success, service={service}, account={account}");

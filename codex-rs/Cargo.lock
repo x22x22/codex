@@ -1655,6 +1655,7 @@ dependencies = [
  "codex-core",
  "codex-exec",
  "codex-execpolicy",
+ "codex-keyring-store",
  "codex-login",
  "codex-mcp-server",
  "codex-protocol",
@@ -2101,7 +2102,10 @@ dependencies = [
 name = "codex-keyring-store"
 version = "0.0.0"
 dependencies = [
+ "core-foundation 0.10.1",
  "keyring",
+ "security-framework 3.5.1",
+ "security-framework-sys",
  "tracing",
 ]
 

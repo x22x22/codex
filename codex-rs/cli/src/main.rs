@@ -21,6 +21,7 @@ use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
+use codex_keyring_store::migrate_existing_codex_items_to_access_group;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_state::StateRuntime;
 use codex_state::state_db_path;
@@ -600,6 +601,14 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
     let root_remote = remote.remote;
+
+    #[cfg(target_os = "macos")]
+    if let Err(error) = migrate_existing_codex_items_to_access_group() {
+        tracing::warn!(
+            error = %error,
+            "failed to migrate existing Codex keychain items into the shared macOS access group"
+        );
+    }
 
     match subcommand {
         None => {
