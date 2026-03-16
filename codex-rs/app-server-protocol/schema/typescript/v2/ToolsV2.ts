@@ -14,9 +14,9 @@ web_search: WebSearchToolConfig | null,
  */
 view_image: boolean | null, 
 /**
- * Additive capability overrides keyed by canonical capability name.
+ * Canonical capability names to enable. If omitted, legacy/default resolution applies.
  */
-capabilities: { [key in string]?: boolean } | null, 
+enabled: Array<string> | null, 
 /**
  * Execution policy for approval-capable tools.
  */

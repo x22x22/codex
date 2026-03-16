@@ -13793,13 +13793,13 @@
       },
       "ToolsV2": {
         "properties": {
-          "capabilities": {
-            "additionalProperties": {
-              "type": "boolean"
+          "enabled": {
+            "description": "Canonical capability names to enable. If omitted, legacy/default resolution applies.",
+            "items": {
+              "type": "string"
             },
-            "description": "Additive capability overrides keyed by canonical capability name.",
             "type": [
-              "object",
+              "array",
               "null"
             ]
           },

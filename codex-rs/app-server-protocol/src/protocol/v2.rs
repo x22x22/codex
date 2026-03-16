@@ -549,11 +549,9 @@ pub struct ToolsV2 {
     pub web_search: Option<WebSearchToolConfig>,
     /// Legacy enablement for the `view_image` capability.
     pub view_image: Option<bool>,
-    /// Additive capability overrides keyed by canonical capability name.
-    #[serde(alias = "builtin_features")]
-    pub capabilities: Option<std::collections::BTreeMap<String, bool>>,
+    /// Canonical capability names to enable. If omitted, legacy/default resolution applies.
+    pub enabled: Option<Vec<String>>,
     /// Execution policy for approval-capable tools.
-    #[serde(alias = "builtin_execution_mode")]
     pub execution_mode: Option<ToolExecutionMode>,
 }
 

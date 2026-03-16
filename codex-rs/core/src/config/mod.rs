@@ -546,8 +546,8 @@ pub struct Config {
     /// Additional parameters for the web search tool when it is enabled.
     pub web_search_config: Option<WebSearchConfig>,
 
-    /// Optional capability overrides requested by config.
-    pub tool_capability_overrides: Option<BTreeMap<String, bool>>,
+    /// Explicitly enabled tool capabilities requested by config.
+    pub enabled_tool_capabilities: Option<std::collections::BTreeSet<String>>,
 
     /// Legacy `tools.view_image` fallback used when no explicit capability override is present.
     pub legacy_view_image_override: Option<bool>,
@@ -1626,12 +1626,12 @@ pub struct ToolsToml {
     #[serde(default)]
     pub view_image: Option<bool>,
 
-    /// Additive capability overrides keyed by canonical capability name.
-    #[serde(default, alias = "builtin_features")]
-    pub capabilities: Option<std::collections::BTreeMap<String, bool>>,
+    /// Canonical capability names to enable. If omitted, legacy/default resolution applies.
+    #[serde(default)]
+    pub enabled: Option<Vec<String>>,
 
     /// Execution policy for approval-capable tools.
-    #[serde(default, alias = "builtin_execution_mode")]
+    #[serde(default)]
     pub execution_mode: Option<ToolExecutionMode>,
 }
 
@@ -2058,7 +2058,7 @@ fn resolve_web_search_mode(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
     features: &Features,
-    tool_capability_overrides: Option<&BTreeMap<String, bool>>,
+    enabled_tool_capabilities: Option<&std::collections::BTreeSet<String>>,
 ) -> Option<WebSearchMode> {
     let explicit_mode = || config_profile.web_search.or(config_toml.web_search);
     let feature_default_mode = || {
@@ -2071,11 +2071,13 @@ fn resolve_web_search_mode(
         }
     };
 
-    match tool_capability_overrides.and_then(|overrides| overrides.get("web_search")) {
-        Some(false) => Some(WebSearchMode::Disabled),
-        Some(true) => explicit_mode()
-            .filter(|mode| *mode != WebSearchMode::Disabled)
-            .or_else(feature_default_mode),
+    match enabled_tool_capabilities {
+        Some(enabled_tool_capabilities) if enabled_tool_capabilities.contains("web_search") => {
+            explicit_mode()
+                .filter(|mode| *mode != WebSearchMode::Disabled)
+                .or_else(feature_default_mode)
+        }
+        Some(_) => Some(WebSearchMode::Disabled),
         None => explicit_mode().or_else(feature_default_mode),
     }
 }
@@ -2101,41 +2103,27 @@ fn resolve_web_search_config(
     }
 }
 
-fn resolve_tool_capability_overrides(
+fn resolve_enabled_tool_capabilities(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
-) -> std::result::Result<Option<BTreeMap<String, bool>>, String> {
-    let base_capabilities = config_toml
+) -> std::result::Result<Option<std::collections::BTreeSet<String>>, String> {
+    let enabled = config_profile
         .tools
         .as_ref()
-        .and_then(|tools| tools.capabilities.as_ref());
-    let profile_capabilities = config_profile
-        .tools
-        .as_ref()
-        .and_then(|tools| tools.capabilities.as_ref());
+        .and_then(|tools| tools.enabled.as_ref())
+        .or_else(|| {
+            config_toml
+                .tools
+                .as_ref()
+                .and_then(|tools| tools.enabled.as_ref())
+        });
 
-    let capabilities = match (base_capabilities, profile_capabilities) {
-        (None, None) => None,
-        (Some(base), None) => Some(base.clone()),
-        (None, Some(profile)) => Some(profile.clone()),
-        (Some(base), Some(profile)) => {
-            let mut merged = base.clone();
-            merged.extend(profile.clone());
-            Some(merged)
-        }
+    let Some(enabled) = enabled else {
+        return Ok(None);
     };
 
-    if capabilities.as_ref().is_none_or(BTreeMap::is_empty) {
-        return Ok(None);
-    }
-
-    let declared_capability_names = capabilities
-        .as_ref()
-        .map(|capabilities| capabilities.keys().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
-    crate::tools::spec::validate_tool_capability_names(&declared_capability_names)?;
-
-    Ok(capabilities)
+    let canonical_enabled = crate::tools::spec::normalize_enabled_tool_capability_names(enabled)?;
+    Ok(Some(canonical_enabled))
 }
 
 fn resolve_legacy_view_image_override(
@@ -2476,11 +2464,11 @@ impl Config {
             );
             approval_policy = constrained_approval_policy.value();
         }
-        let tool_capability_overrides = resolve_tool_capability_overrides(&cfg, &config_profile)
+        let enabled_tool_capabilities = resolve_enabled_tool_capabilities(&cfg, &config_profile)
             .map_err(|err| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    format!("invalid tools.capabilities configuration: {err}"),
+                    format!("invalid tools.enabled configuration: {err}"),
                 )
             })?;
         let approvals_reviewer = approvals_reviewer_override
@@ -2491,7 +2479,7 @@ impl Config {
             &cfg,
             &config_profile,
             &features,
-            tool_capability_overrides.as_ref(),
+            enabled_tool_capabilities.as_ref(),
         )
         .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
@@ -2916,7 +2904,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_flag,
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
-            tool_capability_overrides,
+            enabled_tool_capabilities,
             legacy_view_image_override,
             tool_execution_mode,
             use_experimental_unified_exec_tool,

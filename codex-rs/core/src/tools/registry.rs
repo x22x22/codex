@@ -171,18 +171,18 @@ impl ToolCapabilityKey {
 
     pub(crate) const fn capability_name(self) -> &'static str {
         match self {
-            Self::CommandExecution => "command_execution",
+            Self::CommandExecution => "shell",
             Self::JavascriptExecution => "javascript_execution",
             Self::FilesystemInspection => "filesystem_inspection",
             Self::MultiAgent => "multi_agent",
             Self::AgentJobs => "agent_jobs",
             Self::ApplyPatch => "apply_patch",
-            Self::UpdatePlan => "update_plan",
-            Self::RequestUserInput => "request_user_input",
+            Self::UpdatePlan => "plan",
+            Self::RequestUserInput => "structured_user_input",
             Self::WebSearch => "web_search",
             Self::ImageGeneration => "image_generation",
             Self::ViewImage => "view_image",
-            Self::Artifacts => "artifacts",
+            Self::Artifacts => "document_generation",
         }
     }
 
@@ -226,7 +226,21 @@ pub(crate) fn builtin_tool_key(name: &str) -> Option<BuiltinToolKey> {
 }
 
 pub(crate) fn tool_capability_key(name: &str) -> Option<ToolCapabilityKey> {
-    ToolCapabilityKey::iter().find(|key| key.capability_name() == name)
+    match name {
+        "shell" => Some(ToolCapabilityKey::CommandExecution),
+        "javascript_execution" => Some(ToolCapabilityKey::JavascriptExecution),
+        "filesystem_inspection" => Some(ToolCapabilityKey::FilesystemInspection),
+        "multi_agent" => Some(ToolCapabilityKey::MultiAgent),
+        "agent_jobs" => Some(ToolCapabilityKey::AgentJobs),
+        "apply_patch" => Some(ToolCapabilityKey::ApplyPatch),
+        "plan" => Some(ToolCapabilityKey::UpdatePlan),
+        "structured_user_input" => Some(ToolCapabilityKey::RequestUserInput),
+        "web_search" => Some(ToolCapabilityKey::WebSearch),
+        "image_generation" => Some(ToolCapabilityKey::ImageGeneration),
+        "view_image" => Some(ToolCapabilityKey::ViewImage),
+        "document_generation" => Some(ToolCapabilityKey::Artifacts),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

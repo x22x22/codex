@@ -30,7 +30,6 @@ use codex_protocol::openai_models::ReasoningEffort;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use serde_json::json;
-use std::collections::BTreeMap;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -104,10 +103,7 @@ allowed_domains = ["example.com"]
 [tools]
 view_image = false
 execution_mode = "manual"
-
-[tools.capabilities]
-command_execution = true
-apply_patch = false
+enabled = ["shell", "apply_patch"]
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -143,10 +139,7 @@ apply_patch = false
                 location: None,
             }),
             view_image: Some(false),
-            capabilities: Some(BTreeMap::from([
-                ("command_execution".to_string(), true),
-                ("apply_patch".to_string(), false),
-            ])),
+            enabled: Some(vec!["shell".to_string(), "apply_patch".to_string()]),
             execution_mode: Some(codex_app_server_protocol::ToolExecutionMode::Manual),
         }
     );
@@ -181,19 +174,13 @@ apply_patch = false
         }
     );
     assert_eq!(
-        origins
-            .get("tools.capabilities.command_execution")
-            .expect("origin")
-            .name,
+        origins.get("tools.enabled.0").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }
     );
     assert_eq!(
-        origins
-            .get("tools.capabilities.apply_patch")
-            .expect("origin")
-            .name,
+        origins.get("tools.enabled.1").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }

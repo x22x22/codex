@@ -31,6 +31,7 @@ use core_test_support::test_absolute_path;
 use pretty_assertions::assert_eq;
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -196,7 +197,7 @@ web_search = true
         Some(ToolsToml {
             web_search: None,
             view_image: None,
-            capabilities: None,
+            enabled: None,
             execution_mode: None,
         })
     );
@@ -217,22 +218,19 @@ web_search = false
         Some(ToolsToml {
             web_search: None,
             view_image: None,
-            capabilities: None,
+            enabled: None,
             execution_mode: None,
         })
     );
 }
 
 #[test]
-fn tools_capabilities_deserialize_with_execution_mode() {
+fn tools_enabled_deserialize_with_execution_mode() {
     let cfg: ConfigToml = toml::from_str(
         r#"
 [tools]
 execution_mode = "manual"
-
-[tools.capabilities]
-command_execution = true
-apply_patch = false
+enabled = ["shell", "apply_patch"]
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -242,10 +240,7 @@ apply_patch = false
         Some(ToolsToml {
             web_search: None,
             view_image: None,
-            capabilities: Some(BTreeMap::from([
-                ("command_execution".to_string(), true),
-                ("apply_patch".to_string(), false),
-            ])),
+            enabled: Some(vec!["shell".to_string(), "apply_patch".to_string()]),
             execution_mode: Some(ToolExecutionMode::Manual),
         })
     );
@@ -1531,16 +1526,16 @@ fn web_search_mode_capability_override_false_disables_tool() {
     let profile = ConfigProfile::default();
     let mut features = Features::with_defaults();
     features.enable(Feature::WebSearchCached);
-    let capabilities = BTreeMap::from([("web_search".to_string(), false)]);
+    let enabled_tools = BTreeSet::new();
 
     assert_eq!(
-        resolve_web_search_mode(&cfg, &profile, &features, Some(&capabilities)),
+        resolve_web_search_mode(&cfg, &profile, &features, Some(&enabled_tools)),
         Some(WebSearchMode::Disabled)
     );
 }
 
 #[test]
-fn tool_capability_overrides_include_legacy_view_image_fallback() {
+fn resolve_enabled_tool_capabilities_returns_none_when_omitted() {
     let cfg: ConfigToml = toml::from_str(
         r#"
 [tools]
@@ -1550,8 +1545,8 @@ view_image = false
     .expect("TOML deserialization should succeed");
 
     assert_eq!(
-        resolve_tool_capability_overrides(&cfg, &ConfigProfile::default()),
-        Ok(Some(BTreeMap::from([("view_image".to_string(), false)])))
+        resolve_enabled_tool_capabilities(&cfg, &ConfigProfile::default()),
+        Ok(None)
     );
 }
 
@@ -4396,7 +4391,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             web_search_config: None,
-            tool_capability_overrides: None,
+            enabled_tool_capabilities: None,
             legacy_view_image_override: None,
             tool_execution_mode: ToolExecutionMode::Auto,
             use_experimental_unified_exec_tool: !cfg!(windows),
@@ -4542,7 +4537,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
-        tool_capability_overrides: None,
+        enabled_tool_capabilities: None,
         legacy_view_image_override: None,
         tool_execution_mode: ToolExecutionMode::Auto,
         use_experimental_unified_exec_tool: !cfg!(windows),
@@ -4686,7 +4681,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
-        tool_capability_overrides: None,
+        enabled_tool_capabilities: None,
         legacy_view_image_override: None,
         tool_execution_mode: ToolExecutionMode::Auto,
         use_experimental_unified_exec_tool: !cfg!(windows),
@@ -4816,7 +4811,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
-        tool_capability_overrides: None,
+        enabled_tool_capabilities: None,
         legacy_view_image_override: None,
         tool_execution_mode: ToolExecutionMode::Auto,
         use_experimental_unified_exec_tool: !cfg!(windows),

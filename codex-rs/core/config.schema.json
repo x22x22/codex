@@ -1598,13 +1598,13 @@
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
-        "capabilities": {
-          "additionalProperties": {
-            "type": "boolean"
-          },
+        "enabled": {
           "default": null,
-          "description": "Additive capability overrides keyed by canonical capability name.",
-          "type": "object"
+          "description": "Canonical capability names to enable. If omitted, legacy/default resolution applies.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "execution_mode": {
           "allOf": [

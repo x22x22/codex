@@ -35,6 +35,7 @@ use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::ToolCapabilityKey;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::registry::builtin_tool_key;
+use crate::tools::registry::tool_capability_key;
 use crate::tools::registry::tool_handler_key;
 use codex_features::Feature;
 use codex_features::Features;
@@ -272,7 +273,7 @@ pub(crate) struct ToolsConfig {
     shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_shell_mode: UnifiedExecShellMode,
     pub allow_login_shell: bool,
-    pub tool_capability_overrides: Option<BTreeMap<String, bool>>,
+    pub enabled_tool_capabilities: Option<std::collections::BTreeSet<String>>,
     pub legacy_view_image_override: Option<bool>,
     pub execution_mode: ToolExecutionMode,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
@@ -409,7 +410,7 @@ impl ToolsConfig {
             shell_command_backend,
             unified_exec_shell_mode: UnifiedExecShellMode::Direct,
             allow_login_shell: true,
-            tool_capability_overrides: None,
+            enabled_tool_capabilities: None,
             legacy_view_image_override: None,
             execution_mode: ToolExecutionMode::Auto,
             apply_patch_tool_type,
@@ -448,11 +449,11 @@ impl ToolsConfig {
         self
     }
 
-    pub fn with_tool_capability_overrides(
+    pub fn with_enabled_tool_capabilities(
         mut self,
-        tool_capability_overrides: Option<BTreeMap<String, bool>>,
+        enabled_tool_capabilities: Option<std::collections::BTreeSet<String>>,
     ) -> Self {
-        self.tool_capability_overrides = tool_capability_overrides;
+        self.enabled_tool_capabilities = enabled_tool_capabilities;
         self
     }
 
@@ -519,12 +520,8 @@ impl ToolsConfig {
     }
 
     fn is_tool_capability_enabled(&self, capability: ToolCapabilityKey) -> bool {
-        if let Some(enabled) = self
-            .tool_capability_overrides
-            .as_ref()
-            .and_then(|overrides| overrides.get(capability.capability_name()))
-        {
-            return *enabled;
+        if let Some(enabled_tool_capabilities) = self.enabled_tool_capabilities.as_ref() {
+            return enabled_tool_capabilities.contains(capability.capability_name());
         }
 
         match capability {
@@ -549,13 +546,12 @@ impl ToolsConfig {
     }
 }
 
-pub fn validate_tool_capability_names(requested_capabilities: &[String]) -> Result<(), String> {
-    let known_names = ToolCapabilityKey::iter()
-        .map(ToolCapabilityKey::capability_name)
-        .collect::<std::collections::BTreeSet<_>>();
-    let invalid_names = requested_capabilities
+pub fn normalize_enabled_tool_capability_names(
+    enabled_tools: &[String],
+) -> Result<std::collections::BTreeSet<String>, String> {
+    let invalid_names = enabled_tools
         .iter()
-        .filter(|name| !known_names.contains(name.as_str()))
+        .filter(|name| tool_capability_key(name).is_none())
         .cloned()
         .collect::<Vec<_>>();
     if !invalid_names.is_empty() {
@@ -564,7 +560,12 @@ pub fn validate_tool_capability_names(requested_capabilities: &[String]) -> Resu
             invalid_names.join(", ")
         ));
     }
-    Ok(())
+    Ok(enabled_tools
+        .iter()
+        .filter_map(|name| tool_capability_key(name))
+        .map(ToolCapabilityKey::capability_name)
+        .map(str::to_string)
+        .collect())
 }
 
 fn supports_image_generation(model_info: &ModelInfo) -> bool {
