@@ -541,6 +541,7 @@ fn status_summary_spans(status: &AgentStatus) -> Vec<Span<'static>> {
     match status {
         AgentStatus::PendingInit => vec![Span::from("Pending init").cyan()],
         AgentStatus::Running => vec![Span::from("Running").cyan().bold()],
+        AgentStatus::Interrupted => vec![Span::from("Interrupted").magenta()],
         AgentStatus::Completed(message) => {
             let mut spans = vec![Span::from("Completed").green()];
             if let Some(message) = message.as_ref() {
