@@ -3787,7 +3787,7 @@ impl Session {
         response_item: ResponseItem,
         user_message_type: Option<UserMessageType>,
     ) {
-        let user_message_type = if self.enabled(Feature::UserMessageTypeMetadata) {
+        let user_message_type = if self.enabled(Feature::ItemMetadata) {
             user_message_type
         } else {
             None
@@ -3918,7 +3918,7 @@ impl Session {
         }
 
         let mut input_item: ResponseInputItem = input.into();
-        if self.enabled(Feature::UserMessageTypeMetadata) {
+        if self.enabled(Feature::ItemMetadata) {
             stamp_user_message_type_on_input_item(&mut input_item, UserMessageType::PromptSteering);
         }
 
@@ -3941,7 +3941,7 @@ impl Session {
                         ResponseInputItem::Message { .. } => Some(UserMessageType::PromptQueued),
                         _ => None,
                     };
-                    if self.enabled(Feature::UserMessageTypeMetadata)
+                    if self.enabled(Feature::ItemMetadata)
                         && let Some(kind) = user_message_type.clone()
                     {
                         stamp_user_message_type_on_input_item(&mut item, kind);
@@ -5726,7 +5726,7 @@ pub(crate) async fn run_turn(
         .await;
 
     let mut initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    if sess.enabled(Feature::UserMessageTypeMetadata) {
+    if sess.enabled(Feature::ItemMetadata) {
         stamp_user_message_type_on_input_item(&mut initial_input_for_turn, UserMessageType::Prompt);
     }
     let response_item: ResponseItem = initial_input_for_turn.clone().into();

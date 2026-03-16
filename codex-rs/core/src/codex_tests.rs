@@ -3841,7 +3841,7 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
-        .enable(crate::features::Feature::UserMessageTypeMetadata)
+        .enable(crate::features::Feature::ItemMetadata)
         .expect("feature flag should be enabled for this test");
 
     let input = vec![UserInput::Text {
