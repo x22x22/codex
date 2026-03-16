@@ -356,7 +356,6 @@ async fn user_message_type_prompt_steering_metadata_is_emitted_when_feature_enab
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-<<<<<<< rhan/escalations-approvals-sandbox
 async fn user_message_type_prompt_queued_metadata_is_emitted_when_feature_enabled()
 -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
@@ -496,8 +495,6 @@ async fn user_message_type_prompt_queued_metadata_is_emitted_when_feature_enable
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-=======
->>>>>>> rhan/emittance
 async fn assistant_message_item_is_emitted() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
