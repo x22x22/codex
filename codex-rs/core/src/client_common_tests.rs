@@ -147,6 +147,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            metadata: None,
         },
         ResponseItem::FunctionCallOutput {
             call_id: "call-1".to_string(),
@@ -158,6 +159,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
             call_id: "call-2".to_string(),
             name: "apply_patch".to_string(),
             input: "*** Begin Patch".to_string(),
+            metadata: None,
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "call-2".to_string(),
@@ -176,6 +178,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
                 namespace: None,
                 arguments: "{}".to_string(),
                 call_id: "call-1".to_string(),
+                metadata: None,
             },
             ResponseItem::FunctionCallOutput {
                 call_id: "call-1".to_string(),
@@ -187,6 +190,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
                 call_id: "call-2".to_string(),
                 name: "apply_patch".to_string(),
                 input: "*** Begin Patch".to_string(),
+                metadata: None,
             },
             ResponseItem::CustomToolCallOutput {
                 call_id: "call-2".to_string(),

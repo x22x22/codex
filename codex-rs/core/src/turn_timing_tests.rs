@@ -83,6 +83,7 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
             namespace: None,
             arguments: "{}".to_string(),
             call_id: "call-1".to_string(),
+            metadata: None,
         }
     ));
     assert!(response_item_records_turn_ttft(
@@ -92,6 +93,7 @@ fn response_item_records_turn_ttft_for_first_output_signals() {
             call_id: "call-2".to_string(),
             name: "custom".to_string(),
             input: "echo hi".to_string(),
+            metadata: None,
         }
     ));
     assert!(response_item_records_turn_ttft(&ResponseItem::Message {
