@@ -1,2 +1,1 @@
 sandbox_mode = "read-only"
-include_apply_patch_tool = false
