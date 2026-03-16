@@ -4414,6 +4414,137 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
     ));
 }
 
+#[test]
+fn review_decision_metadata_mapping_is_stable() {
+    assert_eq!(
+        review_decision_to_metadata(&ReviewDecision::Approved),
+        codex_protocol::models::ReviewDecisionMetadata::Approved
+    );
+    assert_eq!(
+        review_decision_to_metadata(&ReviewDecision::Denied),
+        codex_protocol::models::ReviewDecisionMetadata::Denied
+    );
+    assert_eq!(
+        review_decision_to_metadata(&ReviewDecision::Abort),
+        codex_protocol::models::ReviewDecisionMetadata::Abort
+    );
+    assert_eq!(
+        review_decision_to_metadata(&ReviewDecision::ApprovedForSession),
+        codex_protocol::models::ReviewDecisionMetadata::ApprovedForSession
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enabled() {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut sess)
+        .expect("session should be uniquely owned in this test")
+        .features
+        .enable(crate::features::Feature::ItemMetadata)
+        .expect("feature flag should be enabled for this test");
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        vec![UserInput::Text {
+            text: "start".to_string(),
+            text_elements: Vec::new(),
+        }],
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    while rx.try_recv().is_ok() {}
+
+    sess.record_approval_outcome("call-1", &ReviewDecision::Denied)
+        .await;
+    sess.record_response_item_and_emit_turn_item(
+        tc.as_ref(),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-1".to_string(),
+            metadata: None,
+        },
+    )
+    .await;
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected raw response item event")
+        .expect("channel open");
+    assert!(matches!(
+        event.msg,
+        EventMsg::RawResponseItem(ref ev)
+            if matches!(
+                &ev.item,
+                ResponseItem::FunctionCall {
+                    metadata: Some(metadata),
+                    ..
+                } if metadata.is_tool_call_escalated == Some(true)
+                    && metadata.review_decision
+                        == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
+            )
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
+    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
+    Arc::get_mut(&mut sess)
+        .expect("session should be uniquely owned in this test")
+        .features
+        .enable(crate::features::Feature::ItemMetadata)
+        .expect("feature flag should be enabled for this test");
+
+    sess.spawn_task(
+        Arc::clone(&tc),
+        vec![UserInput::Text {
+            text: "start".to_string(),
+            text_elements: Vec::new(),
+        }],
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+    while rx.try_recv().is_ok() {}
+
+    sess.record_response_item_and_emit_turn_item(
+        tc.as_ref(),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-2".to_string(),
+            metadata: None,
+        },
+    )
+    .await;
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected raw response item event")
+        .expect("channel open");
+    assert!(matches!(
+        event.msg,
+        EventMsg::RawResponseItem(ref ev)
+            if matches!(
+                &ev.item,
+                ResponseItem::FunctionCall {
+                    metadata: Some(metadata),
+                    ..
+                } if metadata.is_tool_call_escalated == Some(false)
+                    && metadata.review_decision.is_none()
+            )
+    ));
+}
+
 #[tokio::test]
 async fn steer_input_requires_active_turn() {
     let (sess, _tc, _rx) = make_session_and_context_with_rx().await;
@@ -4745,6 +4876,7 @@ async fn fatal_tool_error_stops_turn_and_reports_error() {
         call_id: "call-1".to_string(),
         name: "shell".to_string(),
         input: "{}".to_string(),
+        metadata: None,
     };
 
     let call = ToolRouter::build_tool_call(session.as_ref(), item.clone())
