@@ -780,6 +780,53 @@ async fn reconstruct_history_uses_replacement_history_verbatim() {
 }
 
 #[tokio::test]
+async fn replace_compacted_history_persists_merged_ghost_snapshot_tail() {
+    let (sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let rollout_path = attach_rollout_recorder(&sess).await;
+    let base_history = vec![user_message("before compact")];
+    let summary_item = user_message("summary");
+    let ghost_snapshot = ResponseItem::GhostSnapshot {
+        ghost_commit: codex_git::GhostCommit::new(
+            "ghost-123".to_string(),
+            None,
+            Vec::new(),
+            Vec::new(),
+        ),
+    };
+
+    sess.replace_history(base_history.clone(), Some(tc.to_turn_context_item()))
+        .await;
+    sess.record_conversation_items(tc.as_ref(), std::slice::from_ref(&ghost_snapshot))
+        .await;
+
+    let merged = sess
+        .replace_compacted_history(
+            vec![summary_item.clone()],
+            Some(tc.to_turn_context_item()),
+            CompactedItem {
+                message: String::new(),
+                replacement_history: Some(vec![summary_item.clone()]),
+            },
+            &base_history,
+        )
+        .await;
+
+    assert!(merged);
+    let expected_history = vec![summary_item.clone(), ghost_snapshot.clone()];
+    assert_eq!(sess.clone_history().await.raw_items(), expected_history);
+
+    sess.flush_rollout().await;
+    let (rollout_items, _, _) = RolloutRecorder::load_rollout_items(&rollout_path)
+        .await
+        .expect("load rollout items");
+    let reconstructed = sess
+        .reconstruct_history_from_rollout(tc.as_ref(), &rollout_items)
+        .await;
+
+    assert_eq!(reconstructed.history, expected_history);
+}
+
+#[tokio::test]
 async fn record_initial_history_reconstructs_resumed_transcript() {
     let (session, turn_context) = make_session_and_context().await;
     let (rollout_items, expected) = sample_rollout(&session, &turn_context).await;

@@ -6,7 +6,6 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::built_tools;
 use crate::compact::InitialContextInjection;
-use crate::compact::append_concurrent_ghost_snapshot_tail_if_append_only;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
@@ -151,23 +150,6 @@ async fn run_remote_compact_task_inner_impl(
     if !ghost_snapshots.is_empty() {
         new_history.extend(ghost_snapshots);
     }
-    // Remote compaction snapshots history, waits on an API call, then replaces
-    // session history wholesale. Detached ghost snapshot tasks can finish in
-    // that window and append `/undo` metadata directly into session history.
-    // Those entries are stripped from `for_prompt()`, so re-snapshot here to
-    // preserve an append-only ghost-snapshot tail without reintroducing
-    // model-visible items that were never compacted.
-    let latest_history_snapshot = sess.clone_history().await;
-    if !append_concurrent_ghost_snapshot_tail_if_append_only(
-        &mut new_history,
-        history_snapshot.raw_items(),
-        latest_history_snapshot.raw_items(),
-    ) {
-        warn!(
-            turn_id = %turn_context.sub_id,
-            "session history changed beyond append-only ghost snapshots during remote compaction; skipping concurrent ghost snapshot merge"
-        );
-    }
     let reference_context_item = match initial_context_injection {
         InitialContextInjection::DoNotInject => None,
         InitialContextInjection::BeforeLastUserMessage => Some(turn_context.to_turn_context_item()),
@@ -176,8 +158,20 @@ async fn run_remote_compact_task_inner_impl(
         message: String::new(),
         replacement_history: Some(new_history.clone()),
     };
-    sess.replace_compacted_history(new_history, reference_context_item, compacted_item)
-        .await;
+    if !sess
+        .replace_compacted_history(
+            new_history,
+            reference_context_item,
+            compacted_item,
+            history_snapshot.raw_items(),
+        )
+        .await
+    {
+        warn!(
+            turn_id = %turn_context.sub_id,
+            "session history changed beyond append-only ghost snapshots during remote compaction; skipping concurrent ghost snapshot merge"
+        );
+    }
     sess.recompute_token_usage(turn_context).await;
 
     sess.emit_turn_item_completed(turn_context, compaction_item)

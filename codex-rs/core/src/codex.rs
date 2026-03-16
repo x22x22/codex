@@ -3360,12 +3360,26 @@ impl Session {
 
     pub(crate) async fn replace_compacted_history(
         &self,
-        items: Vec<ResponseItem>,
+        mut items: Vec<ResponseItem>,
         reference_context_item: Option<TurnContextItem>,
-        compacted_item: CompactedItem,
-    ) {
-        self.replace_history(items, reference_context_item.clone())
-            .await;
+        mut compacted_item: CompactedItem,
+        base_history: &[ResponseItem],
+    ) -> bool {
+        // Compaction snapshots history and waits on a model/API call. Preserve
+        // any append-only ghost snapshot tail while holding the same lock that
+        // replaces history so detached `/undo` metadata writes are not lost in
+        // the gap before replacement.
+        let merged_ghost_snapshot_tail = {
+            let mut state = self.state.lock().await;
+            let merged = compact::append_concurrent_ghost_snapshot_tail_if_append_only(
+                &mut items,
+                base_history,
+                state.history.raw_items(),
+            );
+            state.replace_history(items.clone(), reference_context_item.clone());
+            merged
+        };
+        compacted_item.replacement_history = Some(items);
 
         self.persist_rollout_items(&[RolloutItem::Compacted(compacted_item)])
             .await;
@@ -3373,6 +3387,7 @@ impl Session {
             self.persist_rollout_items(&[RolloutItem::TurnContext(turn_context_item)])
                 .await;
         }
+        merged_ghost_snapshot_tail
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
