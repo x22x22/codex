@@ -203,6 +203,69 @@ async fn exec_server_client_connects_over_websocket() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_disconnect_terminates_processes_for_that_connection() -> anyhow::Result<()> {
+    let mut env = std::collections::HashMap::new();
+    if let Some(path) = std::env::var_os("PATH") {
+        env.insert("PATH".to_string(), path.to_string_lossy().into_owned());
+    }
+
+    let marker_path = std::env::temp_dir().join(format!(
+        "codex-exec-server-disconnect-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let _ = std::fs::remove_file(&marker_path);
+
+    let binary = cargo_bin("codex-exec-server")?;
+    let mut child = Command::new(binary);
+    child.args(["--listen", "ws://127.0.0.1:0"]);
+    child.stdin(Stdio::null());
+    child.stdout(Stdio::null());
+    child.stderr(Stdio::piped());
+    let mut child = child.spawn()?;
+    let stderr = child.stderr.take().expect("stderr");
+    let mut stderr_lines = BufReader::new(stderr).lines();
+    let websocket_url = read_websocket_url(&mut stderr_lines).await?;
+
+    {
+        let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
+            websocket_url,
+            client_name: "exec-server-test".to_string(),
+            connect_timeout: Duration::from_secs(5),
+            initialize_timeout: Duration::from_secs(5),
+        })
+        .await?;
+
+        let _process = client
+            .start_process(ExecParams {
+                process_id: "2003".to_string(),
+                argv: vec![
+                    "bash".to_string(),
+                    "-lc".to_string(),
+                    format!("sleep 2; printf disconnected > {}", marker_path.display()),
+                ],
+                cwd: std::env::current_dir()?,
+                env,
+                tty: false,
+                arg0: None,
+            })
+            .await?;
+    }
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(
+        !marker_path.exists(),
+        "managed process should be terminated when the websocket client disconnects"
+    );
+
+    child.start_kill()?;
+    let _ = std::fs::remove_file(&marker_path);
+    Ok(())
+}
+
 async fn read_websocket_url<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> anyhow::Result<String>
 where
     R: tokio::io::AsyncRead + Unpin,

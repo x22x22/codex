@@ -25,6 +25,10 @@ That split is meant to leave reusable seams if exec-server and app-server later
 share transport or JSON-RPC connection utilities. It also keeps the core
 handler testable without the RPC server implementation itself.
 
+Design notes for a likely future integration with unified exec, including
+rough call flow, buffering, and sandboxing boundaries, live in
+[DESIGN.md](./DESIGN.md).
+
 ## Transport
 
 The server speaks the same JSON-RPC message shapes over multiple transports.
