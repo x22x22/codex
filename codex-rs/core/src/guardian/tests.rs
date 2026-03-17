@@ -82,6 +82,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                         text: "Please check the repo visibility and push the docs fix if needed."
                             .to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: None,
                 },
@@ -105,6 +106,7 @@ async fn seed_guardian_parent_history(session: &Arc<Session>, turn: &Arc<TurnCon
                         text: "The repo is public; I now need approval to push the docs fix."
                             .to_string(),
                     }],
+                    metadata: None,
                     end_turn: None,
                     phase: None,
                 },
