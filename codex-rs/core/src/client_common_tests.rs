@@ -245,3 +245,86 @@ fn tool_search_output_namespace_serializes_with_deferred_child_tools() {
         })
     );
 }
+
+#[test]
+fn strip_input_item_metadata_clears_supported_variants() {
+    let metadata = Some(codex_protocol::models::ResponseItemMetadata {
+        user_message_type: Some(codex_protocol::models::UserMessageType::Prompt),
+        sandbox_policy: Some(codex_protocol::models::SandboxPolicyMetadata::Sandbox),
+        is_tool_call_escalated: Some(true),
+        review_decision: Some(codex_protocol::models::ReviewDecisionMetadata::Denied),
+    });
+    let mut items = vec![
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![codex_protocol::models::ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            metadata: metadata.clone(),
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::LocalShellCall {
+            id: None,
+            call_id: Some("call-1".to_string()),
+            status: codex_protocol::models::LocalShellStatus::Completed,
+            action: codex_protocol::models::LocalShellAction::Exec(
+                codex_protocol::models::LocalShellExecAction {
+                    command: vec!["echo".to_string(), "hello".to_string()],
+                    env: None,
+                    timeout_ms: None,
+                    user: None,
+                    working_directory: None,
+                },
+            ),
+            metadata: metadata.clone(),
+        },
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-2".to_string(),
+            metadata: metadata.clone(),
+        },
+        ResponseItem::CustomToolCall {
+            id: None,
+            status: None,
+            call_id: "call-3".to_string(),
+            name: "apply_patch".to_string(),
+            input: "*** Begin Patch".to_string(),
+            metadata: metadata.clone(),
+        },
+    ];
+
+    strip_input_item_metadata(&mut items);
+
+    for item in items {
+        match item {
+            ResponseItem::Message { metadata, .. }
+            | ResponseItem::LocalShellCall { metadata, .. }
+            | ResponseItem::FunctionCall { metadata, .. }
+            | ResponseItem::CustomToolCall { metadata, .. } => assert_eq!(metadata, None),
+            _ => {}
+        }
+    }
+}
+
+#[test]
+fn strip_input_item_metadata_does_not_change_non_metadata_items() {
+    let mut items = vec![
+        ResponseItem::FunctionCallOutput {
+            call_id: "call-4".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+        },
+        ResponseItem::CustomToolCallOutput {
+            call_id: "call-5".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+        },
+    ];
+
+    let expected = items.clone();
+    strip_input_item_metadata(&mut items);
+    assert_eq!(items, expected);
+}
