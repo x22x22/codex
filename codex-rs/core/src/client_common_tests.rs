@@ -294,7 +294,7 @@ fn strip_input_item_metadata_clears_supported_variants() {
             call_id: "call-3".to_string(),
             name: "apply_patch".to_string(),
             input: "*** Begin Patch".to_string(),
-            metadata: metadata.clone(),
+            metadata: metadata,
         },
     ];
 
