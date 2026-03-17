@@ -22,6 +22,7 @@ use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot_for_zsh_fork;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
 use crate::tools::sandboxing::ExecApprovalRequirement;
@@ -221,12 +222,21 @@ impl ToolRuntime<ShellRequest, ExecToolCallOutput> for ShellRuntime {
         ctx: &ToolCtx,
     ) -> Result<ExecToolCallOutput, ToolError> {
         let session_shell = ctx.session.user_shell();
-        let command = maybe_wrap_shell_lc_with_snapshot(
-            &req.command,
-            session_shell.as_ref(),
-            &req.cwd,
-            &req.explicit_env_overrides,
-        );
+        let command = if self.backend == ShellRuntimeBackend::ShellCommandZshFork {
+            maybe_wrap_shell_lc_with_snapshot_for_zsh_fork(
+                &req.command,
+                session_shell.as_ref(),
+                &req.cwd,
+                &req.explicit_env_overrides,
+            )
+        } else {
+            maybe_wrap_shell_lc_with_snapshot(
+                &req.command,
+                session_shell.as_ref(),
+                &req.cwd,
+                &req.explicit_env_overrides,
+            )
+        };
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
             && ctx.session.features().enabled(Feature::PowershellUtf8)
         {

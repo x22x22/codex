@@ -19,6 +19,7 @@ use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
+use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot_for_zsh_fork;
 use crate::tools::runtimes::shell::zsh_fork_backend;
 use crate::tools::sandboxing::Approvable;
 use crate::tools::sandboxing::ApprovalCtx;
@@ -194,18 +195,28 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
     ) -> Result<UnifiedExecProcess, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
-        let command = maybe_wrap_shell_lc_with_snapshot(
-            base_command,
-            session_shell.as_ref(),
-            &req.cwd,
-            &req.explicit_env_overrides,
-        );
-        let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
-            && ctx.session.features().enabled(Feature::PowershellUtf8)
-        {
-            prefix_powershell_script_with_utf8(&command)
-        } else {
-            command
+        let command = match &self.shell_mode {
+            UnifiedExecShellMode::Direct => {
+                let command = maybe_wrap_shell_lc_with_snapshot(
+                    base_command,
+                    session_shell.as_ref(),
+                    &req.cwd,
+                    &req.explicit_env_overrides,
+                );
+                if matches!(session_shell.shell_type, ShellType::PowerShell)
+                    && ctx.session.features().enabled(Feature::PowershellUtf8)
+                {
+                    prefix_powershell_script_with_utf8(&command)
+                } else {
+                    command
+                }
+            }
+            UnifiedExecShellMode::ZshFork(_) => maybe_wrap_shell_lc_with_snapshot_for_zsh_fork(
+                base_command,
+                session_shell.as_ref(),
+                &req.cwd,
+                &req.explicit_env_overrides,
+            ),
         };
 
         let mut env = req.env.clone();

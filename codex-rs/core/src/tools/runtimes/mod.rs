@@ -62,14 +62,56 @@ pub(crate) fn build_command_spec(
 ///   shell -lc "<script>"
 ///   => user_shell -c ". SNAPSHOT (best effort); exec shell -c <script>"
 ///
-/// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can
-/// be run by Bash/Zsh/sh. On non-matching commands, or when command cwd does
-/// not match the snapshot cwd, this is a no-op.
+/// This wrapper script uses POSIX constructs (`if`, `.`, `exec`) so it can be
+/// run by Bash/Zsh/sh. On non-matching commands, or when command cwd does not
+/// match the snapshot cwd, this is a no-op.
 pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     command: &[String],
     session_shell: &Shell,
     cwd: &Path,
     explicit_env_overrides: &HashMap<String, String>,
+) -> Vec<String> {
+    rewrite_shell_lc_with_snapshot(
+        command,
+        session_shell,
+        cwd,
+        explicit_env_overrides,
+        SnapshotWrapMode::ExecOriginalShell,
+    )
+}
+
+/// POSIX-only helper: equivalent to `maybe_wrap_shell_lc_with_snapshot`, but
+/// keeps the original script in the same shell process after sourcing the
+/// snapshot instead of `exec`-ing the original shell. This avoids an extra
+/// shell re-exec, which matters for the zsh-fork path in restricted read-only
+/// sandboxes.
+pub(crate) fn maybe_wrap_shell_lc_with_snapshot_for_zsh_fork(
+    command: &[String],
+    session_shell: &Shell,
+    cwd: &Path,
+    explicit_env_overrides: &HashMap<String, String>,
+) -> Vec<String> {
+    rewrite_shell_lc_with_snapshot(
+        command,
+        session_shell,
+        cwd,
+        explicit_env_overrides,
+        SnapshotWrapMode::RunInSessionShell,
+    )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SnapshotWrapMode {
+    ExecOriginalShell,
+    RunInSessionShell,
+}
+
+fn rewrite_shell_lc_with_snapshot(
+    command: &[String],
+    session_shell: &Shell,
+    cwd: &Path,
+    explicit_env_overrides: &HashMap<String, String>,
+    wrap_mode: SnapshotWrapMode,
 ) -> Vec<String> {
     if cfg!(windows) {
         return command.to_vec();
@@ -105,25 +147,46 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
 
     let snapshot_path = snapshot.path.to_string_lossy();
     let shell_path = session_shell.shell_path.to_string_lossy();
-    let original_shell = shell_single_quote(&command[0]);
-    let original_script = shell_single_quote(&command[2]);
     let snapshot_path = shell_single_quote(snapshot_path.as_ref());
-    let trailing_args = command[3..]
-        .iter()
-        .map(|arg| format!(" '{}'", shell_single_quote(arg)))
-        .collect::<String>();
     let (override_captures, override_exports) = build_override_exports(explicit_env_overrides);
-    let rewritten_script = if override_exports.is_empty() {
-        format!(
-            "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
-        )
-    } else {
-        format!(
-            "{override_captures}\n\nif . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{override_exports}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
-        )
+    let rewritten_script = match wrap_mode {
+        SnapshotWrapMode::ExecOriginalShell => {
+            let original_shell = shell_single_quote(&command[0]);
+            let original_script = shell_single_quote(&command[2]);
+            let trailing_args = command[3..]
+                .iter()
+                .map(|arg| format!(" '{}'", shell_single_quote(arg)))
+                .collect::<String>();
+            if override_exports.is_empty() {
+                format!(
+                    "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
+                )
+            } else {
+                format!(
+                    "{override_captures}\n\nif . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{override_exports}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
+                )
+            }
+        }
+        SnapshotWrapMode::RunInSessionShell => {
+            if override_exports.is_empty() {
+                format!(
+                    "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{}",
+                    command[2]
+                )
+            } else {
+                format!(
+                    "{override_captures}\n\nif . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{override_exports}\n\n{}",
+                    command[2]
+                )
+            }
+        }
     };
 
-    vec![shell_path.to_string(), "-c".to_string(), rewritten_script]
+    let mut rewritten = vec![shell_path.to_string(), "-c".to_string(), rewritten_script];
+    if wrap_mode == SnapshotWrapMode::RunInSessionShell {
+        rewritten.extend(command[3..].iter().cloned());
+    }
+    rewritten
 }
 
 fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (String, String) {

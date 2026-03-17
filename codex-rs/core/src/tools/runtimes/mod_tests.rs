@@ -33,7 +33,7 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
     let session_shell = shell_with_snapshot(
         ShellType::Zsh,
         "/bin/zsh",
-        snapshot_path,
+        snapshot_path.clone(),
         dir.path().to_path_buf(),
     );
     let command = vec![
@@ -59,7 +59,7 @@ fn maybe_wrap_shell_lc_with_snapshot_escapes_single_quotes() {
     let session_shell = shell_with_snapshot(
         ShellType::Zsh,
         "/bin/zsh",
-        snapshot_path,
+        snapshot_path.clone(),
         dir.path().to_path_buf(),
     );
     let command = vec![
@@ -82,7 +82,7 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_bash_bootstrap_shell() {
     let session_shell = shell_with_snapshot(
         ShellType::Bash,
         "/bin/bash",
-        snapshot_path,
+        snapshot_path.clone(),
         dir.path().to_path_buf(),
     );
     let command = vec![
@@ -134,7 +134,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
     let session_shell = shell_with_snapshot(
         ShellType::Zsh,
         "/bin/zsh",
-        snapshot_path,
+        snapshot_path.clone(),
         dir.path().to_path_buf(),
     );
     let command = vec![
@@ -148,6 +148,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
     let rewritten =
         maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path(), &HashMap::new());
 
+    assert_eq!(rewritten.len(), 3);
     assert!(
         rewritten[2]
             .contains(r#"exec '/bin/bash' -c 'printf '"'"'%s %s'"'"' "$0" "$1"' 'arg0' 'arg1'"#)
@@ -195,13 +196,17 @@ fn maybe_wrap_shell_lc_with_snapshot_accepts_dot_alias_cwd() {
     ];
     let command_cwd = dir.path().join(".");
 
-    let rewritten =
-        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, &command_cwd, &HashMap::new());
+    let rewritten = maybe_wrap_shell_lc_with_snapshot_for_zsh_fork(
+        &command,
+        &session_shell,
+        &command_cwd,
+        &HashMap::new(),
+    );
 
     assert_eq!(rewritten[0], "/bin/zsh");
     assert_eq!(rewritten[1], "-c");
     assert!(rewritten[2].contains("if . '"));
-    assert!(rewritten[2].contains("exec '/bin/bash' -c 'echo hello'"));
+    assert!(rewritten[2].ends_with("\n\necho hello"));
 }
 
 #[test]
@@ -226,7 +231,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_explicit_override_precedence() {
     ];
     let explicit_env_overrides =
         HashMap::from([("TEST_ENV_SNAPSHOT".to_string(), "worktree".to_string())]);
-    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot_for_zsh_fork(
         &command,
         &session_shell,
         dir.path(),
@@ -265,8 +270,12 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_snapshot_path_without_override() {
         "-lc".to_string(),
         "printf '%s' \"$PATH\"".to_string(),
     ];
-    let rewritten =
-        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path(), &HashMap::new());
+    let rewritten = maybe_wrap_shell_lc_with_snapshot_for_zsh_fork(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+    );
     let output = Command::new(&rewritten[0])
         .args(&rewritten[1..])
         .output()
@@ -297,7 +306,7 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_explicit_path_override() {
         "printf '%s' \"$PATH\"".to_string(),
     ];
     let explicit_env_overrides = HashMap::from([("PATH".to_string(), "/worktree/bin".to_string())]);
-    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot_for_zsh_fork(
         &command,
         &session_shell,
         dir.path(),
@@ -337,7 +346,7 @@ fn maybe_wrap_shell_lc_with_snapshot_does_not_embed_override_values_in_argv() {
         "OPENAI_API_KEY".to_string(),
         "super-secret-value".to_string(),
     )]);
-    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot_for_zsh_fork(
         &command,
         &session_shell,
         dir.path(),
@@ -381,7 +390,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_unset_override_variables() {
         "CODEX_TEST_UNSET_OVERRIDE".to_string(),
         "worktree-value".to_string(),
     )]);
-    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+    let rewritten = maybe_wrap_shell_lc_with_snapshot_for_zsh_fork(
         &command,
         &session_shell,
         dir.path(),
@@ -395,4 +404,75 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_unset_override_variables() {
         .expect("run rewritten command");
     assert!(output.status.success(), "command failed: {output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "unset");
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_for_zsh_fork_bootstraps_in_user_shell() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Zsh,
+        "/bin/zsh",
+        snapshot_path.clone(),
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "echo hello".to_string(),
+    ];
+
+    let rewritten = maybe_wrap_shell_lc_with_snapshot_for_zsh_fork(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+    );
+
+    assert_eq!(rewritten[0], "/bin/zsh");
+    assert_eq!(rewritten[1], "-c");
+    assert!(rewritten[2].contains("if . '"));
+    assert!(rewritten[2].ends_with("\n\necho hello"));
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_for_zsh_fork_preserves_trailing_args() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(&snapshot_path, "# Snapshot file\n").expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Zsh,
+        "/bin/zsh",
+        snapshot_path.clone(),
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s %s' \"$0\" \"$1\"".to_string(),
+        "arg0".to_string(),
+        "arg1".to_string(),
+    ];
+
+    let rewritten = maybe_wrap_shell_lc_with_snapshot_for_zsh_fork(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+    );
+
+    assert_eq!(
+        rewritten,
+        vec![
+            "/bin/zsh".to_string(),
+            "-c".to_string(),
+            format!(
+                "if . '{}' >/dev/null 2>&1; then :; fi\n\nprintf '%s %s' \"$0\" \"$1\"",
+                snapshot_path.display()
+            ),
+            "arg0".to_string(),
+            "arg1".to_string(),
+        ]
+    );
 }
