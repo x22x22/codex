@@ -5846,7 +5846,7 @@ pub(crate) async fn run_turn(
                     if mid_turn_auto_compaction_attempts > MAX_MID_TURN_AUTO_COMPACTION_ATTEMPTS {
                         sess.services.session_telemetry.counter(
                             "codex.auto_compaction.stalled",
-                            1,
+                            /*inc*/ 1,
                             &[("phase", "mid_turn")],
                         );
                         error!(
