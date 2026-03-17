@@ -12,6 +12,22 @@ inputs:
     description: Whether to sign and notarize the macOS dmg.
     required: false
     default: "true"
+  sign-paths:
+    description: Optional newline-separated list of paths to sign when signing macOS binaries. Defaults to the release codex binaries.
+    required: false
+    default: ""
+  entitlements-file:
+    description: Optional path to an entitlements plist to apply while signing selected macOS code paths.
+    required: false
+    default: ""
+  entitlements-paths:
+    description: Optional newline-separated list of signed paths that should receive entitlements. Defaults to all sign-paths when entitlements-file is set.
+    required: false
+    default: ""
+  shared-keychain-entitlement:
+    description: Whether to apply the shared keychain entitlement plist. `auto` enables it for alpha and beta tag builds.
+    required: false
+    default: "auto"
   apple-certificate:
     description: Base64-encoded Apple signing certificate (P12).
     required: true
@@ -117,8 +133,6 @@ runs:
     - name: Sign macOS binaries
       if: ${{ inputs.sign-binaries == 'true' }}
       shell: bash
-      env:
-        TARGET: ${{ inputs.target }}
       run: |
         set -euo pipefail
 
@@ -132,16 +146,92 @@ runs:
           keychain_args+=(--keychain "${APPLE_CODESIGN_KEYCHAIN}")
         fi
 
-        for binary in codex codex-responses-api-proxy; do
-          path="codex-rs/target/${TARGET}/release/${binary}"
-          codesign --force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$path"
+        normalize_sign_path() {
+          local path="$1"
+          if [[ "$path" != /* ]]; then
+            path="${GITHUB_WORKSPACE}/${path}"
+          fi
+          printf '%s\n' "$path"
+        }
+
+        sign_paths=()
+        while IFS= read -r path; do
+          [[ -n "$path" ]] && sign_paths+=("$(normalize_sign_path "$path")")
+        done < <(printf '%s\n' '${{ inputs.sign-paths }}')
+
+        if ((${#sign_paths[@]} == 0)); then
+          for binary in codex codex-responses-api-proxy; do
+            sign_paths+=("$(normalize_sign_path "codex-rs/target/${{ inputs.target }}/release/${binary}")")
+          done
+        fi
+
+        entitlements_file="${{ inputs.entitlements-file }}"
+        shared_keychain_entitlement="${{ inputs.shared-keychain-entitlement }}"
+        if [[ -z "$entitlements_file" ]]; then
+          case "$shared_keychain_entitlement" in
+            true)
+              entitlements_file=".github/macos/codex-shared-keychain.entitlements"
+              ;;
+            auto)
+              if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]] && [[ "${GITHUB_REF_NAME:-}" =~ -(alpha|beta)(\.[0-9]+)?$ ]]; then
+                entitlements_file=".github/macos/codex-shared-keychain.entitlements"
+              fi
+              ;;
+            false)
+              ;;
+            *)
+              echo "shared-keychain-entitlement must be one of: auto, true, false"
+              exit 1
+              ;;
+          esac
+        fi
+
+        if [[ -n "$entitlements_file" ]]; then
+          entitlements_file="$(normalize_sign_path "$entitlements_file")"
+          if [[ ! -f "$entitlements_file" ]]; then
+            echo "Entitlements file $entitlements_file not found"
+            exit 1
+          fi
+        fi
+
+        entitlements_paths=()
+        while IFS= read -r path; do
+          [[ -n "$path" ]] && entitlements_paths+=("$(normalize_sign_path "$path")")
+        done < <(printf '%s\n' '${{ inputs.entitlements-paths }}')
+
+        for path in "${sign_paths[@]}"; do
+          if [[ ! -e "$path" ]]; then
+            echo "Sign path $path not found"
+            exit 1
+          fi
+
+          codesign_args=(--force --options runtime --timestamp --sign "$APPLE_CODESIGN_IDENTITY")
+          codesign_args+=("${keychain_args[@]}")
+
+          if [[ -n "$entitlements_file" ]]; then
+            apply_entitlements=true
+            if ((${#entitlements_paths[@]} > 0)); then
+              apply_entitlements=false
+              for entitlements_path in "${entitlements_paths[@]}"; do
+                if [[ "$path" == "$entitlements_path" ]]; then
+                  apply_entitlements=true
+                  break
+                fi
+              done
+            fi
+
+            if [[ "$apply_entitlements" == "true" ]]; then
+              codesign_args+=(--entitlements "$entitlements_file")
+            fi
+          fi
+
+          codesign "${codesign_args[@]}" "$path"
         done
 
     - name: Notarize macOS binaries
       if: ${{ inputs.sign-binaries == 'true' }}
       shell: bash
       env:
-        TARGET: ${{ inputs.target }}
         APPLE_NOTARIZATION_KEY_P8: ${{ inputs.apple-notarization-key-p8 }}
         APPLE_NOTARIZATION_KEY_ID: ${{ inputs.apple-notarization-key-id }}
         APPLE_NOTARIZATION_ISSUER_ID: ${{ inputs.apple-notarization-issuer-id }}
@@ -166,7 +256,7 @@ runs:
 
         notarize_binary() {
           local binary="$1"
-          local source_path="codex-rs/target/${TARGET}/release/${binary}"
+          local source_path="codex-rs/target/${{ inputs.target }}/release/${binary}"
           local archive_path="${RUNNER_TEMP}/${binary}.zip"
 
           if [[ ! -f "$source_path" ]]; then
@@ -187,7 +277,6 @@ runs:
       if: ${{ inputs.sign-dmg == 'true' }}
       shell: bash
       env:
-        TARGET: ${{ inputs.target }}
         APPLE_NOTARIZATION_KEY_P8: ${{ inputs.apple-notarization-key-p8 }}
         APPLE_NOTARIZATION_KEY_ID: ${{ inputs.apple-notarization-key-id }}
         APPLE_NOTARIZATION_ISSUER_ID: ${{ inputs.apple-notarization-issuer-id }}
@@ -210,8 +299,7 @@ runs:
 
         source "$GITHUB_ACTION_PATH/notary_helpers.sh"
 
-        dmg_name="codex-${TARGET}.dmg"
-        dmg_path="codex-rs/target/${TARGET}/release/${dmg_name}"
+        dmg_path="codex-rs/target/${{ inputs.target }}/release/codex-${{ inputs.target }}.dmg"
 
         if [[ ! -f "$dmg_path" ]]; then
           echo "dmg $dmg_path not found"
@@ -224,7 +312,7 @@ runs:
         fi
 
         codesign --force --timestamp --sign "$APPLE_CODESIGN_IDENTITY" "${keychain_args[@]}" "$dmg_path"
-        notarize_submission "$dmg_name" "$dmg_path" "$notary_key_path"
+        notarize_submission "codex-${{ inputs.target }}.dmg" "$dmg_path" "$notary_key_path"
         xcrun stapler staple "$dmg_path"
 
     - name: Remove signing keychain
