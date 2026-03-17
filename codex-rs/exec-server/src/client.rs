@@ -14,7 +14,6 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
@@ -194,6 +193,73 @@ struct RegisteredProcess {
     status: Arc<RemoteProcessStatus>,
 }
 
+enum PendingRequest {
+    Initialize(oneshot::Sender<Result<InitializeResponse, JSONRPCErrorError>>),
+    Exec(oneshot::Sender<Result<ExecResponse, JSONRPCErrorError>>),
+    Write(oneshot::Sender<Result<WriteResponse, JSONRPCErrorError>>),
+    Terminate(oneshot::Sender<Result<TerminateResponse, JSONRPCErrorError>>),
+}
+
+impl PendingRequest {
+    fn resolve_json(self, result: Value) -> Result<(), ExecServerError> {
+        match self {
+            PendingRequest::Initialize(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::Exec(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::Write(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::Terminate(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_typed(self, response: ExecServerResponseMessage) -> Result<(), ExecServerError> {
+        match (self, response) {
+            (PendingRequest::Initialize(tx), ExecServerResponseMessage::Initialize(response)) => {
+                let _ = tx.send(Ok(response));
+            }
+            (PendingRequest::Exec(tx), ExecServerResponseMessage::Exec(response)) => {
+                let _ = tx.send(Ok(response));
+            }
+            (PendingRequest::Write(tx), ExecServerResponseMessage::Write(response)) => {
+                let _ = tx.send(Ok(response));
+            }
+            (PendingRequest::Terminate(tx), ExecServerResponseMessage::Terminate(response)) => {
+                let _ = tx.send(Ok(response));
+            }
+            (_, response) => {
+                return Err(ExecServerError::Protocol(format!(
+                    "unexpected in-process response kind: {response:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_error(self, error: JSONRPCErrorError) {
+        match self {
+            PendingRequest::Initialize(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::Exec(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::Write(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::Terminate(tx) => {
+                let _ = tx.send(Err(error));
+            }
+        }
+    }
+}
+
 enum ClientBackend {
     JsonRpc {
         write_tx: mpsc::Sender<JSONRPCMessage>,
@@ -205,7 +271,7 @@ enum ClientBackend {
 
 struct Inner {
     backend: ClientBackend,
-    pending: Mutex<HashMap<RequestId, oneshot::Sender<Result<Value, JSONRPCErrorError>>>>,
+    pending: Mutex<HashMap<RequestId, PendingRequest>>,
     processes: Mutex<HashMap<String, RegisteredProcess>>,
     next_request_id: AtomicI64,
     reader_task: JoinHandle<()>,
@@ -472,7 +538,7 @@ impl ExecServerClient {
         } = options;
         timeout(initialize_timeout, async {
             let _: InitializeResponse = self
-                .request(INITIALIZE_METHOD, &InitializeParams { client_name })
+                .request_initialize(InitializeParams { client_name })
                 .await?;
             self.notify(INITIALIZED_METHOD, &serde_json::json!({}))
                 .await
@@ -484,24 +550,100 @@ impl ExecServerClient {
     }
 
     async fn request_exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
-        self.request(EXEC_METHOD, &params).await
+        let request_id = self.next_request_id();
+        let (response_tx, response_rx) = oneshot::channel();
+        self.inner
+            .pending
+            .lock()
+            .await
+            .insert(request_id.clone(), PendingRequest::Exec(response_tx));
+        let send_result = match &self.inner.backend {
+            ClientBackend::JsonRpc { write_tx } => {
+                send_jsonrpc_request(write_tx, request_id.clone(), EXEC_METHOD, &params).await
+            }
+            ClientBackend::InProcess { write_tx } => {
+                send_in_process_request(
+                    write_tx,
+                    ExecServerInboundMessage::Request(ExecServerRequest::Exec {
+                        request_id: request_id.clone(),
+                        params,
+                    }),
+                )
+                .await
+            }
+        };
+        if let Err(err) = send_result {
+            self.inner.pending.lock().await.remove(&request_id);
+            return Err(err);
+        }
+        receive_typed_response(response_rx).await
     }
 
     async fn write_process(&self, params: WriteParams) -> Result<WriteResponse, ExecServerError> {
-        self.request(EXEC_WRITE_METHOD, &params).await
+        let request_id = self.next_request_id();
+        let (response_tx, response_rx) = oneshot::channel();
+        self.inner
+            .pending
+            .lock()
+            .await
+            .insert(request_id.clone(), PendingRequest::Write(response_tx));
+        let send_result = match &self.inner.backend {
+            ClientBackend::JsonRpc { write_tx } => {
+                send_jsonrpc_request(write_tx, request_id.clone(), EXEC_WRITE_METHOD, &params).await
+            }
+            ClientBackend::InProcess { write_tx } => {
+                send_in_process_request(
+                    write_tx,
+                    ExecServerInboundMessage::Request(ExecServerRequest::Write {
+                        request_id: request_id.clone(),
+                        params,
+                    }),
+                )
+                .await
+            }
+        };
+        if let Err(err) = send_result {
+            self.inner.pending.lock().await.remove(&request_id);
+            return Err(err);
+        }
+        receive_typed_response(response_rx).await
     }
 
     async fn terminate_session(
         &self,
         session_id: &str,
     ) -> Result<TerminateResponse, ExecServerError> {
-        self.request(
-            EXEC_TERMINATE_METHOD,
-            &TerminateParams {
-                session_id: session_id.to_string(),
-            },
-        )
-        .await
+        let params = TerminateParams {
+            session_id: session_id.to_string(),
+        };
+        let request_id = self.next_request_id();
+        let (response_tx, response_rx) = oneshot::channel();
+        self.inner
+            .pending
+            .lock()
+            .await
+            .insert(request_id.clone(), PendingRequest::Terminate(response_tx));
+        let send_result = match &self.inner.backend {
+            ClientBackend::JsonRpc { write_tx } => {
+                send_jsonrpc_request(write_tx, request_id.clone(), EXEC_TERMINATE_METHOD, &params)
+                    .await
+            }
+            ClientBackend::InProcess { write_tx } => {
+                send_in_process_request(
+                    write_tx,
+                    ExecServerInboundMessage::Request(ExecServerRequest::Terminate {
+                        request_id: request_id.clone(),
+                        params,
+                    }),
+                )
+                .await
+            }
+        };
+        if let Err(err) = send_result {
+            self.inner.pending.lock().await.remove(&request_id);
+            return Err(err);
+        }
+        receive_typed_response(response_rx).await
     }
 
     async fn notify<P: Serialize>(&self, method: &str, params: &P) -> Result<(), ExecServerError> {
@@ -535,87 +677,83 @@ impl ExecServerClient {
         }
     }
 
-    async fn request<P, R>(&self, method: &str, params: &P) -> Result<R, ExecServerError>
-    where
-        P: Serialize,
-        R: DeserializeOwned,
-    {
-        let params = serde_json::to_value(params)?;
-        let request_id =
-            RequestId::Integer(self.inner.next_request_id.fetch_add(1, Ordering::SeqCst));
+    async fn request_initialize(
+        &self,
+        params: InitializeParams,
+    ) -> Result<InitializeResponse, ExecServerError> {
+        let request_id = self.next_request_id();
         let (response_tx, response_rx) = oneshot::channel();
         self.inner
             .pending
             .lock()
             .await
-            .insert(request_id.clone(), response_tx);
-
-        match &self.inner.backend {
+            .insert(request_id.clone(), PendingRequest::Initialize(response_tx));
+        let send_result = match &self.inner.backend {
             ClientBackend::JsonRpc { write_tx } => {
-                let message = JSONRPCMessage::Request(JSONRPCRequest {
-                    id: request_id.clone(),
-                    method: method.to_string(),
-                    params: Some(params),
-                    trace: None,
-                });
-
-                if write_tx.send(message).await.is_err() {
-                    self.inner.pending.lock().await.remove(&request_id);
-                    return Err(ExecServerError::Closed);
-                }
+                send_jsonrpc_request(write_tx, request_id.clone(), INITIALIZE_METHOD, &params).await
             }
             ClientBackend::InProcess { write_tx } => {
-                let message = in_process_request(method, request_id.clone(), params)?;
-                if write_tx.send(message).await.is_err() {
-                    self.inner.pending.lock().await.remove(&request_id);
-                    return Err(ExecServerError::Closed);
-                }
+                send_in_process_request(
+                    write_tx,
+                    ExecServerInboundMessage::Request(ExecServerRequest::Initialize {
+                        request_id: request_id.clone(),
+                        params,
+                    }),
+                )
+                .await
             }
+        };
+        if let Err(err) = send_result {
+            self.inner.pending.lock().await.remove(&request_id);
+            return Err(err);
         }
+        receive_typed_response(response_rx).await
+    }
 
-        let result = response_rx.await.map_err(|_| ExecServerError::Closed)?;
-        match result {
-            Ok(value) => serde_json::from_value(value).map_err(ExecServerError::from),
-            Err(error) => Err(ExecServerError::Server {
-                code: error.code,
-                message: error.message,
-            }),
-        }
+    fn next_request_id(&self) -> RequestId {
+        RequestId::Integer(self.inner.next_request_id.fetch_add(1, Ordering::SeqCst))
     }
 }
 
-fn in_process_request(
-    method: &str,
-    request_id: RequestId,
-    params: Value,
-) -> Result<ExecServerInboundMessage, ExecServerError> {
-    match method {
-        INITIALIZE_METHOD => Ok(ExecServerInboundMessage::Request(
-            ExecServerRequest::Initialize {
-                request_id,
-                params: serde_json::from_value(params)?,
-            },
-        )),
-        EXEC_METHOD => Ok(ExecServerInboundMessage::Request(ExecServerRequest::Exec {
-            request_id,
-            params: serde_json::from_value(params)?,
-        })),
-        EXEC_WRITE_METHOD => Ok(ExecServerInboundMessage::Request(
-            ExecServerRequest::Write {
-                request_id,
-                params: serde_json::from_value(params)?,
-            },
-        )),
-        EXEC_TERMINATE_METHOD => Ok(ExecServerInboundMessage::Request(
-            ExecServerRequest::Terminate {
-                request_id,
-                params: serde_json::from_value(params)?,
-            },
-        )),
-        other => Err(ExecServerError::Protocol(format!(
-            "unsupported in-process request method `{other}`"
-        ))),
+async fn receive_typed_response<T>(
+    response_rx: oneshot::Receiver<Result<T, JSONRPCErrorError>>,
+) -> Result<T, ExecServerError> {
+    let result = response_rx.await.map_err(|_| ExecServerError::Closed)?;
+    match result {
+        Ok(response) => Ok(response),
+        Err(error) => Err(ExecServerError::Server {
+            code: error.code,
+            message: error.message,
+        }),
     }
+}
+
+async fn send_jsonrpc_request<P: Serialize>(
+    write_tx: &mpsc::Sender<JSONRPCMessage>,
+    request_id: RequestId,
+    method: &str,
+    params: &P,
+) -> Result<(), ExecServerError> {
+    let params = serde_json::to_value(params)?;
+    write_tx
+        .send(JSONRPCMessage::Request(JSONRPCRequest {
+            id: request_id,
+            method: method.to_string(),
+            params: Some(params),
+            trace: None,
+        }))
+        .await
+        .map_err(|_| ExecServerError::Closed)
+}
+
+async fn send_in_process_request(
+    write_tx: &mpsc::Sender<ExecServerInboundMessage>,
+    message: ExecServerInboundMessage,
+) -> Result<(), ExecServerError> {
+    write_tx
+        .send(message)
+        .await
+        .map_err(|_| ExecServerError::Closed)
 }
 
 async fn handle_in_process_outbound_message(
@@ -627,23 +765,13 @@ async fn handle_in_process_outbound_message(
             request_id,
             response,
         } => {
-            if let Some(tx) = inner.pending.lock().await.remove(&request_id) {
-                let result = match response {
-                    ExecServerResponseMessage::Initialize(response) => {
-                        serde_json::to_value(response)?
-                    }
-                    ExecServerResponseMessage::Exec(response) => serde_json::to_value(response)?,
-                    ExecServerResponseMessage::Write(response) => serde_json::to_value(response)?,
-                    ExecServerResponseMessage::Terminate(response) => {
-                        serde_json::to_value(response)?
-                    }
-                };
-                let _ = tx.send(Ok(result));
+            if let Some(pending) = inner.pending.lock().await.remove(&request_id) {
+                pending.resolve_typed(response)?;
             }
         }
         ExecServerOutboundMessage::Error { request_id, error } => {
-            if let Some(tx) = inner.pending.lock().await.remove(&request_id) {
-                let _ = tx.send(Err(error));
+            if let Some(pending) = inner.pending.lock().await.remove(&request_id) {
+                pending.resolve_error(error);
             }
         }
         ExecServerOutboundMessage::Notification(notification) => {
@@ -684,13 +812,13 @@ async fn handle_server_message(
 ) -> Result<(), ExecServerError> {
     match message {
         JSONRPCMessage::Response(JSONRPCResponse { id, result }) => {
-            if let Some(tx) = inner.pending.lock().await.remove(&id) {
-                let _ = tx.send(Ok(result));
+            if let Some(pending) = inner.pending.lock().await.remove(&id) {
+                pending.resolve_json(result)?;
             }
         }
         JSONRPCMessage::Error(JSONRPCError { id, error }) => {
-            if let Some(tx) = inner.pending.lock().await.remove(&id) {
-                let _ = tx.send(Err(error));
+            if let Some(pending) = inner.pending.lock().await.remove(&id) {
+                pending.resolve_error(error);
             }
         }
         JSONRPCMessage::Notification(notification) => {
@@ -742,14 +870,17 @@ async fn handle_server_notification(
 async fn handle_transport_shutdown(inner: &Arc<Inner>) {
     let pending = {
         let mut pending = inner.pending.lock().await;
-        pending.drain().map(|(_, tx)| tx).collect::<Vec<_>>()
+        pending
+            .drain()
+            .map(|(_, pending)| pending)
+            .collect::<Vec<_>>()
     };
-    for tx in pending {
-        let _ = tx.send(Err(JSONRPCErrorError {
+    for pending in pending {
+        pending.resolve_error(JSONRPCErrorError {
             code: -32000,
             data: None,
             message: "exec-server transport closed".to_string(),
-        }));
+        });
     }
 
     let processes = {
