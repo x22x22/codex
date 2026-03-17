@@ -621,7 +621,7 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
     (!active_transcript.is_empty())
         .then_some(active_transcript)
         .or_else(|| {
-            (!handoff.input_transcript.is_empty()).then(|| handoff.input_transcript.clone())
+            (!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone())
         })
 }
 
