@@ -305,7 +305,6 @@ The crate exports:
 - `RemoteExecServerConnectArgs`
 - `ExecServerLaunchCommand`
 - `ExecServerEvent`
-- `ExecServerOutput`
 - `SpawnedExecServer`
 - `ExecServerError`
 - `ExecServerTransport`

@@ -6,8 +6,8 @@ use tokio::process::Child;
 use tokio::process::Command;
 
 use crate::client::ExecServerClient;
-use crate::client::ExecServerClientConnectOptions;
 use crate::client::ExecServerError;
+use crate::client_api::ExecServerClientConnectOptions;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecServerLaunchCommand {
