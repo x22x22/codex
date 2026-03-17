@@ -6464,6 +6464,7 @@ guardian_approval = true
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
                 remote_image_urls: Vec::new(),
+                turn_context: None,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -7248,6 +7249,7 @@ guardian_approval = true
                 text_elements,
                 local_image_paths,
                 remote_image_urls,
+                turn_context: None,
             }) as Arc<dyn HistoryCell>
         };
         let agent_cell = |text: &str| -> Arc<dyn HistoryCell> {
@@ -7379,6 +7381,7 @@ guardian_approval = true
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),
+            turn_context: None,
         }) as Arc<dyn HistoryCell>];
         app.chat_widget
             .set_composer_text("stale draft".to_string(), Vec::new(), Vec::new());
@@ -7437,6 +7440,7 @@ guardian_approval = true
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: vec![data_image_url.clone()],
+            turn_context: None,
         }) as Arc<dyn HistoryCell>];
 
         app.apply_backtrack_rollback(BacktrackSelection {
@@ -7643,6 +7647,7 @@ guardian_approval = true
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
                 remote_image_urls: Vec::new(),
+                turn_context: None,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("after first")],
@@ -7653,6 +7658,7 @@ guardian_approval = true
                 text_elements: Vec::new(),
                 local_image_paths: Vec::new(),
                 remote_image_urls: Vec::new(),
+                turn_context: None,
             }) as Arc<dyn HistoryCell>,
             Arc::new(AgentMessageCell::new(
                 vec![Line::from("after second")],
@@ -7809,6 +7815,7 @@ guardian_approval = true
             text_elements: Vec::new(),
             local_image_paths: Vec::new(),
             remote_image_urls: Vec::new(),
+            turn_context: None,
         }) as Arc<dyn HistoryCell>];
         app.overlay = Some(Overlay::new_transcript(app.transcript_cells.clone()));
         app.deferred_history_lines = vec![Line::from("stale buffered line")];

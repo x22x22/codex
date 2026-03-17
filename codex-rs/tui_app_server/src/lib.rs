@@ -128,6 +128,7 @@ mod text_formatting;
 mod theme_picker;
 mod tooltips;
 mod tui;
+mod turn_context;
 mod ui_consts;
 pub mod update_action;
 mod update_prompt;
