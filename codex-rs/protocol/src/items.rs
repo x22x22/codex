@@ -241,10 +241,8 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
     let content = fragments
         .iter()
         .filter(|fragment| !fragment.hook_run_ids.is_empty())
-        .map(|fragment| {
-            ContentItem::InputText {
-                text: serialize_hook_prompt_fragment(&fragment.text, &fragment.hook_run_ids),
-            }
+        .map(|fragment| ContentItem::InputText {
+            text: serialize_hook_prompt_fragment(&fragment.text, &fragment.hook_run_ids),
         })
         .collect::<Vec<_>>();
 
@@ -342,7 +340,10 @@ fn parse_hook_prompt_hook_run_ids(open_tag: &str) -> Option<Vec<String>> {
         parse_hook_prompt_attribute(open_tag, HOOK_PROMPT_RUN_IDS_ATTR)
     {
         let hook_run_ids = serde_json::from_str::<Vec<String>>(&encoded_hook_run_ids).ok()?;
-        if hook_run_ids.iter().any(|hook_run_id| hook_run_id.trim().is_empty()) {
+        if hook_run_ids
+            .iter()
+            .any(|hook_run_id| hook_run_id.trim().is_empty())
+        {
             return None;
         }
         return Some(hook_run_ids);
