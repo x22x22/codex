@@ -399,12 +399,16 @@ fn canonical_signing_payload(agent_runtime_id: &str, timestamp: &str) -> String 
     format!("{agent_runtime_id}:{timestamp}")
 }
 
-fn sign_payload(private_key_pkcs8_base64: &str, payload: &[u8]) -> Result<String> {
+fn decode_signing_key(private_key_pkcs8_base64: &str) -> Result<SigningKey> {
     let private_key_pkcs8_der = BASE64_STANDARD
         .decode(private_key_pkcs8_base64)
         .context("decoding agent identity private key")?;
-    let signing_key = SigningKey::from_pkcs8_der(&private_key_pkcs8_der)
-        .context("decoding agent identity private key")?;
+    SigningKey::from_pkcs8_der(&private_key_pkcs8_der)
+        .context("decoding agent identity private key")
+}
+
+fn sign_payload(private_key_pkcs8_base64: &str, payload: &[u8]) -> Result<String> {
+    let signing_key = decode_signing_key(private_key_pkcs8_base64)?;
     let signature: Signature = signing_key.sign(payload);
     Ok(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
 }
@@ -429,11 +433,7 @@ fn decrypt_task_id(
         .decode(&encrypted_task_id)
         .or_else(|_| URL_SAFE_NO_PAD.decode(&encrypted_task_id))
         .context("decoding encrypted task id envelope")?;
-    let private_key_pkcs8_der = BASE64_STANDARD
-        .decode(private_key_pkcs8_base64)
-        .context("decoding agent identity private key")?;
-    let signing_key = SigningKey::from_pkcs8_der(&private_key_pkcs8_der)
-        .context("decoding agent identity private key")?;
+    let signing_key = decode_signing_key(private_key_pkcs8_base64)?;
     let secret_key = CryptoBoxSecretKey::from(signing_key.to_scalar());
     let decrypted = secret_key
         .unseal(&decoded)
