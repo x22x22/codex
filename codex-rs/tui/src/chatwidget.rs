@@ -47,6 +47,7 @@ use crate::audio_device::list_realtime_audio_device_names;
 use crate::bottom_pane::StatusLineItem;
 use crate::bottom_pane::StatusLinePreviewData;
 use crate::bottom_pane::StatusLineSetupView;
+use crate::draft_completion::DraftCompletionRequest;
 use crate::status::RateLimitWindowDisplay;
 use crate::status::format_directory_display;
 use crate::status::format_tokens_compact;
@@ -1594,7 +1595,7 @@ impl ChatWidget {
             .unwrap_or(AgentMessageStreamKind::Unknown)
     }
 
-    fn current_user_prompt_for_interleave(&self) -> Option<String> {
+    fn last_user_prompt_text(&self) -> Option<String> {
         self.last_rendered_user_message_event
             .as_ref()
             .map(|event| event.message.trim().to_string())
@@ -1671,7 +1672,7 @@ impl ChatWidget {
     }
 
     fn start_answer_interleave(&mut self, raw_answer: String) {
-        let Some(user_prompt) = self.current_user_prompt_for_interleave() else {
+        let Some(user_prompt) = self.last_user_prompt_text() else {
             self.finalize_live_answer_without_interleave(raw_answer);
             return;
         };
@@ -4449,6 +4450,16 @@ impl ChatWidget {
                 }
                 InputResult::CommandWithArgs(cmd, args, text_elements) => {
                     self.dispatch_command_with_args(cmd, args, text_elements);
+                }
+                InputResult::RequestDraftCompletion { request_id, draft } => {
+                    self.app_event_tx.send(AppEvent::StartDraftCompletion(
+                        DraftCompletionRequest {
+                            request_id,
+                            draft,
+                            last_user_turn: self.last_user_prompt_text(),
+                            last_assistant_turn: self.last_copyable_output.clone(),
+                        },
+                    ));
                 }
                 InputResult::None => {}
             },
@@ -8843,6 +8854,15 @@ impl ChatWidget {
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
+    }
+
+    pub(crate) fn on_draft_completion_result(
+        &mut self,
+        request_id: u64,
+        result: Result<Vec<String>, String>,
+    ) {
+        self.bottom_pane
+            .on_draft_completion_result(request_id, result);
     }
 
     /// Handles a Ctrl+C press at the chat-widget layer.

@@ -12,11 +12,9 @@ use codex_core::default_client::originator;
 use codex_core::models_manager::manager::ModelsManager;
 use codex_otel::SessionTelemetry;
 use codex_protocol::ThreadId;
-use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::SessionSource;
 use ratatui::prelude::Stylize;
 use ratatui::text::Line;
@@ -246,9 +244,9 @@ async fn interleave_answer(
             &prompt,
             &model_info,
             &telemetry,
-            Some(ReasoningEffortConfig::None),
-            ReasoningSummaryConfig::None,
-            Some(codex_protocol::config_types::ServiceTier::Fast),
+            None,
+            model_info.default_reasoning_summary,
+            None,
             None,
         )
         .await
@@ -412,8 +410,9 @@ fn parse_simple_list(text: &str) -> Option<ParsedList> {
     let mut started = false;
     let mut remainder_start = None;
     let lines: Vec<&str> = text.lines().collect();
-
-    for (idx, line) in lines.iter().enumerate() {
+    let mut idx = 0;
+    while idx < lines.len() {
+        let line = lines[idx];
         let trimmed = line.trim();
         if trimmed.is_empty() {
             if started {
@@ -423,31 +422,39 @@ fn parse_simple_list(text: &str) -> Option<ParsedList> {
                     .map(|offset| idx + 1 + offset);
                 break;
             }
+            idx += 1;
             continue;
         }
 
-        let Some((line_kind, marker, item_text)) = parse_list_item_line(trimmed) else {
-            if started {
-                remainder_start = Some(idx);
-                break;
+        if let Some((line_kind, marker, item_text)) = parse_list_item_line(trimmed) {
+            match kind {
+                Some(existing_kind) if existing_kind != line_kind => {
+                    remainder_start = Some(idx);
+                    break;
+                }
+                None => kind = Some(line_kind),
+                Some(_) => {}
             }
-            continue;
-        };
 
-        match kind {
-            Some(existing_kind) if existing_kind != line_kind => {
-                remainder_start = Some(idx);
-                break;
-            }
-            None => kind = Some(line_kind),
-            Some(_) => {}
+            started = true;
+            items.push(ListItem {
+                marker,
+                text: item_text.to_string(),
+            });
+            idx += 1;
+            continue;
         }
 
-        started = true;
-        items.push(ListItem {
-            marker,
-            text: item_text.to_string(),
-        });
+        if started {
+            if let Some(last_item) = items.last_mut() {
+                last_item.text.push('\n');
+                last_item.text.push_str(trimmed);
+            }
+            idx += 1;
+            continue;
+        }
+
+        idx += 1;
     }
 
     if items.is_empty() {
@@ -571,6 +578,29 @@ mod tests {
                  A: I'm doing fine.\n\
                  2. what's your favorite model?\n\
                  A: I don't have a favorite."
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn heuristic_interleave_keeps_continuation_lines_with_numbered_answers() {
+        let result = heuristic_interleave_answer(
+            "1. how are you doing?\n2. what's the biggest city in the world?\n3. who's the ceo of openai?",
+            "1. I'm doing fine.\n2. Jakarta is the largest city by population.\nSource: https://example.com/jakarta\n3. Sam Altman is the CEO of OpenAI.\nSource: https://example.com/openai",
+        );
+
+        assert_eq!(
+            result,
+            Some(
+                "1. how are you doing?\n\
+                 A: I'm doing fine.\n\
+                 2. what's the biggest city in the world?\n\
+                 A: Jakarta is the largest city by population.\n\
+                 Source: https://example.com/jakarta\n\
+                 3. who's the ceo of openai?\n\
+                 A: Sam Altman is the CEO of OpenAI.\n\
+                 Source: https://example.com/openai"
                     .to_string()
             )
         );

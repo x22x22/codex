@@ -21,6 +21,7 @@ use codex_utils_approval_presets::ApprovalPreset;
 use crate::answer_interleave::AnswerInterleaveRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
+use crate::draft_completion::DraftCompletionRequest;
 use crate::history_cell::HistoryCell;
 
 use codex_core::config::types::ApprovalsReviewer;
@@ -137,6 +138,15 @@ pub(crate) enum AppEvent {
     AnswerInterleaveResult {
         request_id: u64,
         result: Result<String, String>,
+    },
+
+    /// Kick off an asynchronous fast-model draft completion request.
+    StartDraftCompletion(DraftCompletionRequest),
+
+    /// Result of a completed draft completion request.
+    DraftCompletionResult {
+        request_id: u64,
+        result: Result<Vec<String>, String>,
     },
 
     /// Result of refreshing rate limits
