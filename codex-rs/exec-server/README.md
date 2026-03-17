@@ -17,11 +17,13 @@ unified-exec in this PR; it is only the standalone transport layer.
 The internal shape is intentionally closer to `app-server` than the first cut:
 
 - transport adapters are separate from the per-connection request processor
+- JSON-RPC route matching is separate from the stateful exec handler
 - the client only speaks the protocol; it does not spawn a server subprocess
 - local child-process launch is handled by a separate helper/factory layer
 
 That split is meant to leave reusable seams if exec-server and app-server later
-share transport or JSON-RPC connection utilities.
+share transport or JSON-RPC connection utilities. It also keeps the core
+handler testable without the RPC server implementation itself.
 
 ## Transport
 
