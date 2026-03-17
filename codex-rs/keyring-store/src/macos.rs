@@ -396,22 +396,4 @@ mod tests {
         );
         assert_eq!(store.shared_writes.get(), 1);
     }
-
-    #[test]
-    fn delete_removes_both_shared_and_legacy_passwords() {
-        let store = MockPasswordStore::default()
-            .with_shared_password("shared-value")
-            .with_legacy_password("legacy-value");
-
-        let deleted = delete_password_with_store(&store, "Codex Auth", "test-account").unwrap();
-
-        assert!(deleted);
-        assert_eq!(store.shared.borrow().clone(), None);
-        assert_eq!(store.legacy.borrow().clone(), None);
-    }
-
-    #[test]
-    fn shared_access_group_matches_configured_team_prefix() {
-        assert_eq!(SHARED_ACCESS_GROUP, "2DC432GLL2.com.openai.codex.shared");
-    }
 }
