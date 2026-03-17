@@ -1,6 +1,8 @@
 #![allow(clippy::expect_used)]
 
 use anyhow::Result;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_test_macros::large_stack_test;
 use core_test_support::responses::ev_apply_patch_call;
 use core_test_support::responses::ev_apply_patch_custom_tool_call;
@@ -788,9 +790,18 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
             match call_num {
                 0 => {
                     let command = if cfg!(windows) {
-                        r#"powershell.exe -NoLogo -NoProfile -Command "Get-Content -Encoding utf8 source.txt""#
+                        // Encode the nested PowerShell script so `cmd.exe /c` does not leave the
+                        // read command wrapped in quotes and turn it into a printed string literal.
+                        let script = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-Content -Encoding utf8 source.txt";
+                        let encoded = BASE64_STANDARD.encode(
+                            script
+                                .encode_utf16()
+                                .flat_map(u16::to_le_bytes)
+                                .collect::<Vec<u8>>(),
+                        );
+                        format!("powershell.exe -NoLogo -NoProfile -EncodedCommand {encoded}")
                     } else {
-                        "cat source.txt"
+                        "cat source.txt".to_string()
                     };
                     let args = json!({
                         "command": command,
