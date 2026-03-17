@@ -163,6 +163,7 @@ pub(crate) struct ToolSuggestionRequest {
 struct McpToolApprovalDisplayParam {
     name: String,
     value: Value,
+    display_name: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -442,6 +443,7 @@ fn parse_tool_approval_display_params(meta: Option<&Value>) -> Vec<McpToolApprov
                 .map(|(name, value)| McpToolApprovalDisplayParam {
                     name: name.clone(),
                     value: value.clone(),
+                    display_name: name.clone(),
                 })
                 .collect::<Vec<_>>()
         })
@@ -456,9 +458,18 @@ fn parse_tool_approval_display_param(value: &Value) -> Option<McpToolApprovalDis
     if name.is_empty() {
         return None;
     }
+    let display_name = value
+        .get("display_name")
+        .and_then(Value::as_str)
+        .unwrap_or(name)
+        .trim();
+    if display_name.is_empty() {
+        return None;
+    }
     Some(McpToolApprovalDisplayParam {
         name: name.to_string(),
         value: value.get("value")?.clone(),
+        display_name: display_name.to_string(),
     })
 }
 
@@ -491,7 +502,7 @@ fn format_tool_approval_display_message(
 fn format_tool_approval_display_param_line(param: &McpToolApprovalDisplayParam) -> String {
     format!(
         "{}: {}",
-        param.name,
+        param.display_name,
         format_tool_approval_display_param_value(&param.value)
     )
 }
@@ -1112,24 +1123,25 @@ impl McpServerElicitationOverlay {
         }
         self.validation_error = None;
         if self.request.response_mode == McpServerElicitationResponseMode::ApprovalAction {
-            let (decision, meta) = match self.field_value(0).as_ref().and_then(Value::as_str) {
-                Some(APPROVAL_ACCEPT_ONCE_VALUE) => (ElicitationAction::Accept, None),
-                Some(APPROVAL_ACCEPT_SESSION_VALUE) => (
-                    ElicitationAction::Accept,
-                    Some(serde_json::json!({
-                        APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_SESSION_VALUE,
-                    })),
-                ),
-                Some(APPROVAL_ACCEPT_ALWAYS_VALUE) => (
-                    ElicitationAction::Accept,
-                    Some(serde_json::json!({
-                        APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_ALWAYS_VALUE,
-                    })),
-                ),
-                Some(APPROVAL_DECLINE_VALUE) => (ElicitationAction::Decline, None),
-                Some(APPROVAL_CANCEL_VALUE) => (ElicitationAction::Cancel, None),
-                _ => (ElicitationAction::Cancel, None),
-            };
+            let (decision, meta) =
+                match self.field_value(/*idx*/ 0).as_ref().and_then(Value::as_str) {
+                    Some(APPROVAL_ACCEPT_ONCE_VALUE) => (ElicitationAction::Accept, None),
+                    Some(APPROVAL_ACCEPT_SESSION_VALUE) => (
+                        ElicitationAction::Accept,
+                        Some(serde_json::json!({
+                            APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_SESSION_VALUE,
+                        })),
+                    ),
+                    Some(APPROVAL_ACCEPT_ALWAYS_VALUE) => (
+                        ElicitationAction::Accept,
+                        Some(serde_json::json!({
+                            APPROVAL_PERSIST_KEY: APPROVAL_PERSIST_ALWAYS_VALUE,
+                        })),
+                    ),
+                    Some(APPROVAL_DECLINE_VALUE) => (ElicitationAction::Decline, None),
+                    Some(APPROVAL_CANCEL_VALUE) => (ElicitationAction::Cancel, None),
+                    _ => (ElicitationAction::Cancel, None),
+                };
             self.app_event_tx.send(AppEvent::SubmitThreadOp {
                 thread_id: self.request.thread_id,
                 op: Op::ResolveElicitation {
@@ -1179,7 +1191,7 @@ impl McpServerElicitationOverlay {
         if self.current_index() + 1 >= self.field_count() {
             self.submit_answers();
         } else {
-            self.move_field(true);
+            self.move_field(/*next*/ true);
         }
     }
 
@@ -1474,7 +1486,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.move_field(false);
+                self.move_field(/*next*/ false);
                 return;
             }
             KeyEvent {
@@ -1487,7 +1499,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                self.move_field(true);
+                self.move_field(/*next*/ true);
                 return;
             }
             KeyEvent {
@@ -1495,7 +1507,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.current_field_is_select() => {
-                self.move_field(false);
+                self.move_field(/*next*/ false);
                 return;
             }
             KeyEvent {
@@ -1503,7 +1515,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                 modifiers: KeyModifiers::NONE,
                 ..
             } if self.current_field_is_select() => {
-                self.move_field(true);
+                self.move_field(/*next*/ true);
                 return;
             }
             _ => {}
@@ -1526,10 +1538,10 @@ impl BottomPaneView for McpServerElicitationOverlay {
                     }
                 }
                 KeyCode::Backspace | KeyCode::Delete => self.clear_selection(),
-                KeyCode::Char(' ') => self.select_current_option(true),
+                KeyCode::Char(' ') => self.select_current_option(/*committed*/ true),
                 KeyCode::Enter => {
                     if self.selected_option_index().is_some() {
-                        self.select_current_option(true);
+                        self.select_current_option(/*committed*/ true);
                     }
                     self.go_next_or_submit();
                 }
@@ -1538,7 +1550,7 @@ impl BottomPaneView for McpServerElicitationOverlay {
                         if let Some(answer) = self.current_answer_mut() {
                             answer.selection.selected_idx = Some(option_idx);
                         }
-                        self.select_current_option(true);
+                        self.select_current_option(/*committed*/ true);
                         self.go_next_or_submit();
                     }
                 }
@@ -1687,7 +1699,7 @@ mod tests {
     fn tool_approval_meta(
         persist_modes: &[&str],
         tool_params: Option<Value>,
-        tool_params_display: Option<Vec<(&str, Value)>>,
+        tool_params_display: Option<Vec<(&str, Value, &str)>>,
     ) -> Option<Value> {
         let mut meta = serde_json::Map::from_iter([(
             APPROVAL_META_KIND_KEY.to_string(),
@@ -1713,10 +1725,11 @@ mod tests {
                 Value::Array(
                     tool_params_display
                         .into_iter()
-                        .map(|(name, value)| {
+                        .map(|(name, value, display_name)| {
                             serde_json::json!({
                                 "name": name,
                                 "value": value,
+                                "display_name": display_name,
                             })
                         })
                         .collect(),
@@ -2020,8 +2033,16 @@ mod tests {
                         "alpha": 1,
                     })),
                     Some(vec![
-                        ("Calendar", Value::String("primary".to_string())),
-                        ("Title", Value::String("Roadmap review".to_string())),
+                        (
+                            "calendar_id",
+                            Value::String("primary".to_string()),
+                            "Calendar",
+                        ),
+                        (
+                            "title",
+                            Value::String("Roadmap review".to_string()),
+                            "Title",
+                        ),
                     ]),
                 ),
             ),
@@ -2032,12 +2053,14 @@ mod tests {
             request.approval_display_params,
             vec![
                 McpToolApprovalDisplayParam {
-                    name: "Calendar".to_string(),
+                    name: "calendar_id".to_string(),
                     value: Value::String("primary".to_string()),
+                    display_name: "Calendar".to_string(),
                 },
                 McpToolApprovalDisplayParam {
-                    name: "Title".to_string(),
+                    name: "title".to_string(),
                     value: Value::String("Roadmap review".to_string()),
+                    display_name: "Title".to_string(),
                 },
             ]
         );
@@ -2407,13 +2430,26 @@ mod tests {
                         "ignored_after_limit": "fourth param",
                     })),
                     Some(vec![
-                        ("Calendar", Value::String("primary".to_string())),
-                        ("Title", Value::String("Roadmap review".to_string())),
                         (
-                            "Notes",
-                            Value::String("This is a deliberately long note that should truncate before it turns the approval body into a giant wall of text in the TUI overlay.".to_string()),
+                            "calendar_id",
+                            Value::String("primary".to_string()),
+                            "Calendar",
                         ),
-                        ("Ignored", Value::String("fourth param".to_string())),
+                        (
+                            "title",
+                            Value::String("Roadmap review".to_string()),
+                            "Title",
+                        ),
+                        (
+                            "notes",
+                            Value::String("This is a deliberately long note that should truncate before it turns the approval body into a giant wall of text in the TUI overlay.".to_string()),
+                            "Notes",
+                        ),
+                        (
+                            "ignored_after_limit",
+                            Value::String("fourth param".to_string()),
+                            "Ignored",
+                        ),
                     ]),
                 ),
             ),

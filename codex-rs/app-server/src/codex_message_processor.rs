@@ -201,6 +201,8 @@ use codex_core::config::NetworkProxyAuditMetadata;
 use codex_core::config::edit::ConfigEdit;
 use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::McpServerTransportConfig;
+use codex_core::config_loader::CloudRequirementsLoadError;
+use codex_core::config_loader::CloudRequirementsLoadErrorCode;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::error::CodexErr;
@@ -444,7 +446,7 @@ impl CodexMessageProcessor {
     }
 
     pub(crate) async fn maybe_start_curated_repo_sync_for_latest_config(&self) {
-        match self.load_latest_config(None).await {
+        match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => self
                 .thread_manager
                 .plugins_manager()
@@ -896,6 +898,15 @@ impl CodexMessageProcessor {
             | ClientRequest::ConfigValueWrite { .. }
             | ClientRequest::ConfigBatchWrite { .. } => {
                 warn!("Config request reached CodexMessageProcessor unexpectedly");
+            }
+            ClientRequest::FsReadFile { .. }
+            | ClientRequest::FsWriteFile { .. }
+            | ClientRequest::FsCreateDirectory { .. }
+            | ClientRequest::FsGetMetadata { .. }
+            | ClientRequest::FsReadDirectory { .. }
+            | ClientRequest::FsRemove { .. }
+            | ClientRequest::FsCopy { .. } => {
+                warn!("Filesystem request reached CodexMessageProcessor unexpectedly");
             }
             ClientRequest::ConfigRequirementsRead { .. } => {
                 warn!("ConfigRequirementsRead request reached CodexMessageProcessor unexpectedly");
@@ -1612,7 +1623,10 @@ impl CodexMessageProcessor {
         }
 
         let cwd = cwd.unwrap_or_else(|| self.config.cwd.clone());
-        let mut env = create_env(&self.config.permissions.shell_environment_policy, None);
+        let mut env = create_env(
+            &self.config.permissions.shell_environment_policy,
+            /*thread_id*/ None,
+        );
         if let Some(env_overrides) = env_overrides {
             for (key, value) in env_overrides {
                 match value {
@@ -1648,8 +1662,8 @@ impl CodexMessageProcessor {
             Some(spec) => match spec
                 .start_proxy(
                     self.config.permissions.sandbox_policy.get(),
-                    None,
-                    None,
+                    /*policy_decider*/ None,
+                    /*blocked_request_observer*/ None,
                     managed_network_requirements_enabled,
                     NetworkProxyAuditMetadata::default(),
                 )
@@ -1693,6 +1707,10 @@ impl CodexMessageProcessor {
                 .map(codex_core::config::StartedNetworkProxy::proxy),
             sandbox_permissions: SandboxPermissions::UseDefault,
             windows_sandbox_level,
+            windows_sandbox_private_desktop: self
+                .config
+                .permissions
+                .windows_sandbox_private_desktop,
             justification: None,
             arg0: None,
         };
@@ -1839,6 +1857,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             config,
             service_name,
@@ -1857,6 +1876,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             base_instructions,
             developer_instructions,
@@ -1902,6 +1922,10 @@ impl CodexMessageProcessor {
         {
             warn!("timed out waiting for background tasks to shut down; proceeding");
         }
+    }
+
+    pub(crate) async fn clear_all_thread_listeners(&self) {
+        self.thread_state_manager.clear_all_listeners().await;
     }
 
     pub(crate) async fn shutdown_threads(&self) {
@@ -1959,11 +1983,7 @@ impl CodexMessageProcessor {
         {
             Ok(config) => config,
             Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("error deriving config: {err}"),
-                    data: None,
-                };
+                let error = config_load_error(&err);
                 listener_task_context
                     .outgoing
                     .send_error(request_id, error)
@@ -1994,9 +2014,11 @@ impl CodexMessageProcessor {
                     name: tool.name,
                     description: tool.description,
                     input_schema: tool.input_schema,
+                    defer_loading: tool.defer_loading,
                 })
                 .collect()
         };
+        let core_dynamic_tool_count = core_dynamic_tools.len();
 
         match listener_task_context
             .thread_manager
@@ -2007,6 +2029,12 @@ impl CodexMessageProcessor {
                 service_name,
                 request_trace,
             )
+            .instrument(tracing::info_span!(
+                "app_server.thread_start.create_thread",
+                otel.name = "app_server.thread_start.create_thread",
+                thread_start.dynamic_tool_count = core_dynamic_tool_count,
+                thread_start.persist_extended_history = persist_extended_history,
+            ))
             .await
         {
             Ok(new_conv) => {
@@ -2016,7 +2044,13 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = new_conv;
-                let config_snapshot = thread.config_snapshot().await;
+                let config_snapshot = thread
+                    .config_snapshot()
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.config_snapshot",
+                        otel.name = "app_server.thread_start.config_snapshot",
+                    ))
+                    .await;
                 let mut thread = build_thread_from_snapshot(
                     thread_id,
                     &config_snapshot,
@@ -2032,6 +2066,11 @@ impl CodexMessageProcessor {
                         experimental_raw_events,
                         ApiVersion::V2,
                     )
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.attach_listener",
+                        otel.name = "app_server.thread_start.attach_listener",
+                        thread_start.experimental_raw_events = experimental_raw_events,
+                    ))
                     .await,
                     thread_id,
                     request_id.connection_id,
@@ -2041,14 +2080,22 @@ impl CodexMessageProcessor {
                 listener_task_context
                     .thread_watch_manager
                     .upsert_thread_silently(thread.clone())
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.upsert_thread",
+                        otel.name = "app_server.thread_start.upsert_thread",
+                    ))
                     .await;
 
                 thread.status = resolve_thread_status(
                     listener_task_context
                         .thread_watch_manager
                         .loaded_status_for_thread(&thread.id)
+                        .instrument(tracing::info_span!(
+                            "app_server.thread_start.resolve_status",
+                            otel.name = "app_server.thread_start.resolve_status",
+                        ))
                         .await,
-                    false,
+                    /*has_in_progress_turn*/ false,
                 );
 
                 let response = ThreadStartResponse {
@@ -2058,6 +2105,7 @@ impl CodexMessageProcessor {
                     service_tier: config_snapshot.service_tier,
                     cwd: config_snapshot.cwd,
                     approval_policy: config_snapshot.approval_policy.into(),
+                    approvals_reviewer: config_snapshot.approvals_reviewer.into(),
                     sandbox: config_snapshot.sandbox_policy.into(),
                     reasoning_effort: config_snapshot.reasoning_effort,
                 };
@@ -2065,12 +2113,20 @@ impl CodexMessageProcessor {
                 listener_task_context
                     .outgoing
                     .send_response(request_id, response)
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.send_response",
+                        otel.name = "app_server.thread_start.send_response",
+                    ))
                     .await;
 
                 let notif = ThreadStartedNotification { thread };
                 listener_task_context
                     .outgoing
                     .send_server_notification(ServerNotification::ThreadStarted(notif))
+                    .instrument(tracing::info_span!(
+                        "app_server.thread_start.notify_started",
+                        otel.name = "app_server.thread_start.notify_started",
+                    ))
                     .await;
             }
             Err(err) => {
@@ -2095,6 +2151,7 @@ impl CodexMessageProcessor {
         service_tier: Option<Option<codex_protocol::config_types::ServiceTier>>,
         cwd: Option<String>,
         approval_policy: Option<codex_app_server_protocol::AskForApproval>,
+        approvals_reviewer: Option<codex_app_server_protocol::ApprovalsReviewer>,
         sandbox: Option<SandboxMode>,
         base_instructions: Option<String>,
         developer_instructions: Option<String>,
@@ -2107,6 +2164,8 @@ impl CodexMessageProcessor {
             cwd: cwd.map(PathBuf::from),
             approval_policy: approval_policy
                 .map(codex_app_server_protocol::AskForApproval::to_core),
+            approvals_reviewer: approvals_reviewer
+                .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
             sandbox_mode: sandbox.map(SandboxMode::to_core),
             codex_linux_sandbox_exe: self.arg0_paths.codex_linux_sandbox_exe.clone(),
             main_execve_wrapper_exe: self.arg0_paths.main_execve_wrapper_exe.clone(),
@@ -2485,7 +2544,7 @@ impl CodexMessageProcessor {
             self.thread_watch_manager
                 .loaded_status_for_thread(&thread.id)
                 .await,
-            false,
+            /*has_in_progress_turn*/ false,
         );
 
         self.outgoing
@@ -2536,10 +2595,10 @@ impl CodexMessageProcessor {
                 Some(state_db_ctx),
                 rollout_path.as_path(),
                 self.config.model_provider_id.as_str(),
-                None,
+                /*builder*/ None,
                 &[],
-                None,
-                None,
+                /*archived_only*/ None,
+                /*new_thread_memory_mode*/ None,
             )
             .await;
 
@@ -2607,10 +2666,10 @@ impl CodexMessageProcessor {
             Some(state_db_ctx),
             rollout_path.as_path(),
             self.config.model_provider_id.as_str(),
-            None,
+            /*builder*/ None,
             &[],
-            None,
-            None,
+            /*archived_only*/ None,
+            /*new_thread_memory_mode*/ None,
         )
         .await;
 
@@ -2797,7 +2856,7 @@ impl CodexMessageProcessor {
                     self.thread_watch_manager
                         .loaded_status_for_thread(&thread.id)
                         .await,
-                    false,
+                    /*has_in_progress_turn*/ false,
                 );
                 self.attach_thread_name(thread_id, &mut thread).await;
                 let thread_id = thread.id.clone();
@@ -3271,8 +3330,13 @@ impl CodexMessageProcessor {
 
         for connection_id in connection_ids {
             Self::log_listener_attach_result(
-                self.ensure_conversation_listener(thread_id, connection_id, false, ApiVersion::V2)
-                    .await,
+                self.ensure_conversation_listener(
+                    thread_id,
+                    connection_id,
+                    /*raw_events_enabled*/ false,
+                    ApiVersion::V2,
+                )
+                .await,
                 thread_id,
                 connection_id,
                 "thread",
@@ -3314,6 +3378,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             config: request_overrides,
             base_instructions,
@@ -3347,6 +3412,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             base_instructions,
             developer_instructions,
@@ -3366,11 +3432,7 @@ impl CodexMessageProcessor {
         {
             Ok(config) => config,
             Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("error deriving config: {err}"),
-                    data: None,
-                };
+                let error = config_load_error(&err);
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
@@ -3409,7 +3471,7 @@ impl CodexMessageProcessor {
                     self.ensure_conversation_listener(
                         thread_id,
                         request_id.connection_id,
-                        false,
+                        /*raw_events_enabled*/ false,
                         ApiVersion::V2,
                     )
                     .await,
@@ -3441,7 +3503,11 @@ impl CodexMessageProcessor {
                     .loaded_status_for_thread(&thread.id)
                     .await;
 
-                set_thread_status_and_interrupt_stale_turns(&mut thread, thread_status, false);
+                set_thread_status_and_interrupt_stale_turns(
+                    &mut thread,
+                    thread_status,
+                    /*has_live_in_progress_turn*/ false,
+                );
 
                 let response = ThreadResumeResponse {
                     thread,
@@ -3450,6 +3516,7 @@ impl CodexMessageProcessor {
                     service_tier: session_configured.service_tier,
                     cwd: session_configured.cwd,
                     approval_policy: session_configured.approval_policy.into(),
+                    approvals_reviewer: session_configured.approvals_reviewer.into(),
                     sandbox: session_configured.sandbox_policy.into(),
                     reasoning_effort: session_configured.reasoning_effort,
                 };
@@ -3758,7 +3825,7 @@ impl CodexMessageProcessor {
         if let Err(message) = populate_thread_turns(
             &mut thread,
             ThreadTurnSource::HistoryItems(&history_items),
-            None,
+            /*active_turn*/ None,
         )
         .await
         {
@@ -3789,6 +3856,7 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             config: cli_overrides,
             base_instructions,
@@ -3870,10 +3938,11 @@ impl CodexMessageProcessor {
             service_tier,
             cwd,
             approval_policy,
+            approvals_reviewer,
             sandbox,
             base_instructions,
             developer_instructions,
-            None,
+            /*personality*/ None,
         );
         typesafe_overrides.ephemeral = ephemeral.then_some(true);
         // Derive a Config using the same logic as new conversation, honoring overrides if provided.
@@ -3889,11 +3958,9 @@ impl CodexMessageProcessor {
         {
             Ok(config) => config,
             Err(err) => {
-                self.send_invalid_request_error(
-                    request_id,
-                    format!("error deriving config: {err}"),
-                )
-                .await;
+                self.outgoing
+                    .send_error(request_id, config_load_error(&err))
+                    .await;
                 return;
             }
         };
@@ -3946,7 +4013,7 @@ impl CodexMessageProcessor {
             self.ensure_conversation_listener(
                 thread_id,
                 request_id.connection_id,
-                false,
+                /*raw_events_enabled*/ false,
                 ApiVersion::V2,
             )
             .await,
@@ -3980,7 +4047,8 @@ impl CodexMessageProcessor {
         } else {
             let config_snapshot = forked_thread.config_snapshot().await;
             // forked thread names do not inherit the source thread name
-            let mut thread = build_thread_from_snapshot(thread_id, &config_snapshot, None);
+            let mut thread =
+                build_thread_from_snapshot(thread_id, &config_snapshot, /*path*/ None);
             let history_items = match read_rollout_items_from_rollout(rollout_path.as_path()).await
             {
                 Ok(items) => items,
@@ -4000,7 +4068,7 @@ impl CodexMessageProcessor {
             if let Err(message) = populate_thread_turns(
                 &mut thread,
                 ThreadTurnSource::HistoryItems(&history_items),
-                None,
+                /*active_turn*/ None,
             )
             .await
             {
@@ -4014,7 +4082,7 @@ impl CodexMessageProcessor {
             && let Err(message) = populate_thread_turns(
                 &mut thread,
                 ThreadTurnSource::RolloutPath(fork_rollout_path.as_path()),
-                None,
+                /*active_turn*/ None,
             )
             .await
         {
@@ -4030,7 +4098,7 @@ impl CodexMessageProcessor {
             self.thread_watch_manager
                 .loaded_status_for_thread(&thread.id)
                 .await,
-            false,
+            /*has_in_progress_turn*/ false,
         );
 
         let response = ThreadForkResponse {
@@ -4040,6 +4108,7 @@ impl CodexMessageProcessor {
             service_tier: session_configured.service_tier,
             cwd: session_configured.cwd,
             approval_policy: session_configured.approval_policy.into(),
+            approvals_reviewer: session_configured.approvals_reviewer.into(),
             sandbox: session_configured.sandbox_policy.into(),
             reasoning_effort: session_configured.reasoning_effort,
         };
@@ -4342,7 +4411,7 @@ impl CodexMessageProcessor {
         params: ExperimentalFeatureListParams,
     ) {
         let ExperimentalFeatureListParams { cursor, limit } = params;
-        let config = match self.load_latest_config(None).await {
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4457,7 +4526,7 @@ impl CodexMessageProcessor {
     }
 
     async fn mcp_server_refresh(&self, request_id: ConnectionRequestId, _params: Option<()>) {
-        let config = match self.load_latest_config(None).await {
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4516,7 +4585,7 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: McpServerOauthLoginParams,
     ) {
-        let config = match self.load_latest_config(None).await {
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -4628,7 +4697,7 @@ impl CodexMessageProcessor {
         let request = request_id.clone();
 
         let outgoing = Arc::clone(&self.outgoing);
-        let config = match self.load_latest_config(None).await {
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request, error).await;
@@ -4800,7 +4869,7 @@ impl CodexMessageProcessor {
     async fn finalize_thread_teardown(&mut self, thread_id: ThreadId) {
         self.pending_thread_unloads.lock().await.remove(&thread_id);
         self.outgoing
-            .cancel_requests_for_thread(thread_id, None)
+            .cancel_requests_for_thread(thread_id, /*error*/ None)
             .await;
         self.thread_state_manager
             .remove_thread_state(thread_id)
@@ -4863,7 +4932,7 @@ impl CodexMessageProcessor {
             // Any pending app-server -> client requests for this thread can no longer be
             // answered; cancel their callbacks before shutdown/unload.
             self.outgoing
-                .cancel_requests_for_thread(thread_id, None)
+                .cancel_requests_for_thread(thread_id, /*error*/ None)
                 .await;
             self.thread_state_manager
                 .remove_thread_state(thread_id)
@@ -5036,7 +5105,7 @@ impl CodexMessageProcessor {
     }
 
     async fn apps_list(&self, request_id: ConnectionRequestId, params: AppsListParams) {
-        let mut config = match self.load_latest_config(None).await {
+        let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
@@ -5333,7 +5402,7 @@ impl CodexMessageProcessor {
         } = params;
         let roots = cwds.unwrap_or_default();
 
-        let mut config = match self.load_latest_config(None).await {
+        let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
             Ok(config) => config,
             Err(err) => {
                 self.outgoing.send_error(request_id, err).await;
@@ -5366,7 +5435,7 @@ impl CodexMessageProcessor {
                 }
             }
 
-            config = match self.load_latest_config(None).await {
+            config = match self.load_latest_config(/*fallback_cwd*/ None).await {
                 Ok(config) => config,
                 Err(err) => {
                     self.outgoing.send_error(request_id, err).await;
@@ -5636,9 +5705,9 @@ impl CodexMessageProcessor {
                     Vec::new()
                 } else {
                     let (all_connectors_result, accessible_connectors_result) = tokio::join!(
-                        connectors::list_all_connectors_with_options(&config, true),
+                        connectors::list_all_connectors_with_options(&config, /*force_refetch*/ true),
                         connectors::list_accessible_connectors_from_mcp_tools_with_options_and_status(
-                            &config, true
+                            &config, /*force_refetch*/ true
                         ),
                     );
 
@@ -5829,6 +5898,7 @@ impl CodexMessageProcessor {
 
         let has_any_overrides = params.cwd.is_some()
             || params.approval_policy.is_some()
+            || params.approvals_reviewer.is_some()
             || params.sandbox_policy.is_some()
             || params.model.is_some()
             || params.service_tier.is_some()
@@ -5846,6 +5916,9 @@ impl CodexMessageProcessor {
                     Op::OverrideTurnContext {
                         cwd: params.cwd,
                         approval_policy: params.approval_policy.map(AskForApproval::to_core),
+                        approvals_reviewer: params
+                            .approvals_reviewer
+                            .map(codex_app_server_protocol::ApprovalsReviewer::to_core),
                         sandbox_policy: params.sandbox_policy.map(|p| p.to_core()),
                         windows_sandbox_level: None,
                         model: params.model,
@@ -5986,7 +6059,7 @@ impl CodexMessageProcessor {
             .ensure_conversation_listener(
                 thread_id,
                 request_id.connection_id,
-                false,
+                /*raw_events_enabled*/ false,
                 ApiVersion::V2,
             )
             .await
@@ -6267,7 +6340,7 @@ impl CodexMessageProcessor {
                 usize::MAX,
                 config,
                 rollout_path,
-                false,
+                /*persist_extended_history*/ false,
                 self.request_trace_context(request_id).await,
             )
             .await
@@ -6281,7 +6354,7 @@ impl CodexMessageProcessor {
             self.ensure_conversation_listener(
                 thread_id,
                 request_id.connection_id,
-                false,
+                /*raw_events_enabled*/ false,
                 ApiVersion::V2,
             )
             .await,
@@ -6302,7 +6375,7 @@ impl CodexMessageProcessor {
                         self.thread_watch_manager
                             .loaded_status_for_thread(&thread.id)
                             .await,
-                        false,
+                        /*has_in_progress_turn*/ false,
                     );
                     let notif = ThreadStartedNotification { thread };
                     self.outgoing
@@ -6990,7 +7063,7 @@ impl CodexMessageProcessor {
         tokio::spawn(async move {
             let derived_config = derive_config_for_cwd(
                 &cli_overrides,
-                None,
+                /*request_overrides*/ None,
                 ConfigOverrides {
                     cwd: Some(command_cwd.clone()),
                     ..Default::default()
@@ -7152,6 +7225,7 @@ async fn handle_pending_thread_resume_request(
         model_provider_id,
         service_tier,
         approval_policy,
+        approvals_reviewer,
         sandbox_policy,
         cwd,
         reasoning_effort,
@@ -7164,6 +7238,7 @@ async fn handle_pending_thread_resume_request(
         service_tier,
         cwd,
         approval_policy: approval_policy.into(),
+        approvals_reviewer: approvals_reviewer.into(),
         sandbox: sandbox_policy.into(),
         reasoning_effort,
     };
@@ -7299,6 +7374,15 @@ fn collect_resume_override_mismatches(
         if requested_approval != &active_approval {
             mismatch_details.push(format!(
                 "approval_policy requested={requested_approval:?} active={active_approval:?}"
+            ));
+        }
+    }
+    if let Some(requested_review_policy) = request.approvals_reviewer.as_ref() {
+        let active_review_policy: codex_app_server_protocol::ApprovalsReviewer =
+            config_snapshot.approvals_reviewer.into();
+        if requested_review_policy != &active_review_policy {
+            mismatch_details.push(format!(
+                "approvals_reviewer requested={requested_review_policy:?} active={active_review_policy:?}"
             ));
         }
     }
@@ -7462,6 +7546,42 @@ fn errors_to_info(
             message: err.message.clone(),
         })
         .collect()
+}
+
+fn cloud_requirements_load_error(err: &std::io::Error) -> Option<&CloudRequirementsLoadError> {
+    let mut current: Option<&(dyn std::error::Error + 'static)> = err
+        .get_ref()
+        .map(|source| source as &(dyn std::error::Error + 'static));
+    while let Some(source) = current {
+        if let Some(cloud_error) = source.downcast_ref::<CloudRequirementsLoadError>() {
+            return Some(cloud_error);
+        }
+        current = source.source();
+    }
+    None
+}
+
+fn config_load_error(err: &std::io::Error) -> JSONRPCErrorError {
+    let data = cloud_requirements_load_error(err).map(|cloud_error| {
+        let mut data = serde_json::json!({
+            "reason": "cloudRequirements",
+            "errorCode": format!("{:?}", cloud_error.code()),
+            "detail": cloud_error.to_string(),
+        });
+        if let Some(status_code) = cloud_error.status_code() {
+            data["statusCode"] = serde_json::json!(status_code);
+        }
+        if cloud_error.code() == CloudRequirementsLoadErrorCode::Auth {
+            data["action"] = serde_json::json!("relogin");
+        }
+        data
+    });
+
+    JSONRPCErrorError {
+        code: INVALID_REQUEST_ERROR_CODE,
+        message: format!("failed to load configuration: {err}"),
+        data,
+    }
 }
 
 fn validate_dynamic_tools(tools: &[ApiDynamicToolSpec]) -> Result<(), String> {
@@ -8083,6 +8203,7 @@ mod tests {
             name: "my_tool".to_string(),
             description: "test".to_string(),
             input_schema: json!({"type": "null"}),
+            defer_loading: false,
         }];
         let err = validate_dynamic_tools(&tools).expect_err("invalid schema");
         assert!(err.contains("my_tool"), "unexpected error: {err}");
@@ -8095,8 +8216,70 @@ mod tests {
             description: "test".to_string(),
             // Missing `type` is common; core sanitizes these to a supported schema.
             input_schema: json!({"properties": {}}),
+            defer_loading: false,
         }];
         validate_dynamic_tools(&tools).expect("valid schema");
+    }
+
+    #[test]
+    fn config_load_error_marks_cloud_requirements_failures_for_relogin() {
+        let err = std::io::Error::other(CloudRequirementsLoadError::new(
+            CloudRequirementsLoadErrorCode::Auth,
+            Some(401),
+            "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+        ));
+
+        let error = config_load_error(&err);
+
+        assert_eq!(
+            error.data,
+            Some(json!({
+                "reason": "cloudRequirements",
+                "errorCode": "Auth",
+                "action": "relogin",
+                "statusCode": 401,
+                "detail": "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+            }))
+        );
+        assert!(
+            error.message.contains("failed to load configuration"),
+            "unexpected error message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn config_load_error_leaves_non_cloud_requirements_failures_unmarked() {
+        let err = std::io::Error::other("required MCP servers failed to initialize");
+
+        let error = config_load_error(&err);
+
+        assert_eq!(error.data, None);
+        assert!(
+            error.message.contains("failed to load configuration"),
+            "unexpected error message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn config_load_error_marks_non_auth_cloud_requirements_failures_without_relogin() {
+        let err = std::io::Error::other(CloudRequirementsLoadError::new(
+            CloudRequirementsLoadErrorCode::RequestFailed,
+            None,
+            "failed to load your workspace-managed config",
+        ));
+
+        let error = config_load_error(&err);
+
+        assert_eq!(
+            error.data,
+            Some(json!({
+                "reason": "cloudRequirements",
+                "errorCode": "RequestFailed",
+                "detail": "failed to load your workspace-managed config",
+            }))
+        );
     }
 
     #[test]
@@ -8110,6 +8293,7 @@ mod tests {
             service_tier: Some(Some(codex_protocol::config_types::ServiceTier::Fast)),
             cwd: None,
             approval_policy: None,
+            approvals_reviewer: None,
             sandbox: None,
             config: None,
             base_instructions: None,
@@ -8122,6 +8306,7 @@ mod tests {
             model_provider_id: "openai".to_string(),
             service_tier: Some(codex_protocol::config_types::ServiceTier::Flex),
             approval_policy: codex_protocol::protocol::AskForApproval::OnRequest,
+            approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer::User,
             sandbox_policy: codex_protocol::protocol::SandboxPolicy::DangerFullAccess,
             cwd: PathBuf::from("/tmp"),
             ephemeral: false,
