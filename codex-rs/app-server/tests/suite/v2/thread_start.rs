@@ -155,7 +155,7 @@ async fn thread_start_creates_thread_and_emits_started() -> Result<()> {
 }
 
 #[tokio::test]
-async fn thread_start_accepts_enabled_tool_overrides() -> Result<()> {
+async fn thread_start_accepts_grouped_tool_overrides() -> Result<()> {
     let server = create_mock_responses_server_repeating_assistant("Done").await;
 
     let codex_home = TempDir::new()?;
@@ -169,8 +169,11 @@ async fn thread_start_accepts_enabled_tool_overrides() -> Result<()> {
             config: Some(HashMap::from([(
                 "tools".to_string(),
                 json!({
-                    "enabled": ["shell", "apply_patch", "web_search"],
+                    "disable_defaults": true,
+                    "shell": {},
+                    "filesystem": {},
                     "web_search": {
+                        "enabled": true,
                         "context_size": "low",
                         "allowed_domains": ["example.com"]
                     }

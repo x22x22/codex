@@ -190,19 +190,6 @@ view_image = false
             file: user_file.clone(),
         }
     );
-    assert_eq!(
-        origins.get("tools.shell").expect("origin").name,
-        ConfigLayerSource::User {
-            file: user_file.clone(),
-        }
-    );
-    assert_eq!(
-        origins.get("tools.filesystem").expect("origin").name,
-        ConfigLayerSource::User {
-            file: user_file.clone(),
-        }
-    );
-
     let layers = layers.expect("layers present");
     assert_layers_user_then_optional_system(&layers, user_file)?;
 
