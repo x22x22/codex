@@ -42,7 +42,7 @@ impl fmt::Display for MacOsAccessGroupError {
 
 impl std::error::Error for MacOsAccessGroupError {}
 
-const SHARED_ACCESS_GROUP: &str = "2DC432GLL2.com.openai.shared";
+const SHARED_ACCESS_GROUP: &str = "2DC432GLL2.com.openai.codex.shared";
 const CODEX_KEYCHAIN_SERVICES: [&str; 3] = ["Codex Auth", "Codex MCP Credentials", "codex"];
 
 pub(crate) fn load_password(
@@ -266,6 +266,6 @@ mod tests {
 
     #[test]
     fn shared_access_group_matches_configured_team_prefix() {
-        assert_eq!(SHARED_ACCESS_GROUP, "2DC432GLL2.com.openai.shared");
+        assert_eq!(SHARED_ACCESS_GROUP, "2DC432GLL2.com.openai.codex.shared");
     }
 }
