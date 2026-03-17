@@ -6,7 +6,6 @@ use codex_protocol::approvals::ElicitationAction;
 use codex_protocol::mcp::RequestId as McpRequestId;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use tokio::sync::mpsc::UnboundedSender;
@@ -48,12 +47,6 @@ impl AppEventSender {
     pub(crate) fn set_thread_name(&self, name: String) {
         self.send(AppEvent::CodexOp(
             AppCommand::set_thread_name(name).into_core(),
-        ));
-    }
-
-    pub(crate) fn review(&self, review_request: ReviewRequest) {
-        self.send(AppEvent::CodexOp(
-            AppCommand::review(review_request).into_core(),
         ));
     }
 
