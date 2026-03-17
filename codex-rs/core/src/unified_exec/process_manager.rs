@@ -98,6 +98,7 @@ struct PreparedProcessHandles {
     cancellation_token: CancellationToken,
     pause_state: Option<watch::Receiver<bool>>,
     command: Vec<String>,
+    cwd: PathBuf,
     process_id: i32,
     tty: bool,
 }
@@ -320,6 +321,7 @@ impl UnifiedExecProcessManager {
             cancellation_token,
             pause_state,
             command: session_command,
+            cwd,
             process_id,
             tty,
             ..
@@ -328,6 +330,42 @@ impl UnifiedExecProcessManager {
         if !request.input.is_empty() {
             if !tty {
                 return Err(UnifiedExecError::StdinClosed);
+            }
+            if let Some(context) = request.context
+                && context.turn.tools_config.requires_manual_tool_approval()
+            {
+                let input = request.input.escape_default().to_string();
+                let reason = if input.len() > 200 {
+                    Some(format!("interactive terminal input: {}...", &input[..200]))
+                } else {
+                    Some(format!("interactive terminal input: {input}"))
+                };
+                let decision = context
+                    .session
+                    .request_command_approval(
+                        context.turn.as_ref(),
+                        context.call_id.clone(),
+                        /*approval_id*/ None,
+                        session_command.clone(),
+                        cwd.clone(),
+                        reason,
+                        /*network_approval_context*/ None,
+                        /*proposed_execpolicy_amendment*/ None,
+                        /*additional_permissions*/ None,
+                        /*skill_metadata*/ None,
+                        /*available_decisions*/ None,
+                    )
+                    .await;
+                if !matches!(
+                    decision,
+                    codex_protocol::protocol::ReviewDecision::Approved
+                        | codex_protocol::protocol::ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                        | codex_protocol::protocol::ReviewDecision::ApprovedForSession
+                ) {
+                    return Err(UnifiedExecError::create_process(
+                        "rejected by user".to_string(),
+                    ));
+                }
             }
             Self::send_input(&writer_tx, request.input.as_bytes()).await?;
             // Give the remote process a brief window to react so that we are
@@ -463,6 +501,7 @@ impl UnifiedExecProcessManager {
             cancellation_token,
             pause_state,
             command: entry.command.clone(),
+            cwd: entry.cwd.clone(),
             process_id: entry.process_id,
             tty: entry.tty,
         })
@@ -496,6 +535,7 @@ impl UnifiedExecProcessManager {
             call_id: context.call_id.clone(),
             process_id,
             command: command.to_vec(),
+            cwd: cwd.clone(),
             tty,
             network_approval_id,
             session: Arc::downgrade(&context.session),
@@ -609,6 +649,12 @@ impl UnifiedExecProcessManager {
                 prefix_rule: request.prefix_rule.clone(),
             })
             .await;
+        let exec_approval_requirement = if context.turn.tools_config.requires_manual_tool_approval()
+        {
+            exec_approval_requirement.force_manual_approval()
+        } else {
+            exec_approval_requirement
+        };
         let req = UnifiedExecToolRequest {
             command: request.command.clone(),
             cwd,
