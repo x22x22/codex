@@ -3392,6 +3392,9 @@ impl Session {
         let call_id = ts
             .remove_pending_approval_call_id(approval_id)
             .unwrap_or_else(|| approval_id.to_string());
+        if !self.enabled(Feature::ItemMetadata) {
+            return;
+        }
         ts.record_approval_outcome(call_id, review_decision_to_metadata(decision));
     }
 
