@@ -17,7 +17,7 @@ use crate::app_server_session::AppServerSession;
 use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use crate::local_chatgpt_auth::load_local_chatgpt_auth;
-use crate::dynamic_tools::handle_dynamic_tool_call_request;
+use crate::dynamic_tools::spawn_dynamic_tool_call_task;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -168,14 +168,7 @@ impl App {
                     let registry = app_server_client.dynamic_tool_registry();
                     let context =
                         app_server_client.dynamic_tool_execution_context(&params.thread_id);
-                    tokio::spawn(async move {
-                        if let Err(err) =
-                            handle_dynamic_tool_call_request(registry, context, request_id, params)
-                                .await
-                        {
-                            tracing::warn!("{err}");
-                        }
-                    });
+                    spawn_dynamic_tool_call_task(registry, context, request_id, params);
                     return;
                 }
                 if let Some(unsupported) = self

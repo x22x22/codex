@@ -11,6 +11,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::task::JoinError;
 
 type DynamicToolFuture = Pin<
     Box<dyn Future<Output = Result<DynamicToolCallResponse, DynamicToolExecutionError>> + Send>,
@@ -195,6 +196,89 @@ pub(crate) async fn handle_dynamic_tool_call_request(
     }
 }
 
+pub(crate) fn spawn_dynamic_tool_call_task(
+    registry: Arc<DynamicToolRegistry>,
+    context: DynamicToolExecutionContext,
+    request_id: RequestId,
+    params: DynamicToolCallParams,
+) {
+    tokio::spawn(async move {
+        if let Err(err) =
+            supervise_dynamic_tool_call_task(registry, context, request_id, params).await
+        {
+            tracing::warn!("{err}");
+        }
+    });
+}
+
+async fn supervise_dynamic_tool_call_task(
+    registry: Arc<DynamicToolRegistry>,
+    context: DynamicToolExecutionContext,
+    request_id: RequestId,
+    params: DynamicToolCallParams,
+) -> Result<(), String> {
+    let panic_context = context.clone();
+    let panic_request_id = request_id.clone();
+    let panic_tool = params.tool.clone();
+
+    supervise_spawned_task(
+        handle_dynamic_tool_call_request(registry, context, request_id, params),
+        move |join_err| async move {
+            reject_panicked_dynamic_tool_request(
+                panic_context,
+                panic_request_id,
+                panic_tool,
+                join_err,
+            )
+            .await
+        },
+    )
+    .await
+}
+
+async fn supervise_spawned_task<F, P, PF>(future: F, on_join_error: P) -> Result<(), String>
+where
+    F: Future<Output = Result<(), String>> + Send + 'static,
+    P: FnOnce(JoinError) -> PF,
+    PF: Future<Output = Result<(), String>> + Send,
+{
+    match tokio::spawn(future).await {
+        Ok(result) => result,
+        Err(err) => on_join_error(err).await,
+    }
+}
+
+async fn reject_panicked_dynamic_tool_request(
+    context: DynamicToolExecutionContext,
+    request_id: RequestId,
+    tool: String,
+    join_err: JoinError,
+) -> Result<(), String> {
+    let Some(request_handle) = context.request_handle().cloned() else {
+        return Err(format!(
+            "dynamic tool `{tool}` task failed before producing a response: {join_err}"
+        ));
+    };
+
+    let message = if join_err.is_panic() {
+        format!("dynamic tool `{tool}` panicked before producing a response")
+    } else {
+        format!("dynamic tool `{tool}` was cancelled before producing a response")
+    };
+    tracing::warn!(tool, error = %join_err, "dynamic tool task failed");
+    request_handle
+        .reject_server_request(
+            request_id,
+            JSONRPCErrorError {
+                code: -32000,
+                message,
+                data: None,
+            },
+        )
+        .await
+        .map_err(|err| format!("failed to reject dynamic tool request for `{tool}`: {err}"))
+}
+
 pub(crate) fn dynamic_tool_failure_response(message: &str) -> DynamicToolCallResponse {
     DynamicToolCallResponse {
         content_items: vec![DynamicToolCallOutputContentItem::InputText {
@@ -216,6 +300,7 @@ mod tests {
     use codex_app_server_protocol::DynamicToolSpec;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use tokio::sync::oneshot;
 
     fn demo_spec(name: &str) -> DynamicToolSpec {
         DynamicToolSpec {
@@ -327,5 +412,31 @@ mod tests {
                 message: "dynamic tool failed".to_string(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn supervisor_runs_fallback_when_task_panics() {
+        let (panic_seen_tx, panic_seen_rx) = oneshot::channel();
+
+        let result = super::supervise_spawned_task(
+            async move {
+                panic!("boom");
+                #[allow(unreachable_code)]
+                Ok(())
+            },
+            move |join_err: tokio::task::JoinError| async move {
+                assert!(join_err.is_panic());
+                panic_seen_tx
+                    .send(())
+                    .expect("panic notification should send");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(result, Ok(()));
+        panic_seen_rx
+            .await
+            .expect("panic fallback should be invoked");
     }
 }
