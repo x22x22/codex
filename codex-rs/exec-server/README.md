@@ -1,24 +1,41 @@
 # codex-exec-server
 
-`codex-exec-server` is a small standalone stdio JSON-RPC server for spawning
-and controlling subprocesses through `codex-utils-pty`.
+`codex-exec-server` is a small standalone JSON-RPC server for spawning and
+controlling subprocesses through `codex-utils-pty`.
 
 It currently provides:
 
 - a standalone binary: `codex-exec-server`
+- a transport-agnostic server runtime with stdio and websocket entrypoints
 - a Rust client: `ExecServerClient`
+- a separate local launch helper: `spawn_local_exec_server`
 - a small protocol module with shared request/response types
 
 This crate is intentionally narrow. It is not wired into the main Codex CLI or
 unified-exec in this PR; it is only the standalone transport layer.
 
+The internal shape is intentionally closer to `app-server` than the first cut:
+
+- transport adapters are separate from the per-connection request processor
+- the client only speaks the protocol; it does not spawn a server subprocess
+- local child-process launch is handled by a separate helper/factory layer
+
+That split is meant to leave reusable seams if exec-server and app-server later
+share transport or JSON-RPC connection utilities.
+
 ## Transport
 
-The server speaks newline-delimited JSON-RPC 2.0 over stdio.
+The server speaks the same JSON-RPC message shapes over multiple transports.
 
-- `stdin`: one JSON-RPC message per line
-- `stdout`: one JSON-RPC message per line
-- `stderr`: reserved for logs / process errors
+The standalone binary supports:
+
+- `stdio://` (default)
+- `ws://IP:PORT`
+
+Wire framing:
+
+- stdio: one newline-delimited JSON-RPC message per line on stdin/stdout
+- websocket: one JSON-RPC message per websocket text frame
 
 Like the app-server transport, messages on the wire omit the `"jsonrpc":"2.0"`
 field and use the shared `codex-app-server-protocol` envelope types.
@@ -41,11 +58,11 @@ Each connection follows this sequence:
 5. Read streaming notifications from `command/exec/outputDelta` and
    `command/exec/exited`.
 
-If the server receives any notification other than `initialized`, it replies
-with an error using request id `-1`.
+If the client sends exec methods before completing the `initialize` /
+`initialized` handshake, the server rejects them.
 
-If the stdio connection closes, the server terminates any remaining managed
-processes before exiting.
+If a connection closes, the server terminates any remaining managed processes
+for that connection.
 
 ## API
 
@@ -72,10 +89,10 @@ Response:
 ### `initialized`
 
 Handshake acknowledgement notification sent by the client after a successful
-`initialize` response.
+`initialize` response. Exec methods are rejected until this arrives.
 
-Params are currently ignored. Sending any other notification method is treated
-as an invalid request.
+Params are currently ignored. Sending any other client notification method is a
+protocol error.
 
 ### `command/exec`
 
@@ -242,13 +259,43 @@ Typical error cases:
 The crate exports:
 
 - `ExecServerClient`
+- `ExecServerClientConnectOptions`
+- `RemoteExecServerConnectArgs`
 - `ExecServerLaunchCommand`
 - `ExecServerProcess`
+- `SpawnedExecServer`
 - `ExecServerError`
+- `ExecServerTransport`
+- `spawn_local_exec_server(...)`
 - protocol structs such as `ExecParams`, `ExecResponse`,
   `WriteParams`, `TerminateParams`, `ExecOutputDeltaNotification`, and
   `ExecExitedNotification`
-- `run_main()` for embedding the stdio server in a binary
+- `run_main()` and `run_main_with_transport(...)`
+
+### Binary
+
+Run over stdio:
+
+```text
+codex-exec-server
+```
+
+Run as a websocket server:
+
+```text
+codex-exec-server --listen ws://127.0.0.1:8080
+```
+
+### Client
+
+Connect the client to an existing server transport:
+
+- `ExecServerClient::connect_stdio(...)`
+- `ExecServerClient::connect_websocket(...)`
+
+Spawning a local child process is deliberately separate:
+
+- `spawn_local_exec_server(...)`
 
 ## Example session
 
