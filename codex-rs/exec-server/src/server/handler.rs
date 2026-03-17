@@ -357,6 +357,7 @@ mod tests {
     use crate::protocol::InitializeParams;
     use crate::protocol::InitializeResponse;
     use crate::protocol::PROTOCOL_VERSION;
+    use crate::protocol::TerminateResponse;
     use crate::protocol::WriteParams;
     use crate::server::routing::ExecServerClientNotification;
     use crate::server::routing::ExecServerInboundMessage;
@@ -719,5 +720,111 @@ mod tests {
         assert_eq!(error.message, "stdin is closed for process proc-2");
 
         handler.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn writes_to_unknown_processes_are_rejected() {
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(2);
+        let mut handler = ExecServerHandler::new(outgoing_tx);
+
+        if let Err(err) = handler
+            .handle_message(ExecServerInboundMessage::Request(
+                ExecServerRequest::Initialize {
+                    request_id: RequestId::Integer(1),
+                    params: InitializeParams {
+                        client_name: "test".to_string(),
+                    },
+                },
+            ))
+            .await
+        {
+            panic!("initialize should succeed: {err}");
+        }
+        let _ = recv_outbound(&mut outgoing_rx).await;
+        if let Err(err) = handler
+            .handle_message(ExecServerInboundMessage::Notification(
+                ExecServerClientNotification::Initialized,
+            ))
+            .await
+        {
+            panic!("initialized should succeed: {err}");
+        }
+
+        if let Err(err) = handler
+            .handle_message(ExecServerInboundMessage::Request(
+                ExecServerRequest::Write {
+                    request_id: RequestId::Integer(2),
+                    params: WriteParams {
+                        process_id: "missing".to_string(),
+                        chunk: b"hello\n".to_vec().into(),
+                    },
+                },
+            ))
+            .await
+        {
+            panic!("write should not fail the handler: {err}");
+        }
+
+        let ExecServerOutboundMessage::Error { request_id, error } =
+            recv_outbound(&mut outgoing_rx).await
+        else {
+            panic!("expected unknown-process error");
+        };
+        assert_eq!(request_id, RequestId::Integer(2));
+        assert_eq!(error.code, -32600);
+        assert_eq!(error.message, "unknown process id missing");
+    }
+
+    #[tokio::test]
+    async fn terminate_unknown_processes_report_running_false() {
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(2);
+        let mut handler = ExecServerHandler::new(outgoing_tx);
+
+        if let Err(err) = handler
+            .handle_message(ExecServerInboundMessage::Request(
+                ExecServerRequest::Initialize {
+                    request_id: RequestId::Integer(1),
+                    params: InitializeParams {
+                        client_name: "test".to_string(),
+                    },
+                },
+            ))
+            .await
+        {
+            panic!("initialize should succeed: {err}");
+        }
+        let _ = recv_outbound(&mut outgoing_rx).await;
+        if let Err(err) = handler
+            .handle_message(ExecServerInboundMessage::Notification(
+                ExecServerClientNotification::Initialized,
+            ))
+            .await
+        {
+            panic!("initialized should succeed: {err}");
+        }
+
+        if let Err(err) = handler
+            .handle_message(ExecServerInboundMessage::Request(
+                ExecServerRequest::Terminate {
+                    request_id: RequestId::Integer(2),
+                    params: crate::protocol::TerminateParams {
+                        process_id: "missing".to_string(),
+                    },
+                },
+            ))
+            .await
+        {
+            panic!("terminate should not fail the handler: {err}");
+        }
+
+        assert_eq!(
+            recv_outbound(&mut outgoing_rx).await,
+            ExecServerOutboundMessage::Response {
+                request_id: RequestId::Integer(2),
+                response: ExecServerResponseMessage::Terminate(TerminateResponse {
+                    running: false,
+                }),
+            }
+        );
     }
 }

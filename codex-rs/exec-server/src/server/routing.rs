@@ -255,6 +255,7 @@ mod tests {
     use codex_app_server_protocol::JSONRPCMessage;
     use codex_app_server_protocol::JSONRPCNotification;
     use codex_app_server_protocol::JSONRPCRequest;
+    use codex_app_server_protocol::JSONRPCResponse;
     use codex_app_server_protocol::RequestId;
 
     #[test]
@@ -396,5 +397,46 @@ mod tests {
                 arg0: None,
             }
         );
+    }
+
+    #[test]
+    fn unknown_request_methods_return_immediate_invalid_request_errors() {
+        let routed = route_jsonrpc_message(JSONRPCMessage::Request(JSONRPCRequest {
+            id: RequestId::Integer(5),
+            method: "process/unknown".to_string(),
+            params: Some(json!({})),
+            trace: None,
+        }))
+        .expect("unknown request should still route");
+
+        assert_eq!(
+            routed,
+            RoutedExecServerMessage::ImmediateOutbound(ExecServerOutboundMessage::Error {
+                request_id: RequestId::Integer(5),
+                error: super::invalid_request("unknown method: process/unknown".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn unexpected_client_notifications_are_rejected() {
+        let err = route_jsonrpc_message(JSONRPCMessage::Notification(JSONRPCNotification {
+            method: "process/outputDelta".to_string(),
+            params: Some(json!({})),
+        }))
+        .expect_err("unexpected client notification should fail");
+
+        assert_eq!(err, "unexpected notification method: process/outputDelta");
+    }
+
+    #[test]
+    fn unexpected_client_responses_are_rejected() {
+        let err = route_jsonrpc_message(JSONRPCMessage::Response(JSONRPCResponse {
+            id: RequestId::Integer(6),
+            result: json!({}),
+        }))
+        .expect_err("unexpected client response should fail");
+
+        assert_eq!(err, "unexpected client response for request id Integer(6)");
     }
 }
