@@ -755,6 +755,8 @@ mod tests {
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::FuzzyFileSearchSessionStartParams;
     use codex_app_server_protocol::FuzzyFileSearchSessionUpdateParams;
+    use codex_app_server_protocol::InitializeCapabilities;
+    use codex_app_server_protocol::InitializeParams;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
     use codex_app_server_protocol::ThreadStartParams;
     use codex_app_server_protocol::ThreadStartResponse;
@@ -883,7 +885,33 @@ mod tests {
 
     #[tokio::test]
     async fn start_request_preserves_enqueue_order_for_dependent_requests() {
-        let client = start_test_client(SessionSource::Cli).await;
+        let client = start(InProcessStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(build_test_config().await),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            auth_manager: None,
+            thread_manager: None,
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            initialize: InitializeParams {
+                client_info: ClientInfo {
+                    name: "codex-in-process-test".to_string(),
+                    title: None,
+                    version: "0.0.0".to_string(),
+                },
+                capabilities: Some(InitializeCapabilities {
+                    experimental_api: true,
+                    ..Default::default()
+                }),
+            },
+            channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
+        })
+        .await
+        .expect("in-process runtime should start");
         let root = TempDir::new().expect("temp dir should be created");
         std::fs::write(root.path().join("alpha.txt"), "contents")
             .expect("fixture file should be written");
