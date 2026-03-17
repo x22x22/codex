@@ -56,7 +56,6 @@ fn inserts_bwrap_argv0_before_command_separator() {
         vec![
             "bwrap".to_string(),
             "--new-session".to_string(),
-            "--die-with-parent".to_string(),
             "--ro-bind".to_string(),
             "/".to_string(),
             "/".to_string(),

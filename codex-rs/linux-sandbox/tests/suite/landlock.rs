@@ -311,6 +311,58 @@ async fn test_writable_root() {
 }
 
 #[tokio::test]
+async fn detached_children_survive_parent_exit_under_bwrap() {
+    if should_skip_bwrap_tests().await {
+        eprintln!("skipping bwrap test: bwrap sandbox prerequisites are unavailable");
+        return;
+    }
+
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let log_path = tempdir.path().join("detached.log");
+    let pid_path = tempdir.path().join("detached.pid");
+    let command = format!(
+        "nohup sh -c 'echo \"$$\" > \"{pid}\"; while true; do printf x >> \"{log}\"; sleep 0.2; done' >/dev/null 2>&1 </dev/null &",
+        pid = pid_path.to_string_lossy(),
+        log = log_path.to_string_lossy(),
+    );
+
+    let output = run_cmd_result_with_writable_roots(
+        &["bash", "-lc", &command],
+        &[tempdir.path().to_path_buf()],
+        LONG_TIMEOUT_MS,
+        false,
+        true,
+    )
+    .await
+    .expect("sandboxed command should execute");
+
+    assert_eq!(output.exit_code, 0);
+
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    let first_len = std::fs::metadata(&log_path)
+        .expect("detached child should create log file")
+        .len();
+    assert!(first_len > 0, "detached child should write to the log");
+
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    let second_len = std::fs::metadata(&log_path)
+        .expect("detached child log file should still exist")
+        .len();
+    assert!(
+        second_len > first_len,
+        "detached child should keep writing after the parent exits",
+    );
+
+    if let Ok(pid) = std::fs::read_to_string(&pid_path)
+        && let Ok(pid) = pid.trim().parse::<libc::pid_t>()
+    {
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+}
+
+#[tokio::test]
 async fn test_no_new_privs_is_enabled() {
     let output = run_cmd_output(
         &["bash", "-lc", "grep '^NoNewPrivs:' /proc/self/status"],

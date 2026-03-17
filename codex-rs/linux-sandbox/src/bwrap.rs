@@ -123,13 +123,14 @@ pub(crate) fn create_bwrap_command_args(
 fn create_bwrap_flags_full_filesystem(command: Vec<String>, options: BwrapOptions) -> BwrapArgs {
     let mut args = vec![
         "--new-session".to_string(),
-        "--die-with-parent".to_string(),
         "--bind".to_string(),
         "/".to_string(),
         "/".to_string(),
         // Always enter a fresh user namespace so root inside a container does
         // not need ambient CAP_SYS_ADMIN to create the remaining namespaces.
         "--unshare-user".to_string(),
+        // Preserve the PID namespace even when the initial tool process exits
+        // so detached descendants keep their sandboxed `/proc` view.
         "--unshare-pid".to_string(),
     ];
     if options.network_mode.should_unshare_network() {
@@ -162,12 +163,13 @@ fn create_bwrap_flags(
     let normalized_command_cwd = normalize_command_cwd_for_bwrap(command_cwd);
     let mut args = Vec::new();
     args.push("--new-session".to_string());
-    args.push("--die-with-parent".to_string());
     args.extend(filesystem_args);
     // Request a user namespace explicitly rather than relying on bubblewrap's
     // auto-enable behavior, which is skipped when the caller runs as uid 0.
     args.push("--unshare-user".to_string());
-    // Isolate the PID namespace.
+    // Keep the PID namespace, but do not tie the sandbox lifecycle to
+    // bubblewrap's parent process. Detached children should be able to
+    // survive after the initial one-shot tool process exits.
     args.push("--unshare-pid".to_string());
     if options.network_mode.should_unshare_network() {
         args.push("--unshare-net".to_string());
@@ -660,7 +662,6 @@ mod tests {
             args.args,
             vec![
                 "--new-session".to_string(),
-                "--die-with-parent".to_string(),
                 "--bind".to_string(),
                 "/".to_string(),
                 "/".to_string(),
