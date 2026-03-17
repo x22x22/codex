@@ -3,7 +3,6 @@ use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
-use crate::config::ToolExecutionMode;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -275,7 +274,6 @@ pub(crate) struct ToolsConfig {
     pub allow_login_shell: bool,
     pub enabled_tool_capabilities: Option<std::collections::BTreeSet<String>>,
     pub legacy_view_image_override: Option<bool>,
-    pub execution_mode: ToolExecutionMode,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
     pub web_search_config: Option<WebSearchConfig>,
@@ -412,7 +410,6 @@ impl ToolsConfig {
             allow_login_shell: true,
             enabled_tool_capabilities: None,
             legacy_view_image_override: None,
-            execution_mode: ToolExecutionMode::Auto,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
             web_search_config: None,
@@ -465,11 +462,6 @@ impl ToolsConfig {
         self
     }
 
-    pub fn with_execution_mode(mut self, execution_mode: ToolExecutionMode) -> Self {
-        self.execution_mode = execution_mode;
-        self
-    }
-
     pub fn with_unified_exec_shell_mode(
         mut self,
         unified_exec_shell_mode: UnifiedExecShellMode,
@@ -513,10 +505,6 @@ impl ToolsConfig {
             return true;
         };
         self.is_tool_capability_enabled(capability)
-    }
-
-    pub fn requires_manual_tool_approval(&self) -> bool {
-        matches!(self.execution_mode, ToolExecutionMode::Manual)
     }
 
     fn is_tool_capability_enabled(&self, capability: ToolCapabilityKey) -> bool {

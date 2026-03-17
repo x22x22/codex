@@ -169,7 +169,6 @@ async fn thread_start_accepts_enabled_tool_overrides() -> Result<()> {
             config: Some(HashMap::from([(
                 "tools".to_string(),
                 json!({
-                    "execution_mode": "manual",
                     "enabled": ["shell", "apply_patch", "web_search"],
                     "web_search": {
                         "context_size": "low",

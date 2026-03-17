@@ -102,7 +102,6 @@ allowed_domains = ["example.com"]
 
 [tools]
 view_image = false
-execution_mode = "manual"
 enabled = ["shell", "apply_patch"]
 "#,
     )?;
@@ -140,7 +139,6 @@ enabled = ["shell", "apply_patch"]
             }),
             view_image: Some(false),
             enabled: Some(vec!["shell".to_string(), "apply_patch".to_string()]),
-            execution_mode: Some(codex_app_server_protocol::ToolExecutionMode::Manual),
         }
     );
     assert_eq!(
@@ -163,12 +161,6 @@ enabled = ["shell", "apply_patch"]
     );
     assert_eq!(
         origins.get("tools.view_image").expect("origin").name,
-        ConfigLayerSource::User {
-            file: user_file.clone(),
-        }
-    );
-    assert_eq!(
-        origins.get("tools.execution_mode").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }

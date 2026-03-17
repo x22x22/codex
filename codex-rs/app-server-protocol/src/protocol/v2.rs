@@ -536,14 +536,6 @@ pub struct SandboxWorkspaceWrite {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
-pub enum ToolExecutionMode {
-    Auto,
-    Manual,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export_to = "v2/")]
 pub struct ToolsV2 {
     /// Per-tool web search configuration. Presence alone does not enable the capability.
     pub web_search: Option<WebSearchToolConfig>,
@@ -551,8 +543,6 @@ pub struct ToolsV2 {
     pub view_image: Option<bool>,
     /// Canonical capability names to enable. If omitted, legacy/default resolution applies.
     pub enabled: Option<Vec<String>>,
-    /// Execution policy for approval-capable tools.
-    pub execution_mode: Option<ToolExecutionMode>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq, JsonSchema, TS)]
