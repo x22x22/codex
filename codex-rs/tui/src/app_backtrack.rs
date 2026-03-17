@@ -156,8 +156,12 @@ impl App {
             ..
         }) = event
         {
-            // First Esc in transcript overlay: begin backtrack preview at latest user message.
-            self.begin_overlay_backtrack_preview(tui);
+            if self.overlay.as_ref().is_some_and(Overlay::consumes_escape) {
+                self.overlay_forward_event(tui, event)?;
+            } else {
+                // First Esc in transcript overlay: begin backtrack preview at latest user message.
+                self.begin_overlay_backtrack_preview(tui);
+            }
             Ok(true)
         } else {
             // Not in backtrack mode: forward events to the overlay widget.

@@ -1,0 +1,20 @@
+---
+source: tui/src/pager_overlay.rs
+expression: term.backend()
+---
+"/ T R A N S C R I P T / / / / / / / / / / / / / / / / / / / / / / / / / "
+"                                                                        "
+"› Find the foo item                                                     "
+"                                                                        "
+"                                                                        "
+"  Details...                                                            "
+"                                                                        "
+"• Final answer that also mentions foo.                                  "
+"                                                                        "
+"› 2. Other prompt                                                       "
+"• (no response yet)                                                     "
+"~                                                                       "
+"───────────────────────────────────────────────────────────────── 100% ─"
+" <↑>/<↓> to scroll   <pgup>/<pgdn> to page   <home>/<end> to jump       "
+" <q> to quit   <a> hide side panel   <e> expand all   <d> show details  "
+"Search /foo  1/3  › Find the foo item  <n>/<N>  <esc> clear             "
