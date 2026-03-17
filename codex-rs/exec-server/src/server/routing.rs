@@ -286,7 +286,7 @@ mod tests {
         let routed = route_jsonrpc_message(JSONRPCMessage::Request(JSONRPCRequest {
             id: RequestId::Integer(2),
             method: EXEC_METHOD.to_string(),
-            params: Some(json!({ "processId": "proc-1" })),
+            params: Some(json!({ "sessionId": "proc-1" })),
             trace: None,
         }))
         .expect("exec request should route");
@@ -322,7 +322,7 @@ mod tests {
     fn serializes_typed_notifications_back_to_jsonrpc() {
         let message = encode_outbound_message(ExecServerOutboundMessage::Notification(
             ExecServerServerNotification::Exited(ExecExitedNotification {
-                process_id: "proc-1".to_string(),
+                session_id: "proc-1".to_string(),
                 exit_code: 0,
             }),
         ))
@@ -333,7 +333,7 @@ mod tests {
             JSONRPCMessage::Notification(JSONRPCNotification {
                 method: EXEC_EXITED_METHOD.to_string(),
                 params: Some(json!({
-                    "processId": "proc-1",
+                    "sessionId": "proc-1",
                     "exitCode": 0,
                 })),
             })
@@ -345,7 +345,7 @@ mod tests {
         let message = encode_outbound_message(ExecServerOutboundMessage::Response {
             request_id: RequestId::Integer(3),
             response: ExecServerResponseMessage::Exec(ExecResponse {
-                process_id: "proc-1".to_string(),
+                session_id: "proc-1".to_string(),
             }),
         })
         .expect("response should serialize");
@@ -355,7 +355,7 @@ mod tests {
             JSONRPCMessage::Response(codex_app_server_protocol::JSONRPCResponse {
                 id: RequestId::Integer(3),
                 result: json!({
-                    "processId": "proc-1",
+                    "sessionId": "proc-1",
                 }),
             })
         );
@@ -368,7 +368,7 @@ mod tests {
             id: RequestId::Integer(4),
             method: EXEC_METHOD.to_string(),
             params: Some(json!({
-                "processId": "proc-1",
+                "sessionId": "proc-1",
                 "argv": ["bash", "-lc", "true"],
                 "cwd": cwd,
                 "env": {},
@@ -389,7 +389,6 @@ mod tests {
         assert_eq!(
             params,
             ExecParams {
-                process_id: "proc-1".to_string(),
                 argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
                 cwd: std::env::current_dir().expect("cwd"),
                 env: std::collections::HashMap::new(),

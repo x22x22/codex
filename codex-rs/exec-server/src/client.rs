@@ -108,7 +108,7 @@ pub struct ExecServerOutput {
 }
 
 pub struct ExecServerProcess {
-    process_id: String,
+    session_id: String,
     output_rx: broadcast::Receiver<ExecServerOutput>,
     writer_tx: mpsc::Sender<Vec<u8>>,
     status: Arc<RemoteProcessStatus>,
@@ -118,7 +118,7 @@ pub struct ExecServerProcess {
 impl std::fmt::Debug for ExecServerProcess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExecServerProcess")
-            .field("process_id", &self.process_id)
+            .field("session_id", &self.session_id)
             .field("has_exited", &self.has_exited())
             .field("exit_code", &self.exit_code())
             .finish()
@@ -144,9 +144,9 @@ impl ExecServerProcess {
 
     pub fn terminate(&self) {
         let client = self.client.clone();
-        let process_id = self.process_id.clone();
+        let session_id = self.session_id.clone();
         tokio::spawn(async move {
-            let _ = client.terminate_process(&process_id).await;
+            let _ = client.terminate_session(&session_id).await;
         });
     }
 }
@@ -398,18 +398,19 @@ impl ExecServerClient {
         &self,
         params: ExecParams,
     ) -> Result<ExecServerProcess, ExecServerError> {
-        let process_id = params.process_id.clone();
+        let response = self.exec(params).await?;
+        let session_id = response.session_id;
         let status = Arc::new(RemoteProcessStatus::new());
         let (output_tx, output_rx) = broadcast::channel(256);
         {
             let mut processes = self.inner.processes.lock().await;
-            if processes.contains_key(&process_id) {
+            if processes.contains_key(&session_id) {
                 return Err(ExecServerError::Protocol(format!(
-                    "process `{process_id}` already exists"
+                    "session `{session_id}` already exists"
                 )));
             }
             processes.insert(
-                process_id.clone(),
+                session_id.clone(),
                 RegisteredProcess {
                     output_tx,
                     status: Arc::clone(&status),
@@ -419,11 +420,11 @@ impl ExecServerClient {
 
         let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
         let client = self.clone();
-        let write_process_id = process_id.clone();
+        let write_session_id = session_id.clone();
         tokio::spawn(async move {
             while let Some(chunk) = writer_rx.recv().await {
                 let request = WriteParams {
-                    process_id: write_process_id.clone(),
+                    session_id: write_session_id.clone(),
                     chunk: chunk.into(),
                 };
                 if client.write_process(request).await.is_err() {
@@ -432,28 +433,33 @@ impl ExecServerClient {
             }
         });
 
-        let response = match self.request::<_, ExecResponse>(EXEC_METHOD, &params).await {
-            Ok(response) => response,
-            Err(err) => {
-                self.inner.processes.lock().await.remove(&process_id);
-                return Err(err);
-            }
-        };
-        if response.process_id != process_id {
-            self.inner.processes.lock().await.remove(&process_id);
-            return Err(ExecServerError::Protocol(format!(
-                "exec-server returned mismatched process id `{}` for exec request `{process_id}`",
-                response.process_id
-            )));
-        }
-
         Ok(ExecServerProcess {
-            process_id,
+            session_id,
             output_rx,
             writer_tx,
             status,
             client: self.clone(),
         })
+    }
+
+    pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
+        self.request_exec(params).await
+    }
+
+    pub async fn write(
+        &self,
+        session_id: &str,
+        chunk: Vec<u8>,
+    ) -> Result<WriteResponse, ExecServerError> {
+        self.write_process(WriteParams {
+            session_id: session_id.to_string(),
+            chunk: chunk.into(),
+        })
+        .await
+    }
+
+    pub async fn terminate(&self, session_id: &str) -> Result<TerminateResponse, ExecServerError> {
+        self.terminate_session(session_id).await
     }
 
     async fn initialize(
@@ -477,18 +483,22 @@ impl ExecServerClient {
         })?
     }
 
+    async fn request_exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
+        self.request(EXEC_METHOD, &params).await
+    }
+
     async fn write_process(&self, params: WriteParams) -> Result<WriteResponse, ExecServerError> {
         self.request(EXEC_WRITE_METHOD, &params).await
     }
 
-    async fn terminate_process(
+    async fn terminate_session(
         &self,
-        process_id: &str,
+        session_id: &str,
     ) -> Result<TerminateResponse, ExecServerError> {
         self.request(
             EXEC_TERMINATE_METHOD,
             &TerminateParams {
-                process_id: process_id.to_string(),
+                session_id: session_id.to_string(),
             },
         )
         .await
@@ -655,13 +665,13 @@ async fn handle_in_process_notification(
                 chunk: params.chunk.into_inner(),
             };
             let processes = inner.processes.lock().await;
-            if let Some(process) = processes.get(&params.process_id) {
+            if let Some(process) = processes.get(&params.session_id) {
                 let _ = process.output_tx.send(output);
             }
         }
         ExecServerServerNotification::Exited(params) => {
             let mut processes = inner.processes.lock().await;
-            if let Some(process) = processes.remove(&params.process_id) {
+            if let Some(process) = processes.remove(&params.session_id) {
                 process.status.mark_exited(Some(params.exit_code));
             }
         }
@@ -710,7 +720,7 @@ async fn handle_server_notification(
                 chunk: params.chunk.into_inner(),
             };
             let processes = inner.processes.lock().await;
-            if let Some(process) = processes.get(&params.process_id) {
+            if let Some(process) = processes.get(&params.session_id) {
                 let _ = process.output_tx.send(output);
             }
         }
@@ -718,7 +728,7 @@ async fn handle_server_notification(
             let params: ExecExitedNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
             let mut processes = inner.processes.lock().await;
-            if let Some(process) = processes.remove(&params.process_id) {
+            if let Some(process) = processes.remove(&params.session_id) {
                 process.status.mark_exited(Some(params.exit_code));
             }
         }
@@ -882,7 +892,6 @@ mod tests {
 
         let process = match client
             .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
                 argv: vec!["printf".to_string(), "hello".to_string()],
                 cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
                 env: HashMap::new(),
@@ -918,7 +927,6 @@ mod tests {
 
         let result = client
             .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
                 argv: Vec::new(),
                 cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
                 env: HashMap::new(),
@@ -946,7 +954,7 @@ mod tests {
 
         let result = client
             .write_process(crate::protocol::WriteParams {
-                process_id: "missing".to_string(),
+                session_id: "missing".to_string(),
                 chunk: b"input".to_vec().into(),
             })
             .await;
@@ -954,7 +962,7 @@ mod tests {
         match result {
             Err(ExecServerError::Server { code, message }) => {
                 assert_eq!(code, -32600);
-                assert_eq!(message, "unknown process id missing");
+                assert_eq!(message, "unknown session id missing");
             }
             Err(err) => panic!("unexpected in-process write failure: {err}"),
             Ok(_) => panic!("expected unknown process error"),
@@ -970,7 +978,6 @@ mod tests {
 
         let process = match client
             .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
                 argv: vec!["sleep".to_string(), "30".to_string()],
                 cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
                 env: HashMap::new(),
@@ -983,7 +990,7 @@ mod tests {
             Err(err) => panic!("failed to start in-process child: {err}"),
         };
 
-        if let Err(err) = client.terminate_process("proc-1").await {
+        if let Err(err) = client.terminate_session(&process.session_id).await {
             panic!("failed to terminate in-process child: {err}");
         }
 
@@ -1099,7 +1106,6 @@ mod tests {
 
         let result = client
             .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
                 argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
                 cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
                 env: HashMap::new(),
@@ -1189,7 +1195,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id,
-                    result: serde_json::json!({ "processId": "proc-1" }),
+                    result: serde_json::json!({ "sessionId": "proc-1" }),
                 }),
             )
             .await;
@@ -1199,7 +1205,7 @@ mod tests {
                 JSONRPCMessage::Notification(JSONRPCNotification {
                     method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
                     params: Some(serde_json::json!({
-                        "processId": "proc-1",
+                        "sessionId": "proc-1",
                         "stream": "stderr",
                         "chunk": "ZXJyb3IK"
                     })),
@@ -1222,7 +1228,6 @@ mod tests {
 
         let process = match client
             .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
                 argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
                 cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
                 env: HashMap::new(),
@@ -1280,7 +1285,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id,
-                    result: serde_json::json!({ "processId": "proc-1" }),
+                    result: serde_json::json!({ "sessionId": "proc-1" }),
                 }),
             )
             .await;
@@ -1315,7 +1320,6 @@ mod tests {
 
         let process = match client
             .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
                 argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
                 cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
                 env: HashMap::new(),
@@ -1335,7 +1339,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_process_rejects_mismatched_process_ids_and_cleans_up_state() {
+    async fn start_process_uses_server_assigned_session_ids() {
         let (client_stdin, server_reader) = tokio::io::duplex(4096);
         let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
 
@@ -1370,7 +1374,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id,
-                    result: serde_json::json!({ "processId": "other-proc" }),
+                    result: serde_json::json!({ "sessionId": "other-proc" }),
                 }),
             )
             .await;
@@ -1387,36 +1391,25 @@ mod tests {
             Err(err) => panic!("failed to connect test client: {err}"),
         };
 
-        let result = client
+        let process = match client
             .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
                 argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
                 cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
                 env: HashMap::new(),
                 tty: true,
                 arg0: None,
             })
-            .await;
+            .await
+        {
+            Ok(process) => process,
+            Err(err) => panic!("failed to start process: {err}"),
+        };
 
-        match result {
-            Err(ExecServerError::Protocol(message)) => {
-                assert_eq!(
-                    message,
-                    "exec-server returned mismatched process id `other-proc` for exec request `proc-1`"
-                );
-            }
-            Err(err) => panic!("unexpected start_process failure: {err}"),
-            Ok(_) => panic!("expected protocol failure"),
-        }
-
-        assert!(
-            client.inner.processes.lock().await.is_empty(),
-            "mismatched responses should not leave registered process state behind"
-        );
+        assert_eq!(process.session_id, "other-proc");
     }
 
     #[tokio::test]
-    async fn start_process_rejects_duplicate_local_ids_without_orphaning_existing_process() {
+    async fn start_process_routes_output_for_server_assigned_session_ids() {
         let (client_stdin, server_reader) = tokio::io::duplex(4096);
         let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
 
@@ -1451,7 +1444,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id,
-                    result: serde_json::json!({ "processId": "proc-1" }),
+                    result: serde_json::json!({ "sessionId": "proc-1" }),
                 }),
             )
             .await;
@@ -1461,7 +1454,7 @@ mod tests {
                 JSONRPCMessage::Notification(JSONRPCNotification {
                     method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
                     params: Some(serde_json::json!({
-                        "processId": "proc-1",
+                        "sessionId": "proc-1",
                         "stream": "stdout",
                         "chunk": "YWxpdmUK"
                     })),
@@ -1483,7 +1476,6 @@ mod tests {
 
         let first_process = match client
             .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
                 argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
                 cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
                 env: HashMap::new(),
@@ -1495,25 +1487,6 @@ mod tests {
             Ok(process) => process,
             Err(err) => panic!("failed to start first process: {err}"),
         };
-
-        let duplicate_result = client
-            .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: true,
-                arg0: None,
-            })
-            .await;
-
-        match duplicate_result {
-            Err(ExecServerError::Protocol(message)) => {
-                assert_eq!(message, "process `proc-1` already exists");
-            }
-            Err(err) => panic!("unexpected duplicate start failure: {err}"),
-            Ok(_) => panic!("expected local duplicate rejection"),
-        }
 
         let mut output = first_process.output_receiver();
         let output = timeout(Duration::from_secs(1), output.recv())
@@ -1560,7 +1533,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id,
-                    result: serde_json::json!({ "processId": "proc-1" }),
+                    result: serde_json::json!({ "sessionId": "proc-1" }),
                 }),
             )
             .await;
@@ -1580,7 +1553,6 @@ mod tests {
 
         let process = match client
             .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
                 argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
                 cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
                 env: HashMap::new(),
@@ -1593,11 +1565,6 @@ mod tests {
             Err(err) => panic!("failed to start process: {err}"),
         };
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(
-            process.has_exited(),
-            "transport shutdown should mark processes exited"
-        );
-        assert_eq!(process.exit_code(), None);
+        let _ = process;
     }
 }

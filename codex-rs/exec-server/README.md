@@ -111,7 +111,6 @@ Request params:
 
 ```json
 {
-  "processId": "proc-1",
   "argv": ["bash", "-lc", "printf 'hello\\n'"],
   "cwd": "/absolute/working/directory",
   "env": {
@@ -124,7 +123,6 @@ Request params:
 
 Field definitions:
 
-- `processId`: caller-chosen stable id for this process within the connection.
 - `argv`: command vector. It must be non-empty.
 - `cwd`: absolute working directory used for the child process.
 - `env`: environment variables passed to the child process.
@@ -136,13 +134,13 @@ Response:
 
 ```json
 {
-  "processId": "proc-1"
+  "sessionId": "proc-1"
 }
 ```
 
 Behavior notes:
 
-- Reusing an existing `processId` is rejected.
+- `sessionId` is assigned by the server.
 - PTY-backed processes accept later writes through `command/exec/write`.
 - Pipe-backed processes are launched with stdin closed and reject writes.
 - Output is streamed asynchronously via `command/exec/outputDelta`.
@@ -156,7 +154,7 @@ Request params:
 
 ```json
 {
-  "processId": "proc-1",
+  "sessionId": "proc-1",
   "chunk": "aGVsbG8K"
 }
 ```
@@ -173,7 +171,7 @@ Response:
 
 Behavior notes:
 
-- Writes to an unknown `processId` are rejected.
+- Writes to an unknown `sessionId` are rejected.
 - Writes to a non-PTY process are rejected because stdin is already closed.
 
 ### `command/exec/terminate`
@@ -184,7 +182,7 @@ Request params:
 
 ```json
 {
-  "processId": "proc-1"
+  "sessionId": "proc-1"
 }
 ```
 
@@ -214,7 +212,7 @@ Params:
 
 ```json
 {
-  "processId": "proc-1",
+  "sessionId": "proc-1",
   "stream": "stdout",
   "chunk": "aGVsbG8K"
 }
@@ -222,7 +220,7 @@ Params:
 
 Fields:
 
-- `processId`: process identifier
+- `sessionId`: process identifier
 - `stream`: `"stdout"` or `"stderr"`
 - `chunk`: base64-encoded output bytes
 
@@ -234,7 +232,7 @@ Params:
 
 ```json
 {
-  "processId": "proc-1",
+  "sessionId": "proc-1",
   "exitCode": 0
 }
 ```
@@ -252,7 +250,7 @@ Typical error cases:
 - unknown method
 - malformed params
 - empty `argv`
-- duplicate `processId`
+- duplicate `sessionId`
 - writes to unknown processes
 - writes to non-PTY processes
 
@@ -327,23 +325,23 @@ Initialize:
 Start a process:
 
 ```json
-{"id":2,"method":"command/exec","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"arg0":null}}
-{"id":2,"result":{"processId":"proc-1"}}
-{"method":"command/exec/outputDelta","params":{"processId":"proc-1","stream":"stdout","chunk":"cmVhZHkK"}}
+{"id":2,"method":"command/exec","params":{"argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"arg0":null}}
+{"id":2,"result":{"sessionId":"proc-1"}}
+{"method":"command/exec/outputDelta","params":{"sessionId":"proc-1","stream":"stdout","chunk":"cmVhZHkK"}}
 ```
 
 Write to the process:
 
 ```json
-{"id":3,"method":"command/exec/write","params":{"processId":"proc-1","chunk":"aGVsbG8K"}}
+{"id":3,"method":"command/exec/write","params":{"sessionId":"proc-1","chunk":"aGVsbG8K"}}
 {"id":3,"result":{"accepted":true}}
-{"method":"command/exec/outputDelta","params":{"processId":"proc-1","stream":"stdout","chunk":"ZWNobzpoZWxsbwo="}}
+{"method":"command/exec/outputDelta","params":{"sessionId":"proc-1","stream":"stdout","chunk":"ZWNobzpoZWxsbwo="}}
 ```
 
 Terminate it:
 
 ```json
-{"id":4,"method":"command/exec/terminate","params":{"processId":"proc-1"}}
+{"id":4,"method":"command/exec/terminate","params":{"sessionId":"proc-1"}}
 {"id":4,"result":{"running":true}}
-{"method":"command/exec/exited","params":{"processId":"proc-1","exitCode":0}}
+{"method":"command/exec/exited","params":{"sessionId":"proc-1","exitCode":0}}
 ```

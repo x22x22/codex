@@ -84,7 +84,7 @@ enum ProcessStartRequest {
 }
 
 struct DirectExecSpec {
-    process_id: String,
+    session_id: String,
     argv: Vec<String>,
     cwd: PathBuf,
     env: HashMap<String, String>,
@@ -93,7 +93,7 @@ struct DirectExecSpec {
 }
 
 struct PreparedExecSpec {
-    process_id: String,
+    session_id: String,
     request: PreparedExecRequest,
     io: ProcessIo,
 }
@@ -116,7 +116,7 @@ enum TerminateMode {
 
 Notes:
 
-- `processId` remains a protocol handle, not an OS pid.
+- `sessionId` remains a protocol handle, not an OS pid.
 - `wait` is a good generic API because many callers want process completion
   without manually wiring notifications.
 - `communicate` is also a reasonable API, but it should probably start as a

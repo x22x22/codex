@@ -96,7 +96,6 @@ async fn exec_server_client_streams_output_and_accepts_writes() -> anyhow::Resul
     let process = server
         .client()
         .start_process(ExecParams {
-            process_id: "2001".to_string(),
             argv: vec![
                 "bash".to_string(),
                 "-lc".to_string(),
@@ -163,7 +162,6 @@ async fn exec_server_client_connects_over_websocket() -> anyhow::Result<()> {
 
     let process = client
         .start_process(ExecParams {
-            process_id: "2002".to_string(),
             argv: vec![
                 "bash".to_string(),
                 "-lc".to_string(),
@@ -241,7 +239,6 @@ async fn websocket_disconnect_terminates_processes_for_that_connection() -> anyh
 
         let _process = client
             .start_process(ExecParams {
-                process_id: "2003".to_string(),
                 argv: vec![
                     "bash".to_string(),
                     "-lc".to_string(),

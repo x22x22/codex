@@ -45,9 +45,6 @@ pub struct InitializeResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecParams {
-    /// Caller-chosen stable process identifier scoped to a single exec-server
-    /// connection. This is a protocol handle, not an OS pid.
-    pub process_id: String,
     pub argv: Vec<String>,
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
@@ -58,13 +55,15 @@ pub struct ExecParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
-    pub process_id: String,
+    /// Server-assigned opaque session handle. This is a protocol key, not an
+    /// OS pid.
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteParams {
-    pub process_id: String,
+    pub session_id: String,
     pub chunk: ByteChunk,
 }
 
@@ -77,7 +76,7 @@ pub struct WriteResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminateParams {
-    pub process_id: String,
+    pub session_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,7 +95,7 @@ pub enum ExecOutputStream {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecOutputDeltaNotification {
-    pub process_id: String,
+    pub session_id: String,
     pub stream: ExecOutputStream,
     pub chunk: ByteChunk,
 }
@@ -104,7 +103,7 @@ pub struct ExecOutputDeltaNotification {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecExitedNotification {
-    pub process_id: String,
+    pub session_id: String,
     pub exit_code: i32,
 }
 

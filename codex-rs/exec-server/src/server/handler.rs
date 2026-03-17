@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::TerminalSize;
@@ -31,9 +33,10 @@ struct RunningProcess {
 
 pub(crate) struct ExecServerHandler {
     outbound_tx: mpsc::Sender<ExecServerOutboundMessage>,
-    // Keyed by the protocol `processId`, which is caller-assigned and scoped to
-    // a single client connection rather than an OS pid.
+    // Keyed by server-assigned opaque `sessionId`; this is a protocol handle,
+    // not an OS pid.
     processes: Arc<Mutex<HashMap<String, RunningProcess>>>,
+    next_session_id: AtomicU64,
     initialize_requested: bool,
     initialized: bool,
 }
@@ -43,6 +46,7 @@ impl ExecServerHandler {
         Self {
             outbound_tx,
             processes: Arc::new(Mutex::new(HashMap::new())),
+            next_session_id: AtomicU64::new(1),
             initialize_requested: false,
             initialized: false,
         }
@@ -176,15 +180,10 @@ impl ExecServerHandler {
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
 
-        let process_id = params.process_id.clone();
-        {
-            let process_map = self.processes.lock().await;
-            if process_map.contains_key(&process_id) {
-                return Err(invalid_request(format!(
-                    "process {process_id} already exists"
-                )));
-            }
-        }
+        let session_id = format!(
+            "session-{}",
+            self.next_session_id.fetch_add(1, Ordering::SeqCst)
+        );
 
         let spawned = if params.tty {
             codex_utils_pty::spawn_pty_process(
@@ -210,14 +209,14 @@ impl ExecServerHandler {
 
         {
             let mut process_map = self.processes.lock().await;
-            if process_map.contains_key(&process_id) {
+            if process_map.contains_key(&session_id) {
                 spawned.session.terminate();
                 return Err(invalid_request(format!(
-                    "process {process_id} already exists"
+                    "session {session_id} already exists"
                 )));
             }
             process_map.insert(
-                process_id.clone(),
+                session_id.clone(),
                 RunningProcess {
                     session: spawned.session,
                     tty: params.tty,
@@ -226,25 +225,25 @@ impl ExecServerHandler {
         }
 
         tokio::spawn(stream_output(
-            process_id.clone(),
+            session_id.clone(),
             ExecOutputStream::Stdout,
             spawned.stdout_rx,
             self.outbound_tx.clone(),
         ));
         tokio::spawn(stream_output(
-            process_id.clone(),
+            session_id.clone(),
             ExecOutputStream::Stderr,
             spawned.stderr_rx,
             self.outbound_tx.clone(),
         ));
         tokio::spawn(watch_exit(
-            process_id.clone(),
+            session_id.clone(),
             spawned.exit_rx,
             self.outbound_tx.clone(),
             Arc::clone(&self.processes),
         ));
 
-        Ok(ExecResponse { process_id })
+        Ok(ExecResponse { session_id })
     }
 
     async fn handle_write_request(
@@ -253,13 +252,13 @@ impl ExecServerHandler {
     ) -> Result<WriteResponse, codex_app_server_protocol::JSONRPCErrorError> {
         let writer_tx = {
             let process_map = self.processes.lock().await;
-            let process = process_map.get(&params.process_id).ok_or_else(|| {
-                invalid_request(format!("unknown process id {}", params.process_id))
+            let process = process_map.get(&params.session_id).ok_or_else(|| {
+                invalid_request(format!("unknown session id {}", params.session_id))
             })?;
             if !process.tty {
                 return Err(invalid_request(format!(
-                    "stdin is closed for process {}",
-                    params.process_id
+                    "stdin is closed for session {}",
+                    params.session_id
                 )));
             }
             process.session.writer_sender()
@@ -279,7 +278,7 @@ impl ExecServerHandler {
     ) -> Result<TerminateResponse, codex_app_server_protocol::JSONRPCErrorError> {
         let running = {
             let process_map = self.processes.lock().await;
-            if let Some(process) = process_map.get(&params.process_id) {
+            if let Some(process) = process_map.get(&params.session_id) {
                 process.session.terminate();
                 true
             } else {
@@ -311,7 +310,7 @@ impl ExecServerHandler {
 }
 
 async fn stream_output(
-    process_id: String,
+    session_id: String,
     stream: ExecOutputStream,
     mut receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
     outbound_tx: mpsc::Sender<ExecServerOutboundMessage>,
@@ -320,7 +319,7 @@ async fn stream_output(
         if outbound_tx
             .send(ExecServerOutboundMessage::Notification(
                 ExecServerServerNotification::OutputDelta(ExecOutputDeltaNotification {
-                    process_id: process_id.clone(),
+                    session_id: session_id.clone(),
                     stream,
                     chunk: chunk.into(),
                 }),
@@ -334,7 +333,7 @@ async fn stream_output(
 }
 
 async fn watch_exit(
-    process_id: String,
+    session_id: String,
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
     outbound_tx: mpsc::Sender<ExecServerOutboundMessage>,
     processes: Arc<Mutex<HashMap<String, RunningProcess>>>,
@@ -342,12 +341,12 @@ async fn watch_exit(
     let exit_code = exit_rx.await.unwrap_or(-1);
     {
         let mut processes = processes.lock().await;
-        processes.remove(&process_id);
+        processes.remove(&session_id);
     }
     let _ = outbound_tx
         .send(ExecServerOutboundMessage::Notification(
             ExecServerServerNotification::Exited(ExecExitedNotification {
-                process_id,
+                session_id,
                 exit_code,
             }),
         ))
@@ -428,7 +427,6 @@ mod tests {
             .handle_message(ExecServerInboundMessage::Request(ExecServerRequest::Exec {
                 request_id: RequestId::Integer(7),
                 params: crate::protocol::ExecParams {
-                    process_id: "proc-1".to_string(),
                     argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
                     cwd: std::env::current_dir().expect("cwd"),
                     env: HashMap::new(),
@@ -478,7 +476,6 @@ mod tests {
             .handle_message(ExecServerInboundMessage::Request(ExecServerRequest::Exec {
                 request_id: RequestId::Integer(2),
                 params: crate::protocol::ExecParams {
-                    process_id: "proc-1".to_string(),
                     argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
                     cwd: std::env::current_dir().expect("cwd"),
                     env: HashMap::new(),
@@ -574,18 +571,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_process_ids_are_rejected_per_connection() {
+    async fn exec_returns_server_generated_session_ids() {
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(4);
         let mut handler = ExecServerHandler::new(outgoing_tx);
-        let marker_path = std::env::temp_dir().join(format!(
-            "codex-exec-server-duplicate-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system clock before unix epoch")
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_file(&marker_path);
 
         if let Err(err) = handler
             .handle_message(ExecServerInboundMessage::Request(
@@ -611,7 +599,6 @@ mod tests {
         }
 
         let params = crate::protocol::ExecParams {
-            process_id: "proc-1".to_string(),
             argv: vec![
                 "bash".to_string(),
                 "-lc".to_string(),
@@ -631,48 +618,40 @@ mod tests {
         {
             panic!("first exec should succeed: {err}");
         }
-        assert_eq!(
-            recv_outbound(&mut outgoing_rx).await,
-            ExecServerOutboundMessage::Response {
-                request_id: RequestId::Integer(2),
-                response: ExecServerResponseMessage::Exec(crate::protocol::ExecResponse {
-                    process_id: "proc-1".to_string(),
-                }),
-            }
-        );
+        let ExecServerOutboundMessage::Response {
+            request_id,
+            response: ExecServerResponseMessage::Exec(first_exec),
+        } = recv_outbound(&mut outgoing_rx).await
+        else {
+            panic!("expected first exec response");
+        };
+        assert_eq!(request_id, RequestId::Integer(2));
+        assert_eq!(first_exec.session_id, "session-1");
 
         if let Err(err) = handler
             .handle_message(ExecServerInboundMessage::Request(ExecServerRequest::Exec {
                 request_id: RequestId::Integer(3),
                 params: crate::protocol::ExecParams {
-                    argv: vec![
-                        "bash".to_string(),
-                        "-lc".to_string(),
-                        format!("printf duplicate > {}", marker_path.display()),
-                    ],
+                    argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
                     ..params
                 },
             }))
             .await
         {
-            panic!("duplicate exec should not fail the handler: {err}");
+            panic!("second exec should succeed: {err}");
         }
 
-        let ExecServerOutboundMessage::Error { request_id, error } =
-            recv_outbound(&mut outgoing_rx).await
+        let ExecServerOutboundMessage::Response {
+            request_id,
+            response: ExecServerResponseMessage::Exec(second_exec),
+        } = recv_outbound(&mut outgoing_rx).await
         else {
-            panic!("expected duplicate-process error");
+            panic!("expected second exec response");
         };
         assert_eq!(request_id, RequestId::Integer(3));
-        assert_eq!(error.code, -32600);
-        assert_eq!(error.message, "process proc-1 already exists");
-        assert!(
-            !marker_path.exists(),
-            "duplicate process ids must be rejected before spawning the command"
-        );
+        assert_eq!(second_exec.session_id, "session-2");
 
         handler.shutdown().await;
-        let _ = std::fs::remove_file(&marker_path);
     }
 
     #[tokio::test]
@@ -707,7 +686,6 @@ mod tests {
             .handle_message(ExecServerInboundMessage::Request(ExecServerRequest::Exec {
                 request_id: RequestId::Integer(2),
                 params: crate::protocol::ExecParams {
-                    process_id: "proc-2".to_string(),
                     argv: vec![
                         "bash".to_string(),
                         "-lc".to_string(),
@@ -723,14 +701,20 @@ mod tests {
         {
             panic!("exec should succeed: {err}");
         }
-        let _ = recv_outbound(&mut outgoing_rx).await;
+        let ExecServerOutboundMessage::Response {
+            response: ExecServerResponseMessage::Exec(exec_response),
+            ..
+        } = recv_outbound(&mut outgoing_rx).await
+        else {
+            panic!("expected exec response");
+        };
 
         if let Err(err) = handler
             .handle_message(ExecServerInboundMessage::Request(
                 ExecServerRequest::Write {
                     request_id: RequestId::Integer(3),
                     params: WriteParams {
-                        process_id: "proc-2".to_string(),
+                        session_id: exec_response.session_id,
                         chunk: b"hello\n".to_vec().into(),
                     },
                 },
@@ -747,7 +731,7 @@ mod tests {
         };
         assert_eq!(request_id, RequestId::Integer(3));
         assert_eq!(error.code, -32600);
-        assert_eq!(error.message, "stdin is closed for process proc-2");
+        assert_eq!(error.message, "stdin is closed for session session-1");
 
         handler.shutdown().await;
     }
@@ -785,7 +769,7 @@ mod tests {
                 ExecServerRequest::Write {
                     request_id: RequestId::Integer(2),
                     params: WriteParams {
-                        process_id: "missing".to_string(),
+                        session_id: "missing".to_string(),
                         chunk: b"hello\n".to_vec().into(),
                     },
                 },
@@ -802,7 +786,7 @@ mod tests {
         };
         assert_eq!(request_id, RequestId::Integer(2));
         assert_eq!(error.code, -32600);
-        assert_eq!(error.message, "unknown process id missing");
+        assert_eq!(error.message, "unknown session id missing");
     }
 
     #[tokio::test]
@@ -838,7 +822,7 @@ mod tests {
                 ExecServerRequest::Terminate {
                     request_id: RequestId::Integer(2),
                     params: crate::protocol::TerminateParams {
-                        process_id: "missing".to_string(),
+                        session_id: "missing".to_string(),
                     },
                 },
             ))
@@ -859,7 +843,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminate_keeps_process_ids_reserved_until_exit_cleanup() {
+    async fn terminate_keeps_session_ids_reserved_until_exit_cleanup() {
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(2);
         let mut handler = ExecServerHandler::new(outgoing_tx);
 
@@ -911,7 +895,7 @@ mod tests {
                 ExecServerRequest::Terminate {
                     request_id: RequestId::Integer(2),
                     params: crate::protocol::TerminateParams {
-                        process_id: "proc-1".to_string(),
+                        session_id: "proc-1".to_string(),
                     },
                 },
             ))
