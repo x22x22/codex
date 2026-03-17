@@ -702,18 +702,19 @@ impl AppServerSession {
     }
 
     fn remember_thread_cwd(&self, thread_id: String, cwd: PathBuf) {
-        self.thread_cwds
-            .write()
-            .expect("thread cwd map lock should not be poisoned")
-            .insert(thread_id, cwd);
+        match self.thread_cwds.write() {
+            Ok(mut thread_cwds) => {
+                thread_cwds.insert(thread_id, cwd);
+            }
+            Err(err) => panic!("thread cwd map lock should not be poisoned: {err}"),
+        }
     }
 
     fn thread_cwd(&self, thread_id: &str) -> Option<PathBuf> {
-        self.thread_cwds
-            .read()
-            .expect("thread cwd map lock should not be poisoned")
-            .get(thread_id)
-            .cloned()
+        match self.thread_cwds.read() {
+            Ok(thread_cwds) => thread_cwds.get(thread_id).cloned(),
+            Err(err) => panic!("thread cwd map lock should not be poisoned: {err}"),
+        }
     }
 }
 
