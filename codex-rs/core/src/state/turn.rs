@@ -2,6 +2,7 @@
 
 use indexmap::IndexMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -125,17 +126,13 @@ impl TurnState {
         self.approval_outcomes_by_call_id.insert(call_id, decision);
     }
 
-    pub(crate) fn approval_outcome_for_call_id(
+    pub(crate) fn approval_metadata_snapshot(
         &self,
-        call_id: &str,
-    ) -> Option<ReviewDecisionMetadata> {
-        self.approval_outcomes_by_call_id.get(call_id).cloned()
-    }
-
-    pub(crate) fn has_pending_approval_for_call_id(&self, call_id: &str) -> bool {
-        self.pending_approval_call_ids
-            .values()
-            .any(|pending_call_id| pending_call_id == call_id)
+    ) -> (HashMap<String, ReviewDecisionMetadata>, HashSet<String>) {
+        (
+            self.approval_outcomes_by_call_id.clone(),
+            self.pending_approval_call_ids.values().cloned().collect(),
+        )
     }
 
     pub(crate) fn remove_pending_approval(
