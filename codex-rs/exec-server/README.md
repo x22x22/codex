@@ -262,8 +262,8 @@ The crate exports:
 - `ExecServerClientConnectOptions`
 - `RemoteExecServerConnectArgs`
 - `ExecServerLaunchCommand`
+- `ExecServerEvent`
 - `ExecServerOutput`
-- `ExecServerProcess`
 - `SpawnedExecServer`
 - `ExecServerError`
 - `ExecServerTransport`
@@ -301,12 +301,12 @@ Timeout behavior:
 - stdio and websocket clients both enforce an initialize-handshake timeout
 - websocket clients also enforce a connect timeout before the handshake begins
 
-Process output:
+Events:
 
-- `ExecServerProcess::output_receiver()` yields `ExecServerOutput`
-- each output event includes both `stream` (`stdout` or `stderr`) and raw bytes
-- `ExecServerProcess::has_exited()` is only updated from an actual exit
-  notification or transport shutdown, not from `terminate()` alone
+- `ExecServerClient::event_receiver()` yields `ExecServerEvent`
+- output events include both `stream` (`stdout` or `stderr`) and raw bytes
+- process lifetime is tracked by server notifications such as
+  `command/exec/exited`, not by a client-side process registry
 
 Spawning a local child process is deliberately separate:
 

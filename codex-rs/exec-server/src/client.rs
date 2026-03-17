@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::Mutex as StdMutex;
+#[cfg(test)]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -106,42 +108,35 @@ pub struct ExecServerOutput {
     pub chunk: Vec<u8>,
 }
 
-pub struct ExecServerProcess {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecServerEvent {
+    OutputDelta(ExecOutputDeltaNotification),
+    Exited(ExecExitedNotification),
+}
+
+#[cfg(test)]
+struct ExecServerProcess {
     session_id: String,
     output_rx: broadcast::Receiver<ExecServerOutput>,
-    writer_tx: mpsc::Sender<Vec<u8>>,
     status: Arc<RemoteProcessStatus>,
     client: ExecServerClient,
 }
 
-impl std::fmt::Debug for ExecServerProcess {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ExecServerProcess")
-            .field("session_id", &self.session_id)
-            .field("has_exited", &self.has_exited())
-            .field("exit_code", &self.exit_code())
-            .finish()
-    }
-}
-
+#[cfg(test)]
 impl ExecServerProcess {
-    pub fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
-        self.writer_tx.clone()
-    }
-
-    pub fn output_receiver(&self) -> broadcast::Receiver<ExecServerOutput> {
+    fn output_receiver(&self) -> broadcast::Receiver<ExecServerOutput> {
         self.output_rx.resubscribe()
     }
 
-    pub fn has_exited(&self) -> bool {
+    fn has_exited(&self) -> bool {
         self.status.has_exited()
     }
 
-    pub fn exit_code(&self) -> Option<i32> {
+    fn exit_code(&self) -> Option<i32> {
         self.status.exit_code()
     }
 
-    pub fn terminate(&self) {
+    fn terminate(&self) {
         let client = self.client.clone();
         let session_id = self.session_id.clone();
         tokio::spawn(async move {
@@ -150,20 +145,13 @@ impl ExecServerProcess {
     }
 }
 
-impl std::fmt::Debug for RemoteProcessStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RemoteProcessStatus")
-            .field("exited", &self.has_exited())
-            .field("exit_code", &self.exit_code())
-            .finish()
-    }
-}
-
+#[cfg(test)]
 struct RemoteProcessStatus {
     exited: AtomicBool,
     exit_code: StdMutex<Option<i32>>,
 }
 
+#[cfg(test)]
 impl RemoteProcessStatus {
     fn new() -> Self {
         Self {
@@ -186,11 +174,6 @@ impl RemoteProcessStatus {
             *guard = exit_code;
         }
     }
-}
-
-struct RegisteredProcess {
-    output_tx: broadcast::Sender<ExecServerOutput>,
-    status: Arc<RemoteProcessStatus>,
 }
 
 enum PendingRequest {
@@ -272,7 +255,7 @@ enum ClientBackend {
 struct Inner {
     backend: ClientBackend,
     pending: Mutex<HashMap<RequestId, PendingRequest>>,
-    processes: Mutex<HashMap<String, RegisteredProcess>>,
+    events_tx: broadcast::Sender<ExecServerEvent>,
     next_request_id: AtomicI64,
     reader_task: JoinHandle<()>,
     server_task: Option<JoinHandle<()>>,
@@ -355,7 +338,7 @@ impl ExecServerClient {
             Inner {
                 backend: ClientBackend::InProcess { write_tx },
                 pending: Mutex::new(HashMap::new()),
-                processes: Mutex::new(HashMap::new()),
+                events_tx: broadcast::channel(256).0,
                 next_request_id: AtomicI64::new(1),
                 reader_task,
                 server_task: Some(server_task),
@@ -448,7 +431,7 @@ impl ExecServerClient {
             Inner {
                 backend: ClientBackend::JsonRpc { write_tx },
                 pending: Mutex::new(HashMap::new()),
-                processes: Mutex::new(HashMap::new()),
+                events_tx: broadcast::channel(256).0,
                 next_request_id: AtomicI64::new(1),
                 reader_task,
                 server_task: None,
@@ -460,7 +443,12 @@ impl ExecServerClient {
         Ok(client)
     }
 
-    pub async fn start_process(
+    pub fn event_receiver(&self) -> broadcast::Receiver<ExecServerEvent> {
+        self.inner.events_tx.subscribe()
+    }
+
+    #[cfg(test)]
+    async fn start_process(
         &self,
         params: ExecParams,
     ) -> Result<ExecServerProcess, ExecServerError> {
@@ -468,33 +456,27 @@ impl ExecServerClient {
         let session_id = response.session_id;
         let status = Arc::new(RemoteProcessStatus::new());
         let (output_tx, output_rx) = broadcast::channel(256);
-        {
-            let mut processes = self.inner.processes.lock().await;
-            if processes.contains_key(&session_id) {
-                return Err(ExecServerError::Protocol(format!(
-                    "session `{session_id}` already exists"
-                )));
-            }
-            processes.insert(
-                session_id.clone(),
-                RegisteredProcess {
-                    output_tx,
-                    status: Arc::clone(&status),
-                },
-            );
-        }
-
-        let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
-        let client = self.clone();
-        let write_session_id = session_id.clone();
+        let mut events_rx = self.event_receiver();
+        let status_watcher = Arc::clone(&status);
+        let watch_session_id = session_id.clone();
         tokio::spawn(async move {
-            while let Some(chunk) = writer_rx.recv().await {
-                let request = WriteParams {
-                    session_id: write_session_id.clone(),
-                    chunk: chunk.into(),
-                };
-                if client.write_process(request).await.is_err() {
-                    break;
+            while let Ok(event) = events_rx.recv().await {
+                match event {
+                    ExecServerEvent::OutputDelta(notification)
+                        if notification.session_id == watch_session_id =>
+                    {
+                        let _ = output_tx.send(ExecServerOutput {
+                            stream: notification.stream,
+                            chunk: notification.chunk.into_inner(),
+                        });
+                    }
+                    ExecServerEvent::Exited(notification)
+                        if notification.session_id == watch_session_id =>
+                    {
+                        status_watcher.mark_exited(Some(notification.exit_code));
+                        break;
+                    }
+                    ExecServerEvent::OutputDelta(_) | ExecServerEvent::Exited(_) => {}
                 }
             }
         });
@@ -502,7 +484,6 @@ impl ExecServerClient {
         Ok(ExecServerProcess {
             session_id,
             output_rx,
-            writer_tx,
             status,
             client: self.clone(),
         })
@@ -788,20 +769,10 @@ async fn handle_in_process_notification(
 ) {
     match notification {
         ExecServerServerNotification::OutputDelta(params) => {
-            let output = ExecServerOutput {
-                stream: params.stream,
-                chunk: params.chunk.into_inner(),
-            };
-            let processes = inner.processes.lock().await;
-            if let Some(process) = processes.get(&params.session_id) {
-                let _ = process.output_tx.send(output);
-            }
+            let _ = inner.events_tx.send(ExecServerEvent::OutputDelta(params));
         }
         ExecServerServerNotification::Exited(params) => {
-            let mut processes = inner.processes.lock().await;
-            if let Some(process) = processes.remove(&params.session_id) {
-                process.status.mark_exited(Some(params.exit_code));
-            }
+            let _ = inner.events_tx.send(ExecServerEvent::Exited(params));
         }
     }
 }
@@ -843,22 +814,12 @@ async fn handle_server_notification(
         EXEC_OUTPUT_DELTA_METHOD => {
             let params: ExecOutputDeltaNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
-            let output = ExecServerOutput {
-                stream: params.stream,
-                chunk: params.chunk.into_inner(),
-            };
-            let processes = inner.processes.lock().await;
-            if let Some(process) = processes.get(&params.session_id) {
-                let _ = process.output_tx.send(output);
-            }
+            let _ = inner.events_tx.send(ExecServerEvent::OutputDelta(params));
         }
         EXEC_EXITED_METHOD => {
             let params: ExecExitedNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
-            let mut processes = inner.processes.lock().await;
-            if let Some(process) = processes.remove(&params.session_id) {
-                process.status.mark_exited(Some(params.exit_code));
-            }
+            let _ = inner.events_tx.send(ExecServerEvent::Exited(params));
         }
         other => {
             debug!("ignoring unknown exec-server notification: {other}");
@@ -881,17 +842,6 @@ async fn handle_transport_shutdown(inner: &Arc<Inner>) {
             data: None,
             message: "exec-server transport closed".to_string(),
         });
-    }
-
-    let processes = {
-        let mut processes = inner.processes.lock().await;
-        processes
-            .drain()
-            .map(|(_, process)| process)
-            .collect::<Vec<_>>()
-    };
-    for process in processes {
-        process.status.mark_exited(None);
     }
 }
 
@@ -1255,8 +1205,8 @@ mod tests {
         }
 
         assert!(
-            client.inner.processes.lock().await.is_empty(),
-            "failed requests should not leave registered process state behind"
+            client.inner.pending.lock().await.is_empty(),
+            "failed requests should not leave pending request state behind"
         );
     }
 
