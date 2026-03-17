@@ -10,15 +10,8 @@ mod macos;
 #[cfg(not(target_os = "macos"))]
 use keyring::Entry;
 
-#[cfg(not(target_os = "macos"))]
 pub fn migrate_existing_codex_items_to_access_group() -> Result<(), CredentialStoreError> {
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-pub fn migrate_existing_codex_items_to_access_group() -> Result<(), CredentialStoreError> {
-    macos::migrate_existing_codex_items_to_access_group()
-        .map_err(|error| CredentialStoreError::new(KeyringError::PlatformFailure(Box::new(error))))
 }
 
 #[derive(Debug)]
