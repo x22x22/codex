@@ -910,6 +910,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connect_in_process_rejects_invalid_exec_params_from_handler() {
+        let client = match ExecServerClient::connect_in_process(test_options()).await {
+            Ok(client) => client,
+            Err(err) => panic!("failed to connect in-process client: {err}"),
+        };
+
+        let result = client
+            .start_process(ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: Vec::new(),
+                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
+                env: HashMap::new(),
+                tty: false,
+                arg0: None,
+            })
+            .await;
+
+        match result {
+            Err(ExecServerError::Server { code, message }) => {
+                assert_eq!(code, -32602);
+                assert_eq!(message, "argv must not be empty");
+            }
+            Err(err) => panic!("unexpected in-process exec failure: {err}"),
+            Ok(_) => panic!("expected invalid params error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_in_process_rejects_writes_to_unknown_processes() {
+        let client = match ExecServerClient::connect_in_process(test_options()).await {
+            Ok(client) => client,
+            Err(err) => panic!("failed to connect in-process client: {err}"),
+        };
+
+        let result = client
+            .write_process(crate::protocol::WriteParams {
+                process_id: "missing".to_string(),
+                chunk: b"input".to_vec().into(),
+            })
+            .await;
+
+        match result {
+            Err(ExecServerError::Server { code, message }) => {
+                assert_eq!(code, -32600);
+                assert_eq!(message, "unknown process id missing");
+            }
+            Err(err) => panic!("unexpected in-process write failure: {err}"),
+            Ok(_) => panic!("expected unknown process error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_in_process_terminate_marks_process_exited() {
+        let client = match ExecServerClient::connect_in_process(test_options()).await {
+            Ok(client) => client,
+            Err(err) => panic!("failed to connect in-process client: {err}"),
+        };
+
+        let process = match client
+            .start_process(ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: vec!["sleep".to_string(), "30".to_string()],
+                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
+                env: HashMap::new(),
+                tty: false,
+                arg0: None,
+            })
+            .await
+        {
+            Ok(process) => process,
+            Err(err) => panic!("failed to start in-process child: {err}"),
+        };
+
+        if let Err(err) = client.terminate_process("proc-1").await {
+            panic!("failed to terminate in-process child: {err}");
+        }
+
+        timeout(Duration::from_secs(2), async {
+            loop {
+                if process.has_exited() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|err| panic!("timed out waiting for in-process child to exit: {err}"));
+
+        assert!(process.has_exited());
+    }
+
+    #[tokio::test]
     async fn connect_stdio_returns_initialize_errors() {
         let (client_stdin, server_reader) = tokio::io::duplex(4096);
         let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
