@@ -352,14 +352,21 @@ impl InProcessAppServerClient {
                     command = command_rx.recv() => {
                         match command {
                             Some(ClientCommand::Request { request, response_tx }) => {
-                                let request_sender = request_sender.clone();
-                                // Request waits happen on a detached task so
-                                // this loop can keep draining runtime events
-                                // while the request is blocked on client input.
-                                tokio::spawn(async move {
-                                    let result = request_sender.request(*request).await;
-                                    let _ = response_tx.send(result);
-                                });
+                                // Enqueue synchronously so the embedded runtime
+                                // observes request order matching the caller's
+                                // command order, then detach only the response
+                                // wait so this loop can keep draining events.
+                                match request_sender.start_request(*request) {
+                                    Ok(pending_request) => {
+                                        tokio::spawn(async move {
+                                            let result = pending_request.recv().await;
+                                            let _ = response_tx.send(result);
+                                        });
+                                    }
+                                    Err(err) => {
+                                        let _ = response_tx.send(Err(err));
+                                    }
+                                }
                             }
                             Some(ClientCommand::Notify {
                                 notification,
