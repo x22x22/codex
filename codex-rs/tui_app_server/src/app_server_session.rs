@@ -77,6 +77,7 @@ use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
 
 use crate::bottom_pane::FeedbackAudience;
 use crate::dynamic_tools::DynamicToolExecutionContext;
@@ -99,6 +100,7 @@ pub(crate) struct AppServerBootstrap {
 pub(crate) struct AppServerSession {
     client: AppServerClient,
     dynamic_tools: Arc<DynamicToolRegistry>,
+    thread_cwds: RwLock<HashMap<String, PathBuf>>,
     next_request_id: i64,
 }
 
@@ -143,6 +145,7 @@ impl AppServerSession {
         Self {
             client,
             dynamic_tools,
+            thread_cwds: RwLock::new(HashMap::new()),
             next_request_id: 1,
         }
     }
@@ -283,7 +286,11 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/start failed during TUI bootstrap")?;
-        started_thread_from_start_response(response)
+        let thread_id = response.thread.id.clone();
+        let cwd = response.cwd.clone();
+        let started = started_thread_from_start_response(response)?;
+        self.remember_thread_cwd(thread_id, cwd);
+        Ok(started)
     }
 
     pub(crate) async fn resume_thread(
@@ -305,7 +312,11 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/resume failed during TUI bootstrap")?;
-        started_thread_from_resume_response(response, show_raw_agent_reasoning)
+        let thread_id = response.thread.id.clone();
+        let cwd = response.cwd.clone();
+        let started = started_thread_from_resume_response(response, show_raw_agent_reasoning)?;
+        self.remember_thread_cwd(thread_id, cwd);
+        Ok(started)
     }
 
     pub(crate) async fn fork_thread(
@@ -327,7 +338,11 @@ impl AppServerSession {
             })
             .await
             .wrap_err("thread/fork failed during TUI bootstrap")?;
-        started_thread_from_fork_response(response, show_raw_agent_reasoning)
+        let thread_id = response.thread.id.clone();
+        let cwd = response.cwd.clone();
+        let started = started_thread_from_fork_response(response, show_raw_agent_reasoning)?;
+        self.remember_thread_cwd(thread_id, cwd);
+        Ok(started)
     }
 
     fn thread_params_mode(&self) -> ThreadParamsMode {
@@ -386,13 +401,15 @@ impl AppServerSession {
         output_schema: Option<serde_json::Value>,
     ) -> Result<TurnStartResponse> {
         let request_id = self.next_request_id();
-        self.client
+        let request_cwd = cwd.clone();
+        let response = self
+            .client
             .request_typed(ClientRequest::TurnStart {
                 request_id,
                 params: TurnStartParams {
                     thread_id: thread_id.to_string(),
                     input: items.into_iter().map(Into::into).collect(),
-                    cwd: Some(cwd),
+                    cwd: Some(request_cwd),
                     approval_policy: Some(approval_policy.into()),
                     approvals_reviewer: Some(approvals_reviewer.into()),
                     sandbox_policy: Some(sandbox_policy.into()),
@@ -406,7 +423,9 @@ impl AppServerSession {
                 },
             })
             .await
-            .wrap_err("turn/start failed in app-server TUI")
+            .wrap_err("turn/start failed in app-server TUI")?;
+        self.remember_thread_cwd(thread_id.to_string(), cwd);
+        Ok(response)
     }
 
     pub(crate) async fn turn_interrupt(
@@ -669,14 +688,32 @@ impl AppServerSession {
         Arc::clone(&self.dynamic_tools)
     }
 
-    pub(crate) fn dynamic_tool_execution_context(&self) -> DynamicToolExecutionContext {
-        DynamicToolExecutionContext::new(self.request_handle(), std::env::current_dir().ok())
+    pub(crate) fn dynamic_tool_execution_context(
+        &self,
+        thread_id: &str,
+    ) -> DynamicToolExecutionContext {
+        DynamicToolExecutionContext::new(self.request_handle(), self.thread_cwd(thread_id))
     }
 
     fn next_request_id(&mut self) -> RequestId {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
         RequestId::Integer(request_id)
+    }
+
+    fn remember_thread_cwd(&self, thread_id: String, cwd: PathBuf) {
+        self.thread_cwds
+            .write()
+            .expect("thread cwd map lock should not be poisoned")
+            .insert(thread_id, cwd);
+    }
+
+    fn thread_cwd(&self, thread_id: &str) -> Option<PathBuf> {
+        self.thread_cwds
+            .read()
+            .expect("thread cwd map lock should not be poisoned")
+            .get(thread_id)
+            .cloned()
     }
 }
 
@@ -1265,7 +1302,7 @@ mod tests {
                 }) => {
                     handle_dynamic_tool_call_request(
                         session.dynamic_tool_registry(),
-                        session.dynamic_tool_execution_context(),
+                        session.dynamic_tool_execution_context(&params.thread_id),
                         request_id,
                         params,
                     )
@@ -1412,14 +1449,13 @@ mod tests {
         let registry = Arc::new(DynamicToolRegistry::from_registrations(vec![
             DynamicToolRegistration::new(
                 demo_tool_spec(tool_name),
-                |_context, params| async move {
+                |context, _params| async move {
                     Ok(DynamicToolCallResponse {
                         content_items: vec![DynamicToolCallOutputContentItem::InputText {
-                            text: params
-                                .arguments
-                                .get("city")
-                                .and_then(Value::as_str)
-                                .expect("city argument should be present")
+                            text: context
+                                .cwd()
+                                .expect("thread cwd should be present")
+                                .display()
                                 .to_string(),
                         }],
                         success: true,
@@ -1440,7 +1476,7 @@ mod tests {
             .expect("expected function_call_output payload");
         assert_eq!(
             payload,
-            FunctionCallOutputPayload::from_text("Paris".to_string())
+            FunctionCallOutputPayload::from_text(config.cwd.display().to_string())
         );
         Ok(())
     }
@@ -1476,14 +1512,13 @@ mod tests {
         let registry = Arc::new(DynamicToolRegistry::from_registrations(vec![
             DynamicToolRegistration::new(
                 demo_tool_spec(tool_name),
-                |_context, params| async move {
+                |context, _params| async move {
                     Ok(DynamicToolCallResponse {
                         content_items: vec![DynamicToolCallOutputContentItem::InputText {
-                            text: params
-                                .arguments
-                                .get("city")
-                                .and_then(Value::as_str)
-                                .expect("city argument should be present")
+                            text: context
+                                .cwd()
+                                .expect("thread cwd should be present")
+                                .display()
                                 .to_string(),
                         }],
                         success: true,
@@ -1539,11 +1574,11 @@ mod tests {
             .expect("expected second function_call_output payload");
         assert_eq!(
             first_payload,
-            FunctionCallOutputPayload::from_text("Paris".to_string())
+            FunctionCallOutputPayload::from_text(config.cwd.display().to_string())
         );
         assert_eq!(
             second_payload,
-            FunctionCallOutputPayload::from_text("Paris".to_string())
+            FunctionCallOutputPayload::from_text(resumed_config.cwd.display().to_string())
         );
         Ok(())
     }

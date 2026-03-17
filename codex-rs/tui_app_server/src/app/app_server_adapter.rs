@@ -166,7 +166,8 @@ impl App {
                 }
                 if let ServerRequest::DynamicToolCall { request_id, params } = request {
                     let registry = app_server_client.dynamic_tool_registry();
-                    let context = app_server_client.dynamic_tool_execution_context();
+                    let context =
+                        app_server_client.dynamic_tool_execution_context(&params.thread_id);
                     tokio::spawn(async move {
                         if let Err(err) =
                             handle_dynamic_tool_call_request(registry, context, request_id, params)
@@ -1140,14 +1141,13 @@ mod tests {
                     }),
                     defer_loading: false,
                 },
-                |_context, params| async move {
+                |_context, _params| async move {
                     Ok(DynamicToolCallResponse {
                         content_items: vec![DynamicToolCallOutputContentItem::InputText {
-                            text: params
-                                .arguments
-                                .get("city")
-                                .and_then(Value::as_str)
-                                .expect("city argument should be present")
+                            text: _context
+                                .cwd()
+                                .expect("thread cwd should be present")
+                                .display()
                                 .to_string(),
                         }],
                         success: true,
@@ -1201,7 +1201,7 @@ mod tests {
                 .iter()
                 .find_map(|body| function_call_output_text(body, call_id))
             {
-                assert_eq!(text, "Paris");
+                assert_eq!(text, config.cwd.display().to_string());
                 break;
             }
         }
