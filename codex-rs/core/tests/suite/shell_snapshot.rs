@@ -577,7 +577,7 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
 
     let mut saw_patch_begin = false;
     let mut patch_end = None;
-    wait_for_event(&codex, |ev| match ev {
+    wait_for_event(&codex, |event| match event {
         EventMsg::PatchApplyBegin(begin) if begin.call_id == call_id => {
             saw_patch_begin = true;
             false
@@ -591,15 +591,12 @@ async fn shell_command_snapshot_still_intercepts_apply_patch() -> Result<()> {
     })
     .await;
 
-    assert!(
-        saw_patch_begin,
-        "expected apply_patch to emit PatchApplyBegin"
-    );
-    let patch_end = patch_end.expect("expected apply_patch to emit PatchApplyEnd");
+    assert!(saw_patch_begin, "expected PatchApplyBegin event");
+    let patch_end = patch_end.expect("expected PatchApplyEnd event");
     assert!(
         patch_end.success,
-        "expected apply_patch to finish successfully: stdout={:?} stderr={:?}",
-        patch_end.stdout, patch_end.stderr,
+        "expected apply_patch to finish successfully: status={:?} stdout={:?} stderr={:?}",
+        patch_end.status, patch_end.stdout, patch_end.stderr,
     );
 
     assert_eq!(

@@ -162,6 +162,20 @@ fn js_repl_internal_tool_guard_matches_expected_names() {
     assert!(!is_js_repl_internal_tool("list_mcp_resources"));
 }
 
+#[test]
+fn is_dotslash_script_detects_dotslash_shebang() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let dotslash_path = dir.path().join("codex-node");
+    fs::write(&dotslash_path, "#!/usr/bin/env dotslash\n{}\n")?;
+    assert!(is_dotslash_script(&dotslash_path).map_err(anyhow::Error::msg)?);
+
+    let plain_path = dir.path().join("node");
+    fs::write(&plain_path, "#!/bin/sh\nexit 0\n")?;
+    assert!(!is_dotslash_script(&plain_path).map_err(anyhow::Error::msg)?);
+
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wait_for_exec_tool_calls_map_drains_inflight_calls_without_hanging() {
     let exec_tool_calls = Arc::new(Mutex::new(HashMap::new()));

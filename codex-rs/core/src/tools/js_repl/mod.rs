@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
+use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
@@ -1941,8 +1942,71 @@ pub(crate) async fn resolve_compatible_node(config_path: Option<&Path>) -> Resul
     let node_path = resolve_node(config_path).ok_or_else(|| {
         "Node runtime not found; install Node or set CODEX_JS_REPL_NODE_PATH".to_string()
     })?;
+    let node_path = maybe_fetch_dotslash_node(&node_path).await?;
     ensure_node_version(&node_path).await?;
     Ok(node_path)
+}
+
+async fn maybe_fetch_dotslash_node(node_path: &Path) -> Result<PathBuf, String> {
+    if !is_dotslash_script(node_path)? {
+        return Ok(node_path.to_path_buf());
+    }
+
+    let output = tokio::process::Command::new("dotslash")
+        .arg("--")
+        .arg("fetch")
+        .arg(node_path)
+        .output()
+        .await
+        .map_err(|err| {
+            format!(
+                "failed to run dotslash to fetch Node runtime {}: {err}",
+                node_path.display()
+            )
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        let details = if stderr.is_empty() {
+            String::new()
+        } else {
+            format!(": {stderr}")
+        };
+        return Err(format!(
+            "dotslash fetch failed for Node runtime {}{details}",
+            node_path.display()
+        ));
+    }
+
+    let fetched_path = String::from_utf8(output.stdout)
+        .map_err(|err| format!("dotslash fetch output was not utf8: {err}"))?;
+    let fetched_path = fetched_path.trim();
+    if fetched_path.is_empty() {
+        return Err(format!(
+            "dotslash fetch output was empty for Node runtime {}",
+            node_path.display()
+        ));
+    }
+    let fetched_path = PathBuf::from(fetched_path);
+    if !fetched_path.is_file() {
+        return Err(format!(
+            "dotslash returned non-file Node runtime path: {}",
+            fetched_path.display()
+        ));
+    }
+    Ok(fetched_path)
+}
+
+fn is_dotslash_script(path: &Path) -> Result<bool, String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|err| format!("failed to open Node runtime {}: {err}", path.display()))?;
+    let mut header = [0_u8; 64];
+    let bytes_read = file
+        .read(&mut header)
+        .map_err(|err| format!("failed to read Node runtime {}: {err}", path.display()))?;
+    let header = String::from_utf8_lossy(&header[..bytes_read]);
+    Ok(header.starts_with("#!/usr/bin/env dotslash"))
 }
 
 pub(crate) fn resolve_node(config_path: Option<&Path>) -> Option<PathBuf> {
