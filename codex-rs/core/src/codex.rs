@@ -1607,19 +1607,11 @@ impl Session {
             &config.model_provider,
             auth_manager.codex_api_key_env_enabled(),
         );
-        let conversation_start_base_url = if auth.is_none()
-            && config.model_provider.requires_openai_auth
-            && config.model_provider.base_url.is_none()
-            && !auth_env_telemetry.has_api_key_override()
-        {
-            "https://chatgpt.com/backend-api/codex".to_string()
-        } else {
-            config
-                .model_provider
-                .to_api_provider(auth.map(CodexAuth::auth_mode))
-                .map(|provider| provider.base_url)
-                .unwrap_or_default()
-        };
+        let conversation_start_base_url = config
+            .model_provider
+            .to_api_provider(auth.map(CodexAuth::auth_mode))
+            .map(|provider| provider.base_url)
+            .unwrap_or_default();
         let endpoint_telemetry = resolve_endpoint_config_telemetry_source(
             &config,
             session_configuration.session_source.clone(),

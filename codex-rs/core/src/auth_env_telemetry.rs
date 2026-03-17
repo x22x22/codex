@@ -13,14 +13,6 @@ pub(crate) struct AuthEnvTelemetry {
     pub(crate) refresh_token_url_override_present: bool,
 }
 
-impl AuthEnvTelemetry {
-    pub(crate) fn has_api_key_override(&self) -> bool {
-        self.openai_api_key_env_present
-            || (self.codex_api_key_env_enabled && self.codex_api_key_env_present)
-            || self.provider_env_key_present == Some(true)
-    }
-}
-
 pub(crate) fn collect_auth_env_telemetry(
     provider: &ModelProviderInfo,
     codex_api_key_env_enabled: bool,
