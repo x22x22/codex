@@ -60,8 +60,7 @@ const ACTIVE_RESPONSE_CONFLICT_ERROR_PREFIX: &str =
 enum RealtimeConversationEnd {
     Requested,
     TransportClosed,
-    Error(String),
-    ErrorAlreadySent,
+    Error,
 }
 
 pub(crate) struct RealtimeConversationManager {
@@ -355,12 +354,15 @@ pub(crate) async fn handle_start(
 ) -> CodexResult<()> {
     if let Err(err) = handle_start_inner(sess, &sub_id, params).await {
         error!("failed to start realtime conversation: {err}");
-        end_realtime_conversation(
-            sess,
-            sub_id,
-            RealtimeConversationEnd::Error(err.to_string()),
-        )
+        let message = err.to_string();
+        sess.send_event_raw(Event {
+            id: sub_id.clone(),
+            msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::Error(message),
+            }),
+        })
         .await;
+        end_realtime_conversation(sess, sub_id, RealtimeConversationEnd::Error).await;
     }
     Ok(())
 }
@@ -449,7 +451,7 @@ async fn handle_start_inner(
                 );
             }
             if matches!(event, RealtimeEvent::Error(_)) {
-                end = RealtimeConversationEnd::ErrorAlreadySent;
+                end = RealtimeConversationEnd::Error;
             }
             let maybe_routed_text = match &event {
                 RealtimeEvent::HandoffRequested(handoff) => {
@@ -489,12 +491,15 @@ pub(crate) async fn handle_audio(
     if let Err(err) = sess.conversation.audio_in(params.frame).await {
         error!("failed to append realtime audio: {err}");
         if sess.conversation.running_state().await.is_some() {
-            end_realtime_conversation(
-                sess,
-                sub_id,
-                RealtimeConversationEnd::Error(err.to_string()),
-            )
+            let message = err.to_string();
+            sess.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::Error(message),
+                }),
+            })
             .await;
+            end_realtime_conversation(sess, sub_id, RealtimeConversationEnd::Error).await;
         } else {
             send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest)
                 .await;
@@ -574,12 +579,15 @@ pub(crate) async fn handle_text(
     if let Err(err) = sess.conversation.text_in(params.text).await {
         error!("failed to append realtime text: {err}");
         if sess.conversation.running_state().await.is_some() {
-            end_realtime_conversation(
-                sess,
-                sub_id,
-                RealtimeConversationEnd::Error(err.to_string()),
-            )
+            let message = err.to_string();
+            sess.send_event_raw(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::Error(message),
+                }),
+            })
             .await;
+            end_realtime_conversation(sess, sub_id, RealtimeConversationEnd::Error).await;
         } else {
             send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest)
                 .await;
@@ -895,22 +903,10 @@ async fn end_realtime_conversation(
 ) {
     let _ = sess.conversation.shutdown().await;
 
-    if let RealtimeConversationEnd::Error(message) = &end {
-        sess.send_event_raw(Event {
-            id: sub_id.clone(),
-            msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-                payload: RealtimeEvent::Error(message.clone()),
-            }),
-        })
-        .await;
-    }
-
     let reason = match end {
         RealtimeConversationEnd::Requested => Some("requested".to_string()),
         RealtimeConversationEnd::TransportClosed => Some("transport_closed".to_string()),
-        RealtimeConversationEnd::Error(_) | RealtimeConversationEnd::ErrorAlreadySent => {
-            Some("error".to_string())
-        }
+        RealtimeConversationEnd::Error => Some("error".to_string()),
     };
 
     sess.send_event_raw(Event {
