@@ -60,6 +60,7 @@ codex-windows-sandbox = { package = "codex-windows-sandbox", path = "../windows-
 csv = { workspace = true }
 dirs = { workspace = true }
 dunce = { workspace = true }
+ed25519-dalek = { workspace = true }
 encoding_rs = { workspace = true }
 env-flags = { workspace = true }
 eventsource-stream = { workspace = true }

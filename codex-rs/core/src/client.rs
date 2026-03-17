@@ -111,6 +111,7 @@ use crate::util::emit_feedback_request_tags;
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 pub const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
+pub const X_OPENAI_INTERNAL_CODEX_TASK_ID_HEADER: &str = "X-Openai-Internal-Codex-Task-Id";
 pub const X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER: &str =
     "x-responsesapi-include-timing-metrics";
 const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=2026-02-06";
@@ -142,6 +143,7 @@ struct ModelClientState {
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
     disable_websockets: AtomicBool,
+    agent_task_id: StdMutex<Option<String>>,
     cached_websocket_session: StdMutex<WebsocketSession>,
 }
 
@@ -276,6 +278,7 @@ impl ModelClient {
                 include_timing_metrics,
                 beta_features_header,
                 disable_websockets: AtomicBool::new(false),
+                agent_task_id: StdMutex::new(None),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
         }
@@ -308,6 +311,23 @@ impl ModelClient {
             .cached_websocket_session
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = websocket_session;
+    }
+
+    pub fn set_agent_task_id(&self, task_id: Option<String>) {
+        *self
+            .state
+            .agent_task_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = task_id;
+        self.store_cached_websocket_session(WebsocketSession::default());
+    }
+
+    fn agent_task_id(&self) -> Option<String> {
+        self.state
+            .agent_task_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Compacts the current conversation history using the Compact endpoint.
@@ -609,6 +629,7 @@ impl ModelClient {
             self.state.beta_features_header.as_deref(),
             turn_state,
             turn_metadata_header.as_ref(),
+            self.agent_task_id().as_deref(),
         );
         if let Ok(header_value) = HeaderValue::from_str(&conversation_id) {
             headers.insert("x-client-request-id", header_value);
@@ -733,10 +754,16 @@ impl ModelClientSession {
                 self.client.state.beta_features_header.as_deref(),
                 Some(&self.turn_state),
                 turn_metadata_header.as_ref(),
+                self.client.agent_task_id().as_deref(),
             ),
             compression,
             turn_state: Some(Arc::clone(&self.turn_state)),
         }
+    }
+
+    pub(crate) fn set_agent_task_id(&mut self, task_id: Option<String>) {
+        self.client.set_agent_task_id(task_id);
+        self.websocket_session = WebsocketSession::default();
     }
 
     fn get_incremental_items(
@@ -1337,6 +1364,7 @@ fn build_responses_headers(
     beta_features_header: Option<&str>,
     turn_state: Option<&Arc<OnceLock<String>>>,
     turn_metadata_header: Option<&HeaderValue>,
+    agent_task_id: Option<&str>,
 ) -> ApiHeaderMap {
     let mut headers = ApiHeaderMap::new();
     if let Some(value) = beta_features_header
@@ -1353,6 +1381,12 @@ fn build_responses_headers(
     }
     if let Some(header_value) = turn_metadata_header {
         headers.insert(X_CODEX_TURN_METADATA_HEADER, header_value.clone());
+    }
+    if let Some(agent_task_id) = agent_task_id
+        && let Ok(header_value) = HeaderValue::from_str(agent_task_id)
+    {
+        trace!("attaching agent task id to responses request");
+        headers.insert(X_OPENAI_INTERNAL_CODEX_TASK_ID_HEADER, header_value);
     }
     headers
 }

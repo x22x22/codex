@@ -15,9 +15,11 @@ use codex_protocol::mcp::Tool;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use serde_json::Value;
+use tracing::trace;
 
 use crate::AuthManager;
 use crate::CodexAuth;
+use crate::client::X_OPENAI_INTERNAL_CODEX_TASK_ID_HEADER;
 use crate::config::Config;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
@@ -110,13 +112,23 @@ fn codex_apps_mcp_bearer_token(auth: Option<&CodexAuth>) -> Option<String> {
     }
 }
 
-fn codex_apps_mcp_http_headers(auth: Option<&CodexAuth>) -> Option<HashMap<String, String>> {
+fn codex_apps_mcp_http_headers(
+    auth: Option<&CodexAuth>,
+    agent_task_id: Option<&str>,
+) -> Option<HashMap<String, String>> {
     let mut headers = HashMap::new();
     if let Some(token) = codex_apps_mcp_bearer_token(auth) {
         headers.insert("Authorization".to_string(), format!("Bearer {token}"));
     }
     if let Some(account_id) = auth.and_then(CodexAuth::get_account_id) {
         headers.insert("ChatGPT-Account-ID".to_string(), account_id);
+    }
+    if let Some(agent_task_id) = agent_task_id {
+        trace!("attaching agent task id to codex apps gateway");
+        headers.insert(
+            X_OPENAI_INTERNAL_CODEX_TASK_ID_HEADER.to_string(),
+            agent_task_id.to_string(),
+        );
     }
     if headers.is_empty() {
         None
@@ -151,12 +163,16 @@ pub(crate) fn codex_apps_mcp_url(config: &Config) -> String {
     codex_apps_mcp_url_for_base_url(&config.chatgpt_base_url)
 }
 
-fn codex_apps_mcp_server_config(config: &Config, auth: Option<&CodexAuth>) -> McpServerConfig {
+fn codex_apps_mcp_server_config(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    agent_task_id: Option<&str>,
+) -> McpServerConfig {
     let bearer_token_env_var = codex_apps_mcp_bearer_token_env_var();
     let http_headers = if bearer_token_env_var.is_some() {
         None
     } else {
-        codex_apps_mcp_http_headers(auth)
+        codex_apps_mcp_http_headers(auth, agent_task_id)
     };
     let url = codex_apps_mcp_url(config);
 
@@ -184,11 +200,12 @@ pub(crate) fn with_codex_apps_mcp(
     connectors_enabled: bool,
     auth: Option<&CodexAuth>,
     config: &Config,
+    agent_task_id: Option<&str>,
 ) -> HashMap<String, McpServerConfig> {
     if connectors_enabled {
         servers.insert(
             CODEX_APPS_MCP_SERVER_NAME.to_string(),
-            codex_apps_mcp_server_config(config, auth),
+            codex_apps_mcp_server_config(config, auth, agent_task_id),
         );
     } else {
         servers.remove(CODEX_APPS_MCP_SERVER_NAME);
@@ -214,7 +231,16 @@ impl McpManager {
         config: &Config,
         auth: Option<&CodexAuth>,
     ) -> HashMap<String, McpServerConfig> {
-        effective_mcp_servers(config, auth, self.plugins_manager.as_ref())
+        self.effective_servers_with_agent_task(config, auth, None)
+    }
+
+    pub fn effective_servers_with_agent_task(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+        agent_task_id: Option<&str>,
+    ) -> HashMap<String, McpServerConfig> {
+        effective_mcp_servers(config, auth, self.plugins_manager.as_ref(), agent_task_id)
     }
 
     pub fn tool_plugin_provenance(&self, config: &Config) -> ToolPluginProvenance {
@@ -239,6 +265,7 @@ fn effective_mcp_servers(
     config: &Config,
     auth: Option<&CodexAuth>,
     plugins_manager: &PluginsManager,
+    agent_task_id: Option<&str>,
 ) -> HashMap<String, McpServerConfig> {
     let servers = configured_mcp_servers(config, plugins_manager);
     with_codex_apps_mcp(
@@ -246,6 +273,7 @@ fn effective_mcp_servers(
         config.features.apps_enabled_for_auth(auth),
         auth,
         config,
+        agent_task_id,
     )
 }
 

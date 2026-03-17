@@ -188,6 +188,8 @@ pub enum Feature {
     ResponsesWebsockets,
     /// Enable Responses API websocket v2 mode.
     ResponsesWebsocketsV2,
+    /// Use the agent identity registration + per-thread task flow for ChatGPT auth.
+    UseAgentIdentity,
 }
 
 impl Feature {
@@ -866,6 +868,12 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::ResponsesWebsocketsV2,
         key: "responses_websockets_v2",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::UseAgentIdentity,
+        key: "use_agent_identity",
         stage: Stage::UnderDevelopment,
         default_enabled: false,
     },

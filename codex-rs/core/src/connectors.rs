@@ -186,7 +186,7 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         });
     }
 
-    let mcp_servers = with_codex_apps_mcp(HashMap::new(), true, auth.as_ref(), config);
+    let mcp_servers = with_codex_apps_mcp(HashMap::new(), true, auth.as_ref(), config, None);
     if mcp_servers.is_empty() {
         return Ok(AccessibleConnectorsStatus {
             connectors: Vec::new(),

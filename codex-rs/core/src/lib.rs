@@ -5,6 +5,7 @@
 // the TUI or the tracing stack).
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+mod agent_identity;
 mod analytics_client;
 pub mod api_bridge;
 mod apply_patch;
@@ -76,6 +77,7 @@ pub mod token_data;
 mod truncate;
 mod unified_exec;
 pub mod windows_sandbox;
+pub use client::X_OPENAI_INTERNAL_CODEX_TASK_ID_HEADER;
 pub use client::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;
 pub use model_provider_info::DEFAULT_OLLAMA_PORT;

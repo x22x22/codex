@@ -12,6 +12,7 @@ use crate::SandboxState;
 use crate::agent::AgentControl;
 use crate::agent::AgentStatus;
 use crate::agent::agent_status_from_event;
+use crate::agent_identity::AgentIdentityManager;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::AppInvocation;
 use crate::analytics_client::InvocationType;
@@ -1792,6 +1793,10 @@ impl Session {
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
             ),
+            agent_identity_manager: AgentIdentityManager::new(
+                Arc::clone(&auth_manager),
+                config.codex_home.clone(),
+            ),
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
@@ -2047,6 +2052,72 @@ impl Session {
         state.merge_connector_selection(connector_ids)
     }
 
+    pub(crate) async fn agent_task_id(&self) -> Option<String> {
+        let state = self.state.lock().await;
+        state.agent_task_id()
+    }
+
+    pub(crate) async fn ensure_agent_task(&self, turn_context: &TurnContext) -> Option<String> {
+        if !turn_context
+            .config
+            .features
+            .enabled(Feature::UseAgentIdentity)
+        {
+            let had_task = {
+                let mut state = self.state.lock().await;
+                let had_task = state.agent_task_id().is_some();
+                if had_task {
+                    state.set_agent_task_id(None);
+                }
+                had_task
+            };
+            self.services.model_client.set_agent_task_id(None);
+            if had_task {
+                self.refresh_mcp_servers_for_agent_task(turn_context).await;
+            }
+            return None;
+        }
+
+        if let Some(task_id) = self.agent_task_id().await {
+            self.services
+                .model_client
+                .set_agent_task_id(Some(task_id.clone()));
+            return Some(task_id);
+        }
+
+        let task_id = match self
+            .services
+            .agent_identity_manager
+            .ensure_thread_task(
+                turn_context.config.as_ref(),
+                &self.conversation_id.to_string(),
+            )
+            .await
+        {
+            Ok(task_id) => task_id,
+            Err(err) => {
+                let message =
+                    format!("Agent identity flow failed; continuing without agent task: {err:#}");
+                warn!("{message}");
+                self.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                    .await;
+                return None;
+            }
+        };
+
+        let task_id = task_id?;
+
+        {
+            let mut state = self.state.lock().await;
+            state.set_agent_task_id(Some(task_id.clone()));
+        }
+        self.services
+            .model_client
+            .set_agent_task_id(Some(task_id.clone()));
+        self.refresh_mcp_servers_for_agent_task(turn_context).await;
+        Some(task_id)
+    }
+
     // Returns the connector IDs currently selected for this session.
     pub(crate) async fn get_connector_selection(&self) -> HashSet<String> {
         let state = self.state.lock().await;
@@ -2057,6 +2128,20 @@ impl Session {
     pub(crate) async fn clear_connector_selection(&self) {
         let mut state = self.state.lock().await;
         state.clear_connector_selection();
+    }
+
+    async fn refresh_mcp_servers_for_agent_task(&self, turn_context: &TurnContext) {
+        let config = self.get_config().await;
+        let mcp_servers = self
+            .services
+            .mcp_manager
+            .configured_servers(config.as_ref());
+        self.refresh_mcp_servers_inner(
+            turn_context,
+            mcp_servers,
+            config.mcp_oauth_credentials_store_mode,
+        )
+        .await;
     }
 
     async fn record_initial_history(&self, conversation_history: InitialHistory) {
@@ -4012,6 +4097,7 @@ impl Session {
         store_mode: OAuthCredentialsStoreMode,
     ) {
         let auth = self.services.auth_manager.auth().await;
+        let agent_task_id = self.agent_task_id().await;
         let config = self.get_config().await;
         let tool_plugin_provenance = self
             .services
@@ -4022,6 +4108,7 @@ impl Session {
             self.features.apps_enabled_for_auth(auth.as_ref()),
             auth.as_ref(),
             config.as_ref(),
+            agent_task_id.as_deref(),
         );
         let auth_statuses = compute_auth_statuses(mcp_servers.iter(), store_mode).await;
         let sandbox_state = SandboxState {
@@ -4749,10 +4836,12 @@ mod handlers {
     pub async fn list_mcp_tools(sess: &Session, config: &Arc<Config>, sub_id: String) {
         let mcp_connection_manager = sess.services.mcp_connection_manager.read().await;
         let auth = sess.services.auth_manager.auth().await;
-        let mcp_servers = sess
-            .services
-            .mcp_manager
-            .effective_servers(config, auth.as_ref());
+        let agent_task_id = sess.agent_task_id().await;
+        let mcp_servers = sess.services.mcp_manager.effective_servers_with_agent_task(
+            config,
+            auth.as_ref(),
+            agent_task_id.as_deref(),
+        );
         let snapshot = collect_mcp_snapshot_from_manager(
             &mcp_connection_manager,
             compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode)
@@ -5495,6 +5584,8 @@ pub(crate) async fn run_turn(
     sess.record_context_updates_and_set_reference_context_item(turn_context.as_ref())
         .await;
 
+    sess.ensure_agent_task(turn_context.as_ref()).await;
+
     let loaded_plugins = sess
         .services
         .plugins_manager
@@ -5673,6 +5764,7 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    client_session.set_agent_task_id(sess.agent_task_id().await);
 
     loop {
         if let Some(session_start_source) = sess.take_pending_session_start_source().await {

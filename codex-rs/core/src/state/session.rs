@@ -34,6 +34,7 @@ pub(crate) struct SessionState {
     pub(crate) startup_regular_task: Option<JoinHandle<CodexResult<RegularTask>>>,
     pub(crate) active_connector_selection: HashSet<String>,
     pub(crate) pending_session_start_source: Option<codex_hooks::SessionStartSource>,
+    agent_task_id: Option<String>,
     granted_permissions: Option<PermissionProfile>,
 }
 
@@ -52,6 +53,7 @@ impl SessionState {
             startup_regular_task: None,
             active_connector_selection: HashSet::new(),
             pending_session_start_source: None,
+            agent_task_id: None,
             granted_permissions: None,
         }
     }
@@ -205,6 +207,14 @@ impl SessionState {
         &mut self,
     ) -> Option<codex_hooks::SessionStartSource> {
         self.pending_session_start_source.take()
+    }
+
+    pub(crate) fn agent_task_id(&self) -> Option<String> {
+        self.agent_task_id.clone()
+    }
+
+    pub(crate) fn set_agent_task_id(&mut self, task_id: Option<String>) {
+        self.agent_task_id = task_id;
     }
 
     pub(crate) fn record_granted_permissions(&mut self, permissions: PermissionProfile) {

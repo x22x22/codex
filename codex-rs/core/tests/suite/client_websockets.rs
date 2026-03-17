@@ -6,6 +6,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
 use codex_core::WireApi;
+use codex_core::X_OPENAI_INTERNAL_CODEX_TASK_ID_HEADER;
 use codex_core::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER;
 use codex_core::features::Feature;
 use codex_core::ws_version_from_features;
@@ -93,6 +94,34 @@ async fn responses_websocket_streams_request() {
     assert_eq!(
         handshake.header(X_CLIENT_REQUEST_ID_HEADER),
         Some(harness.conversation_id.to_string())
+    );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_includes_agent_task_header() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness(&server).await;
+    harness
+        .client
+        .set_agent_task_id(Some("task-123".to_string()));
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![message_item("hello")]);
+
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
+
+    let handshake = server.single_handshake();
+    assert_eq!(
+        handshake.header(X_OPENAI_INTERNAL_CODEX_TASK_ID_HEADER),
+        Some("task-123".to_string())
     );
 
     server.shutdown().await;

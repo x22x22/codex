@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::AuthManager;
 use crate::RolloutRecorder;
 use crate::agent::AgentControl;
+use crate::agent_identity::AgentIdentityManager;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
@@ -60,5 +61,6 @@ pub(crate) struct SessionServices {
     pub(crate) state_db: Option<StateDbHandle>,
     /// Session-scoped model client shared across turns.
     pub(crate) model_client: ModelClient,
+    pub(crate) agent_identity_manager: AgentIdentityManager,
     pub(crate) code_mode_service: CodeModeService,
 }

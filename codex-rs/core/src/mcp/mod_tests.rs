@@ -159,7 +159,7 @@ fn codex_apps_server_config_uses_legacy_codex_apps_path() {
     let mut config = crate::config::test_config();
     config.chatgpt_base_url = "https://chatgpt.com".to_string();
 
-    let mut servers = with_codex_apps_mcp(HashMap::new(), false, None, &config);
+    let mut servers = with_codex_apps_mcp(HashMap::new(), false, None, &config, None);
     assert!(!servers.contains_key(CODEX_APPS_MCP_SERVER_NAME));
 
     config
@@ -167,7 +167,7 @@ fn codex_apps_server_config_uses_legacy_codex_apps_path() {
         .enable(Feature::Apps)
         .expect("test config should allow apps");
 
-    servers = with_codex_apps_mcp(servers, true, None, &config);
+    servers = with_codex_apps_mcp(servers, true, None, &config, None);
     let server = servers
         .get(CODEX_APPS_MCP_SERVER_NAME)
         .expect("codex apps should be present when apps is enabled");
@@ -177,6 +177,34 @@ fn codex_apps_server_config_uses_legacy_codex_apps_path() {
     };
 
     assert_eq!(url, "https://chatgpt.com/backend-api/wham/apps");
+}
+
+#[test]
+fn codex_apps_server_config_includes_agent_task_header() {
+    let mut config = crate::config::test_config();
+    config.chatgpt_base_url = "https://chatgpt.com".to_string();
+    config
+        .features
+        .enable(Feature::Apps)
+        .expect("test config should allow apps");
+
+    let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
+    let servers = with_codex_apps_mcp(HashMap::new(), true, Some(&auth), &config, Some("task-123"));
+    let server = servers
+        .get(CODEX_APPS_MCP_SERVER_NAME)
+        .expect("codex apps should be present when apps is enabled");
+
+    match &server.transport {
+        McpServerTransportConfig::StreamableHttp { http_headers, .. } => {
+            assert_eq!(
+                http_headers
+                    .as_ref()
+                    .and_then(|headers| headers.get(X_OPENAI_INTERNAL_CODEX_TASK_ID_HEADER)),
+                Some(&"task-123".to_string())
+            );
+        }
+        other => panic!("expected streamable http transport, got {other:?}"),
+    }
 }
 
 #[tokio::test]

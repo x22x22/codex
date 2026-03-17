@@ -2409,6 +2409,10 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
         ),
+        agent_identity_manager: crate::agent_identity::AgentIdentityManager::new(
+            Arc::clone(&auth_manager),
+            config.codex_home.clone(),
+        ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
         ),
@@ -3198,6 +3202,10 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
             config.features.enabled(Feature::EnableRequestCompression),
             config.features.enabled(Feature::RuntimeMetrics),
             Session::build_model_client_beta_features_header(config.as_ref()),
+        ),
+        agent_identity_manager: crate::agent_identity::AgentIdentityManager::new(
+            Arc::clone(&auth_manager),
+            config.codex_home.clone(),
         ),
         code_mode_service: crate::tools::code_mode::CodeModeService::new(
             config.js_repl_node_path.clone(),
