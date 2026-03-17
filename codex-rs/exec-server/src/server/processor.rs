@@ -466,3 +466,201 @@ fn internal_error(message: String) -> JSONRPCErrorError {
         message,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use tokio::time::timeout;
+
+    use super::ExecServerConnectionProcessor;
+    use crate::protocol::EXEC_METHOD;
+    use crate::protocol::INITIALIZE_METHOD;
+    use crate::protocol::INITIALIZED_METHOD;
+    use crate::protocol::PROTOCOL_VERSION;
+    use codex_app_server_protocol::JSONRPCMessage;
+    use codex_app_server_protocol::JSONRPCNotification;
+    use codex_app_server_protocol::JSONRPCRequest;
+    use codex_app_server_protocol::RequestId;
+
+    fn request(id: i64, method: &str, params: serde_json::Value) -> JSONRPCMessage {
+        JSONRPCMessage::Request(JSONRPCRequest {
+            id: RequestId::Integer(id),
+            method: method.to_string(),
+            params: Some(params),
+            trace: None,
+        })
+    }
+
+    async fn recv_outgoing_json(
+        outgoing_rx: &mut tokio::sync::mpsc::Receiver<JSONRPCMessage>,
+    ) -> serde_json::Value {
+        let recv_result = timeout(Duration::from_secs(1), outgoing_rx.recv()).await;
+        let maybe_message = match recv_result {
+            Ok(maybe_message) => maybe_message,
+            Err(err) => panic!("timed out waiting for processor output: {err}"),
+        };
+        let message = match maybe_message {
+            Some(message) => message,
+            None => panic!("processor output channel closed unexpectedly"),
+        };
+        serde_json::to_value(message)
+            .unwrap_or_else(|err| panic!("failed to serialize processor output: {err}"))
+    }
+
+    #[tokio::test]
+    async fn initialize_response_reports_protocol_version() {
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(1);
+        let mut processor = ExecServerConnectionProcessor::new(outgoing_tx);
+
+        if let Err(err) = processor
+            .handle_message(request(
+                1,
+                INITIALIZE_METHOD,
+                json!({ "clientName": "test" }),
+            ))
+            .await
+        {
+            panic!("initialize should succeed: {err}");
+        }
+
+        let outgoing = recv_outgoing_json(&mut outgoing_rx).await;
+        assert_eq!(
+            outgoing,
+            json!({
+                "id": 1,
+                "result": {
+                    "protocolVersion": PROTOCOL_VERSION
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_methods_require_initialize() {
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(1);
+        let mut processor = ExecServerConnectionProcessor::new(outgoing_tx);
+
+        if let Err(err) = processor
+            .handle_message(request(7, EXEC_METHOD, json!({ "processId": "proc-1" })))
+            .await
+        {
+            panic!("request handling should not fail the connection: {err}");
+        }
+
+        let outgoing = recv_outgoing_json(&mut outgoing_rx).await;
+        assert_eq!(
+            outgoing,
+            json!({
+                "id": 7,
+                "error": {
+                    "code": -32600,
+                    "message": "client must call initialize before using exec methods"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn exec_methods_require_initialized_notification_after_initialize() {
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(2);
+        let mut processor = ExecServerConnectionProcessor::new(outgoing_tx);
+
+        if let Err(err) = processor
+            .handle_message(request(
+                1,
+                INITIALIZE_METHOD,
+                json!({ "clientName": "test" }),
+            ))
+            .await
+        {
+            panic!("initialize should succeed: {err}");
+        }
+        let _ = recv_outgoing_json(&mut outgoing_rx).await;
+
+        if let Err(err) = processor
+            .handle_message(request(2, EXEC_METHOD, json!({ "processId": "proc-1" })))
+            .await
+        {
+            panic!("request handling should not fail the connection: {err}");
+        }
+
+        let outgoing = recv_outgoing_json(&mut outgoing_rx).await;
+        assert_eq!(
+            outgoing,
+            json!({
+                "id": 2,
+                "error": {
+                    "code": -32600,
+                    "message": "client must send initialized before using exec methods"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn initialized_before_initialize_is_a_protocol_error() {
+        let (outgoing_tx, _outgoing_rx) = tokio::sync::mpsc::channel(1);
+        let mut processor = ExecServerConnectionProcessor::new(outgoing_tx);
+
+        let result = processor
+            .handle_message(JSONRPCMessage::Notification(JSONRPCNotification {
+                method: INITIALIZED_METHOD.to_string(),
+                params: Some(json!({})),
+            }))
+            .await;
+
+        match result {
+            Err(err) => {
+                assert_eq!(
+                    err,
+                    "received `initialized` notification before `initialize`"
+                );
+            }
+            Ok(()) => panic!("expected protocol error for early initialized notification"),
+        }
+    }
+
+    #[tokio::test]
+    async fn initialize_may_only_be_sent_once_per_connection() {
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(2);
+        let mut processor = ExecServerConnectionProcessor::new(outgoing_tx);
+
+        if let Err(err) = processor
+            .handle_message(request(
+                1,
+                INITIALIZE_METHOD,
+                json!({ "clientName": "test" }),
+            ))
+            .await
+        {
+            panic!("initialize should succeed: {err}");
+        }
+        let _ = recv_outgoing_json(&mut outgoing_rx).await;
+
+        if let Err(err) = processor
+            .handle_message(request(
+                2,
+                INITIALIZE_METHOD,
+                json!({ "clientName": "test" }),
+            ))
+            .await
+        {
+            panic!("duplicate initialize should not fail the connection: {err}");
+        }
+
+        let outgoing = recv_outgoing_json(&mut outgoing_rx).await;
+        assert_eq!(
+            outgoing,
+            json!({
+                "id": 2,
+                "error": {
+                    "code": -32600,
+                    "message": "initialize may only be sent once per connection"
+                }
+            })
+        );
+    }
+}

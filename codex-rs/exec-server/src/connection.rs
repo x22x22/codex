@@ -260,3 +260,158 @@ where
 fn serialize_jsonrpc_message(message: &JSONRPCMessage) -> Result<String, serde_json::Error> {
     serde_json::to_string(message)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use codex_app_server_protocol::JSONRPCMessage;
+    use codex_app_server_protocol::JSONRPCRequest;
+    use codex_app_server_protocol::JSONRPCResponse;
+    use codex_app_server_protocol::RequestId;
+    use pretty_assertions::assert_eq;
+    use tokio::io::AsyncBufReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::io::BufReader;
+    use tokio::sync::mpsc;
+    use tokio::time::timeout;
+
+    use super::JsonRpcConnection;
+    use super::JsonRpcConnectionEvent;
+    use super::serialize_jsonrpc_message;
+
+    async fn recv_event(
+        incoming_rx: &mut mpsc::Receiver<JsonRpcConnectionEvent>,
+    ) -> JsonRpcConnectionEvent {
+        let recv_result = timeout(Duration::from_secs(1), incoming_rx.recv()).await;
+        let maybe_event = match recv_result {
+            Ok(maybe_event) => maybe_event,
+            Err(err) => panic!("timed out waiting for connection event: {err}"),
+        };
+        match maybe_event {
+            Some(event) => event,
+            None => panic!("connection event stream ended unexpectedly"),
+        }
+    }
+
+    async fn read_jsonrpc_line<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> JSONRPCMessage
+    where
+        R: tokio::io::AsyncRead + Unpin,
+    {
+        let next_line = timeout(Duration::from_secs(1), lines.next_line()).await;
+        let line_result = match next_line {
+            Ok(line_result) => line_result,
+            Err(err) => panic!("timed out waiting for JSON-RPC line: {err}"),
+        };
+        let maybe_line = match line_result {
+            Ok(maybe_line) => maybe_line,
+            Err(err) => panic!("failed to read JSON-RPC line: {err}"),
+        };
+        let line = match maybe_line {
+            Some(line) => line,
+            None => panic!("connection closed before JSON-RPC line arrived"),
+        };
+        match serde_json::from_str::<JSONRPCMessage>(&line) {
+            Ok(message) => message,
+            Err(err) => panic!("failed to parse JSON-RPC line: {err}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stdio_connection_reads_and_writes_jsonrpc_messages() {
+        let (mut writer_to_connection, connection_reader) = tokio::io::duplex(1024);
+        let (connection_writer, reader_from_connection) = tokio::io::duplex(1024);
+        let connection =
+            JsonRpcConnection::from_stdio(connection_reader, connection_writer, "test".to_string());
+        let (outgoing_tx, mut incoming_rx) = connection.into_parts();
+
+        let incoming_message = JSONRPCMessage::Request(JSONRPCRequest {
+            id: RequestId::Integer(7),
+            method: "initialize".to_string(),
+            params: Some(serde_json::json!({ "clientName": "test-client" })),
+            trace: None,
+        });
+        let encoded = match serialize_jsonrpc_message(&incoming_message) {
+            Ok(encoded) => encoded,
+            Err(err) => panic!("failed to serialize incoming message: {err}"),
+        };
+        if let Err(err) = writer_to_connection
+            .write_all(format!("{encoded}\n").as_bytes())
+            .await
+        {
+            panic!("failed to write to connection: {err}");
+        }
+
+        let event = recv_event(&mut incoming_rx).await;
+        match event {
+            JsonRpcConnectionEvent::Message(message) => {
+                assert_eq!(message, incoming_message);
+            }
+            JsonRpcConnectionEvent::Disconnected { reason } => {
+                panic!("unexpected disconnect event: {reason:?}");
+            }
+        }
+
+        let outgoing_message = JSONRPCMessage::Response(JSONRPCResponse {
+            id: RequestId::Integer(7),
+            result: serde_json::json!({ "protocolVersion": "exec-server.v0" }),
+        });
+        if let Err(err) = outgoing_tx.send(outgoing_message.clone()).await {
+            panic!("failed to queue outgoing message: {err}");
+        }
+
+        let mut lines = BufReader::new(reader_from_connection).lines();
+        let message = read_jsonrpc_line(&mut lines).await;
+        assert_eq!(message, outgoing_message);
+    }
+
+    #[tokio::test]
+    async fn stdio_connection_reports_parse_errors() {
+        let (mut writer_to_connection, connection_reader) = tokio::io::duplex(1024);
+        let (connection_writer, _reader_from_connection) = tokio::io::duplex(1024);
+        let connection =
+            JsonRpcConnection::from_stdio(connection_reader, connection_writer, "test".to_string());
+        let (_outgoing_tx, mut incoming_rx) = connection.into_parts();
+
+        if let Err(err) = writer_to_connection.write_all(b"not-json\n").await {
+            panic!("failed to write invalid JSON: {err}");
+        }
+
+        let event = recv_event(&mut incoming_rx).await;
+        match event {
+            JsonRpcConnectionEvent::Disconnected { reason } => {
+                let reason = match reason {
+                    Some(reason) => reason,
+                    None => panic!("expected a parse error reason"),
+                };
+                assert!(
+                    reason.contains("failed to parse JSON-RPC message from test"),
+                    "unexpected disconnect reason: {reason}"
+                );
+            }
+            JsonRpcConnectionEvent::Message(message) => {
+                panic!("unexpected JSON-RPC message: {message:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn stdio_connection_reports_clean_disconnect() {
+        let (writer_to_connection, connection_reader) = tokio::io::duplex(1024);
+        let (connection_writer, _reader_from_connection) = tokio::io::duplex(1024);
+        let connection =
+            JsonRpcConnection::from_stdio(connection_reader, connection_writer, "test".to_string());
+        let (_outgoing_tx, mut incoming_rx) = connection.into_parts();
+        drop(writer_to_connection);
+
+        let event = recv_event(&mut incoming_rx).await;
+        match event {
+            JsonRpcConnectionEvent::Disconnected { reason } => {
+                assert_eq!(reason, None);
+            }
+            JsonRpcConnectionEvent::Message(message) => {
+                panic!("unexpected JSON-RPC message: {message:?}");
+            }
+        }
+    }
+}
