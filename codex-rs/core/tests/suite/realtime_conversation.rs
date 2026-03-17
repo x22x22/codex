@@ -12,7 +12,6 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
-use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::SessionSource;
@@ -480,7 +479,7 @@ async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_start_connect_failure_emits_realtime_error_and_closed() -> Result<()> {
+async fn conversation_start_connect_failure_emits_realtime_error_only() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_websocket_server(vec![]).await;
@@ -505,17 +504,15 @@ async fn conversation_start_connect_failure_emits_realtime_error_and_closed() ->
     .await;
     assert!(!err.is_empty());
 
-    let closed = wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
-        _ => None,
+    let closed = timeout(Duration::from_millis(200), async {
+        wait_for_event_match(&test.codex, |msg| match msg {
+            EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+            _ => None,
+        })
+        .await
     })
     .await;
-    assert_eq!(
-        closed,
-        RealtimeConversationClosedEvent {
-            reason: Some("error".to_string()),
-        }
-    );
+    assert!(closed.is_err(), "connect failure should not emit closed");
 
     server.shutdown().await;
     Ok(())
