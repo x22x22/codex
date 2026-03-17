@@ -93,13 +93,7 @@ impl PendingAppServerRequests {
                 None
             }
             ServerRequest::DynamicToolCall { .. } => None,
-            ServerRequest::ChatgptAuthTokensRefresh { request_id, .. } => {
-                Some(UnsupportedAppServerRequest {
-                    request_id: request_id.clone(),
-                    message: "ChatGPT auth token refresh is not available in app-server TUI yet."
-                        .to_string(),
-                })
-            }
+            ServerRequest::ChatgptAuthTokensRefresh { .. } => None,
             ServerRequest::ApplyPatchApproval { request_id, .. } => {
                 Some(UnsupportedAppServerRequest {
                     request_id: request_id.clone(),

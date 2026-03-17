@@ -16,8 +16,8 @@ use crate::app_event::AppEvent;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
 use crate::app_server_session::status_account_display_from_auth_mode;
-use crate::local_chatgpt_auth::load_local_chatgpt_auth;
 use crate::dynamic_tools::spawn_dynamic_tool_call_task;
+use crate::local_chatgpt_auth::load_local_chatgpt_auth;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -883,6 +883,7 @@ mod tests {
     use codex_app_server_client::AppServerClient;
     use codex_app_server_client::AppServerEvent;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
+    use codex_app_server_protocol::CodexErrorInfo;
     use codex_app_server_protocol::DynamicToolCallOutputContentItem;
     use codex_app_server_protocol::DynamicToolCallResponse;
     use codex_app_server_protocol::DynamicToolSpec;
@@ -890,6 +891,7 @@ mod tests {
     use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
     use codex_app_server_protocol::ServerNotification;
     use codex_app_server_protocol::ServerRequest;
+    use codex_app_server_protocol::Thread;
     use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
@@ -912,8 +914,6 @@ mod tests {
     use codex_protocol::protocol::SessionSource;
     use codex_protocol::protocol::TurnAbortReason;
     use codex_protocol::protocol::TurnAbortedEvent;
-    use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
     use codex_protocol::user_input::UserInput;
     use core_test_support::responses;
     use pretty_assertions::assert_eq;
@@ -921,6 +921,7 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
     use std::collections::VecDeque;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
