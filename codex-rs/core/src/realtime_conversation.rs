@@ -618,9 +618,7 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .join("\n");
     (!active_transcript.is_empty())
         .then_some(active_transcript)
-        .or_else(|| {
-            (!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone())
-        })
+        .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))
 }
 
 fn realtime_api_key(
