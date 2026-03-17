@@ -34,6 +34,7 @@ use std::fs;
 use std::process::Command;
 use std::time::Duration;
 use tokio::sync::oneshot;
+use tokio::time::timeout;
 
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
 const MEMORY_PROMPT_PHRASE: &str =
