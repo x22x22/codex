@@ -144,6 +144,9 @@ fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseO
             encoded_parser_script,
         ])
         .env("CODEX_POWERSHELL_PAYLOAD", &encoded_script)
+        // Match `Command::output()` here so PowerShell does not stay alive waiting on inherited
+        // stdin after the parser script has already finished.
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
