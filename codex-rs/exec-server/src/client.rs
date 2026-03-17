@@ -1001,4 +1001,162 @@ mod tests {
         assert!(!process.has_exited(), "terminate should not imply exit");
         assert_eq!(process.exit_code(), None);
     }
+
+    #[tokio::test]
+    async fn start_process_rejects_mismatched_process_ids_and_cleans_up_state() {
+        let (client_stdin, server_reader) = tokio::io::duplex(4096);
+        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
+
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+
+            let initialize = read_jsonrpc_line(&mut lines).await;
+            let JSONRPCMessage::Request(initialize_request) = initialize else {
+                panic!("expected initialize request");
+            };
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: initialize_request.id,
+                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
+                }),
+            )
+            .await;
+
+            let initialized = read_jsonrpc_line(&mut lines).await;
+            let JSONRPCMessage::Notification(notification) = initialized else {
+                panic!("expected initialized notification");
+            };
+            assert_eq!(notification.method, INITIALIZED_METHOD);
+
+            let exec_request = read_jsonrpc_line(&mut lines).await;
+            let JSONRPCMessage::Request(JSONRPCRequest { id, method, .. }) = exec_request else {
+                panic!("expected exec request");
+            };
+            assert_eq!(method, EXEC_METHOD);
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id,
+                    result: serde_json::json!({ "processId": "other-proc" }),
+                }),
+            )
+            .await;
+        });
+
+        let client = match ExecServerClient::connect_stdio(
+            client_stdin,
+            client_stdout,
+            test_options(),
+        )
+        .await
+        {
+            Ok(client) => client,
+            Err(err) => panic!("failed to connect test client: {err}"),
+        };
+
+        let result = client
+            .start_process(ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
+                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
+                env: HashMap::new(),
+                tty: true,
+                arg0: None,
+            })
+            .await;
+
+        match result {
+            Err(ExecServerError::Protocol(message)) => {
+                assert_eq!(
+                    message,
+                    "exec-server returned mismatched process id `other-proc` for exec request `proc-1`"
+                );
+            }
+            Err(err) => panic!("unexpected start_process failure: {err}"),
+            Ok(_) => panic!("expected protocol failure"),
+        }
+
+        assert!(
+            client.inner.processes.lock().await.is_empty(),
+            "mismatched responses should not leave registered process state behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn transport_shutdown_marks_processes_exited_without_exit_codes() {
+        let (client_stdin, server_reader) = tokio::io::duplex(4096);
+        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
+
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(server_reader).lines();
+
+            let initialize = read_jsonrpc_line(&mut lines).await;
+            let JSONRPCMessage::Request(initialize_request) = initialize else {
+                panic!("expected initialize request");
+            };
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id: initialize_request.id,
+                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
+                }),
+            )
+            .await;
+
+            let initialized = read_jsonrpc_line(&mut lines).await;
+            let JSONRPCMessage::Notification(notification) = initialized else {
+                panic!("expected initialized notification");
+            };
+            assert_eq!(notification.method, INITIALIZED_METHOD);
+
+            let exec_request = read_jsonrpc_line(&mut lines).await;
+            let JSONRPCMessage::Request(JSONRPCRequest { id, method, .. }) = exec_request else {
+                panic!("expected exec request");
+            };
+            assert_eq!(method, EXEC_METHOD);
+            write_jsonrpc_line(
+                &mut server_writer,
+                JSONRPCMessage::Response(JSONRPCResponse {
+                    id,
+                    result: serde_json::json!({ "processId": "proc-1" }),
+                }),
+            )
+            .await;
+            drop(server_writer);
+        });
+
+        let client = match ExecServerClient::connect_stdio(
+            client_stdin,
+            client_stdout,
+            test_options(),
+        )
+        .await
+        {
+            Ok(client) => client,
+            Err(err) => panic!("failed to connect test client: {err}"),
+        };
+
+        let process = match client
+            .start_process(ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
+                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
+                env: HashMap::new(),
+                tty: true,
+                arg0: None,
+            })
+            .await
+        {
+            Ok(process) => process,
+            Err(err) => panic!("failed to start process: {err}"),
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            process.has_exited(),
+            "transport shutdown should mark processes exited"
+        );
+        assert_eq!(process.exit_code(), None);
+    }
 }
