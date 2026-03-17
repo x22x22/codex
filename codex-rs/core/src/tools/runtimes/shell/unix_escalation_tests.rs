@@ -8,6 +8,7 @@ use super::evaluate_intercepted_exec_policy;
 use super::extract_shell_script;
 use super::join_program_and_argv;
 use super::map_exec_result;
+use super::parse_direct_shell_command;
 #[cfg(target_os = "macos")]
 use crate::config::Constrained;
 #[cfg(target_os = "macos")]
@@ -235,6 +236,21 @@ fn extract_shell_script_supports_wrapped_command_prefixes() {
             script: "pwd".to_string(),
             login: false,
         }
+    );
+}
+
+#[test]
+fn parse_direct_shell_command_supports_snapshot_wrapped_command() {
+    let script = "\
+if . '/Users/celia/.codex/shell_snapshots/session.sh' >/dev/null 2>&1; then :; fi
+
+/Users/celia/code/codex/.codex/skills/proxy-a/scripts/fetch_example.sh";
+
+    assert_eq!(
+        parse_direct_shell_command(script),
+        Some(vec![
+            "/Users/celia/code/codex/.codex/skills/proxy-a/scripts/fetch_example.sh".to_string(),
+        ]),
     );
 }
 

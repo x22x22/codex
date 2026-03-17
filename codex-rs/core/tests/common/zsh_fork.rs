@@ -23,6 +23,7 @@ impl ZshForkRuntime {
         config: &mut Config,
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
+        allow_login_shell: bool,
     ) {
         config
             .features
@@ -34,7 +35,7 @@ impl ZshForkRuntime {
             .expect("test config should allow feature update");
         config.zsh_path = Some(self.zsh_path.clone());
         config.main_execve_wrapper_exe = Some(self.main_execve_wrapper_exe.clone());
-        config.permissions.allow_login_shell = false;
+        config.permissions.allow_login_shell = allow_login_shell;
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy);
     }
@@ -86,7 +87,31 @@ where
     let mut builder = test_codex()
         .with_pre_build_hook(pre_build_hook)
         .with_config(move |config| {
-            runtime.apply_to_config(config, approval_policy, sandbox_policy);
+            runtime.apply_to_config(
+                config,
+                approval_policy,
+                sandbox_policy,
+                /*allow_login_shell*/ false,
+            );
+        });
+    builder.build(server).await
+}
+
+pub async fn build_zsh_fork_test_with_login_shell<F>(
+    server: &wiremock::MockServer,
+    runtime: ZshForkRuntime,
+    approval_policy: AskForApproval,
+    sandbox_policy: SandboxPolicy,
+    allow_login_shell: bool,
+    pre_build_hook: F,
+) -> Result<TestCodex>
+where
+    F: FnOnce(&Path) + Send + 'static,
+{
+    let mut builder = test_codex()
+        .with_pre_build_hook(pre_build_hook)
+        .with_config(move |config| {
+            runtime.apply_to_config(config, approval_policy, sandbox_policy, allow_login_shell);
         });
     builder.build(server).await
 }

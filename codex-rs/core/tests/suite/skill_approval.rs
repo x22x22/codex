@@ -21,6 +21,7 @@ use core_test_support::test_codex::TestCodex;
 use core_test_support::wait_for_event;
 use core_test_support::wait_for_event_match;
 use core_test_support::zsh_fork::build_zsh_fork_test;
+use core_test_support::zsh_fork::build_zsh_fork_test_with_login_shell;
 use core_test_support::zsh_fork::restrictive_workspace_write_policy;
 use core_test_support::zsh_fork::zsh_fork_runtime;
 use pretty_assertions::assert_eq;
@@ -118,6 +119,50 @@ description: {name} skill
     permissions.set_mode(0o755);
     fs::set_permissions(&script_path, permissions)?;
     Ok(script_path)
+}
+
+#[cfg(unix)]
+fn write_project_skill_with_shell_script_contents(
+    workspace_root: &Path,
+    name: &str,
+    script_name: &str,
+    script_contents: &str,
+) -> Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let skill_dir = workspace_root.join(".codex").join("skills").join(name);
+    let scripts_dir = skill_dir.join("scripts");
+    let metadata_dir = skill_dir.join("agents");
+    fs::create_dir_all(&scripts_dir)?;
+    fs::create_dir_all(&metadata_dir)?;
+    fs::write(
+        skill_dir.join("SKILL.md"),
+        format!(
+            r#"---
+name: {name}
+description: {name} skill
+---
+"#
+        ),
+    )?;
+
+    let script_path = scripts_dir.join(script_name);
+    fs::write(&script_path, script_contents)?;
+    let mut permissions = fs::metadata(&script_path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&script_path, permissions)?;
+    Ok(script_path)
+}
+
+fn write_project_skill_metadata(workspace_root: &Path, name: &str, contents: &str) -> Result<()> {
+    let metadata_dir = workspace_root
+        .join(".codex")
+        .join("skills")
+        .join(name)
+        .join("agents");
+    fs::create_dir_all(&metadata_dir)?;
+    fs::write(metadata_dir.join("openai.yaml"), contents)?;
+    Ok(())
 }
 
 fn skill_script_command(test: &TestCodex, script_name: &str) -> Result<(String, String)> {
@@ -664,6 +709,310 @@ async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Res
     assert!(
         !outside_path.exists(),
         "cached session approval should not widen a permissionless skill to full access"
+    );
+
+    Ok(())
+}
+
+/// Permissionless skills should inherit the turn sandbox even when the turn is
+/// read-only, rather than running under a distinct skill-specific sandbox.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox_when_read_only()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork read-only inherited turn sandbox test")? else {
+        return Ok(());
+    };
+
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
+    });
+    let read_only_policy = SandboxPolicy::new_read_only_policy();
+    let server = start_mock_server().await;
+    let tool_call_id = "zsh-fork-read-only-skill";
+    let test = build_zsh_fork_test(
+        &server,
+        runtime,
+        approval_policy,
+        read_only_policy.clone(),
+        move |home| {
+            write_skill_with_shell_script_contents(
+                home,
+                "mbolin-test-skill",
+                "read-only.sh",
+                "#!/bin/sh\nprintf 'read-only-ok\\n'\n",
+            )
+            .unwrap();
+        },
+    )
+    .await?;
+
+    let (_, command) = skill_script_command(&test, "read-only.sh")?;
+    let arguments = shell_command_arguments(&command)?;
+    let mocks =
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
+            .await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        approval_policy,
+        read_only_policy,
+    )
+    .await?;
+
+    let approval = wait_for_exec_approval_request(&test).await;
+    assert!(
+        approval.is_none(),
+        "expected permissionless skill script to skip exec approval and inherit the turn sandbox"
+    );
+
+    wait_for_turn_complete(&test).await;
+
+    let output = mocks
+        .completion
+        .single_request()
+        .function_call_output(tool_call_id)["output"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        output.contains("read-only-ok"),
+        "expected permissionless skill script to execute while inheriting the read-only turn sandbox, got output: {output:?}"
+    );
+
+    Ok(())
+}
+
+/// Skills with declared permissions should still reach the approval prompt
+/// under a restricted read-only turn sandbox before their script executes.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_skill_with_permissions_prompts_under_read_only_sandbox() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork read-only skill permissions prompt test")?
+    else {
+        return Ok(());
+    };
+
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
+    });
+    let read_only_policy = SandboxPolicy::new_read_only_policy();
+    let server = start_mock_server().await;
+    let tool_call_id = "zsh-fork-read-only-skill-permissions";
+    let test = build_zsh_fork_test(
+        &server,
+        runtime,
+        approval_policy,
+        read_only_policy.clone(),
+        move |home| {
+            write_skill_with_shell_script_contents(
+                home,
+                "mbolin-test-skill",
+                "read-only.sh",
+                "#!/usr/bin/env bash\nprintf 'proxy-style-ok\\n'\n",
+            )
+            .unwrap();
+            write_skill_metadata(
+                home,
+                "mbolin-test-skill",
+                r#"
+permissions:
+  network:
+    enabled: true
+    allowed_domains:
+      - "www.example.com"
+"#,
+            )
+            .unwrap();
+        },
+    )
+    .await?;
+
+    let (script_path_str, command) = skill_script_command(&test, "read-only.sh")?;
+    let arguments = shell_command_arguments(&command)?;
+    let _mocks =
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
+            .await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        approval_policy,
+        read_only_policy,
+    )
+    .await?;
+
+    let approval = wait_for_exec_approval_request(&test)
+        .await
+        .expect("expected skill approval prompt before script execution");
+    assert_eq!(approval.call_id, tool_call_id);
+    assert_eq!(approval.command, vec![script_path_str]);
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_relative_skill_path_with_permissions_prompts_under_read_only_sandbox()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) =
+        zsh_fork_runtime("zsh-fork read-only relative skill permissions prompt test")?
+    else {
+        return Ok(());
+    };
+
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
+    });
+    let read_only_policy = SandboxPolicy::new_read_only_policy();
+    let server = start_mock_server().await;
+    let tool_call_id = "zsh-fork-read-only-relative-skill-permissions";
+    let test = build_zsh_fork_test(
+        &server,
+        runtime,
+        approval_policy,
+        read_only_policy.clone(),
+        |_home| {},
+    )
+    .await?;
+
+    let script_path = write_project_skill_with_shell_script_contents(
+        test.cwd_path(),
+        "mbolin-test-skill",
+        "read-only.sh",
+        "#!/usr/bin/env bash\nprintf 'proxy-style-ok\\n'\n",
+    )?;
+    write_project_skill_metadata(
+        test.cwd_path(),
+        "mbolin-test-skill",
+        r#"
+permissions:
+  network:
+    enabled: true
+    allowed_domains:
+      - "www.example.com"
+"#,
+    )?;
+
+    let command = shlex::try_join(["./.codex/skills/mbolin-test-skill/scripts/read-only.sh"])?;
+    let arguments = shell_command_arguments(&command)?;
+    let _mocks =
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
+            .await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        approval_policy,
+        read_only_policy,
+    )
+    .await?;
+
+    let approval = wait_for_exec_approval_request(&test)
+        .await
+        .expect("expected skill approval prompt before relative script execution");
+    assert_eq!(approval.call_id, tool_call_id);
+    assert_eq!(
+        approval.command,
+        vec![
+            fs::canonicalize(script_path)?
+                .to_string_lossy()
+                .into_owned()
+        ]
+    );
+
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shell_zsh_fork_skill_without_permissions_executes_under_read_only_login_shell()
+-> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let Some(runtime) = zsh_fork_runtime("zsh-fork read-only login shell test")? else {
+        return Ok(());
+    };
+
+    let approval_policy = AskForApproval::Granular(GranularApprovalConfig {
+        sandbox_approval: false,
+        rules: true,
+        skill_approval: true,
+        request_permissions: true,
+        mcp_elicitations: true,
+    });
+    let read_only_policy = SandboxPolicy::new_read_only_policy();
+    let server = start_mock_server().await;
+    let tool_call_id = "zsh-fork-read-only-login-shell";
+    let test = build_zsh_fork_test_with_login_shell(
+        &server,
+        runtime,
+        approval_policy,
+        read_only_policy.clone(),
+        true,
+        move |home| {
+            write_skill_with_shell_script_contents(
+                home,
+                "mbolin-test-skill",
+                "read-only-login.sh",
+                "#!/usr/bin/env bash\nprintf 'login-shell-ok\\n'\n",
+            )
+            .unwrap();
+        },
+    )
+    .await?;
+
+    let (_, command) = skill_script_command(&test, "read-only-login.sh")?;
+    let arguments = shell_command_arguments(&command)?;
+    let mocks =
+        mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
+            .await;
+
+    submit_turn_with_policies(
+        &test,
+        "use $mbolin-test-skill",
+        approval_policy,
+        read_only_policy,
+    )
+    .await?;
+
+    let approval = wait_for_exec_approval_request(&test).await;
+    assert!(
+        approval.is_none(),
+        "expected permissionless skill script to skip exec approval in read-only login shell"
+    );
+
+    wait_for_turn_complete(&test).await;
+
+    let output = mocks
+        .completion
+        .single_request()
+        .function_call_output(tool_call_id)["output"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        output.contains("login-shell-ok"),
+        "expected permissionless skill script to execute under read-only login-shell zsh-fork, got output: {output:?}"
     );
 
     Ok(())
