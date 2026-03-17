@@ -17,6 +17,7 @@ use crate::app_server_session::AppServerSession;
 use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
 use crate::app_server_session::status_account_display_from_auth_mode;
 use crate::local_chatgpt_auth::load_local_chatgpt_auth;
+use crate::dynamic_tools::handle_dynamic_tool_call_request;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -161,6 +162,19 @@ impl App {
                         params,
                     )
                     .await;
+                    return;
+                }
+                if let ServerRequest::DynamicToolCall { request_id, params } = request {
+                    let registry = app_server_client.dynamic_tool_registry();
+                    let context = app_server_client.dynamic_tool_execution_context();
+                    tokio::spawn(async move {
+                        if let Err(err) =
+                            handle_dynamic_tool_call_request(registry, context, request_id, params)
+                                .await
+                        {
+                            tracing::warn!("{err}");
+                        }
+                    });
                     return;
                 }
                 if let Some(unsupported) = self
@@ -858,21 +872,43 @@ fn app_server_codex_error_info_to_core(
 
 #[cfg(test)]
 mod tests {
+    use super::App;
     use super::server_notification_thread_events;
     use super::thread_snapshot_events;
     use super::turn_snapshot_events;
+    use crate::app::AgentNavigationState;
+    use crate::app::PendingAppServerRequests;
+    use crate::app::WindowsSandboxState;
+    use crate::app_backtrack::BacktrackState;
+    use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+    use crate::dynamic_tools::DynamicToolRegistration;
+    use crate::dynamic_tools::DynamicToolRegistry;
+    use crate::file_search::FileSearchManager;
+    use app_test_support::create_final_assistant_message_sse_response;
+    use app_test_support::create_mock_responses_server_sequence_unchecked;
+    use codex_app_server_client::AppServerClient;
+    use codex_app_server_client::AppServerEvent;
     use codex_app_server_protocol::AgentMessageDeltaNotification;
-    use codex_app_server_protocol::CodexErrorInfo;
+    use codex_app_server_protocol::DynamicToolCallOutputContentItem;
+    use codex_app_server_protocol::DynamicToolCallResponse;
+    use codex_app_server_protocol::DynamicToolSpec;
     use codex_app_server_protocol::ItemCompletedNotification;
     use codex_app_server_protocol::ReasoningSummaryTextDeltaNotification;
     use codex_app_server_protocol::ServerNotification;
-    use codex_app_server_protocol::Thread;
+    use codex_app_server_protocol::ServerRequest;
     use codex_app_server_protocol::ThreadItem;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnError;
     use codex_app_server_protocol::TurnStatus;
+    use codex_arg0::Arg0DispatchPaths;
+    use codex_core::config::Config;
+    use codex_core::config::ConfigBuilder;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config_loader::CloudRequirementsLoader;
+    use codex_core::config_loader::LoaderOverrides;
+    use codex_otel::SessionTelemetry;
     use codex_protocol::ThreadId;
     use codex_protocol::items::AgentMessageContent;
     use codex_protocol::items::AgentMessageItem;
@@ -884,6 +920,294 @@ mod tests {
     use codex_protocol::protocol::TurnAbortedEvent;
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
+    use codex_protocol::user_input::UserInput;
+    use core_test_support::responses;
+    use pretty_assertions::assert_eq;
+    use serde_json::Value;
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::collections::VecDeque;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use tokio::time::timeout;
+    use wiremock::MockServer;
+
+    use crate::app::FeedbackAudience;
+
+    async fn make_test_app() -> App {
+        let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender().await;
+        let config = chat_widget.config_ref().clone();
+        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+        let model = codex_core::test_support::get_model_offline(config.model.as_deref());
+        let model_info =
+            codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
+        let session_telemetry = SessionTelemetry::new(
+            ThreadId::new(),
+            model.as_str(),
+            model_info.slug.as_str(),
+            None,
+            None,
+            None,
+            codex_core::default_client::originator().value,
+            config.otel.log_user_prompt,
+            codex_core::terminal::user_agent(),
+            SessionSource::Cli,
+        );
+
+        App {
+            model_catalog: chat_widget.model_catalog(),
+            session_telemetry,
+            app_event_tx,
+            chat_widget,
+            config,
+            active_profile: None,
+            cli_kv_overrides: Vec::new(),
+            harness_overrides: ConfigOverrides::default(),
+            runtime_approval_policy_override: None,
+            runtime_sandbox_policy_override: None,
+            file_search,
+            transcript_cells: Vec::new(),
+            overlay: None,
+            deferred_history_lines: Vec::new(),
+            has_emitted_history_lines: false,
+            enhanced_keys_supported: false,
+            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            status_line_invalid_items_warned: Arc::new(AtomicBool::new(false)),
+            backtrack: BacktrackState::default(),
+            backtrack_render_pending: false,
+            feedback: codex_feedback::CodexFeedback::new(),
+            feedback_audience: FeedbackAudience::External,
+            remote_app_server_url: None,
+            pending_update_action: None,
+            suppress_shutdown_complete: false,
+            pending_shutdown_exit_thread_id: None,
+            windows_sandbox: WindowsSandboxState::default(),
+            thread_event_channels: HashMap::new(),
+            thread_event_listener_tasks: HashMap::new(),
+            agent_navigation: AgentNavigationState::default(),
+            active_thread_id: None,
+            active_thread_rx: None,
+            primary_thread_id: None,
+            primary_session_configured: None,
+            pending_primary_events: VecDeque::new(),
+            pending_app_server_requests: PendingAppServerRequests::default(),
+        }
+    }
+
+    fn mock_provider_cli_overrides(server_uri: &str) -> Vec<(String, toml::Value)> {
+        vec![
+            (
+                "model".to_string(),
+                toml::Value::String("mock-model".to_string()),
+            ),
+            (
+                "model_provider".to_string(),
+                toml::Value::String("mock_provider".to_string()),
+            ),
+            (
+                "approval_policy".to_string(),
+                toml::Value::String("never".to_string()),
+            ),
+            (
+                "sandbox_mode".to_string(),
+                toml::Value::String("read-only".to_string()),
+            ),
+            (
+                "model_providers.mock_provider.name".to_string(),
+                toml::Value::String("Mock provider for test".to_string()),
+            ),
+            (
+                "model_providers.mock_provider.base_url".to_string(),
+                toml::Value::String(format!("{server_uri}/v1")),
+            ),
+            (
+                "model_providers.mock_provider.wire_api".to_string(),
+                toml::Value::String("responses".to_string()),
+            ),
+            (
+                "model_providers.mock_provider.request_max_retries".to_string(),
+                toml::Value::Integer(0),
+            ),
+            (
+                "model_providers.mock_provider.stream_max_retries".to_string(),
+                toml::Value::Integer(0),
+            ),
+        ]
+    }
+
+    async fn build_dynamic_tool_test_session(
+        temp_dir: &TempDir,
+        cli_overrides: Vec<(String, toml::Value)>,
+        dynamic_tools: Arc<DynamicToolRegistry>,
+    ) -> color_eyre::Result<(crate::app_server_session::AppServerSession, Config)> {
+        let config = ConfigBuilder::default()
+            .codex_home(temp_dir.path().to_path_buf())
+            .cli_overrides(cli_overrides.clone())
+            .build()
+            .await?;
+        let client = crate::start_embedded_app_server(
+            Arg0DispatchPaths::default(),
+            config.clone(),
+            cli_overrides,
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+            codex_feedback::CodexFeedback::new(),
+        )
+        .await?;
+        Ok((
+            crate::app_server_session::AppServerSession::new_with_dynamic_tools(
+                AppServerClient::InProcess(client),
+                dynamic_tools,
+            ),
+            config,
+        ))
+    }
+
+    async fn responses_bodies(server: &MockServer) -> color_eyre::Result<Vec<Value>> {
+        let mut bodies = Vec::new();
+        for request in server
+            .received_requests()
+            .await
+            .expect("requests should be readable")
+        {
+            if request.url.path().ends_with("/responses") {
+                bodies.push(
+                    request
+                        .body_json::<Value>()
+                        .expect("request body should be json"),
+                );
+            }
+        }
+        Ok(bodies)
+    }
+
+    fn function_call_output_text(body: &Value, call_id: &str) -> Option<String> {
+        body.get("input")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                        && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+                })
+            })
+            .and_then(|item| item.get("output"))
+            .and_then(|output| {
+                serde_json::from_value::<codex_protocol::models::FunctionCallOutputPayload>(
+                    output.clone(),
+                )
+                .ok()
+            })
+            .and_then(|payload| match payload.body {
+                codex_protocol::models::FunctionCallOutputBody::Text(text) => Some(text),
+                codex_protocol::models::FunctionCallOutputBody::ContentItems(_) => None,
+            })
+    }
+
+    #[tokio::test]
+    async fn handle_app_server_event_resolves_dynamic_tool_calls_via_request_handle()
+    -> color_eyre::Result<()> {
+        let call_id = "dyn-call-1";
+        let tool_name = "demo_tool";
+        let tool_args = json!({ "city": "Paris" });
+        let tool_call_arguments = serde_json::to_string(&tool_args)?;
+        let responses = vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+                responses::ev_completed("resp-1"),
+            ]),
+            create_final_assistant_message_sse_response("Done")
+                .map_err(|err| color_eyre::eyre::eyre!(err))?,
+        ];
+        let server = create_mock_responses_server_sequence_unchecked(responses).await;
+        let temp_dir = TempDir::new()?;
+        let cli_overrides = mock_provider_cli_overrides(&server.uri());
+
+        let registry = Arc::new(DynamicToolRegistry::from_registrations(vec![
+            DynamicToolRegistration::new(
+                DynamicToolSpec {
+                    name: tool_name.to_string(),
+                    description: "dynamic tool".to_string(),
+                    input_schema: json!({
+                        "type": "object",
+                        "properties": {
+                            "city": { "type": "string" }
+                        },
+                        "required": ["city"],
+                        "additionalProperties": false,
+                    }),
+                    defer_loading: false,
+                },
+                |_context, params| async move {
+                    Ok(DynamicToolCallResponse {
+                        content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                            text: params
+                                .arguments
+                                .get("city")
+                                .and_then(Value::as_str)
+                                .expect("city argument should be present")
+                                .to_string(),
+                        }],
+                        success: true,
+                    })
+                },
+            ),
+        ]));
+        let (mut session, config) =
+            build_dynamic_tool_test_session(&temp_dir, cli_overrides, registry).await?;
+        let started = session.start_thread(&config).await?;
+        session
+            .turn_start(
+                started.session_configured.session_id,
+                vec![UserInput::Text {
+                    text: "Run the tool".to_string(),
+                    text_elements: Vec::new(),
+                }],
+                config.cwd.clone(),
+                config.permissions.approval_policy.value(),
+                config.approvals_reviewer,
+                config.permissions.sandbox_policy.get().clone(),
+                config
+                    .model
+                    .clone()
+                    .expect("mock model should be configured"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await?;
+
+        let mut app = make_test_app().await;
+        let mut saw_dynamic_tool_request = false;
+        loop {
+            let event = timeout(Duration::from_secs(10), session.next_event())
+                .await?
+                .expect("app-server event stream should stay open");
+            if matches!(
+                &event,
+                AppServerEvent::ServerRequest(ServerRequest::DynamicToolCall { .. })
+            ) {
+                saw_dynamic_tool_request = true;
+            }
+            app.handle_app_server_event(&session, event).await;
+
+            if let Some(text) = responses_bodies(&server)
+                .await?
+                .iter()
+                .find_map(|body| function_call_output_text(body, call_id))
+            {
+                assert_eq!(text, "Paris");
+                break;
+            }
+        }
+        assert!(saw_dynamic_tool_request);
+        Ok(())
+    }
 
     #[test]
     fn bridges_completed_agent_messages_from_server_notifications() {

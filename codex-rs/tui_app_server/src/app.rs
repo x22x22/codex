@@ -4680,6 +4680,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
     use tempfile::tempdir;
     use tokio::time;
 

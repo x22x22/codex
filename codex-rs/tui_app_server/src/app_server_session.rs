@@ -4,6 +4,7 @@ use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::DynamicToolSpec;
 use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
@@ -75,8 +76,11 @@ use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::bottom_pane::FeedbackAudience;
+use crate::dynamic_tools::DynamicToolExecutionContext;
+use crate::dynamic_tools::DynamicToolRegistry;
 use crate::status::StatusAccountDisplay;
 
 pub(crate) struct AppServerBootstrap {
@@ -94,6 +98,7 @@ pub(crate) struct AppServerBootstrap {
 
 pub(crate) struct AppServerSession {
     client: AppServerClient,
+    dynamic_tools: Arc<DynamicToolRegistry>,
     next_request_id: i64,
 }
 
@@ -128,8 +133,16 @@ pub(crate) struct AppServerStartedThread {
 
 impl AppServerSession {
     pub(crate) fn new(client: AppServerClient) -> Self {
+        Self::new_with_dynamic_tools(client, Arc::new(DynamicToolRegistry::tui_owned()))
+    }
+
+    pub(crate) fn new_with_dynamic_tools(
+        client: AppServerClient,
+        dynamic_tools: Arc<DynamicToolRegistry>,
+    ) -> Self {
         Self {
             client,
+            dynamic_tools,
             next_request_id: 1,
         }
     }
@@ -262,7 +275,11 @@ impl AppServerSession {
             .client
             .request_typed(ClientRequest::ThreadStart {
                 request_id,
-                params: thread_start_params_from_config(config, self.thread_params_mode()),
+                params: thread_start_params_from_config(
+                    config,
+                    self.thread_params_mode(),
+                    self.dynamic_tools.specs(),
+                ),
             })
             .await
             .wrap_err("thread/start failed during TUI bootstrap")?;
@@ -648,6 +665,14 @@ impl AppServerSession {
         self.client.request_handle()
     }
 
+    pub(crate) fn dynamic_tool_registry(&self) -> Arc<DynamicToolRegistry> {
+        Arc::clone(&self.dynamic_tools)
+    }
+
+    pub(crate) fn dynamic_tool_execution_context(&self) -> DynamicToolExecutionContext {
+        DynamicToolExecutionContext::new(self.request_handle(), std::env::current_dir().ok())
+    }
+
     fn next_request_id(&mut self) -> RequestId {
         let request_id = self.next_request_id;
         self.next_request_id += 1;
@@ -773,6 +798,7 @@ fn sandbox_mode_from_policy(
 fn thread_start_params_from_config(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
+    dynamic_tools: Option<Vec<DynamicToolSpec>>,
 ) -> ThreadStartParams {
     ThreadStartParams {
         model: config.model.clone(),
@@ -782,6 +808,7 @@ fn thread_start_params_from_config(
         approvals_reviewer: approvals_reviewer_override_from_config(config),
         sandbox: sandbox_mode_from_policy(config.permissions.sandbox_policy.get().clone()),
         config: config_request_overrides_from_config(config),
+        dynamic_tools,
         ephemeral: Some(config.ephemeral),
         persist_extended_history: true,
         ..ThreadStartParams::default()
@@ -1038,39 +1065,259 @@ fn app_server_credits_snapshot_to_core(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use app_test_support::create_final_assistant_message_sse_response;
+    use app_test_support::create_mock_responses_server_sequence_unchecked;
+    use codex_app_server_client::AppServerClient;
+    use codex_app_server_client::AppServerEvent;
+    use codex_app_server_protocol::ClientRequest;
+    use codex_app_server_protocol::DynamicToolCallOutputContentItem;
+    use codex_app_server_protocol::DynamicToolCallParams;
+    use codex_app_server_protocol::DynamicToolCallResponse;
+    use codex_app_server_protocol::DynamicToolSpec;
+    use codex_app_server_protocol::ServerNotification;
+    use codex_app_server_protocol::ServerRequest;
+    use codex_app_server_protocol::ThreadResumeResponse;
     use codex_app_server_protocol::ThreadStatus;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnStatus;
+    use codex_arg0::Arg0DispatchPaths;
     use codex_core::config::ConfigBuilder;
+    use codex_core::config_loader::CloudRequirementsLoader;
+    use codex_core::config_loader::LoaderOverrides;
+    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::user_input::UserInput;
+    use core_test_support::responses;
     use pretty_assertions::assert_eq;
+    use serde_json::Value;
+    use serde_json::json;
+    use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::TempDir;
+    use tokio::time::timeout;
+    use wiremock::MockServer;
 
-    async fn build_config(temp_dir: &TempDir) -> Config {
+    use crate::dynamic_tools::DynamicToolExecutionError;
+    use crate::dynamic_tools::DynamicToolRegistration;
+    use crate::dynamic_tools::DynamicToolRegistry;
+    use crate::dynamic_tools::handle_dynamic_tool_call_request;
+
+    const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+    fn mock_provider_cli_overrides(server_uri: &str) -> Vec<(String, toml::Value)> {
+        vec![
+            (
+                "model".to_string(),
+                toml::Value::String("mock-model".to_string()),
+            ),
+            (
+                "model_provider".to_string(),
+                toml::Value::String("mock_provider".to_string()),
+            ),
+            (
+                "approval_policy".to_string(),
+                toml::Value::String("never".to_string()),
+            ),
+            (
+                "sandbox_mode".to_string(),
+                toml::Value::String("read-only".to_string()),
+            ),
+            (
+                "model_providers.mock_provider.name".to_string(),
+                toml::Value::String("Mock provider for test".to_string()),
+            ),
+            (
+                "model_providers.mock_provider.base_url".to_string(),
+                toml::Value::String(format!("{server_uri}/v1")),
+            ),
+            (
+                "model_providers.mock_provider.wire_api".to_string(),
+                toml::Value::String("responses".to_string()),
+            ),
+            (
+                "model_providers.mock_provider.request_max_retries".to_string(),
+                toml::Value::Integer(0),
+            ),
+            (
+                "model_providers.mock_provider.stream_max_retries".to_string(),
+                toml::Value::Integer(0),
+            ),
+        ]
+    }
+
+    async fn build_config(temp_dir: &TempDir, cli_overrides: Vec<(String, toml::Value)>) -> Config {
         ConfigBuilder::default()
             .codex_home(temp_dir.path().to_path_buf())
+            .cli_overrides(cli_overrides)
             .build()
             .await
             .expect("config should build")
     }
 
+    async fn start_test_session(
+        config: Config,
+        cli_overrides: Vec<(String, toml::Value)>,
+        dynamic_tools: Arc<DynamicToolRegistry>,
+    ) -> Result<AppServerSession> {
+        let client = crate::start_embedded_app_server(
+            Arg0DispatchPaths::default(),
+            config,
+            cli_overrides,
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+            codex_feedback::CodexFeedback::new(),
+        )
+        .await?;
+        Ok(AppServerSession::new_with_dynamic_tools(
+            AppServerClient::InProcess(client),
+            dynamic_tools,
+        ))
+    }
+
+    fn demo_tool_spec(name: &str) -> DynamicToolSpec {
+        DynamicToolSpec {
+            name: name.to_string(),
+            description: format!("dynamic tool {name}"),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "city": { "type": "string" }
+                },
+                "required": ["city"],
+                "additionalProperties": false,
+            }),
+            defer_loading: false,
+        }
+    }
+
+    async fn responses_bodies(server: &MockServer) -> Result<Vec<Value>> {
+        let mut bodies = Vec::new();
+        for request in server
+            .received_requests()
+            .await
+            .expect("requests should be readable")
+        {
+            if request.url.path().ends_with("/responses") {
+                bodies.push(
+                    request
+                        .body_json::<Value>()
+                        .expect("request body should be json"),
+                );
+            }
+        }
+        Ok(bodies)
+    }
+
+    fn function_call_output_payload(
+        body: &Value,
+        call_id: &str,
+    ) -> Option<FunctionCallOutputPayload> {
+        body.get("input")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("type").and_then(Value::as_str) == Some("function_call_output")
+                        && item.get("call_id").and_then(Value::as_str) == Some(call_id)
+                })
+            })
+            .and_then(|item| item.get("output"))
+            .cloned()
+            .and_then(|output| serde_json::from_value(output).ok())
+    }
+
+    async fn run_dynamic_tool_turn(
+        session: &mut AppServerSession,
+        config: &Config,
+        thread_id: ThreadId,
+        prompt: &str,
+    ) -> Result<()> {
+        session
+            .turn_start(
+                thread_id,
+                vec![UserInput::Text {
+                    text: prompt.to_string(),
+                    text_elements: Vec::new(),
+                }],
+                config.cwd.clone(),
+                config.permissions.approval_policy.value(),
+                config.approvals_reviewer,
+                config.permissions.sandbox_policy.get().clone(),
+                config
+                    .model
+                    .clone()
+                    .expect("mock model should be configured"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await?;
+
+        loop {
+            let event = timeout(DEFAULT_READ_TIMEOUT, session.next_event())
+                .await?
+                .expect("app-server event stream should stay open");
+            match event {
+                AppServerEvent::ServerRequest(ServerRequest::DynamicToolCall {
+                    request_id,
+                    params,
+                }) => {
+                    handle_dynamic_tool_call_request(
+                        session.dynamic_tool_registry(),
+                        session.dynamic_tool_execution_context(),
+                        request_id,
+                        params,
+                    )
+                    .await
+                    .map_err(|err| color_eyre::eyre::eyre!(err))?;
+                }
+                AppServerEvent::ServerNotification(ServerNotification::TurnCompleted(_)) => {
+                    return Ok(());
+                }
+                AppServerEvent::LegacyNotification(notification)
+                    if notification.method.ends_with("task_complete") =>
+                {
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+    }
+
     #[tokio::test]
     async fn thread_start_params_include_cwd_for_embedded_sessions() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
-        let config = build_config(&temp_dir).await;
+        let config = build_config(&temp_dir, Vec::new()).await;
 
-        let params = thread_start_params_from_config(&config, ThreadParamsMode::Embedded);
+        let params = thread_start_params_from_config(&config, ThreadParamsMode::Embedded, None);
 
         assert_eq!(params.cwd, Some(config.cwd.to_string_lossy().to_string()));
         assert_eq!(params.model_provider, Some(config.model_provider_id));
     }
 
     #[tokio::test]
+    async fn thread_start_params_include_registered_dynamic_tools() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir, Vec::new()).await;
+        let spec = demo_tool_spec("demo_tool");
+
+        let params = thread_start_params_from_config(
+            &config,
+            ThreadParamsMode::Embedded,
+            Some(vec![spec.clone()]),
+        );
+
+        assert_eq!(params.dynamic_tools, Some(vec![spec]));
+    }
+
+    #[tokio::test]
     async fn thread_lifecycle_params_omit_local_overrides_for_remote_sessions() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
-        let config = build_config(&temp_dir).await;
+        let config = build_config(&temp_dir, Vec::new()).await;
         let thread_id = ThreadId::new();
 
-        let start = thread_start_params_from_config(&config, ThreadParamsMode::Remote);
+        let start = thread_start_params_from_config(&config, ThreadParamsMode::Remote, None);
         let resume =
             thread_resume_params_from_config(config.clone(), thread_id, ThreadParamsMode::Remote);
         let fork = thread_fork_params_from_config(config, thread_id, ThreadParamsMode::Remote);
@@ -1140,5 +1387,243 @@ mod tests {
         assert!(!started.show_raw_agent_reasoning);
         assert_eq!(started.thread.turns.len(), 1);
         assert_eq!(started.thread.turns[0].items.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn dynamic_tool_turn_round_trip_resolves_registered_tools() -> Result<()> {
+        let call_id = "dyn-call-1";
+        let tool_name = "demo_tool";
+        let tool_args = json!({ "city": "Paris" });
+        let tool_call_arguments = serde_json::to_string(&tool_args)?;
+        let responses = vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+                responses::ev_completed("resp-1"),
+            ]),
+            create_final_assistant_message_sse_response("Done")
+                .map_err(|err| color_eyre::eyre::eyre!(err))?,
+        ];
+        let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+        let codex_home = TempDir::new()?;
+        let cli_overrides = mock_provider_cli_overrides(&server.uri());
+        let config = build_config(&codex_home, cli_overrides.clone()).await;
+        let registry = Arc::new(DynamicToolRegistry::from_registrations(vec![
+            DynamicToolRegistration::new(
+                demo_tool_spec(tool_name),
+                |_context, params| async move {
+                    Ok(DynamicToolCallResponse {
+                        content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                            text: params
+                                .arguments
+                                .get("city")
+                                .and_then(Value::as_str)
+                                .expect("city argument should be present")
+                                .to_string(),
+                        }],
+                        success: true,
+                    })
+                },
+            ),
+        ]));
+        let mut session = start_test_session(config.clone(), cli_overrides, registry).await?;
+        let started = session.start_thread(&config).await?;
+        let thread_id = started.session_configured.session_id;
+
+        run_dynamic_tool_turn(&mut session, &config, thread_id, "Run the tool").await?;
+
+        let bodies = responses_bodies(&server).await?;
+        let payload = bodies
+            .iter()
+            .find_map(|body| function_call_output_payload(body, call_id))
+            .expect("expected function_call_output payload");
+        assert_eq!(
+            payload,
+            FunctionCallOutputPayload::from_text("Paris".to_string())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resumed_threads_can_reuse_registered_dynamic_tools() -> Result<()> {
+        let first_call_id = "dyn-call-1";
+        let second_call_id = "dyn-call-2";
+        let tool_name = "demo_tool";
+        let tool_args = json!({ "city": "Paris" });
+        let tool_call_arguments = serde_json::to_string(&tool_args)?;
+        let responses = vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call(first_call_id, tool_name, &tool_call_arguments),
+                responses::ev_completed("resp-1"),
+            ]),
+            create_final_assistant_message_sse_response("Done")
+                .map_err(|err| color_eyre::eyre::eyre!(err))?,
+            responses::sse(vec![
+                responses::ev_response_created("resp-2"),
+                responses::ev_function_call(second_call_id, tool_name, &tool_call_arguments),
+                responses::ev_completed("resp-2"),
+            ]),
+            create_final_assistant_message_sse_response("Done again")
+                .map_err(|err| color_eyre::eyre::eyre!(err))?,
+        ];
+        let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+        let codex_home = TempDir::new()?;
+        let cli_overrides = mock_provider_cli_overrides(&server.uri());
+        let config = build_config(&codex_home, cli_overrides.clone()).await;
+        let registry = Arc::new(DynamicToolRegistry::from_registrations(vec![
+            DynamicToolRegistration::new(
+                demo_tool_spec(tool_name),
+                |_context, params| async move {
+                    Ok(DynamicToolCallResponse {
+                        content_items: vec![DynamicToolCallOutputContentItem::InputText {
+                            text: params
+                                .arguments
+                                .get("city")
+                                .and_then(Value::as_str)
+                                .expect("city argument should be present")
+                                .to_string(),
+                        }],
+                        success: true,
+                    })
+                },
+            ),
+        ]));
+
+        let mut first_session =
+            start_test_session(config.clone(), cli_overrides.clone(), Arc::clone(&registry))
+                .await?;
+        let started = first_session.start_thread(&config).await?;
+        let thread_id = started.session_configured.session_id;
+        run_dynamic_tool_turn(&mut first_session, &config, thread_id, "Run the tool").await?;
+        let rollout_path = first_session
+            .thread_read(thread_id, /* include_turns */ false)
+            .await?
+            .path
+            .expect("thread should expose a persisted rollout path");
+        first_session.shutdown().await?;
+
+        let resumed_config = build_config(&codex_home, cli_overrides.clone()).await;
+        let mut resumed_session =
+            start_test_session(resumed_config.clone(), cli_overrides, Arc::clone(&registry))
+                .await?;
+        let request_id = resumed_session.next_request_id();
+        let mut params = thread_resume_params_from_config(
+            resumed_config.clone(),
+            thread_id,
+            ThreadParamsMode::Embedded,
+        );
+        params.path = Some(rollout_path);
+        let _: ThreadResumeResponse = resumed_session
+            .client
+            .request_typed(ClientRequest::ThreadResume { request_id, params })
+            .await?;
+        run_dynamic_tool_turn(
+            &mut resumed_session,
+            &resumed_config,
+            thread_id,
+            "Run the tool again",
+        )
+        .await?;
+
+        let bodies = responses_bodies(&server).await?;
+        let first_payload = bodies
+            .iter()
+            .find_map(|body| function_call_output_payload(body, first_call_id))
+            .expect("expected first function_call_output payload");
+        let second_payload = bodies
+            .iter()
+            .find_map(|body| function_call_output_payload(body, second_call_id))
+            .expect("expected second function_call_output payload");
+        assert_eq!(
+            first_payload,
+            FunctionCallOutputPayload::from_text("Paris".to_string())
+        );
+        assert_eq!(
+            second_payload,
+            FunctionCallOutputPayload::from_text("Paris".to_string())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unknown_dynamic_tool_requests_are_rejected_cleanly() -> Result<()> {
+        let registry = Arc::new(DynamicToolRegistry::default());
+        let error = handle_dynamic_tool_call_request(
+            registry,
+            DynamicToolExecutionContext::for_tests(),
+            RequestId::Integer(1),
+            DynamicToolCallParams {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                call_id: "call-1".to_string(),
+                tool: "missing_tool".to_string(),
+                arguments: json!({}),
+            },
+        )
+        .await
+        .expect_err("missing request handle should fail before dispatch");
+
+        assert_eq!(
+            error,
+            "dynamic tool execution context is missing an app-server request handle"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failing_dynamic_tools_return_failed_responses() -> Result<()> {
+        let call_id = "dyn-call-1";
+        let tool_name = "demo_tool";
+        let tool_args = json!({ "city": "Paris" });
+        let tool_call_arguments = serde_json::to_string(&tool_args)?;
+        let responses = vec![
+            responses::sse(vec![
+                responses::ev_response_created("resp-1"),
+                responses::ev_function_call(call_id, tool_name, &tool_call_arguments),
+                responses::ev_completed("resp-1"),
+            ]),
+            create_final_assistant_message_sse_response("Done")
+                .map_err(|err| color_eyre::eyre::eyre!(err))?,
+        ];
+        let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+        let codex_home = TempDir::new()?;
+        let cli_overrides = mock_provider_cli_overrides(&server.uri());
+        let config = build_config(&codex_home, cli_overrides.clone()).await;
+        let registry = Arc::new(DynamicToolRegistry::from_registrations(vec![
+            DynamicToolRegistration::new(
+                demo_tool_spec(tool_name),
+                move |_context, _params| async move {
+                    Err(DynamicToolExecutionError::failed(
+                        tool_name,
+                        "dynamic tool failed",
+                    ))
+                },
+            ),
+        ]));
+        let mut session = start_test_session(config.clone(), cli_overrides, registry).await?;
+        let started = session.start_thread(&config).await?;
+
+        run_dynamic_tool_turn(
+            &mut session,
+            &config,
+            started.session_configured.session_id,
+            "Run the tool",
+        )
+        .await?;
+
+        let bodies = responses_bodies(&server).await?;
+        let payload = bodies
+            .iter()
+            .find_map(|body| function_call_output_payload(body, call_id))
+            .expect("expected function_call_output payload");
+        assert_eq!(
+            payload,
+            FunctionCallOutputPayload::from_text("dynamic tool failed".to_string())
+        );
+        Ok(())
     }
 }
