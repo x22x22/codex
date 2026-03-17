@@ -78,6 +78,25 @@ pub struct ExecRequest {
     pub arg0: Option<String>,
 }
 
+impl ExecRequest {
+    pub(crate) fn allow_detached_children_in_linux_sandbox(&mut self) {
+        const ALLOW_DETACHED_CHILDREN: &str = "--allow-detached-children";
+
+        if self.sandbox != SandboxType::LinuxSeccomp {
+            return;
+        }
+
+        if let Some(separator) = self.command.iter().position(|arg| arg == "--")
+            && !self.command[..separator]
+                .iter()
+                .any(|arg| arg == ALLOW_DETACHED_CHILDREN)
+        {
+            self.command
+                .insert(separator, ALLOW_DETACHED_CHILDREN.to_string());
+        }
+    }
+}
+
 /// Bundled arguments for sandbox transformation.
 ///
 /// This keeps call sites self-documenting when several fields are optional.

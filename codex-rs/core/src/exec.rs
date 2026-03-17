@@ -198,16 +198,7 @@ pub async fn process_exec_tool_call(
         codex_linux_sandbox_exe,
         use_legacy_landlock,
     )?;
-    if exec_req.sandbox == SandboxType::LinuxSeccomp
-        && let Some(separator) = exec_req.command.iter().position(|arg| arg == "--")
-        && !exec_req.command[..separator]
-            .iter()
-            .any(|arg| arg == "--allow-detached-children")
-    {
-        exec_req
-            .command
-            .insert(separator, "--allow-detached-children".to_string());
-    }
+    exec_req.allow_detached_children_in_linux_sandbox();
 
     // Route through the sandboxing module for a single, unified execution path.
     crate::sandboxing::execute_env(exec_req, stdout_stream).await
