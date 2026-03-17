@@ -204,15 +204,21 @@ pub fn run_main() -> ! {
             proxy_route_spec,
             command,
         });
+        let options = BwrapOptions {
+            mount_proc: !no_proc,
+            network_mode: bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy),
+            process_lifetime: if allow_detached_children {
+                BwrapProcessLifetime::AllowDetachedChildren
+            } else {
+                BwrapProcessLifetime::TerminateWithParent
+            },
+        };
         run_bwrap_with_proc_fallback(
             &sandbox_policy_cwd,
             command_cwd.as_deref(),
             &file_system_sandbox_policy,
-            network_sandbox_policy,
             inner,
-            !no_proc,
-            allow_network_for_proxy,
-            allow_detached_children,
+            options,
         );
     }
 
@@ -411,38 +417,24 @@ fn run_bwrap_with_proc_fallback(
     sandbox_policy_cwd: &Path,
     command_cwd: Option<&Path>,
     file_system_sandbox_policy: &FileSystemSandboxPolicy,
-    network_sandbox_policy: NetworkSandboxPolicy,
     inner: Vec<String>,
-    mount_proc: bool,
-    allow_network_for_proxy: bool,
-    allow_detached_children: bool,
+    options: BwrapOptions,
 ) -> ! {
-    let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
-    let mut mount_proc = mount_proc;
+    let mut options = options;
     let command_cwd = command_cwd.unwrap_or(sandbox_policy_cwd);
 
-    if mount_proc
+    if options.mount_proc
         && !preflight_proc_mount_support(
             sandbox_policy_cwd,
             command_cwd,
             file_system_sandbox_policy,
-            network_mode,
+            options.network_mode,
         )
     {
         // Keep the retry silent so sandbox-internal diagnostics do not leak into the
         // child process stderr stream.
-        mount_proc = false;
+        options.mount_proc = false;
     }
-
-    let options = BwrapOptions {
-        mount_proc,
-        network_mode,
-        process_lifetime: if allow_detached_children {
-            BwrapProcessLifetime::AllowDetachedChildren
-        } else {
-            BwrapProcessLifetime::TerminateWithParent
-        },
-    };
     let bwrap_args = build_bwrap_argv(
         inner,
         file_system_sandbox_policy,
