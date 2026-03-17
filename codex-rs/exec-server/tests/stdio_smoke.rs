@@ -9,6 +9,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
+use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecServerClient;
 use codex_exec_server::ExecServerClientConnectOptions;
@@ -87,6 +88,7 @@ async fn exec_server_client_streams_output_and_accepts_writes() -> anyhow::Resul
         },
         ExecServerClientConnectOptions {
             client_name: "exec-server-test".to_string(),
+            initialize_timeout: Duration::from_secs(5),
         },
     )
     .await?;
@@ -104,16 +106,15 @@ async fn exec_server_client_streams_output_and_accepts_writes() -> anyhow::Resul
             cwd: std::env::current_dir()?,
             env,
             tty: true,
-            output_bytes_cap: 4096,
             arg0: None,
         })
         .await?;
 
     let mut output = process.output_receiver();
+    let (stream, ready_output) = recv_until_contains(&mut output, "ready").await?;
+    assert_eq!(stream, ExecOutputStream::Stdout);
     assert!(
-        recv_until_contains(&mut output, "ready")
-            .await?
-            .contains("ready"),
+        ready_output.contains("ready"),
         "expected initial ready output"
     );
 
@@ -123,10 +124,10 @@ async fn exec_server_client_streams_output_and_accepts_writes() -> anyhow::Resul
         .await
         .expect("write should succeed");
 
+    let (stream, echoed_output) = recv_until_contains(&mut output, "echo:hello").await?;
+    assert_eq!(stream, ExecOutputStream::Stdout);
     assert!(
-        recv_until_contains(&mut output, "echo:hello")
-            .await?
-            .contains("echo:hello"),
+        echoed_output.contains("echo:hello"),
         "expected echoed output"
     );
 
@@ -155,6 +156,8 @@ async fn exec_server_client_connects_over_websocket() -> anyhow::Result<()> {
     let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs {
         websocket_url,
         client_name: "exec-server-test".to_string(),
+        connect_timeout: Duration::from_secs(5),
+        initialize_timeout: Duration::from_secs(5),
     })
     .await?;
 
@@ -170,16 +173,15 @@ async fn exec_server_client_connects_over_websocket() -> anyhow::Result<()> {
             cwd: std::env::current_dir()?,
             env,
             tty: true,
-            output_bytes_cap: 4096,
             arg0: None,
         })
         .await?;
 
     let mut output = process.output_receiver();
+    let (stream, ready_output) = recv_until_contains(&mut output, "ready").await?;
+    assert_eq!(stream, ExecOutputStream::Stdout);
     assert!(
-        recv_until_contains(&mut output, "ready")
-            .await?
-            .contains("ready"),
+        ready_output.contains("ready"),
         "expected initial ready output"
     );
 
@@ -189,10 +191,10 @@ async fn exec_server_client_connects_over_websocket() -> anyhow::Result<()> {
         .await
         .expect("write should succeed");
 
+    let (stream, echoed_output) = recv_until_contains(&mut output, "echo:hello").await?;
+    assert_eq!(stream, ExecOutputStream::Stdout);
     assert!(
-        recv_until_contains(&mut output, "echo:hello")
-            .await?
-            .contains("echo:hello"),
+        echoed_output.contains("echo:hello"),
         "expected echoed output"
     );
 
@@ -215,17 +217,17 @@ where
 }
 
 async fn recv_until_contains(
-    output: &mut broadcast::Receiver<Vec<u8>>,
+    output: &mut broadcast::Receiver<codex_exec_server::ExecServerOutput>,
     needle: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(ExecOutputStream, String)> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let mut collected = String::new();
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let chunk = timeout(remaining, output.recv()).await??;
-        collected.push_str(&String::from_utf8_lossy(&chunk));
+        let output_event = timeout(remaining, output.recv()).await??;
+        collected.push_str(&String::from_utf8_lossy(&output_event.chunk));
         if collected.contains(needle) {
-            return Ok(collected);
+            return Ok((output_event.stream, collected));
         }
     }
 }

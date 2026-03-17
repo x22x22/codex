@@ -1,7 +1,5 @@
 use std::collections::HashMap;
-use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -41,39 +39,6 @@ use crate::protocol::WriteResponse;
 struct RunningProcess {
     session: ExecCommandSession,
     tty: bool,
-    stdout_buffer: Arc<StdMutex<BoundedBytesBuffer>>,
-    stderr_buffer: Arc<StdMutex<BoundedBytesBuffer>>,
-}
-
-#[derive(Debug)]
-struct BoundedBytesBuffer {
-    max_bytes: usize,
-    bytes: VecDeque<u8>,
-}
-
-impl BoundedBytesBuffer {
-    fn new(max_bytes: usize) -> Self {
-        Self {
-            max_bytes,
-            bytes: VecDeque::with_capacity(max_bytes.min(8192)),
-        }
-    }
-
-    fn push_chunk(&mut self, chunk: &[u8]) {
-        if self.max_bytes == 0 {
-            return;
-        }
-        for byte in chunk {
-            self.bytes.push_back(*byte);
-            if self.bytes.len() > self.max_bytes {
-                self.bytes.pop_front();
-            }
-        }
-    }
-
-    fn snapshot(&self) -> Vec<u8> {
-        self.bytes.iter().copied().collect()
-    }
 }
 
 pub(crate) async fn run_connection(connection: JsonRpcConnection) {
@@ -252,13 +217,6 @@ impl ExecServerConnectionProcessor {
         }
         .map_err(|err| internal_error(err.to_string()))?;
 
-        let stdout_buffer = Arc::new(StdMutex::new(BoundedBytesBuffer::new(
-            params.output_bytes_cap,
-        )));
-        let stderr_buffer = Arc::new(StdMutex::new(BoundedBytesBuffer::new(
-            params.output_bytes_cap,
-        )));
-
         let process_id = params.process_id.clone();
         {
             let mut process_map = self.processes.lock().await;
@@ -273,8 +231,6 @@ impl ExecServerConnectionProcessor {
                 RunningProcess {
                     session: spawned.session,
                     tty: params.tty,
-                    stdout_buffer: Arc::clone(&stdout_buffer),
-                    stderr_buffer: Arc::clone(&stderr_buffer),
                 },
             );
         }
@@ -284,14 +240,12 @@ impl ExecServerConnectionProcessor {
             ExecOutputStream::Stdout,
             spawned.stdout_rx,
             self.outgoing_tx.clone(),
-            Arc::clone(&stdout_buffer),
         ));
         tokio::spawn(stream_output(
             process_id.clone(),
             ExecOutputStream::Stderr,
             spawned.stderr_rx,
             self.outgoing_tx.clone(),
-            Arc::clone(&stderr_buffer),
         ));
         tokio::spawn(watch_exit(
             process_id.clone(),
@@ -300,13 +254,7 @@ impl ExecServerConnectionProcessor {
             Arc::clone(&self.processes),
         ));
 
-        json_value(ExecResponse {
-            process_id,
-            running: true,
-            exit_code: None,
-            stdout: None,
-            stderr: None,
-        })
+        json_value(ExecResponse { process_id })
     }
 
     async fn handle_write_request(
@@ -379,12 +327,8 @@ async fn stream_output(
     stream: ExecOutputStream,
     mut receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
     outgoing_tx: mpsc::Sender<JSONRPCMessage>,
-    buffer: Arc<StdMutex<BoundedBytesBuffer>>,
 ) {
     while let Some(chunk) = receiver.recv().await {
-        if let Ok(mut guard) = buffer.lock() {
-            guard.push_chunk(&chunk);
-        }
         let notification = ExecOutputDeltaNotification {
             process_id: process_id.clone(),
             stream,
@@ -406,13 +350,9 @@ async fn watch_exit(
     processes: Arc<Mutex<HashMap<String, RunningProcess>>>,
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
-    let removed = {
+    {
         let mut processes = processes.lock().await;
-        processes.remove(&process_id)
-    };
-    if let Some(process) = removed {
-        let _ = process.stdout_buffer.lock().map(|buffer| buffer.snapshot());
-        let _ = process.stderr_buffer.lock().map(|buffer| buffer.snapshot());
+        processes.remove(&process_id);
     }
     let _ = send_notification(
         &outgoing_tx,
