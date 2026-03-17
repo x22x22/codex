@@ -3,6 +3,7 @@ use crate::network_policy::NetworkPolicyDecision;
 use crate::network_policy::NetworkProtocol;
 use crate::reasons::REASON_DENIED;
 use crate::reasons::REASON_METHOD_NOT_ALLOWED;
+use crate::reasons::REASON_MITM_HOOK_DENIED;
 use crate::reasons::REASON_MITM_REQUIRED;
 use crate::reasons::REASON_NOT_ALLOWED;
 use crate::reasons::REASON_NOT_ALLOWED_LOCAL;
@@ -52,6 +53,7 @@ pub fn blocked_header_value(reason: &str) -> &'static str {
         REASON_NOT_ALLOWED | REASON_NOT_ALLOWED_LOCAL => "blocked-by-allowlist",
         REASON_DENIED => "blocked-by-denylist",
         REASON_METHOD_NOT_ALLOWED => "blocked-by-method-policy",
+        REASON_MITM_HOOK_DENIED => "blocked-by-mitm-hook",
         REASON_MITM_REQUIRED => "blocked-by-mitm-required",
         _ => "blocked-by-policy",
     }
@@ -69,7 +71,12 @@ pub fn blocked_message(reason: &str) -> &'static str {
         REASON_METHOD_NOT_ALLOWED => {
             "Codex blocked this request: method not allowed in limited mode."
         }
-        REASON_MITM_REQUIRED => "Codex blocked this request: MITM required for limited HTTPS.",
+        REASON_MITM_HOOK_DENIED => {
+            "Codex blocked this request: MITM hook policy denied the HTTPS request."
+        }
+        REASON_MITM_REQUIRED => {
+            "Codex blocked this request: MITM required to enforce HTTPS policy."
+        }
         _ => "Codex blocked this request by network policy.",
     }
 }

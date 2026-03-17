@@ -319,7 +319,16 @@ mod tests {
 default_permissions = "workspace"
 
 [permissions.workspace.network]
+mode = "full"
+mitm = true
 allowed_domains = ["lower.example.com"]
+
+[[permissions.workspace.network.mitm_hooks]]
+host = "lower.example.com"
+
+[permissions.workspace.network.mitm_hooks.match]
+methods = ["POST"]
+path_prefixes = ["/repos/openai/"]
 "#,
         )
         .expect("lower layer should parse");
@@ -328,7 +337,16 @@ allowed_domains = ["lower.example.com"]
 default_permissions = "workspace"
 
 [permissions.workspace.network]
+mode = "full"
+mitm = true
 allowed_domains = ["higher.example.com"]
+
+[[permissions.workspace.network.mitm_hooks]]
+host = "api.github.com"
+
+[permissions.workspace.network.mitm_hooks.match]
+methods = ["PUT"]
+path_prefixes = ["/repos/openai/"]
 "#,
         )
         .expect("higher layer should parse");
@@ -346,6 +364,11 @@ allowed_domains = ["higher.example.com"]
         .expect("higher layer should apply");
 
         assert_eq!(config.network.allowed_domains, vec!["higher.example.com"]);
+        assert_eq!(config.network.mode, codex_network_proxy::NetworkMode::Full);
+        assert!(config.network.mitm);
+        assert_eq!(config.network.mitm_hooks.len(), 1);
+        assert_eq!(config.network.mitm_hooks[0].host, "api.github.com");
+        assert_eq!(config.network.mitm_hooks[0].matcher.methods, vec!["PUT"]);
     }
 
     #[test]

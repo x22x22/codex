@@ -1,6 +1,9 @@
 use crate::config::NetworkMode;
 use crate::config::NetworkProxyConfig;
 use crate::mitm::MitmState;
+use crate::mitm_hook::MitmHookConfig;
+use crate::mitm_hook::compile_mitm_hooks;
+use crate::mitm_hook::validate_mitm_hook_config;
 use crate::policy::DomainPattern;
 use crate::policy::compile_globset;
 use crate::policy::is_global_wildcard_domain_pattern;
@@ -52,6 +55,10 @@ pub struct PartialNetworkConfig {
     pub allow_unix_sockets: Option<Vec<String>>,
     #[serde(default)]
     pub allow_local_binding: Option<bool>,
+    #[serde(default)]
+    pub mitm: Option<bool>,
+    #[serde(default)]
+    pub mitm_hooks: Option<Vec<MitmHookConfig>>,
 }
 
 pub fn build_config_state(
@@ -65,6 +72,7 @@ pub fn build_config_state(
         .map_err(NetworkProxyConstraintError::into_anyhow)?;
     let deny_set = compile_globset(&config.network.denied_domains)?;
     let allow_set = compile_globset(&config.network.allowed_domains)?;
+    let mitm_hooks = compile_mitm_hooks(&config)?;
     let mitm = if config.network.mitm {
         Some(Arc::new(MitmState::new(
             config.network.allow_upstream_proxy,
@@ -77,6 +85,7 @@ pub fn build_config_state(
         allow_set,
         deny_set,
         mitm,
+        mitm_hooks,
         constraints,
         blocked: std::collections::VecDeque::new(),
         blocked_total: 0,
@@ -107,6 +116,7 @@ pub fn validate_policy_against_constraints(
     }
 
     let enabled = config.network.enabled;
+    validate_mitm_hook_config(config).map_err(invalid_mitm_hook_configuration)?;
     validate_domain_patterns("network.allowed_domains", &config.network.allowed_domains)?;
     validate_domain_patterns("network.denied_domains", &config.network.denied_domains)?;
     if let Some(max_enabled) = constraints.enabled {
@@ -362,6 +372,14 @@ pub fn validate_policy_against_constraints(
     }
 
     Ok(())
+}
+
+fn invalid_mitm_hook_configuration(err: anyhow::Error) -> NetworkProxyConstraintError {
+    NetworkProxyConstraintError::InvalidValue {
+        field_name: "network.mitm_hooks",
+        candidate: err.to_string(),
+        allowed: "valid MITM hook configuration".to_string(),
+    }
 }
 
 fn validate_domain_patterns(

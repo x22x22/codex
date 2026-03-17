@@ -5,6 +5,7 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_network_proxy::MitmHookConfig;
 use codex_network_proxy::NetworkMode;
 use codex_network_proxy::NetworkProxyConfig;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -73,6 +74,9 @@ pub struct NetworkToml {
     pub denied_domains: Option<Vec<String>>,
     pub allow_unix_sockets: Option<Vec<String>>,
     pub allow_local_binding: Option<bool>,
+    pub mitm: Option<bool>,
+    #[schemars(with = "Option<Vec<MitmHookConfigSchema>>")]
+    pub mitm_hooks: Option<Vec<MitmHookConfig>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -81,6 +85,46 @@ enum NetworkModeSchema {
     Limited,
     Full,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(default)]
+struct MitmHookConfigSchema {
+    pub host: String,
+    #[serde(rename = "match", default)]
+    pub matcher: MitmHookMatchConfigSchema,
+    #[serde(default)]
+    pub actions: MitmHookActionsConfigSchema,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(default)]
+struct MitmHookMatchConfigSchema {
+    pub methods: Vec<String>,
+    pub path_prefixes: Vec<String>,
+    pub query: BTreeMap<String, Vec<String>>,
+    pub headers: BTreeMap<String, Vec<String>>,
+    pub body: Option<MitmHookBodyConfigSchema>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(default)]
+struct MitmHookActionsConfigSchema {
+    pub strip_request_headers: Vec<String>,
+    pub inject_request_headers: Vec<InjectedHeaderConfigSchema>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(default)]
+struct InjectedHeaderConfigSchema {
+    pub name: String,
+    pub secret_env_var: Option<String>,
+    pub secret_file: Option<String>,
+    pub prefix: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(transparent)]
+struct MitmHookBodyConfigSchema(pub serde_json::Value);
 
 impl NetworkToml {
     pub(crate) fn apply_to_network_proxy_config(&self, config: &mut NetworkProxyConfig) {
@@ -125,6 +169,12 @@ impl NetworkToml {
         }
         if let Some(allow_local_binding) = self.allow_local_binding {
             config.network.allow_local_binding = allow_local_binding;
+        }
+        if let Some(mitm) = self.mitm {
+            config.network.mitm = mitm;
+        }
+        if let Some(mitm_hooks) = self.mitm_hooks.as_ref() {
+            config.network.mitm_hooks = mitm_hooks.clone();
         }
     }
 
