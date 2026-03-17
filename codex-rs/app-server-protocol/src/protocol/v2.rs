@@ -536,13 +536,36 @@ pub struct SandboxWorkspaceWrite {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "v2/")]
+pub struct ToolFeatureConfigV2 {
+    pub enabled: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub struct WebSearchFeatureConfigV2 {
+    pub enabled: Option<bool>,
+    #[serde(flatten)]
+    pub config: WebSearchToolConfig,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
 pub struct ToolsV2 {
-    /// Per-tool web search configuration. Presence alone does not enable the capability.
-    pub web_search: Option<WebSearchToolConfig>,
+    pub disable_defaults: Option<bool>,
+    pub shell: Option<ToolFeatureConfigV2>,
+    pub filesystem: Option<ToolFeatureConfigV2>,
+    pub javascript: Option<ToolFeatureConfigV2>,
+    pub agents: Option<ToolFeatureConfigV2>,
+    pub agent_jobs: Option<ToolFeatureConfigV2>,
+    pub planning: Option<ToolFeatureConfigV2>,
+    pub user_input: Option<ToolFeatureConfigV2>,
+    pub web_search: Option<WebSearchFeatureConfigV2>,
+    pub image_generation: Option<ToolFeatureConfigV2>,
+    pub document_generation: Option<ToolFeatureConfigV2>,
     /// Legacy enablement for the `view_image` capability.
     pub view_image: Option<bool>,
-    /// Canonical capability names to enable. If omitted, legacy/default resolution applies.
-    pub enabled: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq, JsonSchema, TS)]

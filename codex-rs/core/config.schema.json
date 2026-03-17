@@ -1588,16 +1588,47 @@
       ],
       "type": "string"
     },
-    "ToolsToml": {
+    "ToolFeatureToml": {
       "additionalProperties": false,
       "properties": {
         "enabled": {
-          "default": null,
-          "description": "Canonical capability names to enable. If omitted, legacy/default resolution applies.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ToolsToml": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_jobs": {
+          "$ref": "#/definitions/ToolFeatureToml"
+        },
+        "agents": {
+          "$ref": "#/definitions/ToolFeatureToml"
+        },
+        "disable_defaults": {
+          "type": "boolean"
+        },
+        "document_generation": {
+          "$ref": "#/definitions/ToolFeatureToml"
+        },
+        "filesystem": {
+          "$ref": "#/definitions/ToolFeatureToml"
+        },
+        "image_generation": {
+          "$ref": "#/definitions/ToolFeatureToml"
+        },
+        "javascript": {
+          "$ref": "#/definitions/ToolFeatureToml"
+        },
+        "planning": {
+          "$ref": "#/definitions/ToolFeatureToml"
+        },
+        "shell": {
+          "$ref": "#/definitions/ToolFeatureToml"
+        },
+        "user_input": {
+          "$ref": "#/definitions/ToolFeatureToml"
         },
         "view_image": {
           "default": null,
@@ -1605,9 +1636,12 @@
           "type": "boolean"
         },
         "web_search": {
-          "allOf": [
+          "anyOf": [
             {
-              "$ref": "#/definitions/WebSearchToolConfig"
+              "type": "boolean"
+            },
+            {
+              "$ref": "#/definitions/WebSearchFeatureToml"
             }
           ],
           "default": null
@@ -1734,6 +1768,27 @@
       ],
       "type": "string"
     },
+    "WebSearchFeatureToml": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "context_size": {
+          "$ref": "#/definitions/WebSearchContextSize"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "location": {
+          "$ref": "#/definitions/WebSearchLocation"
+        }
+      },
+      "type": "object"
+    },
     "WebSearchLocation": {
       "additionalProperties": false,
       "properties": {
@@ -1759,24 +1814,6 @@
         "live"
       ],
       "type": "string"
-    },
-    "WebSearchToolConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "allowed_domains": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "context_size": {
-          "$ref": "#/definitions/WebSearchContextSize"
-        },
-        "location": {
-          "$ref": "#/definitions/WebSearchLocation"
-        }
-      },
-      "type": "object"
     },
     "WindowsSandboxModeToml": {
       "enum": [

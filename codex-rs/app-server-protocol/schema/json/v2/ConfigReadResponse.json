@@ -760,16 +760,113 @@
       ],
       "type": "string"
     },
-    "ToolsV2": {
+    "ToolFeatureConfigV2": {
       "properties": {
         "enabled": {
-          "description": "Canonical capability names to enable. If omitted, legacy/default resolution applies.",
-          "items": {
-            "type": "string"
-          },
           "type": [
-            "array",
+            "boolean",
             "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ToolsV2": {
+      "properties": {
+        "agent_jobs": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolFeatureConfigV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "agents": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolFeatureConfigV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "disable_defaults": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "document_generation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolFeatureConfigV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "filesystem": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolFeatureConfigV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "image_generation": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolFeatureConfigV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "javascript": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolFeatureConfigV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "planning": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolFeatureConfigV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shell": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolFeatureConfigV2"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "user_input": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ToolFeatureConfigV2"
+            },
+            {
+              "type": "null"
+            }
           ]
         },
         "view_image": {
@@ -782,13 +879,12 @@
         "web_search": {
           "anyOf": [
             {
-              "$ref": "#/definitions/WebSearchToolConfig"
+              "$ref": "#/definitions/WebSearchFeatureConfigV2"
             },
             {
               "type": "null"
             }
-          ],
-          "description": "Per-tool web search configuration. Presence alone does not enable the capability."
+          ]
         }
       },
       "type": "object"
@@ -809,6 +905,46 @@
         "high"
       ],
       "type": "string"
+    },
+    "WebSearchFeatureConfigV2": {
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "context_size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchContextSize"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "enabled": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "location": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/WebSearchLocation"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "WebSearchLocation": {
       "additionalProperties": false,
@@ -847,41 +983,6 @@
         "live"
       ],
       "type": "string"
-    },
-    "WebSearchToolConfig": {
-      "additionalProperties": false,
-      "properties": {
-        "allowed_domains": {
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "context_size": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/WebSearchContextSize"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "location": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/WebSearchLocation"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "type": "object"
     }
   },
   "properties": {

@@ -3,6 +3,7 @@ use crate::client_common::tools::FreeformToolFormat;
 use crate::client_common::tools::ResponsesApiTool;
 use crate::client_common::tools::ToolSpec;
 use crate::config::AgentRoleConfig;
+use crate::config::ToolFeatureOverrides;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp_connection_manager::ToolInfo;
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
@@ -31,10 +32,10 @@ use crate::tools::handlers::multi_agents::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
-use crate::tools::registry::ToolCapabilityKey;
+use crate::tools::registry::BuiltinToolKey;
+use crate::tools::registry::ToolFeatureKey;
 use crate::tools::registry::ToolRegistryBuilder;
 use crate::tools::registry::builtin_tool_key;
-use crate::tools::registry::tool_capability_key;
 use crate::tools::registry::tool_handler_key;
 use codex_features::Feature;
 use codex_features::Features;
@@ -272,7 +273,7 @@ pub(crate) struct ToolsConfig {
     shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_shell_mode: UnifiedExecShellMode,
     pub allow_login_shell: bool,
-    pub enabled_tool_capabilities: Option<std::collections::BTreeSet<String>>,
+    pub tool_feature_overrides: ToolFeatureOverrides,
     pub legacy_view_image_override: Option<bool>,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_mode: Option<WebSearchMode>,
@@ -408,7 +409,7 @@ impl ToolsConfig {
             shell_command_backend,
             unified_exec_shell_mode: UnifiedExecShellMode::Direct,
             allow_login_shell: true,
-            enabled_tool_capabilities: None,
+            tool_feature_overrides: ToolFeatureOverrides::default(),
             legacy_view_image_override: None,
             apply_patch_tool_type,
             web_search_mode: *web_search_mode,
@@ -446,11 +447,11 @@ impl ToolsConfig {
         self
     }
 
-    pub fn with_enabled_tool_capabilities(
+    pub fn with_tool_feature_overrides(
         mut self,
-        enabled_tool_capabilities: Option<std::collections::BTreeSet<String>>,
+        tool_feature_overrides: ToolFeatureOverrides,
     ) -> Self {
-        self.enabled_tool_capabilities = enabled_tool_capabilities;
+        self.tool_feature_overrides = tool_feature_overrides;
         self
     }
 
@@ -501,67 +502,62 @@ impl ToolsConfig {
         let Some(tool) = builtin_tool_key(tool_name) else {
             return false;
         };
-        let Some(capability) = ToolCapabilityKey::for_builtin_tool(tool) else {
+        let Some(feature) = ToolFeatureKey::for_builtin_tool(tool) else {
             return true;
         };
-        self.is_tool_capability_enabled(capability)
+        if self.is_feature_explicitly_controlled(feature) {
+            return self.is_tool_feature_enabled(feature);
+        }
+
+        match tool {
+            BuiltinToolKey::ApplyPatch => self.apply_patch_tool_type.is_some(),
+            BuiltinToolKey::ViewImage => self.legacy_view_image_override.unwrap_or(true),
+            BuiltinToolKey::WebSearch => self.is_web_search_enabled(),
+            _ => self.is_tool_feature_enabled(feature),
+        }
     }
 
-    fn is_tool_capability_enabled(&self, capability: ToolCapabilityKey) -> bool {
-        if let ToolCapabilityKey::WebSearch = capability {
-            // The resolved web_search_mode already reflects config, feature defaults,
-            // and any requirement-driven overrides.
-            return self
-                .web_search_mode
-                .is_some_and(|mode| mode != WebSearchMode::Disabled);
+    fn is_feature_explicitly_controlled(&self, feature: ToolFeatureKey) -> bool {
+        self.tool_feature_overrides.disable_defaults
+            || self.tool_feature_overrides.for_feature(feature).is_some()
+    }
+
+    fn is_web_search_enabled(&self) -> bool {
+        // The resolved web_search_mode already reflects config, feature defaults,
+        // and any requirement-driven overrides.
+        self.web_search_mode
+            .is_some_and(|mode| mode != WebSearchMode::Disabled)
+    }
+
+    fn is_tool_feature_enabled(&self, feature: ToolFeatureKey) -> bool {
+        if let Some(enabled) = self.tool_feature_overrides.for_feature(feature) {
+            return enabled;
         }
 
-        if let Some(enabled_tool_capabilities) = self.enabled_tool_capabilities.as_ref() {
-            return enabled_tool_capabilities.contains(capability.capability_name());
+        if self.tool_feature_overrides.disable_defaults {
+            return false;
         }
 
-        match capability {
-            ToolCapabilityKey::CommandExecution => self.shell_type != ConfigShellToolType::Disabled,
-            ToolCapabilityKey::JavascriptExecution => self.js_repl_enabled,
-            ToolCapabilityKey::FilesystemInspection => self
+        self.is_tool_feature_enabled_by_default(feature)
+    }
+
+    fn is_tool_feature_enabled_by_default(&self, feature: ToolFeatureKey) -> bool {
+        match feature {
+            ToolFeatureKey::Shell => self.shell_type != ConfigShellToolType::Disabled,
+            ToolFeatureKey::Filesystem => self
                 .experimental_supported_tools
                 .iter()
                 .any(|tool| matches!(tool.as_str(), "grep_files" | "read_file" | "list_dir")),
-            ToolCapabilityKey::MultiAgent => self.collab_tools,
-            ToolCapabilityKey::AgentJobs => self.agent_jobs_tools,
-            ToolCapabilityKey::ApplyPatch => self.apply_patch_tool_type.is_some(),
-            ToolCapabilityKey::UpdatePlan => true,
-            ToolCapabilityKey::RequestUserInput => self.request_user_input,
-            ToolCapabilityKey::WebSearch => self
-                .web_search_mode
-                .is_some_and(|mode| mode != WebSearchMode::Disabled),
-            ToolCapabilityKey::ImageGeneration => self.image_gen_tool,
-            ToolCapabilityKey::ViewImage => self.legacy_view_image_override.unwrap_or(true),
-            ToolCapabilityKey::Artifacts => self.artifact_tools,
+            ToolFeatureKey::Javascript => self.js_repl_enabled,
+            ToolFeatureKey::Agents => self.collab_tools,
+            ToolFeatureKey::AgentJobs => self.agent_jobs_tools,
+            ToolFeatureKey::Planning => true,
+            ToolFeatureKey::UserInput => self.request_user_input,
+            ToolFeatureKey::WebSearch => self.is_web_search_enabled(),
+            ToolFeatureKey::ImageGeneration => self.image_gen_tool,
+            ToolFeatureKey::DocumentGeneration => self.artifact_tools,
         }
     }
-}
-
-pub fn normalize_enabled_tool_capability_names(
-    enabled_tools: &[String],
-) -> Result<std::collections::BTreeSet<String>, String> {
-    let invalid_names = enabled_tools
-        .iter()
-        .filter(|name| tool_capability_key(name).is_none())
-        .cloned()
-        .collect::<Vec<_>>();
-    if !invalid_names.is_empty() {
-        return Err(format!(
-            "unknown tool capability name(s): {}",
-            invalid_names.join(", ")
-        ));
-    }
-    Ok(enabled_tools
-        .iter()
-        .filter_map(|name| tool_capability_key(name))
-        .map(ToolCapabilityKey::capability_name)
-        .map(str::to_string)
-        .collect())
 }
 
 fn supports_image_generation(model_info: &ModelInfo) -> bool {

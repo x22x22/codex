@@ -19,7 +19,9 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::SandboxMode;
+use codex_app_server_protocol::ToolFeatureConfigV2;
 use codex_app_server_protocol::ToolsV2;
+use codex_app_server_protocol::WebSearchFeatureConfigV2;
 use codex_app_server_protocol::WriteStatus;
 use codex_core::config::set_project_trust_level;
 use codex_protocol::config_types::TrustLevel;
@@ -97,12 +99,17 @@ async fn config_read_includes_tools() -> Result<()> {
 model = "gpt-user"
 
 [tools.web_search]
+enabled = true
 context_size = "low"
 allowed_domains = ["example.com"]
 
 [tools]
+disable_defaults = true
 view_image = false
-enabled = ["shell", "apply_patch"]
+
+[tools.shell]
+
+[tools.filesystem]
 "#,
     )?;
     let codex_home_path = codex_home.path().canonicalize()?;
@@ -132,13 +139,25 @@ enabled = ["shell", "apply_patch"]
     assert_eq!(
         tools,
         ToolsV2 {
-            web_search: Some(WebSearchToolConfig {
-                context_size: Some(WebSearchContextSize::Low),
-                allowed_domains: Some(vec!["example.com".to_string()]),
-                location: None,
+            disable_defaults: Some(true),
+            shell: Some(ToolFeatureConfigV2 { enabled: None }),
+            filesystem: Some(ToolFeatureConfigV2 { enabled: None }),
+            javascript: None,
+            agents: None,
+            agent_jobs: None,
+            planning: None,
+            user_input: None,
+            web_search: Some(WebSearchFeatureConfigV2 {
+                enabled: Some(true),
+                config: WebSearchToolConfig {
+                    context_size: Some(WebSearchContextSize::Low),
+                    allowed_domains: Some(vec!["example.com".to_string()]),
+                    location: None,
+                },
             }),
+            image_generation: None,
+            document_generation: None,
             view_image: Some(false),
-            enabled: Some(vec!["shell".to_string(), "apply_patch".to_string()]),
         }
     );
     assert_eq!(
@@ -166,13 +185,19 @@ enabled = ["shell", "apply_patch"]
         }
     );
     assert_eq!(
-        origins.get("tools.enabled.0").expect("origin").name,
+        origins.get("tools.disable_defaults").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }
     );
     assert_eq!(
-        origins.get("tools.enabled.1").expect("origin").name,
+        origins.get("tools.shell").expect("origin").name,
+        ConfigLayerSource::User {
+            file: user_file.clone(),
+        }
+    );
+    assert_eq!(
+        origins.get("tools.filesystem").expect("origin").name,
         ConfigLayerSource::User {
             file: user_file.clone(),
         }
@@ -217,15 +242,18 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
 
     assert_eq!(
         config.tools.expect("tools present").web_search,
-        Some(WebSearchToolConfig {
-            context_size: Some(WebSearchContextSize::High),
-            allowed_domains: Some(vec!["example.com".to_string()]),
-            location: Some(WebSearchLocation {
-                country: Some("US".to_string()),
-                region: None,
-                city: Some("New York".to_string()),
-                timezone: Some("America/New_York".to_string()),
-            }),
+        Some(WebSearchFeatureConfigV2 {
+            enabled: None,
+            config: WebSearchToolConfig {
+                context_size: Some(WebSearchContextSize::High),
+                allowed_domains: Some(vec!["example.com".to_string()]),
+                location: Some(WebSearchLocation {
+                    country: Some("US".to_string()),
+                    region: None,
+                    city: Some("New York".to_string()),
+                    timezone: Some("America/New_York".to_string()),
+                }),
+            },
         }),
     );
 

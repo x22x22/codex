@@ -17,6 +17,7 @@ use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_protocol::config_types::WebSearchContextSize;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -31,7 +32,6 @@ use core_test_support::test_absolute_path;
 use pretty_assertions::assert_eq;
 
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
@@ -197,7 +197,7 @@ web_search = true
         Some(ToolsToml {
             web_search: None,
             view_image: None,
-            enabled: None,
+            ..Default::default()
         })
     );
 }
@@ -217,17 +217,22 @@ web_search = false
         Some(ToolsToml {
             web_search: None,
             view_image: None,
-            enabled: None,
+            ..Default::default()
         })
     );
 }
 
 #[test]
-fn tools_enabled_deserializes() {
+fn tools_feature_tables_deserialize() {
     let cfg: ConfigToml = toml::from_str(
         r#"
 [tools]
-enabled = ["shell", "apply_patch"]
+disable_defaults = true
+
+[tools.shell]
+
+[tools.filesystem]
+enabled = false
 "#,
     )
     .expect("TOML deserialization should succeed");
@@ -235,9 +240,12 @@ enabled = ["shell", "apply_patch"]
     assert_eq!(
         cfg.tools,
         Some(ToolsToml {
-            web_search: None,
-            view_image: None,
-            enabled: Some(vec!["shell".to_string(), "apply_patch".to_string()]),
+            disable_defaults: Some(true),
+            shell: Some(ToolFeatureToml { enabled: None }),
+            filesystem: Some(ToolFeatureToml {
+                enabled: Some(false),
+            }),
+            ..Default::default()
         })
     );
 }
@@ -1479,7 +1487,7 @@ fn web_search_mode_defaults_to_none_if_unset() {
     let features = Features::with_defaults();
 
     assert_eq!(
-        resolve_web_search_mode(&cfg, &profile, &features, None),
+        resolve_web_search_mode(&cfg, &profile, &features, &ToolFeatureOverrides::default()),
         None
     );
 }
@@ -1495,7 +1503,7 @@ fn web_search_mode_prefers_profile_over_legacy_flags() {
     features.enable(Feature::WebSearchCached);
 
     assert_eq!(
-        resolve_web_search_mode(&cfg, &profile, &features, None),
+        resolve_web_search_mode(&cfg, &profile, &features, &ToolFeatureOverrides::default()),
         Some(WebSearchMode::Live)
     );
 }
@@ -1511,27 +1519,49 @@ fn web_search_mode_disabled_overrides_legacy_request() {
     features.enable(Feature::WebSearchRequest);
 
     assert_eq!(
-        resolve_web_search_mode(&cfg, &profile, &features, None),
+        resolve_web_search_mode(&cfg, &profile, &features, &ToolFeatureOverrides::default()),
         Some(WebSearchMode::Disabled)
     );
 }
 
 #[test]
-fn web_search_mode_capability_override_false_disables_tool() {
+fn web_search_mode_disable_defaults_disables_tool() {
     let cfg = ConfigToml::default();
     let profile = ConfigProfile::default();
     let mut features = Features::with_defaults();
     features.enable(Feature::WebSearchCached);
-    let enabled_tools = BTreeSet::new();
+    let overrides = ToolFeatureOverrides {
+        disable_defaults: true,
+        ..Default::default()
+    };
 
     assert_eq!(
-        resolve_web_search_mode(&cfg, &profile, &features, Some(&enabled_tools)),
+        resolve_web_search_mode(&cfg, &profile, &features, &overrides),
         Some(WebSearchMode::Disabled)
     );
 }
 
 #[test]
-fn web_search_mode_explicit_disabled_wins_when_capability_enabled() {
+fn web_search_mode_disable_defaults_ignores_explicit_mode_without_grouped_enable() {
+    let cfg = ConfigToml {
+        web_search: Some(WebSearchMode::Cached),
+        ..Default::default()
+    };
+    let profile = ConfigProfile::default();
+    let features = Features::with_defaults();
+    let overrides = ToolFeatureOverrides {
+        disable_defaults: true,
+        ..Default::default()
+    };
+
+    assert_eq!(
+        resolve_web_search_mode(&cfg, &profile, &features, &overrides),
+        Some(WebSearchMode::Disabled)
+    );
+}
+
+#[test]
+fn web_search_mode_explicit_disabled_wins_when_feature_enabled() {
     let cfg = ConfigToml {
         web_search: Some(WebSearchMode::Disabled),
         ..Default::default()
@@ -1539,16 +1569,19 @@ fn web_search_mode_explicit_disabled_wins_when_capability_enabled() {
     let profile = ConfigProfile::default();
     let mut features = Features::with_defaults();
     features.enable(Feature::WebSearchCached);
-    let enabled_tools = BTreeSet::from(["web_search".to_string()]);
+    let overrides = ToolFeatureOverrides {
+        web_search: Some(true),
+        ..Default::default()
+    };
 
     assert_eq!(
-        resolve_web_search_mode(&cfg, &profile, &features, Some(&enabled_tools)),
+        resolve_web_search_mode(&cfg, &profile, &features, &overrides),
         Some(WebSearchMode::Disabled)
     );
 }
 
 #[test]
-fn resolve_enabled_tool_capabilities_returns_none_when_omitted() {
+fn resolve_tool_feature_overrides_returns_defaults_when_omitted() {
     let cfg: ConfigToml = toml::from_str(
         r#"
 [tools]
@@ -1558,8 +1591,43 @@ view_image = false
     .expect("TOML deserialization should succeed");
 
     assert_eq!(
-        resolve_enabled_tool_capabilities(&cfg, &ConfigProfile::default()),
-        Ok(None)
+        resolve_tool_feature_overrides(&cfg, &ConfigProfile::default()),
+        ToolFeatureOverrides::default()
+    );
+}
+
+#[test]
+fn resolve_tool_feature_overrides_profile_web_search_config_only_inherits_disabled_state() {
+    let cfg = ConfigToml {
+        tools: Some(ToolsToml {
+            web_search: Some(WebSearchFeatureToml {
+                enabled: Some(false),
+                config: WebSearchToolConfig::default(),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let profile = ConfigProfile {
+        tools: Some(ToolsToml {
+            web_search: Some(WebSearchFeatureToml {
+                enabled: None,
+                config: WebSearchToolConfig {
+                    context_size: Some(WebSearchContextSize::Low),
+                    ..Default::default()
+                },
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        resolve_tool_feature_overrides(&cfg, &profile),
+        ToolFeatureOverrides {
+            web_search: Some(false),
+            ..Default::default()
+        }
     );
 }
 
@@ -4404,7 +4472,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             include_apply_patch_tool: false,
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             web_search_config: None,
-            enabled_tool_capabilities: None,
+            tool_feature_overrides: ToolFeatureOverrides::default(),
             legacy_view_image_override: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
@@ -4549,7 +4617,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
-        enabled_tool_capabilities: None,
+        tool_feature_overrides: ToolFeatureOverrides::default(),
         legacy_view_image_override: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
@@ -4692,7 +4760,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
-        enabled_tool_capabilities: None,
+        tool_feature_overrides: ToolFeatureOverrides::default(),
         legacy_view_image_override: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
@@ -4821,7 +4889,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         include_apply_patch_tool: false,
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
-        enabled_tool_capabilities: None,
+        tool_feature_overrides: ToolFeatureOverrides::default(),
         legacy_view_image_override: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,

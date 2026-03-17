@@ -58,19 +58,17 @@ pub(crate) enum BuiltinToolKey {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum ToolCapabilityKey {
-    CommandExecution,
-    JavascriptExecution,
-    FilesystemInspection,
-    MultiAgent,
+pub(crate) enum ToolFeatureKey {
+    Shell,
+    Filesystem,
+    Javascript,
+    Agents,
     AgentJobs,
-    ApplyPatch,
-    UpdatePlan,
-    RequestUserInput,
+    Planning,
+    UserInput,
     WebSearch,
     ImageGeneration,
-    ViewImage,
-    Artifacts,
+    DocumentGeneration,
 }
 
 impl BuiltinToolKey {
@@ -149,53 +147,36 @@ impl BuiltinToolKey {
     }
 }
 
-impl ToolCapabilityKey {
-    const ALL: [Self; 12] = [
-        Self::CommandExecution,
-        Self::JavascriptExecution,
-        Self::FilesystemInspection,
-        Self::MultiAgent,
+impl ToolFeatureKey {
+    const ALL: [Self; 10] = [
+        Self::Shell,
+        Self::Filesystem,
+        Self::Javascript,
+        Self::Agents,
         Self::AgentJobs,
-        Self::ApplyPatch,
-        Self::UpdatePlan,
-        Self::RequestUserInput,
+        Self::Planning,
+        Self::UserInput,
         Self::WebSearch,
         Self::ImageGeneration,
-        Self::ViewImage,
-        Self::Artifacts,
+        Self::DocumentGeneration,
     ];
 
     pub(crate) fn iter() -> impl Iterator<Item = Self> {
         Self::ALL.into_iter()
     }
 
-    pub(crate) const fn capability_name(self) -> &'static str {
-        match self {
-            Self::CommandExecution => "shell",
-            Self::JavascriptExecution => "javascript_execution",
-            Self::FilesystemInspection => "filesystem_inspection",
-            Self::MultiAgent => "multi_agent",
-            Self::AgentJobs => "agent_jobs",
-            Self::ApplyPatch => "apply_patch",
-            Self::UpdatePlan => "plan",
-            Self::RequestUserInput => "structured_user_input",
-            Self::WebSearch => "web_search",
-            Self::ImageGeneration => "image_generation",
-            Self::ViewImage => "view_image",
-            Self::Artifacts => "document_generation",
-        }
-    }
-
     pub(crate) const fn builtin_tool_keys(self) -> &'static [BuiltinToolKey] {
         match self {
-            Self::CommandExecution => &[BuiltinToolKey::ExecCommand, BuiltinToolKey::WriteStdin],
-            Self::JavascriptExecution => &[BuiltinToolKey::JsRepl, BuiltinToolKey::JsReplReset],
-            Self::FilesystemInspection => &[
+            Self::Shell => &[BuiltinToolKey::ExecCommand, BuiltinToolKey::WriteStdin],
+            Self::Filesystem => &[
+                BuiltinToolKey::ApplyPatch,
                 BuiltinToolKey::GrepFiles,
                 BuiltinToolKey::ReadFile,
                 BuiltinToolKey::ListDir,
+                BuiltinToolKey::ViewImage,
             ],
-            Self::MultiAgent => &[
+            Self::Javascript => &[BuiltinToolKey::JsRepl, BuiltinToolKey::JsReplReset],
+            Self::Agents => &[
                 BuiltinToolKey::SpawnAgent,
                 BuiltinToolKey::SendInput,
                 BuiltinToolKey::ResumeAgent,
@@ -206,41 +187,21 @@ impl ToolCapabilityKey {
                 BuiltinToolKey::SpawnAgentsOnCsv,
                 BuiltinToolKey::ReportAgentJobResult,
             ],
-            Self::ApplyPatch => &[BuiltinToolKey::ApplyPatch],
-            Self::UpdatePlan => &[BuiltinToolKey::UpdatePlan],
-            Self::RequestUserInput => &[BuiltinToolKey::RequestUserInput],
+            Self::Planning => &[BuiltinToolKey::UpdatePlan],
+            Self::UserInput => &[BuiltinToolKey::RequestUserInput],
             Self::WebSearch => &[BuiltinToolKey::WebSearch],
             Self::ImageGeneration => &[BuiltinToolKey::ImageGeneration],
-            Self::ViewImage => &[BuiltinToolKey::ViewImage],
-            Self::Artifacts => &[BuiltinToolKey::Artifacts],
+            Self::DocumentGeneration => &[BuiltinToolKey::Artifacts],
         }
     }
 
     pub(crate) fn for_builtin_tool(tool: BuiltinToolKey) -> Option<Self> {
-        Self::iter().find(|capability| capability.builtin_tool_keys().contains(&tool))
+        Self::iter().find(|feature| feature.builtin_tool_keys().contains(&tool))
     }
 }
 
 pub(crate) fn builtin_tool_key(name: &str) -> Option<BuiltinToolKey> {
     BuiltinToolKey::iter().find(|key| key.invocation_names().contains(&name))
-}
-
-pub(crate) fn tool_capability_key(name: &str) -> Option<ToolCapabilityKey> {
-    match name {
-        "shell" => Some(ToolCapabilityKey::CommandExecution),
-        "javascript_execution" => Some(ToolCapabilityKey::JavascriptExecution),
-        "filesystem_inspection" => Some(ToolCapabilityKey::FilesystemInspection),
-        "multi_agent" => Some(ToolCapabilityKey::MultiAgent),
-        "agent_jobs" => Some(ToolCapabilityKey::AgentJobs),
-        "apply_patch" => Some(ToolCapabilityKey::ApplyPatch),
-        "plan" => Some(ToolCapabilityKey::UpdatePlan),
-        "structured_user_input" => Some(ToolCapabilityKey::RequestUserInput),
-        "web_search" => Some(ToolCapabilityKey::WebSearch),
-        "image_generation" => Some(ToolCapabilityKey::ImageGeneration),
-        "view_image" => Some(ToolCapabilityKey::ViewImage),
-        "document_generation" => Some(ToolCapabilityKey::Artifacts),
-        _ => None,
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
