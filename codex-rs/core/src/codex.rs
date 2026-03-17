@@ -3420,7 +3420,7 @@ impl Session {
         }
     }
 
-    async fn stamp_tool_approval_metadata(
+    pub(crate) async fn stamp_tool_approval_metadata(
         &self,
         turn_context: &TurnContext,
         response_item: ResponseItem,
@@ -6050,11 +6050,17 @@ pub(crate) async fn run_turn(
         }
 
         // Construct the input that we will send to the model.
-        let sampling_request_input: Vec<ResponseItem> = {
-            sess.clone_history()
-                .await
-                .for_prompt(&turn_context.model_info.input_modalities)
-        };
+        let sampling_request_input_items = sess
+            .clone_history()
+            .await
+            .for_prompt(&turn_context.model_info.input_modalities);
+        let mut sampling_request_input = Vec::with_capacity(sampling_request_input_items.len());
+        for item in sampling_request_input_items {
+            sampling_request_input.push(
+                sess.stamp_tool_approval_metadata(turn_context.as_ref(), item)
+                    .await,
+            );
+        }
 
         let sampling_request_input_messages = sampling_request_input
             .iter()
