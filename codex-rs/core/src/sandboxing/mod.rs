@@ -10,7 +10,6 @@ pub(crate) mod macos_permissions;
 
 use crate::exec::ExecExpiration;
 use crate::exec::ExecToolCallOutput;
-use crate::exec::LinuxSandboxProcessLifetime;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
@@ -93,7 +92,6 @@ pub(crate) struct SandboxTransformRequest<'a> {
     // to make shared ownership explicit across runtime/sandbox plumbing.
     pub network: Option<&'a NetworkProxy>,
     pub sandbox_policy_cwd: &'a Path,
-    pub linux_sandbox_process_lifetime: LinuxSandboxProcessLifetime,
     #[cfg(target_os = "macos")]
     pub macos_seatbelt_profile_extensions: Option<&'a MacOsSeatbeltProfileExtensions>,
     pub codex_linux_sandbox_exe: Option<&'a PathBuf>,
@@ -592,7 +590,6 @@ impl SandboxManager {
             enforce_managed_network,
             network,
             sandbox_policy_cwd,
-            linux_sandbox_process_lifetime,
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions,
             codex_linux_sandbox_exe,
@@ -682,7 +679,6 @@ impl SandboxManager {
                     sandbox_policy_cwd,
                     use_legacy_landlock,
                     allow_proxy_network,
-                    linux_sandbox_process_lifetime,
                 );
                 let mut full_command = Vec::with_capacity(1 + args.len());
                 full_command.push(exe.to_string_lossy().to_string());

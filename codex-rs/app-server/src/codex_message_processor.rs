@@ -1769,7 +1769,6 @@ impl CodexMessageProcessor {
             sandbox_cwd.as_path(),
             &codex_linux_sandbox_exe,
             use_legacy_landlock,
-            codex_core::exec::LinuxSandboxProcessLifetime::TerminateWithParent,
         ) {
             Ok(exec_request) => {
                 if let Err(error) = self

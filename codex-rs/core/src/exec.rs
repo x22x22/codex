@@ -160,18 +160,6 @@ pub enum SandboxType {
     WindowsRestrictedToken,
 }
 
-/// Controls how Linux sandboxed processes relate to the helper lifecycle.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum LinuxSandboxProcessLifetime {
-    /// Keep bubblewrap tied to the helper so tracked command trees terminate
-    /// with the original process.
-    #[default]
-    TerminateWithParent,
-    /// Omit bubblewrap's parent-death coupling so intentionally detached
-    /// descendants can outlive the original helper process.
-    AllowDetachedChildren,
-}
-
 impl SandboxType {
     pub(crate) fn as_metric_tag(self) -> &'static str {
         match self {
@@ -201,7 +189,7 @@ pub async fn process_exec_tool_call(
     use_legacy_landlock: bool,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
-    let exec_req = build_exec_request(
+    let mut exec_req = build_exec_request(
         params,
         sandbox_policy,
         file_system_sandbox_policy,
@@ -209,8 +197,17 @@ pub async fn process_exec_tool_call(
         sandbox_cwd,
         codex_linux_sandbox_exe,
         use_legacy_landlock,
-        LinuxSandboxProcessLifetime::AllowDetachedChildren,
     )?;
+    if exec_req.sandbox == SandboxType::LinuxSeccomp
+        && let Some(separator) = exec_req.command.iter().position(|arg| arg == "--")
+        && !exec_req.command[..separator]
+            .iter()
+            .any(|arg| arg == "--allow-detached-children")
+    {
+        exec_req
+            .command
+            .insert(separator, "--allow-detached-children".to_string());
+    }
 
     // Route through the sandboxing module for a single, unified execution path.
     crate::sandboxing::execute_env(exec_req, stdout_stream).await
@@ -218,7 +215,6 @@ pub async fn process_exec_tool_call(
 
 /// Transform a portable exec request into the concrete argv/env that should be
 /// spawned under the requested sandbox policy.
-#[allow(clippy::too_many_arguments)]
 pub fn build_exec_request(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
@@ -227,7 +223,6 @@ pub fn build_exec_request(
     sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
-    linux_sandbox_process_lifetime: LinuxSandboxProcessLifetime,
 ) -> Result<ExecRequest> {
     let windows_sandbox_level = params.windows_sandbox_level;
     let enforce_managed_network = params.network.is_some();
@@ -283,7 +278,6 @@ pub fn build_exec_request(
             enforce_managed_network,
             network: network.as_ref(),
             sandbox_policy_cwd: sandbox_cwd,
-            linux_sandbox_process_lifetime,
             #[cfg(target_os = "macos")]
             macos_seatbelt_profile_extensions: None,
             codex_linux_sandbox_exe: codex_linux_sandbox_exe.as_ref(),

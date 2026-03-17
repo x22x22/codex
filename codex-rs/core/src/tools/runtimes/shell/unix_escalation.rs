@@ -1057,8 +1057,6 @@ impl CoreShellCommandExecutor {
                 enforce_managed_network: self.network.is_some(),
                 network: self.network.as_ref(),
                 sandbox_policy_cwd: &self.sandbox_policy_cwd,
-                linux_sandbox_process_lifetime:
-                    crate::exec::LinuxSandboxProcessLifetime::TerminateWithParent,
                 #[cfg(target_os = "macos")]
                 macos_seatbelt_profile_extensions,
                 codex_linux_sandbox_exe: self.codex_linux_sandbox_exe.as_ref(),
