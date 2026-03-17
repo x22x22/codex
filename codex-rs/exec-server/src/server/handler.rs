@@ -7,6 +7,7 @@ use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
+use tracing::warn;
 
 use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
@@ -116,6 +117,9 @@ impl ExecServerHandler {
     ) -> Result<ExecResponse, codex_app_server_protocol::JSONRPCErrorError> {
         self.require_initialized()?;
         let process_id = params.process_id.clone();
+        // Same-connection requests are serialized by the RPC processor, and the
+        // in-process client holds the handler mutex across this full call. That
+        // makes this pre-spawn duplicate check safe for the current entrypoints.
         {
             let process_map = self.processes.lock().await;
             if process_map.contains_key(&process_id) {
@@ -218,6 +222,7 @@ impl ExecServerHandler {
 
                 let mut chunks = Vec::new();
                 let mut total_bytes = 0;
+                let mut next_seq = process.next_seq;
                 for retained in process.output.iter().filter(|chunk| chunk.seq > after_seq) {
                     let chunk_len = retained.chunk.len();
                     if !chunks.is_empty() && total_bytes + chunk_len > max_bytes {
@@ -229,6 +234,7 @@ impl ExecServerHandler {
                         stream: retained.stream,
                         chunk: retained.chunk.clone().into(),
                     });
+                    next_seq = retained.seq + 1;
                     if total_bytes >= max_bytes {
                         break;
                     }
@@ -236,7 +242,7 @@ impl ExecServerHandler {
 
                 ReadResponse {
                     chunks,
-                    next_seq: process.next_seq,
+                    next_seq,
                     exited: process.exit_code.is_some(),
                     exit_code: process.exit_code,
                 }
@@ -411,6 +417,9 @@ async fn stream_output(
                     break;
                 };
                 process.retained_bytes = process.retained_bytes.saturating_sub(evicted.chunk.len());
+                warn!(
+                    "retained output cap exceeded for process {process_id}; dropping oldest output"
+                );
             }
             ExecOutputDeltaNotification {
                 process_id: process_id.clone(),
@@ -457,15 +466,20 @@ async fn watch_exit(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::collections::VecDeque;
     use std::time::Duration;
 
     use pretty_assertions::assert_eq;
     use tokio::time::timeout;
 
     use super::ExecServerHandler;
+    use super::RetainedOutputChunk;
+    use super::RunningProcess;
+    use crate::protocol::ExecOutputStream;
     use crate::protocol::InitializeParams;
     use crate::protocol::InitializeResponse;
     use crate::protocol::PROTOCOL_VERSION;
+    use crate::protocol::ReadParams;
     use crate::protocol::TerminateResponse;
     use crate::protocol::WriteParams;
     use crate::server::routing::ExecServerClientNotification;
@@ -1026,6 +1040,83 @@ mod tests {
             handler.processes.lock().await.contains_key("proc-1"),
             "terminated ids should stay reserved until exit cleanup removes them"
         );
+
+        handler.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn read_paginates_retained_output_without_skipping_omitted_chunks() {
+        let (outgoing_tx, _outgoing_rx) = tokio::sync::mpsc::channel(1);
+        let mut handler = ExecServerHandler::new(outgoing_tx);
+        let _ = handler.initialize().expect("initialize should succeed");
+        handler.initialized().expect("initialized should succeed");
+
+        let spawned = codex_utils_pty::spawn_pipe_process_no_stdin(
+            "bash",
+            &["-lc".to_string(), "true".to_string()],
+            std::env::current_dir().expect("cwd").as_path(),
+            &HashMap::new(),
+            &None,
+        )
+        .await
+        .expect("spawn test process");
+        {
+            let mut process_map = handler.processes.lock().await;
+            process_map.insert(
+                "proc-1".to_string(),
+                RunningProcess {
+                    session: spawned.session,
+                    tty: false,
+                    output: VecDeque::from([
+                        RetainedOutputChunk {
+                            seq: 1,
+                            stream: ExecOutputStream::Stdout,
+                            chunk: b"abc".to_vec(),
+                        },
+                        RetainedOutputChunk {
+                            seq: 2,
+                            stream: ExecOutputStream::Stderr,
+                            chunk: b"def".to_vec(),
+                        },
+                    ]),
+                    retained_bytes: 6,
+                    next_seq: 3,
+                    exit_code: None,
+                },
+            );
+        }
+
+        let first = handler
+            .read(ReadParams {
+                process_id: "proc-1".to_string(),
+                after_seq: Some(0),
+                max_bytes: Some(3),
+                wait_ms: Some(0),
+            })
+            .await
+            .expect("first read should succeed");
+
+        assert_eq!(first.chunks.len(), 1);
+        assert_eq!(first.chunks[0].seq, 1);
+        assert_eq!(first.chunks[0].stream, ExecOutputStream::Stdout);
+        assert_eq!(first.chunks[0].chunk.clone().into_inner(), b"abc".to_vec());
+        assert_eq!(first.next_seq, 2);
+
+        let second = handler
+            .read(ReadParams {
+                process_id: "proc-1".to_string(),
+                after_seq: Some(first.next_seq - 1),
+                max_bytes: Some(3),
+                wait_ms: Some(0),
+            })
+            .await
+            .expect("second read should succeed");
+
+        assert_eq!(second.chunks.len(), 1);
+        assert_eq!(second.chunks[0].seq, 2);
+        assert_eq!(second.chunks[0].stream, ExecOutputStream::Stderr);
+        assert_eq!(second.chunks[0].chunk.clone().into_inner(), b"def".to_vec());
+        assert_eq!(second.next_seq, 3);
 
         handler.shutdown().await;
     }
