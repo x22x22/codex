@@ -983,7 +983,7 @@ fn update_output_audio_state(
 fn audio_duration_ms(frame: &RealtimeAudioFrame) -> u32 {
     let Some(samples_per_channel) = frame
         .samples_per_channel
-        .or_else(|| decoded_samples_per_channel(frame))
+        .or(decoded_samples_per_channel(frame))
     else {
         return 0;
     };
