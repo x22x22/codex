@@ -47,6 +47,13 @@ use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
+use crate::server::ExecServerClientNotification;
+use crate::server::ExecServerHandler;
+use crate::server::ExecServerInboundMessage;
+use crate::server::ExecServerOutboundMessage;
+use crate::server::ExecServerRequest;
+use crate::server::ExecServerResponseMessage;
+use crate::server::ExecServerServerNotification;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecServerClientConnectOptions {
@@ -187,17 +194,30 @@ struct RegisteredProcess {
     status: Arc<RemoteProcessStatus>,
 }
 
+enum ClientBackend {
+    JsonRpc {
+        write_tx: mpsc::Sender<JSONRPCMessage>,
+    },
+    InProcess {
+        write_tx: mpsc::Sender<ExecServerInboundMessage>,
+    },
+}
+
 struct Inner {
-    write_tx: mpsc::Sender<JSONRPCMessage>,
+    backend: ClientBackend,
     pending: Mutex<HashMap<RequestId, oneshot::Sender<Result<Value, JSONRPCErrorError>>>>,
     processes: Mutex<HashMap<String, RegisteredProcess>>,
     next_request_id: AtomicI64,
     reader_task: JoinHandle<()>,
+    server_task: Option<JoinHandle<()>>,
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
         self.reader_task.abort();
+        if let Some(server_task) = &self.server_task {
+            server_task.abort();
+        }
     }
 }
 
@@ -231,6 +251,56 @@ pub enum ExecServerError {
 }
 
 impl ExecServerClient {
+    pub async fn connect_in_process(
+        options: ExecServerClientConnectOptions,
+    ) -> Result<Self, ExecServerError> {
+        let (write_tx, mut inbound_rx) = mpsc::channel::<ExecServerInboundMessage>(256);
+        let (outbound_tx, mut outgoing_rx) = mpsc::channel::<ExecServerOutboundMessage>(256);
+
+        let server_task = tokio::spawn(async move {
+            let mut handler = ExecServerHandler::new(outbound_tx);
+            while let Some(message) = inbound_rx.recv().await {
+                if let Err(err) = handler.handle_message(message).await {
+                    warn!("in-process exec-server handler stopped after protocol error: {err}");
+                    break;
+                }
+            }
+            handler.shutdown().await;
+        });
+
+        let inner = Arc::new_cyclic(|weak| {
+            let weak = weak.clone();
+            let reader_task = tokio::spawn(async move {
+                while let Some(message) = outgoing_rx.recv().await {
+                    if let Some(inner) = weak.upgrade()
+                        && let Err(err) = handle_in_process_outbound_message(&inner, message).await
+                    {
+                        warn!("in-process exec-server client closing after protocol error: {err}");
+                        handle_transport_shutdown(&inner).await;
+                        return;
+                    }
+                }
+
+                if let Some(inner) = weak.upgrade() {
+                    handle_transport_shutdown(&inner).await;
+                }
+            });
+
+            Inner {
+                backend: ClientBackend::InProcess { write_tx },
+                pending: Mutex::new(HashMap::new()),
+                processes: Mutex::new(HashMap::new()),
+                next_request_id: AtomicI64::new(1),
+                reader_task,
+                server_task: Some(server_task),
+            }
+        });
+
+        let client = Self { inner };
+        client.initialize(options).await?;
+        Ok(client)
+    }
+
     pub async fn connect_stdio<R, W>(
         stdin: W,
         stdout: R,
@@ -310,11 +380,12 @@ impl ExecServerClient {
             });
 
             Inner {
-                write_tx,
+                backend: ClientBackend::JsonRpc { write_tx },
                 pending: Mutex::new(HashMap::new()),
                 processes: Mutex::new(HashMap::new()),
                 next_request_id: AtomicI64::new(1),
                 reader_task,
+                server_task: None,
             }
         });
 
@@ -424,15 +495,34 @@ impl ExecServerClient {
     }
 
     async fn notify<P: Serialize>(&self, method: &str, params: &P) -> Result<(), ExecServerError> {
-        let params = serde_json::to_value(params)?;
-        self.inner
-            .write_tx
-            .send(JSONRPCMessage::Notification(JSONRPCNotification {
-                method: method.to_string(),
-                params: Some(params),
-            }))
-            .await
-            .map_err(|_| ExecServerError::Closed)
+        match &self.inner.backend {
+            ClientBackend::JsonRpc { write_tx } => {
+                let params = serde_json::to_value(params)?;
+                write_tx
+                    .send(JSONRPCMessage::Notification(JSONRPCNotification {
+                        method: method.to_string(),
+                        params: Some(params),
+                    }))
+                    .await
+                    .map_err(|_| ExecServerError::Closed)
+            }
+            ClientBackend::InProcess { write_tx } => {
+                let message = match method {
+                    INITIALIZED_METHOD => ExecServerInboundMessage::Notification(
+                        ExecServerClientNotification::Initialized,
+                    ),
+                    other => {
+                        return Err(ExecServerError::Protocol(format!(
+                            "unsupported in-process notification method `{other}`"
+                        )));
+                    }
+                };
+                write_tx
+                    .send(message)
+                    .await
+                    .map_err(|_| ExecServerError::Closed)
+            }
+        }
     }
 
     async fn request<P, R>(&self, method: &str, params: &P) -> Result<R, ExecServerError>
@@ -450,16 +540,27 @@ impl ExecServerClient {
             .await
             .insert(request_id.clone(), response_tx);
 
-        let message = JSONRPCMessage::Request(JSONRPCRequest {
-            id: request_id.clone(),
-            method: method.to_string(),
-            params: Some(params),
-            trace: None,
-        });
+        match &self.inner.backend {
+            ClientBackend::JsonRpc { write_tx } => {
+                let message = JSONRPCMessage::Request(JSONRPCRequest {
+                    id: request_id.clone(),
+                    method: method.to_string(),
+                    params: Some(params),
+                    trace: None,
+                });
 
-        if self.inner.write_tx.send(message).await.is_err() {
-            self.inner.pending.lock().await.remove(&request_id);
-            return Err(ExecServerError::Closed);
+                if write_tx.send(message).await.is_err() {
+                    self.inner.pending.lock().await.remove(&request_id);
+                    return Err(ExecServerError::Closed);
+                }
+            }
+            ClientBackend::InProcess { write_tx } => {
+                let message = in_process_request(method, request_id.clone(), params)?;
+                if write_tx.send(message).await.is_err() {
+                    self.inner.pending.lock().await.remove(&request_id);
+                    return Err(ExecServerError::Closed);
+                }
+            }
         }
 
         let result = response_rx.await.map_err(|_| ExecServerError::Closed)?;
@@ -469,6 +570,100 @@ impl ExecServerClient {
                 code: error.code,
                 message: error.message,
             }),
+        }
+    }
+}
+
+fn in_process_request(
+    method: &str,
+    request_id: RequestId,
+    params: Value,
+) -> Result<ExecServerInboundMessage, ExecServerError> {
+    match method {
+        INITIALIZE_METHOD => Ok(ExecServerInboundMessage::Request(
+            ExecServerRequest::Initialize {
+                request_id,
+                params: serde_json::from_value(params)?,
+            },
+        )),
+        EXEC_METHOD => Ok(ExecServerInboundMessage::Request(ExecServerRequest::Exec {
+            request_id,
+            params: serde_json::from_value(params)?,
+        })),
+        EXEC_WRITE_METHOD => Ok(ExecServerInboundMessage::Request(
+            ExecServerRequest::Write {
+                request_id,
+                params: serde_json::from_value(params)?,
+            },
+        )),
+        EXEC_TERMINATE_METHOD => Ok(ExecServerInboundMessage::Request(
+            ExecServerRequest::Terminate {
+                request_id,
+                params: serde_json::from_value(params)?,
+            },
+        )),
+        other => Err(ExecServerError::Protocol(format!(
+            "unsupported in-process request method `{other}`"
+        ))),
+    }
+}
+
+async fn handle_in_process_outbound_message(
+    inner: &Arc<Inner>,
+    message: ExecServerOutboundMessage,
+) -> Result<(), ExecServerError> {
+    match message {
+        ExecServerOutboundMessage::Response {
+            request_id,
+            response,
+        } => {
+            if let Some(tx) = inner.pending.lock().await.remove(&request_id) {
+                let result = match response {
+                    ExecServerResponseMessage::Initialize(response) => {
+                        serde_json::to_value(response)?
+                    }
+                    ExecServerResponseMessage::Exec(response) => serde_json::to_value(response)?,
+                    ExecServerResponseMessage::Write(response) => serde_json::to_value(response)?,
+                    ExecServerResponseMessage::Terminate(response) => {
+                        serde_json::to_value(response)?
+                    }
+                };
+                let _ = tx.send(Ok(result));
+            }
+        }
+        ExecServerOutboundMessage::Error { request_id, error } => {
+            if let Some(tx) = inner.pending.lock().await.remove(&request_id) {
+                let _ = tx.send(Err(error));
+            }
+        }
+        ExecServerOutboundMessage::Notification(notification) => {
+            handle_in_process_notification(inner, notification).await;
+        }
+    }
+
+    Ok(())
+}
+
+async fn handle_in_process_notification(
+    inner: &Arc<Inner>,
+    notification: ExecServerServerNotification,
+) {
+    match notification {
+        ExecServerServerNotification::OutputDelta(params) => {
+            let output = ExecServerOutput {
+                stream: params.stream,
+                chunk: params.chunk.into_inner(),
+            };
+            let processes = inner.processes.lock().await;
+            if let Some(process) = processes.get(&params.process_id) {
+                let _ = process.output_tx.send(output);
+            }
+        }
+        ExecServerServerNotification::Exited(params) => {
+            let mut processes = inner.processes.lock().await;
+            if let Some(process) = processes.remove(&params.process_id) {
+                process.status.mark_exited(Some(params.exit_code));
+            }
         }
     }
 }
@@ -573,6 +768,7 @@ mod tests {
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
     use super::ExecServerError;
+    use super::ExecServerOutput;
     use crate::protocol::EXEC_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
     use crate::protocol::EXEC_TERMINATE_METHOD;
@@ -675,6 +871,42 @@ mod tests {
         if let Err(err) = server.await {
             panic!("server task failed: {err}");
         }
+    }
+
+    #[tokio::test]
+    async fn connect_in_process_starts_processes_without_jsonrpc_transport() {
+        let client = match ExecServerClient::connect_in_process(test_options()).await {
+            Ok(client) => client,
+            Err(err) => panic!("failed to connect in-process client: {err}"),
+        };
+
+        let process = match client
+            .start_process(ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: vec!["printf".to_string(), "hello".to_string()],
+                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
+                env: HashMap::new(),
+                tty: false,
+                arg0: None,
+            })
+            .await
+        {
+            Ok(process) => process,
+            Err(err) => panic!("failed to start in-process child: {err}"),
+        };
+
+        let mut output = process.output_receiver();
+        let output = timeout(Duration::from_secs(1), output.recv())
+            .await
+            .unwrap_or_else(|err| panic!("timed out waiting for process output: {err}"))
+            .unwrap_or_else(|err| panic!("failed to receive process output: {err}"));
+        assert_eq!(
+            output,
+            ExecServerOutput {
+                stream: crate::protocol::ExecOutputStream::Stdout,
+                chunk: b"hello".to_vec(),
+            }
+        );
     }
 
     #[tokio::test]

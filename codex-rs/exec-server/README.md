@@ -8,6 +8,7 @@ It currently provides:
 - a standalone binary: `codex-exec-server`
 - a transport-agnostic server runtime with stdio and websocket entrypoints
 - a Rust client: `ExecServerClient`
+- a direct in-process client mode: `ExecServerClient::connect_in_process`
 - a separate local launch helper: `spawn_local_exec_server`
 - a small protocol module with shared request/response types
 
@@ -19,6 +20,8 @@ The internal shape is intentionally closer to `app-server` than the first cut:
 - transport adapters are separate from the per-connection request processor
 - JSON-RPC route matching is separate from the stateful exec handler
 - the client only speaks the protocol; it does not spawn a server subprocess
+- the client can also bypass the JSON-RPC transport/routing layer in local
+  in-process mode and call the typed handler directly
 - local child-process launch is handled by a separate helper/factory layer
 
 That split is meant to leave reusable seams if exec-server and app-server later
@@ -292,6 +295,8 @@ Connect the client to an existing server transport:
 
 - `ExecServerClient::connect_stdio(...)`
 - `ExecServerClient::connect_websocket(...)`
+- `ExecServerClient::connect_in_process(...)` for a local no-transport mode
+  backed directly by the typed handler
 
 Timeout behavior:
 
