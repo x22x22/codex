@@ -18,7 +18,8 @@ unified-exec in this PR; it is only the standalone transport layer.
 The internal shape is intentionally closer to `app-server` than the first cut:
 
 - transport adapters are separate from the per-connection request processor
-- JSON-RPC route matching is separate from the stateful exec handler
+- JSON-RPC request dispatch is backed by `jsonrpsee` and kept separate from the
+  stateful exec handler
 - the client only speaks the protocol; it does not spawn a server subprocess
 - the client can also bypass the JSON-RPC transport/routing layer in local
   in-process mode and call the typed handler directly

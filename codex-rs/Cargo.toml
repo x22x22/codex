@@ -274,6 +274,7 @@ starlark = "0.13.0"
 strum = "0.27.2"
 strum_macros = "0.28.0"
 supports-color = "3.0.2"
+jsonrpsee = { version = "0.26.0", features = ["server"] }
 syntect = "5"
 sys-locale = "0.3.2"
 tempfile = "3.23.0"

@@ -690,11 +690,6 @@ async fn handle_in_process_outbound_message(
     message: ExecServerOutboundMessage,
 ) -> Result<(), ExecServerError> {
     match message {
-        ExecServerOutboundMessage::Response { .. } | ExecServerOutboundMessage::Error { .. } => {
-            return Err(ExecServerError::Protocol(
-                "unexpected in-process RPC response".to_string(),
-            ));
-        }
         ExecServerOutboundMessage::Notification(notification) => {
             handle_in_process_notification(inner, notification).await;
         }

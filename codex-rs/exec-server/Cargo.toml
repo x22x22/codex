@@ -17,6 +17,7 @@ clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol = { workspace = true }
 codex-utils-pty = { workspace = true }
 futures = { workspace = true }
+jsonrpsee = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
