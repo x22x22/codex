@@ -85,8 +85,7 @@ if payload["stop_hook_active"]:
     print(json.dumps({{"systemMessage": "done"}}))
 else:
     print(json.dumps({{"decision": "block", "reason": {prompt:?}}}))
-"#,
-                prompt = prompt,
+"#
             );
             fs::write(&script_path, script).with_context(|| {
                 format!(

@@ -241,8 +241,9 @@ pub fn build_hook_prompt_message(fragments: &[HookPromptFragment]) -> Option<Res
     let content = fragments
         .iter()
         .filter(|fragment| !fragment.hook_run_ids.is_empty())
-        .map(|fragment| ContentItem::InputText {
-            text: serialize_hook_prompt_fragment(&fragment.text, &fragment.hook_run_ids),
+        .filter_map(|fragment| {
+            serialize_hook_prompt_fragment(&fragment.text, &fragment.hook_run_ids)
+                .map(|text| ContentItem::InputText { text })
         })
         .collect::<Vec<_>>();
 
@@ -308,20 +309,19 @@ pub fn parse_hook_prompt_fragment(text: &str) -> Option<HookPromptFragment> {
     })
 }
 
-fn serialize_hook_prompt_fragment(text: &str, hook_run_ids: &[String]) -> String {
+fn serialize_hook_prompt_fragment(text: &str, hook_run_ids: &[String]) -> Option<String> {
     let escaped_text = escape_hook_prompt_xml(text);
     match hook_run_ids {
-        [hook_run_id] => format!(
+        [hook_run_id] => Some(format!(
             r#"<hook_prompt {HOOK_PROMPT_RUN_ID_ATTR}="{hook_run_id}">{escaped_text}</hook_prompt>"#,
             hook_run_id = escape_hook_prompt_xml(hook_run_id),
-        ),
+        )),
         _ => {
-            let encoded_hook_run_ids =
-                serde_json::to_string(hook_run_ids).expect("hook prompt ids should serialize");
-            format!(
+            let encoded_hook_run_ids = serde_json::to_string(hook_run_ids).ok()?;
+            Some(format!(
                 r#"<hook_prompt {HOOK_PROMPT_RUN_IDS_ATTR}="{hook_run_ids}">{escaped_text}</hook_prompt>"#,
                 hook_run_ids = escape_hook_prompt_xml(&encoded_hook_run_ids),
-            )
+            ))
         }
     }
 }
