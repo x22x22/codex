@@ -17,6 +17,7 @@ use crate::analytics_client::AppInvocation;
 use crate::analytics_client::InvocationType;
 use crate::analytics_client::build_track_events_context;
 use crate::apps::render_apps_section;
+use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::compact::InitialContextInjection;
@@ -291,7 +292,6 @@ use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
-use crate::tools::discoverable::DiscoverableTool;
 use crate::tools::js_repl::JsReplHandle;
 use crate::tools::js_repl::resolve_compatible_node;
 use crate::tools::network_approval::NetworkApprovalService;
@@ -370,6 +370,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) persist_extended_history: bool,
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
 }
 
@@ -421,6 +422,7 @@ impl Codex {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
+            user_shell_override,
             parent_trace: _,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -575,6 +577,7 @@ impl Codex {
             dynamic_tools,
             persist_extended_history,
             inherited_shell_snapshot,
+            user_shell_override,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -1037,6 +1040,7 @@ pub(crate) struct SessionConfiguration {
     dynamic_tools: Vec<DynamicToolSpec>,
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    user_shell_override: Option<shell::Shell>,
 }
 
 impl SessionConfiguration {
@@ -1562,6 +1566,10 @@ impl Session {
         let originator = crate::default_client::originator().value;
         let terminal_type = terminal::user_agent();
         let session_model = session_configuration.collaboration_mode.model().to_string();
+        let auth_env_telemetry = collect_auth_env_telemetry(
+            &session_configuration.provider,
+            auth_manager.codex_api_key_env_enabled(),
+        );
         let mut session_telemetry = SessionTelemetry::new(
             conversation_id,
             session_model.as_str(),
@@ -1573,7 +1581,8 @@ impl Session {
             config.otel.log_user_prompt,
             terminal_type.clone(),
             session_configuration.session_source.clone(),
-        );
+        )
+        .with_auth_env(auth_env_telemetry.to_otel_metadata());
         if let Some(service_name) = session_configuration.metrics_service_name.as_deref() {
             session_telemetry = session_telemetry.with_metrics_service_name(service_name);
         }
@@ -1617,7 +1626,11 @@ impl Session {
         );
 
         let use_zsh_fork_shell = config.features.enabled(Feature::ShellZshFork);
-        let mut default_shell = if use_zsh_fork_shell {
+        let mut default_shell = if let Some(user_shell_override) =
+            session_configuration.user_shell_override.clone()
+        {
+            user_shell_override
+        } else if use_zsh_fork_shell {
             let zsh_path = config.zsh_path.as_ref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "zsh fork feature enabled, but `zsh_path` is not configured; set `zsh_path` in config.toml"
@@ -4229,27 +4242,6 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::list_skills(&sess, sub.id.clone(), cwds, force_reload).await;
                     false
                 }
-                Op::ListRemoteSkills {
-                    hazelnut_scope,
-                    product_surface,
-                    enabled,
-                } => {
-                    handlers::list_remote_skills(
-                        &sess,
-                        &config,
-                        sub.id.clone(),
-                        hazelnut_scope,
-                        product_surface,
-                        enabled,
-                    )
-                    .await;
-                    false
-                }
-                Op::DownloadRemoteSkill { hazelnut_id } => {
-                    handlers::export_remote_skill(&sess, &config, sub.id.clone(), hazelnut_id)
-                        .await;
-                    false
-                }
                 Op::Undo => {
                     handlers::undo(&sess, sub.id.clone()).await;
                     false
@@ -4371,14 +4363,9 @@ mod handlers {
     use codex_protocol::protocol::Event;
     use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ListCustomPromptsResponseEvent;
-    use codex_protocol::protocol::ListRemoteSkillsResponseEvent;
     use codex_protocol::protocol::ListSkillsResponseEvent;
     use codex_protocol::protocol::McpServerRefreshConfig;
     use codex_protocol::protocol::Op;
-    use codex_protocol::protocol::RemoteSkillDownloadedEvent;
-    use codex_protocol::protocol::RemoteSkillHazelnutScope;
-    use codex_protocol::protocol::RemoteSkillProductSurface;
-    use codex_protocol::protocol::RemoteSkillSummary;
     use codex_protocol::protocol::ReviewDecision;
     use codex_protocol::protocol::ReviewRequest;
     use codex_protocol::protocol::RolloutItem;
@@ -4777,96 +4764,6 @@ mod handlers {
             msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
         };
         sess.send_event_raw(event).await;
-    }
-
-    pub async fn list_remote_skills(
-        sess: &Session,
-        config: &Arc<Config>,
-        sub_id: String,
-        hazelnut_scope: RemoteSkillHazelnutScope,
-        product_surface: RemoteSkillProductSurface,
-        enabled: Option<bool>,
-    ) {
-        let auth = sess.services.auth_manager.auth().await;
-        let response = crate::skills::remote::list_remote_skills(
-            config,
-            auth.as_ref(),
-            hazelnut_scope,
-            product_surface,
-            enabled,
-        )
-        .await
-        .map(|skills| {
-            skills
-                .into_iter()
-                .map(|skill| RemoteSkillSummary {
-                    id: skill.id,
-                    name: skill.name,
-                    description: skill.description,
-                })
-                .collect::<Vec<_>>()
-        });
-
-        match response {
-            Ok(skills) => {
-                let event = Event {
-                    id: sub_id,
-                    msg: EventMsg::ListRemoteSkillsResponse(ListRemoteSkillsResponseEvent {
-                        skills,
-                    }),
-                };
-                sess.send_event_raw(event).await;
-            }
-            Err(err) => {
-                let event = Event {
-                    id: sub_id,
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: format!("failed to list remote skills: {err}"),
-                        codex_error_info: Some(CodexErrorInfo::Other),
-                    }),
-                };
-                sess.send_event_raw(event).await;
-            }
-        }
-    }
-
-    pub async fn export_remote_skill(
-        sess: &Session,
-        config: &Arc<Config>,
-        sub_id: String,
-        hazelnut_id: String,
-    ) {
-        let auth = sess.services.auth_manager.auth().await;
-        match crate::skills::remote::export_remote_skill(
-            config,
-            auth.as_ref(),
-            hazelnut_id.as_str(),
-        )
-        .await
-        {
-            Ok(result) => {
-                let id = result.id;
-                let event = Event {
-                    id: sub_id,
-                    msg: EventMsg::RemoteSkillDownloaded(RemoteSkillDownloadedEvent {
-                        id: id.clone(),
-                        name: id,
-                        path: result.path,
-                    }),
-                };
-                sess.send_event_raw(event).await;
-            }
-            Err(err) => {
-                let event = Event {
-                    id: sub_id,
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: format!("failed to export remote skill {hazelnut_id}: {err}"),
-                        codex_error_info: Some(CodexErrorInfo::Other),
-                    }),
-                };
-                sess.send_event_raw(event).await;
-            }
-        }
     }
 
     pub async fn undo(sess: &Arc<Session>, sub_id: String) {
@@ -6410,11 +6307,14 @@ pub(crate) async fn built_tools(
                 accessible_connectors.as_slice(),
             )
             .await
-            {
-                Ok(connectors) if connectors.is_empty() => None,
-                Ok(connectors) => {
-                    Some(connectors.into_iter().map(DiscoverableTool::from).collect())
-                }
+            .map(|discoverable_tools| {
+                crate::tools::discoverable::filter_tool_suggest_discoverable_tools_for_client(
+                    discoverable_tools,
+                    turn_context.app_server_client_name.as_deref(),
+                )
+            }) {
+                Ok(discoverable_tools) if discoverable_tools.is_empty() => None,
+                Ok(discoverable_tools) => Some(discoverable_tools),
                 Err(err) => {
                     warn!("failed to load discoverable tool suggestions: {err:#}");
                     None
@@ -6721,8 +6621,6 @@ fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListCustomPromptsResponse(_)
         | EventMsg::ListSkillsResponse(_)
-        | EventMsg::ListRemoteSkillsResponse(_)
-        | EventMsg::RemoteSkillDownloaded(_)
         | EventMsg::SkillsUpdateAvailable
         | EventMsg::PlanUpdate(_)
         | EventMsg::TurnAborted(_)
