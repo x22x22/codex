@@ -67,6 +67,10 @@ Older failures also appeared on Linux, but the repeated cross-PR signal is stron
   - Cap the Windows PowerShell AST parser subprocess at `5s` and kill it on timeout so a hung `pwsh` startup fails closed instead of stalling `exec_policy::tests::verify_approval_requirement_for_unsafe_powershell_command` until nextest aborts the shard.
   - Add a Windows-only regression test that launches a deliberately sleeping fake PowerShell executable and asserts the parser returns `Failed` within the same `5s` cap.
   - Merge `origin/main` into the PR branch to clear a newly dirty merge state after GitHub stopped enqueuing any `pull_request` workflows for two consecutive heads and created only the `CLA Assistant` suite.
+  - Run `23169801581` on head `9192637e4` narrowed the remaining failures back to two Windows-only shell-command tests after every `Lint/Build` lane and every non-Windows `Tests` lane passed: `all::suite::apply_patch_cli::apply_patch_cli_can_use_shell_command_output_as_patch_input` on Windows x64 and `tools::handlers::shell::tests::commands_generated_by_shell_command_handler_can_be_matched_by_is_known_safe_command` on Windows arm64.
+  - Add a test-only `user_shell_override` seam through `ThreadManager`, `SessionConfiguration`, and `TestCodexBuilder` so the affected integration tests can pin `cmd.exe` on Windows without mutating live session state after startup.
+  - Use that override in the Windows-flaky `apply_patch_cli` and websocket shell-chain tests, while still executing the file-read command under `powershell.exe` inside `cmd.exe` where the scenario needs PowerShell output rather than PowerShell process startup.
+  - Remove the live PowerShell executable discovery from `core/src/tools/handlers/shell_tests.rs`; the PowerShell wrapper safety coverage already lives in `codex-shell-command`, and this core handler regression test only needs to verify that derived commands still match `is_known_safe_command`.
 - Rationale: these failures are test-harness flakes, not product behaviors. The fixes keep the assertions intact and remove environment-sensitive startup and ordering hazards instead of stretching timeouts.
 
 ## Constraints

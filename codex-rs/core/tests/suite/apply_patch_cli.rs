@@ -740,7 +740,9 @@ async fn apply_patch_shell_command_heredoc_with_cd_updates_relative_workdir() ->
 async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
-    let harness = apply_patch_harness_with(|builder| builder.with_model("gpt-5.1")).await?;
+    let harness =
+        apply_patch_harness_with(|builder| builder.with_model("gpt-5.1").with_windows_cmd_shell())
+            .await?;
 
     let source_contents = "line1\nnaïve café\nline3\n";
     let source_path = harness.path("source.txt");
@@ -786,7 +788,7 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
             match call_num {
                 0 => {
                     let command = if cfg!(windows) {
-                        "Get-Content -Encoding utf8 source.txt"
+                        r#"powershell.exe -NoLogo -NoProfile -Command "Get-Content -Encoding utf8 source.txt""#
                     } else {
                         "cat source.txt"
                     };
@@ -807,9 +809,7 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
                     let body_json: serde_json::Value =
                         request.body_json().expect("request body should be json");
                     let read_output = function_call_output_text(&body_json, &self.read_call_id);
-                    eprintln!("read_output: \n{read_output}");
                     let stdout = stdout_from_shell_output(&read_output);
-                    eprintln!("stdout: \n{stdout}");
                     let patch_lines = stdout
                         .lines()
                         .map(|line| format!("+{line}"))
@@ -818,8 +818,6 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
                     let patch = format!(
                         "*** Begin Patch\n*** Add File: target.txt\n{patch_lines}\n*** End Patch"
                     );
-
-                    eprintln!("patch: \n{patch}");
 
                     let body = sse(vec![
                         ev_response_created("resp-2"),
