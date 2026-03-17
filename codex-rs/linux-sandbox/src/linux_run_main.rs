@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crate::bwrap::BwrapNetworkMode;
 use crate::bwrap::BwrapOptions;
+use crate::bwrap::BwrapProcessLifetime;
 use crate::bwrap::create_bwrap_command_args;
 use crate::landlock::apply_sandbox_policy_to_current_thread;
 use crate::proxy_routing::activate_proxy_routes_in_netns;
@@ -79,6 +80,13 @@ pub struct LandlockCommand {
     #[arg(long = "proxy-route-spec", hide = true)]
     pub proxy_route_spec: Option<String>,
 
+    /// Internal compatibility flag.
+    ///
+    /// If set, omit bubblewrap's parent-death coupling so intentionally
+    /// detached descendants can outlive the original helper process.
+    #[arg(long = "allow-detached-children", hide = true, default_value_t = false)]
+    pub allow_detached_children: bool,
+
     /// When set, skip mounting a fresh `/proc` even though PID isolation is
     /// still enabled. This is primarily intended for restrictive container
     /// environments that deny `--proc /proc`.
@@ -108,6 +116,7 @@ pub fn run_main() -> ! {
         apply_seccomp_then_exec,
         allow_network_for_proxy,
         proxy_route_spec,
+        allow_detached_children,
         no_proc,
         command,
     } = LandlockCommand::parse();
@@ -203,6 +212,7 @@ pub fn run_main() -> ! {
             inner,
             !no_proc,
             allow_network_for_proxy,
+            allow_detached_children,
         );
     }
 
@@ -405,6 +415,7 @@ fn run_bwrap_with_proc_fallback(
     inner: Vec<String>,
     mount_proc: bool,
     allow_network_for_proxy: bool,
+    allow_detached_children: bool,
 ) -> ! {
     let network_mode = bwrap_network_mode(network_sandbox_policy, allow_network_for_proxy);
     let mut mount_proc = mount_proc;
@@ -426,6 +437,11 @@ fn run_bwrap_with_proc_fallback(
     let options = BwrapOptions {
         mount_proc,
         network_mode,
+        process_lifetime: if allow_detached_children {
+            BwrapProcessLifetime::AllowDetachedChildren
+        } else {
+            BwrapProcessLifetime::TerminateWithParent
+        },
     };
     let bwrap_args = build_bwrap_argv(
         inner,
@@ -515,6 +531,7 @@ fn build_preflight_bwrap_argv(
         BwrapOptions {
             mount_proc: true,
             network_mode,
+            process_lifetime: BwrapProcessLifetime::TerminateWithParent,
         },
     )
 }
