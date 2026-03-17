@@ -73,6 +73,9 @@ If the client sends exec methods before completing the `initialize` /
 If a connection closes, the server terminates any remaining managed processes
 for that connection.
 
+TODO: add authentication to the `initialize` setup before this is used across a
+trust boundary.
+
 ## API
 
 ### `initialize`
