@@ -1,15 +1,15 @@
 mod client;
+mod client_api;
 mod connection;
 mod local;
 mod protocol;
 mod server;
 
 pub use client::ExecServerClient;
-pub use client::ExecServerClientConnectOptions;
 pub use client::ExecServerError;
-pub use client::ExecServerEvent;
-pub use client::ExecServerOutput;
-pub use client::RemoteExecServerConnectArgs;
+pub use client_api::ExecServerClientConnectOptions;
+pub use client_api::ExecServerEvent;
+pub use client_api::RemoteExecServerConnectArgs;
 pub use local::ExecServerLaunchCommand;
 pub use local::SpawnedExecServer;
 pub use local::spawn_local_exec_server;
