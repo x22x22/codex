@@ -7,7 +7,7 @@ use crate::auth_env_telemetry::AuthEnvTelemetry;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
-use crate::default_client::current_residency_header_telemetry;
+use crate::default_client::residency_header_telemetry_for_provider_headers;
 use crate::endpoint_config_telemetry::EndpointConfigTelemetrySource;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
@@ -51,7 +51,7 @@ struct ModelsRequestTelemetry {
     auth_header_name: Option<&'static str>,
     auth_env_telemetry: AuthEnvTelemetry,
     residency_header_attached: bool,
-    residency_header_value: Option<&'static str>,
+    residency_header_value: Option<String>,
     provider_header_names: Option<String>,
     base_url_origin: &'static str,
     host_class: &'static str,
@@ -93,7 +93,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             auth.env_provider_key_present = self.auth_env_telemetry.provider_env_key_present,
             auth.env_refresh_token_url_override_present = self.auth_env_telemetry.refresh_token_url_override_present,
             residency_header_attached = self.residency_header_attached,
-            residency_header_value = self.residency_header_value,
+            residency_header_value = self.residency_header_value.as_deref(),
             provider_header_names = self.provider_header_names.as_deref(),
             base_url_origin = self.base_url_origin,
             host_class = self.host_class,
@@ -126,7 +126,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             auth.env_provider_key_present = self.auth_env_telemetry.provider_env_key_present,
             auth.env_refresh_token_url_override_present = self.auth_env_telemetry.refresh_token_url_override_present,
             residency_header_attached = self.residency_header_attached,
-            residency_header_value = self.residency_header_value,
+            residency_header_value = self.residency_header_value.as_deref(),
             provider_header_names = self.provider_header_names.as_deref(),
             base_url_origin = self.base_url_origin,
             host_class = self.host_class,
@@ -163,7 +163,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             base_url_source: self.base_url_source,
             base_url_is_default: self.base_url_is_default,
             residency_header_attached: Some(self.residency_header_attached),
-            residency_header_value: self.residency_header_value,
+            residency_header_value: self.residency_header_value.as_deref(),
             auth_request_id: response_debug.request_id.as_deref(),
             auth_cf_ray: response_debug.cf_ray.as_deref(),
             auth_error: response_debug.auth_error.as_deref(),
@@ -196,7 +196,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
                 auth.env_provider_key_present = self.auth_env_telemetry.provider_env_key_present,
                 auth.env_refresh_token_url_override_present = self.auth_env_telemetry.refresh_token_url_override_present,
                 residency_header_attached = self.residency_header_attached,
-                residency_header_value = self.residency_header_value,
+                residency_header_value = self.residency_header_value.as_deref(),
                 provider_header_names = self.provider_header_names.as_deref(),
                 base_url_origin = self.base_url_origin,
                 host_class = self.host_class,
@@ -226,7 +226,7 @@ impl RequestTelemetry for ModelsRequestTelemetry {
                 auth.env_provider_key_present = self.auth_env_telemetry.provider_env_key_present,
                 auth.env_refresh_token_url_override_present = self.auth_env_telemetry.refresh_token_url_override_present,
                 residency_header_attached = self.residency_header_attached,
-                residency_header_value = self.residency_header_value,
+                residency_header_value = self.residency_header_value.as_deref(),
                 provider_header_names = self.provider_header_names.as_deref(),
                 base_url_origin = self.base_url_origin,
                 host_class = self.host_class,
@@ -540,7 +540,7 @@ impl ModelsManager {
         let endpoint_telemetry = self
             .endpoint_telemetry_source
             .classify(api_provider.base_url.as_str());
-        let residency = current_residency_header_telemetry();
+        let residency = residency_header_telemetry_for_provider_headers(&api_provider.headers);
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
             auth_header_attached: api_auth.auth_header_attached(),

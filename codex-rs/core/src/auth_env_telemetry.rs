@@ -33,7 +33,6 @@ impl AuthEnvTelemetry {
             || self.provider_env_key_present == Some(true)
     }
 }
-
 pub(crate) fn collect_auth_env_telemetry(
     provider: &ModelProviderInfo,
     codex_api_key_env_enabled: bool,

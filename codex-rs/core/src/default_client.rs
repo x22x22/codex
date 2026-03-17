@@ -30,10 +30,10 @@ pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ResidencyHeaderTelemetry {
     pub attached: bool,
-    pub value: Option<&'static str>,
+    pub value: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -105,8 +105,21 @@ pub fn current_residency_header_telemetry() -> ResidencyHeaderTelemetry {
     };
     ResidencyHeaderTelemetry {
         attached: true,
-        value: Some(residency_header_value(*requirement)),
+        value: Some(residency_header_value(*requirement).to_string()),
     }
+}
+
+pub fn residency_header_telemetry_for_provider_headers(
+    provider_headers: &HeaderMap,
+) -> ResidencyHeaderTelemetry {
+    if let Some(value) = provider_headers.get(RESIDENCY_HEADER_NAME) {
+        return ResidencyHeaderTelemetry {
+            attached: true,
+            value: value.to_str().ok().map(str::to_owned),
+        };
+    }
+
+    current_residency_header_telemetry()
 }
 
 pub fn originator() -> Originator {
