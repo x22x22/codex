@@ -791,15 +791,18 @@ async fn apply_patch_cli_can_use_shell_command_output_as_patch_input() -> Result
                 0 => {
                     let command = if cfg!(windows) {
                         // Encode the nested PowerShell script so `cmd.exe /c` does not leave the
-                        // read command wrapped in quotes and turn it into a printed string literal.
-                        let script = "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); Get-Content -Encoding utf8 source.txt";
+                        // read command wrapped in quotes, and suppress progress records so the
+                        // shell tool only returns the file contents back to apply_patch.
+                        let script = "$ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); [System.IO.File]::ReadAllText('source.txt', [System.Text.UTF8Encoding]::new($false))";
                         let encoded = BASE64_STANDARD.encode(
                             script
                                 .encode_utf16()
                                 .flat_map(u16::to_le_bytes)
                                 .collect::<Vec<u8>>(),
                         );
-                        format!("powershell.exe -NoLogo -NoProfile -EncodedCommand {encoded}")
+                        format!(
+                            "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}"
+                        )
                     } else {
                         "cat source.txt".to_string()
                     };
