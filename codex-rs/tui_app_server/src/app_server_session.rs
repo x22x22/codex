@@ -402,6 +402,7 @@ impl AppServerSession {
     ) -> Result<TurnStartResponse> {
         let request_id = self.next_request_id();
         let request_cwd = cwd.clone();
+        self.remember_thread_cwd(thread_id.to_string(), cwd);
         let response = self
             .client
             .request_typed(ClientRequest::TurnStart {
@@ -424,7 +425,6 @@ impl AppServerSession {
             })
             .await
             .wrap_err("turn/start failed in app-server TUI")?;
-        self.remember_thread_cwd(thread_id.to_string(), cwd);
         Ok(response)
     }
 
