@@ -374,8 +374,7 @@ async fn handle_start_inner(
 ) -> CodexResult<()> {
     let provider = sess.provider().await;
     let auth = sess.services.auth_manager.auth().await;
-    let realtime_api_key =
-        realtime_api_key(auth.as_ref(), &provider, read_openai_api_key_from_env)?;
+    let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
     let mut api_provider = provider.to_api_provider(Some(crate::auth::AuthMode::ApiKey))?;
     let config = sess.get_config().await;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
@@ -525,7 +524,6 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
 fn realtime_api_key(
     auth: Option<&CodexAuth>,
     provider: &crate::ModelProviderInfo,
-    openai_api_key_from_env: impl FnOnce() -> Option<String>,
 ) -> CodexResult<String> {
     if let Some(api_key) = provider.api_key()? {
         return Ok(api_key);
@@ -542,7 +540,7 @@ fn realtime_api_key(
     // TODO(aibrahim): Remove this temporary fallback once realtime auth no longer
     // requires API key auth for ChatGPT/SIWC sessions.
     if provider.is_openai()
-        && let Some(api_key) = openai_api_key_from_env()
+        && let Some(api_key) = read_openai_api_key_from_env()
     {
         return Ok(api_key);
     }
