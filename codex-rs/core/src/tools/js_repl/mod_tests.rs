@@ -2078,7 +2078,7 @@ console.log(JSON.stringify(out));
     let result = result?;
     response_watcher_result?;
     assert!(result.output.contains("hidden-ok"));
-    assert!(session.get_pending_input().await.is_empty());
+    assert!(session.get_pending_input_with_metadata().await.is_empty());
 
     Ok(())
 }
