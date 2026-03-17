@@ -3,6 +3,7 @@ use std::path::Path;
 
 use codex_utils_image::PromptImageMode;
 use codex_utils_image::load_for_prompt;
+use codex_utils_image::load_for_prompt_from_bytes;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
@@ -947,7 +948,28 @@ pub fn local_image_content_items_with_label_number(
     label_number: Option<usize>,
     mode: PromptImageMode,
 ) -> Vec<ContentItem> {
-    match load_for_prompt(path, mode) {
+    local_image_content_items_for_load_result(path, label_number, load_for_prompt(path, mode))
+}
+
+pub fn local_image_content_items_from_bytes_with_label_number(
+    path: &std::path::Path,
+    bytes: Vec<u8>,
+    label_number: Option<usize>,
+    mode: PromptImageMode,
+) -> Vec<ContentItem> {
+    local_image_content_items_for_load_result(
+        path,
+        label_number,
+        load_for_prompt_from_bytes(path, bytes, mode),
+    )
+}
+
+fn local_image_content_items_for_load_result(
+    path: &std::path::Path,
+    label_number: Option<usize>,
+    image_result: Result<codex_utils_image::EncodedImage, ImageProcessingError>,
+) -> Vec<ContentItem> {
+    match image_result {
         Ok(image) => {
             let mut items = Vec::with_capacity(3);
             if let Some(label_number) = label_number {

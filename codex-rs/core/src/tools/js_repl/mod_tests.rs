@@ -1214,7 +1214,12 @@ const png = Buffer.from(
 );
 await fs.writeFile(imagePath, png);
 const out = await codex.tool("view_image", { path: imagePath });
-await codex.emitImage(out);
+console.log(JSON.stringify(out.output));
+try {
+  await codex.emitImage(out);
+} catch (error) {
+  console.log(String(error));
+}
 console.log(out.type);
 "#;
 
@@ -1229,6 +1234,7 @@ console.log(out.type);
             },
         )
         .await?;
+    println!("{}", result.output);
     assert!(result.output.contains("function_call_output"));
     assert_eq!(
             result.content_items.as_slice(),
