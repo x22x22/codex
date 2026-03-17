@@ -1175,6 +1175,36 @@ fn web_search_mode_live_sets_external_web_access_true() {
 }
 
 #[test]
+fn web_search_mode_overrides_enabled_tool_capabilities() {
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &search_capable_model_info(),
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Live),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    })
+    .with_enabled_tool_capabilities(Some(BTreeSet::from(["shell".to_string()])));
+
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+    let tool = find_tool(&tools, "web_search");
+    assert_eq!(
+        tool.spec,
+        ToolSpec::WebSearch {
+            external_web_access: Some(true),
+            filters: None,
+            user_location: None,
+            search_context_size: None,
+            search_content_types: None,
+        }
+    );
+}
+
+#[test]
 fn web_search_config_is_forwarded_to_tool_spec() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
