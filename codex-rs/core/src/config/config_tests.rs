@@ -6220,9 +6220,121 @@ sandbox_mode = "workspace-write"
 
     assert_eq!(
         err.to_string(),
-        "cannot persist granted permissions without `default_permissions`"
+        "cannot persist granted permissions without user-configured `default_permissions`"
     );
     assert!(!codex_home.path().join(CONFIG_TOML_FILE).exists());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn persist_granted_permission_profile_does_not_copy_inherited_profiles() -> anyhow::Result<()>
+{
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    std::fs::write(cwd.path().join(".git"), "gitdir: nowhere")?;
+    std::fs::create_dir_all(cwd.path().join(".codex"))?;
+
+    let inherited_read = AbsolutePathBuf::try_from(cwd.path().join("repo-only"))?;
+    std::fs::write(
+        cwd.path().join(".codex").join(CONFIG_TOML_FILE),
+        format!(
+            r#"
+sandbox_mode = "workspace-write"
+default_permissions = "workspace"
+
+[permissions.workspace.filesystem]
+read = ["{}"]
+
+[permissions.workspace.network]
+enabled = true
+"#,
+            inherited_read.display()
+        ),
+    )?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"
+sandbox_mode = "workspace-write"
+default_permissions = "workspace"
+
+[permissions.workspace]
+"#,
+    )?;
+
+    let cwd = AbsolutePathBuf::try_from(cwd.path().to_path_buf())?;
+    let config_layer_stack = load_config_layers_state(
+        codex_home.path(),
+        Some(cwd.clone()),
+        &[],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+    let config_toml = deserialize_config_toml_with_base(
+        config_layer_stack.effective_config(),
+        codex_home.path(),
+    )?;
+    let config = Config::load_config_with_layer_stack(
+        config_toml,
+        ConfigOverrides {
+            cwd: Some(cwd.to_path_buf()),
+            ..Default::default()
+        },
+        codex_home.path().to_path_buf(),
+        config_layer_stack,
+    )?;
+
+    let granted_write = AbsolutePathBuf::try_from(cwd.as_path().join("logs"))?;
+    let profile_name = persist_granted_permission_profile(
+        codex_home.path(),
+        &config,
+        &PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: None,
+                write: Some(vec![granted_write.clone()]),
+            }),
+            network: None,
+            macos: None,
+        },
+    )
+    .await?;
+
+    assert_eq!(profile_name, "workspace");
+
+    let persisted = std::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE))?;
+    let persisted: ConfigToml = toml::from_str(&persisted)?;
+    assert_eq!(persisted.default_permissions.as_deref(), Some("workspace"));
+    assert_eq!(
+        persisted
+            .permissions
+            .as_ref()
+            .and_then(|permissions| permissions.entries.get("workspace")),
+        Some(&PermissionProfileToml {
+            filesystem: Some(FilesystemPermissionsToml {
+                entries: BTreeMap::from([(
+                    granted_write.display().to_string(),
+                    FilesystemPermissionToml::Access(FileSystemAccessMode::Write),
+                )]),
+            }),
+            network: None,
+            macos: None,
+        })
+    );
+    assert!(
+        !persisted
+            .permissions
+            .as_ref()
+            .and_then(|permissions| permissions.entries.get("workspace"))
+            .is_some_and(
+                |profile| profile
+                    .filesystem
+                    .as_ref()
+                    .is_some_and(|filesystem| filesystem
+                        .entries
+                        .contains_key(&inherited_read.display().to_string()))
+            )
+    );
 
     Ok(())
 }

@@ -2613,7 +2613,7 @@ async fn request_permissions_is_auto_denied_when_granular_policy_blocks_tool_req
 }
 
 #[tokio::test]
-async fn notify_request_permissions_response_persists_always_allow_permissions() {
+async fn notify_request_permissions_response_falls_back_to_session_when_persist_fails() {
     let (session, _turn_context) = make_session_and_context().await;
     let active_turn = ActiveTurn::default();
     let (tx, rx) = oneshot::channel();
@@ -2654,7 +2654,7 @@ async fn notify_request_permissions_response_persists_always_allow_permissions()
     );
     assert_eq!(
         rx.await.expect("response should be delivered").scope,
-        PermissionGrantScope::AlwaysAllow
+        PermissionGrantScope::Session
     );
 
     assert!(!session.codex_home().await.join(CONFIG_TOML_FILE).exists());

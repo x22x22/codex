@@ -2877,12 +2877,12 @@ impl Config {
     }
 }
 
-pub(crate) fn default_permissions_profile_name(config: &Config) -> Option<String> {
+pub(crate) fn user_default_permissions_profile_name(config: &Config) -> Option<String> {
     config
         .config_layer_stack
-        .effective_config()
-        .try_into::<PermissionSelectionToml>()
-        .ok()
+        .get_user_layer()
+        .map(|layer| layer.config.clone())
+        .and_then(|config| config.try_into::<PermissionSelectionToml>().ok())
         .and_then(|selection| selection.default_permissions)
 }
 
@@ -2892,14 +2892,16 @@ pub(crate) async fn persist_granted_permission_profile(
     granted_permissions: &PermissionProfile,
 ) -> anyhow::Result<String> {
     let granted_profile = permission_profile_toml_from_runtime_permissions(granted_permissions);
-    let Some(profile_name) = default_permissions_profile_name(config) else {
-        anyhow::bail!("cannot persist granted permissions without `default_permissions`");
+    let Some(profile_name) = user_default_permissions_profile_name(config) else {
+        anyhow::bail!(
+            "cannot persist granted permissions without user-configured `default_permissions`"
+        );
     };
     let existing = config
         .config_layer_stack
-        .effective_config()
-        .try_into::<ConfigToml>()
-        .ok()
+        .get_user_layer()
+        .map(|layer| layer.config.clone())
+        .and_then(|config| config.try_into::<ConfigToml>().ok())
         .and_then(|config_toml| config_toml.permissions)
         .and_then(|permissions| permissions.entries.get(&profile_name).cloned());
     let profile = merge_permission_profile_toml(existing.as_ref(), &granted_profile);

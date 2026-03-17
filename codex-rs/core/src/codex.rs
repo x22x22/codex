@@ -3149,7 +3149,7 @@ impl Session {
     pub async fn notify_request_permissions_response(
         &self,
         call_id: &str,
-        response: RequestPermissionsResponse,
+        mut response: RequestPermissionsResponse,
     ) {
         let mut granted_for_session = None;
         let mut granted_always_allow = None;
@@ -3192,6 +3192,7 @@ impl Session {
             .await
             {
                 error!("failed to persist granted permissions: {err}");
+                response.scope = PermissionGrantScope::Session;
             } else {
                 self.reload_user_config_layer().await;
             }

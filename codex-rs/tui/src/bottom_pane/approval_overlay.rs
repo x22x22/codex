@@ -713,14 +713,7 @@ fn exec_options(
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
             }),
-            ReviewDecision::ApprovedForAlways => {
-                additional_permissions.as_ref().map(|_| ApprovalOption {
-                    label: "Yes, and always allow these permissions".to_string(),
-                    decision: ApprovalDecision::Review(ReviewDecision::ApprovedForAlways),
-                    display_shortcut: None,
-                    additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
-                })
-            }
+            ReviewDecision::ApprovedForAlways => None,
             ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment,
             } => {
@@ -1284,6 +1277,37 @@ mod tests {
             labels,
             vec![
                 "Yes, proceed".to_string(),
+                "No, and tell Codex what to do differently".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn additional_permissions_exec_options_hide_persistent_approval() {
+        let additional_permissions = PermissionProfile {
+            file_system: Some(FileSystemPermissions {
+                read: Some(vec![absolute_path("/tmp/readme.txt")]),
+                write: Some(vec![absolute_path("/tmp/out.txt")]),
+            }),
+            ..Default::default()
+        };
+        let options = exec_options(
+            &[
+                ReviewDecision::Approved,
+                ReviewDecision::ApprovedForSession,
+                ReviewDecision::ApprovedForAlways,
+                ReviewDecision::Abort,
+            ],
+            None,
+            Some(&additional_permissions),
+        );
+
+        let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Yes, proceed".to_string(),
+                "Yes, and allow these permissions for this session".to_string(),
                 "No, and tell Codex what to do differently".to_string(),
             ]
         );
