@@ -176,6 +176,16 @@ impl ExecServerHandler {
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
 
+        let process_id = params.process_id.clone();
+        {
+            let process_map = self.processes.lock().await;
+            if process_map.contains_key(&process_id) {
+                return Err(invalid_request(format!(
+                    "process {process_id} already exists"
+                )));
+            }
+        }
+
         let spawned = if params.tty {
             codex_utils_pty::spawn_pty_process(
                 program,
@@ -198,7 +208,6 @@ impl ExecServerHandler {
         }
         .map_err(|err| internal_error(err.to_string()))?;
 
-        let process_id = params.process_id.clone();
         {
             let mut process_map = self.processes.lock().await;
             if process_map.contains_key(&process_id) {
@@ -268,17 +277,17 @@ impl ExecServerHandler {
         &self,
         params: crate::protocol::TerminateParams,
     ) -> Result<TerminateResponse, codex_app_server_protocol::JSONRPCErrorError> {
-        let process = {
-            let mut process_map = self.processes.lock().await;
-            process_map.remove(&params.process_id)
+        let running = {
+            let process_map = self.processes.lock().await;
+            if let Some(process) = process_map.get(&params.process_id) {
+                process.session.terminate();
+                true
+            } else {
+                false
+            }
         };
 
-        Ok(if let Some(process) = process {
-            process.session.terminate();
-            TerminateResponse { running: true }
-        } else {
-            TerminateResponse { running: false }
-        })
+        Ok(TerminateResponse { running })
     }
 
     async fn send_request_result(
@@ -568,6 +577,15 @@ mod tests {
     async fn duplicate_process_ids_are_rejected_per_connection() {
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(4);
         let mut handler = ExecServerHandler::new(outgoing_tx);
+        let marker_path = std::env::temp_dir().join(format!(
+            "codex-exec-server-duplicate-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock before unix epoch")
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_file(&marker_path);
 
         if let Err(err) = handler
             .handle_message(ExecServerInboundMessage::Request(
@@ -626,7 +644,14 @@ mod tests {
         if let Err(err) = handler
             .handle_message(ExecServerInboundMessage::Request(ExecServerRequest::Exec {
                 request_id: RequestId::Integer(3),
-                params,
+                params: crate::protocol::ExecParams {
+                    argv: vec![
+                        "bash".to_string(),
+                        "-lc".to_string(),
+                        format!("printf duplicate > {}", marker_path.display()),
+                    ],
+                    ..params
+                },
             }))
             .await
         {
@@ -641,8 +666,13 @@ mod tests {
         assert_eq!(request_id, RequestId::Integer(3));
         assert_eq!(error.code, -32600);
         assert_eq!(error.message, "process proc-1 already exists");
+        assert!(
+            !marker_path.exists(),
+            "duplicate process ids must be rejected before spawning the command"
+        );
 
         handler.shutdown().await;
+        let _ = std::fs::remove_file(&marker_path);
     }
 
     #[tokio::test]
@@ -826,5 +856,83 @@ mod tests {
                 }),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn terminate_keeps_process_ids_reserved_until_exit_cleanup() {
+        let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(2);
+        let mut handler = ExecServerHandler::new(outgoing_tx);
+
+        if let Err(err) = handler
+            .handle_message(ExecServerInboundMessage::Request(
+                ExecServerRequest::Initialize {
+                    request_id: RequestId::Integer(1),
+                    params: InitializeParams {
+                        client_name: "test".to_string(),
+                    },
+                },
+            ))
+            .await
+        {
+            panic!("initialize should succeed: {err}");
+        }
+        let _ = recv_outbound(&mut outgoing_rx).await;
+        if let Err(err) = handler
+            .handle_message(ExecServerInboundMessage::Notification(
+                ExecServerClientNotification::Initialized,
+            ))
+            .await
+        {
+            panic!("initialized should succeed: {err}");
+        }
+
+        let spawned = codex_utils_pty::spawn_pipe_process_no_stdin(
+            "bash",
+            &["-lc".to_string(), "sleep 30".to_string()],
+            std::env::current_dir().expect("cwd").as_path(),
+            &HashMap::new(),
+            &None,
+        )
+        .await
+        .expect("spawn test process");
+        {
+            let mut process_map = handler.processes.lock().await;
+            process_map.insert(
+                "proc-1".to_string(),
+                super::RunningProcess {
+                    session: spawned.session,
+                    tty: false,
+                },
+            );
+        }
+
+        if let Err(err) = handler
+            .handle_message(ExecServerInboundMessage::Request(
+                ExecServerRequest::Terminate {
+                    request_id: RequestId::Integer(2),
+                    params: crate::protocol::TerminateParams {
+                        process_id: "proc-1".to_string(),
+                    },
+                },
+            ))
+            .await
+        {
+            panic!("terminate should not fail the handler: {err}");
+        }
+
+        assert_eq!(
+            recv_outbound(&mut outgoing_rx).await,
+            ExecServerOutboundMessage::Response {
+                request_id: RequestId::Integer(2),
+                response: ExecServerResponseMessage::Terminate(TerminateResponse { running: true }),
+            }
+        );
+
+        assert!(
+            handler.processes.lock().await.contains_key("proc-1"),
+            "terminated ids should stay reserved until exit cleanup removes them"
+        );
+
+        handler.shutdown().await;
     }
 }
