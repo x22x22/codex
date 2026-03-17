@@ -66,6 +66,7 @@ use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
 mod additional_dirs;
+mod answer_interleave;
 mod app;
 mod app_backtrack;
 mod app_event;

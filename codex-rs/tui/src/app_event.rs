@@ -18,6 +18,7 @@ use codex_protocol::protocol::Event;
 use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_approval_presets::ApprovalPreset;
 
+use crate::answer_interleave::AnswerInterleaveRequest;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
@@ -126,6 +127,16 @@ pub(crate) enum AppEvent {
     FileSearchResult {
         query: String,
         matches: Vec<FileMatch>,
+    },
+
+    /// Kick off an asynchronous fast-model pass that restructures a final answer into an
+    /// interleaved question/answer display.
+    StartAnswerInterleave(AnswerInterleaveRequest),
+
+    /// Result of a completed answer interleaving request.
+    AnswerInterleaveResult {
+        request_id: u64,
+        result: Result<String, String>,
     },
 
     /// Result of refreshing rate limits
