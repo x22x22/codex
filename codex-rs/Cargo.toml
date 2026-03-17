@@ -25,6 +25,7 @@ members = [
     "hooks",
     "secrets",
     "exec",
+    "exec-server",
     "execpolicy",
     "execpolicy-legacy",
     "keyring-store",
