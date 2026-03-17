@@ -12,6 +12,7 @@ use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RealtimeAudioFrame;
+use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeEvent;
 use codex_protocol::protocol::SessionSource;
@@ -381,6 +382,15 @@ impl EnvGuard {
         }
         Self { key, original }
     }
+
+    fn unset(key: &'static str) -> Self {
+        let original = std::env::var_os(key);
+        // SAFETY: this guard restores the original value before the test exits.
+        unsafe {
+            std::env::remove_var(key);
+        }
+        Self { key, original }
+    }
 }
 
 impl Drop for EnvGuard {
@@ -422,6 +432,48 @@ async fn conversation_audio_before_start_emits_error() -> Result<()> {
     .await;
     assert_eq!(err.codex_error_info, Some(CodexErrorInfo::BadRequest));
     assert_eq!(err.message, "conversation is not running");
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial(openai_api_key_env)]
+async fn conversation_start_failure_emits_realtime_error_and_closed() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let _env_guard = EnvGuard::unset(OPENAI_API_KEY_ENV_VAR);
+    let server = start_websocket_server(vec![]).await;
+    let mut builder = test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let err = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(message),
+        }) => Some(message.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(err, "realtime conversation requires API key auth");
+
+    let closed = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        closed,
+        RealtimeConversationClosedEvent {
+            reason: Some("error".to_string()),
+        }
+    );
 
     server.shutdown().await;
     Ok(())

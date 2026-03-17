@@ -56,6 +56,19 @@ const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_000;
 const ACTIVE_RESPONSE_CONFLICT_ERROR_PREFIX: &str =
     "Conversation already has an active response in progress:";
 
+#[derive(Debug)]
+enum RealtimeConversationEnd {
+    Requested,
+    TransportClosed,
+    Error(RealtimeConversationError),
+}
+
+#[derive(Debug)]
+enum RealtimeConversationError {
+    Emit(String),
+    AlreadySent,
+}
+
 pub(crate) struct RealtimeConversationManager {
     state: Mutex<Option<ConversationState>>,
 }
@@ -345,6 +358,23 @@ pub(crate) async fn handle_start(
     sub_id: String,
     params: ConversationStartParams,
 ) -> CodexResult<()> {
+    if let Err(err) = handle_start_inner(sess, &sub_id, params).await {
+        error!("failed to start realtime conversation: {err}");
+        end_realtime_conversation(
+            sess,
+            sub_id,
+            RealtimeConversationEnd::Error(RealtimeConversationError::Emit(err.to_string())),
+        )
+        .await;
+    }
+    Ok(())
+}
+
+async fn handle_start_inner(
+    sess: &Arc<Session>,
+    sub_id: &str,
+    params: ConversationStartParams,
+) -> CodexResult<()> {
     let provider = sess.provider().await;
     let auth = sess.services.auth_manager.auth().await;
     let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
@@ -392,23 +422,15 @@ pub(crate) async fn handle_start(
     let extra_headers =
         realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
     info!("starting realtime conversation");
-    let (events_rx, realtime_active) = match sess
+    let (events_rx, realtime_active) = sess
         .conversation
         .start(api_provider, extra_headers, session_config)
-        .await
-    {
-        Ok(events_rx) => events_rx,
-        Err(err) => {
-            error!("failed to start realtime conversation: {err}");
-            send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
-            return Ok(());
-        }
-    };
+        .await?;
 
     info!("realtime conversation started");
 
     sess.send_event_raw(Event {
-        id: sub_id.clone(),
+        id: sub_id.to_string(),
         msg: EventMsg::RealtimeConversationStarted(RealtimeConversationStartedEvent {
             session_id: requested_session_id,
         }),
@@ -416,11 +438,13 @@ pub(crate) async fn handle_start(
     .await;
 
     let sess_clone = Arc::clone(sess);
+    let sub_id = sub_id.to_string();
     tokio::spawn(async move {
         let ev = |msg| Event {
             id: sub_id.clone(),
             msg,
         };
+        let mut end = RealtimeConversationEnd::TransportClosed;
         while let Ok(event) = events_rx.recv().await {
             // if not audio out, log the event
             if !matches!(event, RealtimeEvent::AudioOut(_)) {
@@ -428,6 +452,9 @@ pub(crate) async fn handle_start(
                     event = ?event,
                     "received realtime conversation event"
                 );
+            }
+            if matches!(event, RealtimeEvent::Error(_)) {
+                end = RealtimeConversationEnd::Error(RealtimeConversationError::AlreadySent);
             }
             let maybe_routed_text = match &event {
                 RealtimeEvent::HandoffRequested(handoff) => {
@@ -449,14 +476,10 @@ pub(crate) async fn handle_start(
                 .await;
         }
         if realtime_active.swap(false, Ordering::Relaxed) {
-            info!("realtime conversation transport closed");
-            sess_clone
-                .send_event_raw(ev(EventMsg::RealtimeConversationClosed(
-                    RealtimeConversationClosedEvent {
-                        reason: Some("transport_closed".to_string()),
-                    },
-                )))
-                .await;
+            if matches!(end, RealtimeConversationEnd::TransportClosed) {
+                info!("realtime conversation transport closed");
+            }
+            end_realtime_conversation(&sess_clone, sub_id, end).await;
         }
     });
 
@@ -470,7 +493,17 @@ pub(crate) async fn handle_audio(
 ) {
     if let Err(err) = sess.conversation.audio_in(params.frame).await {
         error!("failed to append realtime audio: {err}");
-        send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
+        if sess.conversation.running_state().await.is_some() {
+            end_realtime_conversation(
+                sess,
+                sub_id,
+                RealtimeConversationEnd::Error(RealtimeConversationError::Emit(err.to_string())),
+            )
+            .await;
+        } else {
+            send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest)
+                .await;
+        }
     }
 }
 
@@ -545,25 +578,22 @@ pub(crate) async fn handle_text(
     debug!(text = %params.text, "[realtime-text] appending realtime conversation text input");
     if let Err(err) = sess.conversation.text_in(params.text).await {
         error!("failed to append realtime text: {err}");
-        send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
+        if sess.conversation.running_state().await.is_some() {
+            end_realtime_conversation(
+                sess,
+                sub_id,
+                RealtimeConversationEnd::Error(RealtimeConversationError::Emit(err.to_string())),
+            )
+            .await;
+        } else {
+            send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest)
+                .await;
+        }
     }
 }
 
 pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
-    match sess.conversation.shutdown().await {
-        Ok(()) => {
-            sess.send_event_raw(Event {
-                id: sub_id,
-                msg: EventMsg::RealtimeConversationClosed(RealtimeConversationClosedEvent {
-                    reason: Some("requested".to_string()),
-                }),
-            })
-            .await;
-        }
-        Err(err) => {
-            send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::Other).await;
-        }
-    }
+    end_realtime_conversation(sess, sub_id, RealtimeConversationEnd::Requested).await;
 }
 
 fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
@@ -771,11 +801,6 @@ fn spawn_realtime_input_task(input: RealtimeInputTask) -> JoinHandle<()> {
                             }
                         }
                         Ok(None) => {
-                            let _ = events_tx
-                                .send(RealtimeEvent::Error(
-                                    "realtime websocket connection is closed".to_string(),
-                                ))
-                                .await;
                             break;
                         }
                         Err(err) => {
@@ -864,6 +889,36 @@ async fn send_conversation_error(
             message,
             codex_error_info: Some(codex_error_info),
         }),
+    })
+    .await;
+}
+
+async fn end_realtime_conversation(
+    sess: &Arc<Session>,
+    sub_id: String,
+    end: RealtimeConversationEnd,
+) {
+    let _ = sess.conversation.shutdown().await;
+
+    if let RealtimeConversationEnd::Error(RealtimeConversationError::Emit(message)) = &end {
+        sess.send_event_raw(Event {
+            id: sub_id.clone(),
+            msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                payload: RealtimeEvent::Error(message.clone()),
+            }),
+        })
+        .await;
+    }
+
+    let reason = match end {
+        RealtimeConversationEnd::Requested => Some("requested".to_string()),
+        RealtimeConversationEnd::TransportClosed => Some("transport_closed".to_string()),
+        RealtimeConversationEnd::Error(_) => Some("error".to_string()),
+    };
+
+    sess.send_event_raw(Event {
+        id: sub_id,
+        msg: EventMsg::RealtimeConversationClosed(RealtimeConversationClosedEvent { reason }),
     })
     .await;
 }
