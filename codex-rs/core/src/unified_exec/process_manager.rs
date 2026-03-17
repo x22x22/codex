@@ -17,6 +17,7 @@ use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
@@ -26,6 +27,7 @@ use crate::tools::network_approval::finish_deferred_network_approval;
 use crate::tools::orchestrator::ToolOrchestrator;
 use crate::tools::runtimes::unified_exec::UnifiedExecRequest as UnifiedExecToolRequest;
 use crate::tools::runtimes::unified_exec::UnifiedExecRuntime;
+use crate::tools::runtimes::unified_exec::request_unified_exec_approval;
 use crate::tools::sandboxing::ToolCtx;
 use crate::truncate::approx_token_count;
 use crate::unified_exec::ExecCommandRequest;
@@ -340,22 +342,22 @@ impl UnifiedExecProcessManager {
                 } else {
                     Some(format!("interactive terminal input: {input}"))
                 };
-                let decision = context
-                    .session
-                    .request_command_approval(
-                        context.turn.as_ref(),
-                        context.call_id.clone(),
-                        /*approval_id*/ None,
-                        session_command.clone(),
-                        cwd.clone(),
-                        reason,
-                        /*network_approval_context*/ None,
-                        /*proposed_execpolicy_amendment*/ None,
-                        /*additional_permissions*/ None,
-                        /*skill_metadata*/ None,
-                        /*available_decisions*/ None,
-                    )
-                    .await;
+                let decision = request_unified_exec_approval(
+                    &context.session,
+                    &context.turn,
+                    context.call_id.clone(),
+                    session_command.clone(),
+                    cwd.clone(),
+                    SandboxPermissions::UseDefault,
+                    /*additional_permissions*/ None,
+                    reason,
+                    tty,
+                    /*retry_reason*/ None,
+                    /*network_approval_context*/ None,
+                    /*proposed_execpolicy_amendment*/ None,
+                    /*approval_keys*/ None,
+                )
+                .await;
                 if !matches!(
                     decision,
                     codex_protocol::protocol::ReviewDecision::Approved
