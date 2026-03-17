@@ -318,9 +318,16 @@ async fn timed_out_snapshot_shell_is_terminated() -> Result<()> {
         shell_snapshot: crate::shell::empty_shell_snapshot_receiver(),
     };
 
-    let err = run_script_with_timeout(&shell, &script, Duration::from_secs(1), true, None, dir.path())
-        .await
-        .expect_err("snapshot shell should time out");
+    let err = run_script_with_timeout(
+        &shell,
+        &script,
+        Duration::from_secs(1),
+        true,
+        None,
+        dir.path(),
+    )
+    .await
+    .expect_err("snapshot shell should time out");
     assert!(
         err.to_string().contains("timed out"),
         "expected timeout error, got {err:?}"

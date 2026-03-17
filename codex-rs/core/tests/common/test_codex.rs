@@ -570,7 +570,7 @@ impl TestCodexBuilder {
         let shell_home = home.path().join("shell-home");
         std::fs::create_dir_all(&shell_home)?;
         let shell_home_value = shell_home.to_string_lossy().to_string();
-        config.shell_environment_policy = ShellEnvironmentPolicy {
+        config.permissions.shell_environment_policy = ShellEnvironmentPolicy {
             inherit: ShellEnvironmentPolicyInherit::Core,
             ignore_default_excludes: true,
             exclude: Vec::new(),
