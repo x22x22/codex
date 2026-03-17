@@ -18,11 +18,7 @@ use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ReadResponse;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteResponse;
-use crate::server::routing::ExecServerClientNotification;
-use crate::server::routing::ExecServerInboundMessage;
 use crate::server::routing::ExecServerOutboundMessage;
-use crate::server::routing::ExecServerRequest;
-use crate::server::routing::ExecServerResponseMessage;
 use crate::server::routing::ExecServerServerNotification;
 use crate::server::routing::internal_error;
 use crate::server::routing::invalid_params;
@@ -78,98 +74,15 @@ impl ExecServerHandler {
         }
     }
 
-    pub(crate) async fn handle_message(
-        &mut self,
-        message: ExecServerInboundMessage,
-    ) -> Result<(), String> {
-        match message {
-            ExecServerInboundMessage::Request(request) => self.handle_request(request).await,
-            ExecServerInboundMessage::Notification(notification) => {
-                self.handle_notification(notification)
-            }
+    pub(crate) fn initialized(&mut self) -> Result<(), String> {
+        if !self.initialize_requested {
+            return Err("received `initialized` notification before `initialize`".into());
         }
-    }
-
-    async fn handle_request(&mut self, request: ExecServerRequest) -> Result<(), String> {
-        match request {
-            ExecServerRequest::Initialize { request_id, .. } => {
-                let result = self
-                    .handle_initialize_request()
-                    .map(ExecServerResponseMessage::Initialize);
-                self.send_request_result(request_id, result).await;
-            }
-            ExecServerRequest::Exec { request_id, params } => {
-                self.send_request_result(
-                    request_id,
-                    match self.require_initialized() {
-                        Ok(()) => self
-                            .handle_exec_request(params)
-                            .await
-                            .map(ExecServerResponseMessage::Exec),
-                        Err(err) => Err(err),
-                    },
-                )
-                .await;
-            }
-            ExecServerRequest::Read { request_id, params } => {
-                self.send_request_result(
-                    request_id,
-                    match self.require_initialized() {
-                        Ok(()) => self
-                            .handle_read_request(params)
-                            .await
-                            .map(ExecServerResponseMessage::Read),
-                        Err(err) => Err(err),
-                    },
-                )
-                .await;
-            }
-            ExecServerRequest::Write { request_id, params } => {
-                self.send_request_result(
-                    request_id,
-                    match self.require_initialized() {
-                        Ok(()) => self
-                            .handle_write_request(params)
-                            .await
-                            .map(ExecServerResponseMessage::Write),
-                        Err(err) => Err(err),
-                    },
-                )
-                .await;
-            }
-            ExecServerRequest::Terminate { request_id, params } => {
-                self.send_request_result(
-                    request_id,
-                    match self.require_initialized() {
-                        Ok(()) => self
-                            .handle_terminate_request(params)
-                            .await
-                            .map(ExecServerResponseMessage::Terminate),
-                        Err(err) => Err(err),
-                    },
-                )
-                .await;
-            }
-        }
+        self.initialized = true;
         Ok(())
     }
 
-    fn handle_notification(
-        &mut self,
-        notification: ExecServerClientNotification,
-    ) -> Result<(), String> {
-        match notification {
-            ExecServerClientNotification::Initialized => {
-                if !self.initialize_requested {
-                    return Err("received `initialized` notification before `initialize`".into());
-                }
-                self.initialized = true;
-                Ok(())
-            }
-        }
-    }
-
-    fn handle_initialize_request(
+    pub(crate) fn initialize(
         &mut self,
     ) -> Result<InitializeResponse, codex_app_server_protocol::JSONRPCErrorError> {
         if self.initialize_requested {
@@ -197,16 +110,25 @@ impl ExecServerHandler {
         Ok(())
     }
 
-    async fn handle_exec_request(
+    pub(crate) async fn exec(
         &self,
         params: crate::protocol::ExecParams,
     ) -> Result<ExecResponse, codex_app_server_protocol::JSONRPCErrorError> {
+        self.require_initialized()?;
+        let process_id = params.process_id.clone();
+        {
+            let process_map = self.processes.lock().await;
+            if process_map.contains_key(&process_id) {
+                return Err(invalid_request(format!(
+                    "process {process_id} already exists"
+                )));
+            }
+        }
+
         let (program, args) = params
             .argv
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
-
-        let process_id = params.process_id.clone();
 
         let spawned = if params.tty {
             codex_utils_pty::spawn_pty_process(
@@ -232,12 +154,6 @@ impl ExecServerHandler {
 
         {
             let mut process_map = self.processes.lock().await;
-            if process_map.contains_key(&process_id) {
-                spawned.session.terminate();
-                return Err(invalid_request(format!(
-                    "process {process_id} already exists"
-                )));
-            }
             process_map.insert(
                 process_id.clone(),
                 RunningProcess {
@@ -283,10 +199,11 @@ impl ExecServerHandler {
         Ok(ExecResponse { process_id })
     }
 
-    async fn handle_read_request(
+    pub(crate) async fn read(
         &self,
         params: crate::protocol::ReadParams,
     ) -> Result<ReadResponse, codex_app_server_protocol::JSONRPCErrorError> {
+        self.require_initialized()?;
         let after_seq = params.after_seq.unwrap_or(0);
         let max_bytes = params.max_bytes.unwrap_or(usize::MAX);
         let wait = Duration::from_millis(params.wait_ms.unwrap_or(0));
@@ -336,10 +253,11 @@ impl ExecServerHandler {
         }
     }
 
-    async fn handle_write_request(
+    pub(crate) async fn write(
         &self,
         params: crate::protocol::WriteParams,
     ) -> Result<WriteResponse, codex_app_server_protocol::JSONRPCErrorError> {
+        self.require_initialized()?;
         let writer_tx = {
             let process_map = self.processes.lock().await;
             let process = process_map.get(&params.process_id).ok_or_else(|| {
@@ -362,10 +280,11 @@ impl ExecServerHandler {
         Ok(WriteResponse { accepted: true })
     }
 
-    async fn handle_terminate_request(
+    pub(crate) async fn terminate(
         &self,
         params: crate::protocol::TerminateParams,
     ) -> Result<TerminateResponse, codex_app_server_protocol::JSONRPCErrorError> {
+        self.require_initialized()?;
         let running = {
             let process_map = self.processes.lock().await;
             if let Some(process) = process_map.get(&params.process_id) {
@@ -378,24 +297,91 @@ impl ExecServerHandler {
 
         Ok(TerminateResponse { running })
     }
+}
 
-    async fn send_request_result(
-        &self,
+#[cfg(test)]
+impl ExecServerHandler {
+    async fn handle_message(
+        &mut self,
+        message: crate::server::routing::ExecServerInboundMessage,
+    ) -> Result<(), String> {
+        match message {
+            crate::server::routing::ExecServerInboundMessage::Request(request) => {
+                self.handle_request(request).await
+            }
+            crate::server::routing::ExecServerInboundMessage::Notification(
+                crate::server::routing::ExecServerClientNotification::Initialized,
+            ) => self.initialized(),
+        }
+    }
+
+    async fn handle_request(
+        &mut self,
+        request: crate::server::routing::ExecServerRequest,
+    ) -> Result<(), String> {
+        let outbound = match request {
+            crate::server::routing::ExecServerRequest::Initialize { request_id, .. } => {
+                Self::request_outbound(
+                    request_id,
+                    self.initialize()
+                        .map(crate::server::routing::ExecServerResponseMessage::Initialize),
+                )
+            }
+            crate::server::routing::ExecServerRequest::Exec { request_id, params } => {
+                Self::request_outbound(
+                    request_id,
+                    self.exec(params)
+                        .await
+                        .map(crate::server::routing::ExecServerResponseMessage::Exec),
+                )
+            }
+            crate::server::routing::ExecServerRequest::Read { request_id, params } => {
+                Self::request_outbound(
+                    request_id,
+                    self.read(params)
+                        .await
+                        .map(crate::server::routing::ExecServerResponseMessage::Read),
+                )
+            }
+            crate::server::routing::ExecServerRequest::Write { request_id, params } => {
+                Self::request_outbound(
+                    request_id,
+                    self.write(params)
+                        .await
+                        .map(crate::server::routing::ExecServerResponseMessage::Write),
+                )
+            }
+            crate::server::routing::ExecServerRequest::Terminate { request_id, params } => {
+                Self::request_outbound(
+                    request_id,
+                    self.terminate(params)
+                        .await
+                        .map(crate::server::routing::ExecServerResponseMessage::Terminate),
+                )
+            }
+        };
+        self.outbound_tx
+            .send(outbound)
+            .await
+            .map_err(|_| "outbound channel closed".to_string())
+    }
+
+    fn request_outbound(
         request_id: codex_app_server_protocol::RequestId,
-        result: Result<ExecServerResponseMessage, codex_app_server_protocol::JSONRPCErrorError>,
-    ) {
-        let outbound = match result {
-            Ok(response) => ExecServerOutboundMessage::Response {
+        result: Result<
+            crate::server::routing::ExecServerResponseMessage,
+            codex_app_server_protocol::JSONRPCErrorError,
+        >,
+    ) -> crate::server::routing::ExecServerOutboundMessage {
+        match result {
+            Ok(response) => crate::server::routing::ExecServerOutboundMessage::Response {
                 request_id,
                 response,
             },
-            Err(error) => ExecServerOutboundMessage::Error { request_id, error },
-        };
-        self.send_outbound(outbound).await;
-    }
-
-    async fn send_outbound(&self, outbound: ExecServerOutboundMessage) {
-        let _ = self.outbound_tx.send(outbound).await;
+            Err(error) => {
+                crate::server::routing::ExecServerOutboundMessage::Error { request_id, error }
+            }
+        }
     }
 }
 

@@ -6,7 +6,11 @@ use crate::connection::CHANNEL_CAPACITY;
 use crate::connection::JsonRpcConnection;
 use crate::connection::JsonRpcConnectionEvent;
 use crate::server::handler::ExecServerHandler;
+use crate::server::routing::ExecServerClientNotification;
+use crate::server::routing::ExecServerInboundMessage;
 use crate::server::routing::ExecServerOutboundMessage;
+use crate::server::routing::ExecServerRequest;
+use crate::server::routing::ExecServerResponseMessage;
 use crate::server::routing::RoutedExecServerMessage;
 use crate::server::routing::encode_outbound_message;
 use crate::server::routing::route_jsonrpc_message;
@@ -36,7 +40,8 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
         match event {
             JsonRpcConnectionEvent::Message(message) => match route_jsonrpc_message(message) {
                 Ok(RoutedExecServerMessage::Inbound(message)) => {
-                    if let Err(err) = handler.handle_message(message).await {
+                    if let Err(err) = dispatch_to_handler(&mut handler, message, &outgoing_tx).await
+                    {
                         warn!("closing exec-server connection after protocol error: {err}");
                         break;
                     }
@@ -64,4 +69,71 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
     drop(handler);
     drop(outgoing_tx);
     let _ = outbound_task.await;
+}
+
+async fn dispatch_to_handler(
+    handler: &mut ExecServerHandler,
+    message: ExecServerInboundMessage,
+    outgoing_tx: &mpsc::Sender<ExecServerOutboundMessage>,
+) -> Result<(), String> {
+    match message {
+        ExecServerInboundMessage::Request(request) => {
+            let outbound = match request {
+                ExecServerRequest::Initialize { request_id, .. } => request_outbound(
+                    request_id,
+                    handler
+                        .initialize()
+                        .map(ExecServerResponseMessage::Initialize),
+                ),
+                ExecServerRequest::Exec { request_id, params } => request_outbound(
+                    request_id,
+                    handler
+                        .exec(params)
+                        .await
+                        .map(ExecServerResponseMessage::Exec),
+                ),
+                ExecServerRequest::Read { request_id, params } => request_outbound(
+                    request_id,
+                    handler
+                        .read(params)
+                        .await
+                        .map(ExecServerResponseMessage::Read),
+                ),
+                ExecServerRequest::Write { request_id, params } => request_outbound(
+                    request_id,
+                    handler
+                        .write(params)
+                        .await
+                        .map(ExecServerResponseMessage::Write),
+                ),
+                ExecServerRequest::Terminate { request_id, params } => request_outbound(
+                    request_id,
+                    handler
+                        .terminate(params)
+                        .await
+                        .map(ExecServerResponseMessage::Terminate),
+                ),
+            };
+            outgoing_tx
+                .send(outbound)
+                .await
+                .map_err(|_| "outbound channel closed".to_string())
+        }
+        ExecServerInboundMessage::Notification(ExecServerClientNotification::Initialized) => {
+            handler.initialized()
+        }
+    }
+}
+
+fn request_outbound(
+    request_id: codex_app_server_protocol::RequestId,
+    result: Result<ExecServerResponseMessage, codex_app_server_protocol::JSONRPCErrorError>,
+) -> ExecServerOutboundMessage {
+    match result {
+        Ok(response) => ExecServerOutboundMessage::Response {
+            request_id,
+            response,
+        },
+        Err(error) => ExecServerOutboundMessage::Error { request_id, error },
+    }
 }
