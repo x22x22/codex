@@ -45,6 +45,8 @@ pub struct InitializeResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecParams {
+    /// Caller-chosen stable process identifier scoped to a single exec-server
+    /// connection. This is a protocol handle, not an OS pid.
     pub process_id: String,
     pub argv: Vec<String>,
     pub cwd: PathBuf,
