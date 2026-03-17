@@ -13,6 +13,7 @@ use codex_exec_server::ExecOutputStream;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecServerClient;
 use codex_exec_server::ExecServerClientConnectOptions;
+use codex_exec_server::ExecServerEvent;
 use codex_exec_server::ExecServerLaunchCommand;
 use codex_exec_server::InitializeParams;
 use codex_exec_server::InitializeResponse;
@@ -93,10 +94,11 @@ async fn exec_server_client_streams_output_and_accepts_writes() -> anyhow::Resul
     )
     .await?;
 
-    let process = server
-        .client()
-        .start_process(ExecParams {
-            process_id: "2001".to_string(),
+    let client = server.client();
+    let mut events = client.event_receiver();
+    let response = client
+        .exec(ExecParams {
+            process_id: "proc-1".to_string(),
             argv: vec![
                 "bash".to_string(),
                 "-lc".to_string(),
@@ -109,29 +111,26 @@ async fn exec_server_client_streams_output_and_accepts_writes() -> anyhow::Resul
             arg0: None,
         })
         .await?;
+    let process_id = response.process_id;
 
-    let mut output = process.output_receiver();
-    let (stream, ready_output) = recv_until_contains(&mut output, "ready").await?;
-    assert_eq!(stream, ExecOutputStream::Stdout);
+    let (stream, ready_output) = recv_until_contains(&mut events, &process_id, "ready").await?;
+    assert_eq!(stream, ExecOutputStream::Pty);
     assert!(
         ready_output.contains("ready"),
         "expected initial ready output"
     );
 
-    process
-        .writer_sender()
-        .send(b"hello\n".to_vec())
-        .await
-        .expect("write should succeed");
+    client.write(&process_id, b"hello\n".to_vec()).await?;
 
-    let (stream, echoed_output) = recv_until_contains(&mut output, "echo:hello").await?;
-    assert_eq!(stream, ExecOutputStream::Stdout);
+    let (stream, echoed_output) =
+        recv_until_contains(&mut events, &process_id, "echo:hello").await?;
+    assert_eq!(stream, ExecOutputStream::Pty);
     assert!(
         echoed_output.contains("echo:hello"),
         "expected echoed output"
     );
 
-    process.terminate();
+    client.terminate(&process_id).await?;
     Ok(())
 }
 
@@ -161,9 +160,10 @@ async fn exec_server_client_connects_over_websocket() -> anyhow::Result<()> {
     })
     .await?;
 
-    let process = client
-        .start_process(ExecParams {
-            process_id: "2002".to_string(),
+    let mut events = client.event_receiver();
+    let response = client
+        .exec(ExecParams {
+            process_id: "proc-1".to_string(),
             argv: vec![
                 "bash".to_string(),
                 "-lc".to_string(),
@@ -176,29 +176,26 @@ async fn exec_server_client_connects_over_websocket() -> anyhow::Result<()> {
             arg0: None,
         })
         .await?;
+    let process_id = response.process_id;
 
-    let mut output = process.output_receiver();
-    let (stream, ready_output) = recv_until_contains(&mut output, "ready").await?;
-    assert_eq!(stream, ExecOutputStream::Stdout);
+    let (stream, ready_output) = recv_until_contains(&mut events, &process_id, "ready").await?;
+    assert_eq!(stream, ExecOutputStream::Pty);
     assert!(
         ready_output.contains("ready"),
         "expected initial ready output"
     );
 
-    process
-        .writer_sender()
-        .send(b"hello\n".to_vec())
-        .await
-        .expect("write should succeed");
+    client.write(&process_id, b"hello\n".to_vec()).await?;
 
-    let (stream, echoed_output) = recv_until_contains(&mut output, "echo:hello").await?;
-    assert_eq!(stream, ExecOutputStream::Stdout);
+    let (stream, echoed_output) =
+        recv_until_contains(&mut events, &process_id, "echo:hello").await?;
+    assert_eq!(stream, ExecOutputStream::Pty);
     assert!(
         echoed_output.contains("echo:hello"),
         "expected echoed output"
     );
 
-    process.terminate();
+    client.terminate(&process_id).await?;
     child.start_kill()?;
     Ok(())
 }
@@ -239,9 +236,9 @@ async fn websocket_disconnect_terminates_processes_for_that_connection() -> anyh
         })
         .await?;
 
-        let _process = client
-            .start_process(ExecParams {
-                process_id: "2003".to_string(),
+        let _response = client
+            .exec(ExecParams {
+                process_id: "proc-1".to_string(),
                 argv: vec![
                     "bash".to_string(),
                     "-lc".to_string(),
@@ -280,17 +277,22 @@ where
 }
 
 async fn recv_until_contains(
-    output: &mut broadcast::Receiver<codex_exec_server::ExecServerOutput>,
+    events: &mut broadcast::Receiver<ExecServerEvent>,
+    process_id: &str,
     needle: &str,
 ) -> anyhow::Result<(ExecOutputStream, String)> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let mut collected = String::new();
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        let output_event = timeout(remaining, output.recv()).await??;
-        collected.push_str(&String::from_utf8_lossy(&output_event.chunk));
-        if collected.contains(needle) {
-            return Ok((output_event.stream, collected));
+        let event = timeout(remaining, events.recv()).await??;
+        if let ExecServerEvent::OutputDelta(output_event) = event
+            && output_event.process_id == process_id
+        {
+            collected.push_str(&String::from_utf8_lossy(&output_event.chunk.into_inner()));
+            if collected.contains(needle) {
+                return Ok((output_event.stream, collected));
+            }
         }
     }
 }

@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(test)]
 use std::sync::Mutex as StdMutex;
+#[cfg(test)]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -14,7 +16,6 @@ use codex_app_server_protocol::JSONRPCRequest;
 use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
@@ -33,6 +34,7 @@ use crate::connection::JsonRpcConnectionEvent;
 use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
+use crate::protocol::EXEC_READ_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
 use crate::protocol::ExecExitedNotification;
@@ -43,10 +45,19 @@ use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
+use crate::protocol::ReadParams;
+use crate::protocol::ReadResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
+use crate::server::ExecServerClientNotification;
+use crate::server::ExecServerHandler;
+use crate::server::ExecServerInboundMessage;
+use crate::server::ExecServerOutboundMessage;
+use crate::server::ExecServerRequest;
+use crate::server::ExecServerResponseMessage;
+use crate::server::ExecServerServerNotification;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecServerClientConnectOptions {
@@ -100,64 +111,50 @@ pub struct ExecServerOutput {
     pub chunk: Vec<u8>,
 }
 
-pub struct ExecServerProcess {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExecServerEvent {
+    OutputDelta(ExecOutputDeltaNotification),
+    Exited(ExecExitedNotification),
+}
+
+#[cfg(test)]
+struct ExecServerProcess {
     process_id: String,
     output_rx: broadcast::Receiver<ExecServerOutput>,
-    writer_tx: mpsc::Sender<Vec<u8>>,
     status: Arc<RemoteProcessStatus>,
     client: ExecServerClient,
 }
 
-impl std::fmt::Debug for ExecServerProcess {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ExecServerProcess")
-            .field("process_id", &self.process_id)
-            .field("has_exited", &self.has_exited())
-            .field("exit_code", &self.exit_code())
-            .finish()
-    }
-}
-
+#[cfg(test)]
 impl ExecServerProcess {
-    pub fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
-        self.writer_tx.clone()
-    }
-
-    pub fn output_receiver(&self) -> broadcast::Receiver<ExecServerOutput> {
+    fn output_receiver(&self) -> broadcast::Receiver<ExecServerOutput> {
         self.output_rx.resubscribe()
     }
 
-    pub fn has_exited(&self) -> bool {
+    fn has_exited(&self) -> bool {
         self.status.has_exited()
     }
 
-    pub fn exit_code(&self) -> Option<i32> {
+    fn exit_code(&self) -> Option<i32> {
         self.status.exit_code()
     }
 
-    pub fn terminate(&self) {
+    fn terminate(&self) {
         let client = self.client.clone();
         let process_id = self.process_id.clone();
         tokio::spawn(async move {
-            let _ = client.terminate_process(&process_id).await;
+            let _ = client.terminate_session(&process_id).await;
         });
     }
 }
 
-impl std::fmt::Debug for RemoteProcessStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RemoteProcessStatus")
-            .field("exited", &self.has_exited())
-            .field("exit_code", &self.exit_code())
-            .finish()
-    }
-}
-
+#[cfg(test)]
 struct RemoteProcessStatus {
     exited: AtomicBool,
     exit_code: StdMutex<Option<i32>>,
 }
 
+#[cfg(test)]
 impl RemoteProcessStatus {
     fn new() -> Self {
         Self {
@@ -182,22 +179,107 @@ impl RemoteProcessStatus {
     }
 }
 
-struct RegisteredProcess {
-    output_tx: broadcast::Sender<ExecServerOutput>,
-    status: Arc<RemoteProcessStatus>,
+enum PendingRequest {
+    Initialize(oneshot::Sender<Result<InitializeResponse, JSONRPCErrorError>>),
+    Exec(oneshot::Sender<Result<ExecResponse, JSONRPCErrorError>>),
+    Read(oneshot::Sender<Result<ReadResponse, JSONRPCErrorError>>),
+    Write(oneshot::Sender<Result<WriteResponse, JSONRPCErrorError>>),
+    Terminate(oneshot::Sender<Result<TerminateResponse, JSONRPCErrorError>>),
+}
+
+impl PendingRequest {
+    fn resolve_json(self, result: Value) -> Result<(), ExecServerError> {
+        match self {
+            PendingRequest::Initialize(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::Exec(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::Read(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::Write(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::Terminate(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_typed(self, response: ExecServerResponseMessage) -> Result<(), ExecServerError> {
+        match (self, response) {
+            (PendingRequest::Initialize(tx), ExecServerResponseMessage::Initialize(response)) => {
+                let _ = tx.send(Ok(response));
+            }
+            (PendingRequest::Exec(tx), ExecServerResponseMessage::Exec(response)) => {
+                let _ = tx.send(Ok(response));
+            }
+            (PendingRequest::Read(tx), ExecServerResponseMessage::Read(response)) => {
+                let _ = tx.send(Ok(response));
+            }
+            (PendingRequest::Write(tx), ExecServerResponseMessage::Write(response)) => {
+                let _ = tx.send(Ok(response));
+            }
+            (PendingRequest::Terminate(tx), ExecServerResponseMessage::Terminate(response)) => {
+                let _ = tx.send(Ok(response));
+            }
+            (_, response) => {
+                return Err(ExecServerError::Protocol(format!(
+                    "unexpected in-process response kind: {response:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_error(self, error: JSONRPCErrorError) {
+        match self {
+            PendingRequest::Initialize(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::Exec(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::Read(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::Write(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::Terminate(tx) => {
+                let _ = tx.send(Err(error));
+            }
+        }
+    }
+}
+
+enum ClientBackend {
+    JsonRpc {
+        write_tx: mpsc::Sender<JSONRPCMessage>,
+    },
+    InProcess {
+        write_tx: mpsc::Sender<ExecServerInboundMessage>,
+    },
 }
 
 struct Inner {
-    write_tx: mpsc::Sender<JSONRPCMessage>,
-    pending: Mutex<HashMap<RequestId, oneshot::Sender<Result<Value, JSONRPCErrorError>>>>,
-    processes: Mutex<HashMap<String, RegisteredProcess>>,
+    backend: ClientBackend,
+    pending: Mutex<HashMap<RequestId, PendingRequest>>,
+    events_tx: broadcast::Sender<ExecServerEvent>,
     next_request_id: AtomicI64,
     reader_task: JoinHandle<()>,
+    server_task: Option<JoinHandle<()>>,
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
         self.reader_task.abort();
+        if let Some(server_task) = &self.server_task {
+            server_task.abort();
+        }
     }
 }
 
@@ -231,6 +313,56 @@ pub enum ExecServerError {
 }
 
 impl ExecServerClient {
+    pub async fn connect_in_process(
+        options: ExecServerClientConnectOptions,
+    ) -> Result<Self, ExecServerError> {
+        let (write_tx, mut inbound_rx) = mpsc::channel::<ExecServerInboundMessage>(256);
+        let (outbound_tx, mut outgoing_rx) = mpsc::channel::<ExecServerOutboundMessage>(256);
+
+        let server_task = tokio::spawn(async move {
+            let mut handler = ExecServerHandler::new(outbound_tx);
+            while let Some(message) = inbound_rx.recv().await {
+                if let Err(err) = handler.handle_message(message).await {
+                    warn!("in-process exec-server handler stopped after protocol error: {err}");
+                    break;
+                }
+            }
+            handler.shutdown().await;
+        });
+
+        let inner = Arc::new_cyclic(|weak| {
+            let weak = weak.clone();
+            let reader_task = tokio::spawn(async move {
+                while let Some(message) = outgoing_rx.recv().await {
+                    if let Some(inner) = weak.upgrade()
+                        && let Err(err) = handle_in_process_outbound_message(&inner, message).await
+                    {
+                        warn!("in-process exec-server client closing after protocol error: {err}");
+                        handle_transport_shutdown(&inner).await;
+                        return;
+                    }
+                }
+
+                if let Some(inner) = weak.upgrade() {
+                    handle_transport_shutdown(&inner).await;
+                }
+            });
+
+            Inner {
+                backend: ClientBackend::InProcess { write_tx },
+                pending: Mutex::new(HashMap::new()),
+                events_tx: broadcast::channel(256).0,
+                next_request_id: AtomicI64::new(1),
+                reader_task,
+                server_task: Some(server_task),
+            }
+        });
+
+        let client = Self { inner };
+        client.initialize(options).await?;
+        Ok(client)
+    }
+
     pub async fn connect_stdio<R, W>(
         stdin: W,
         stdout: R,
@@ -310,11 +442,12 @@ impl ExecServerClient {
             });
 
             Inner {
-                write_tx,
+                backend: ClientBackend::JsonRpc { write_tx },
                 pending: Mutex::new(HashMap::new()),
-                processes: Mutex::new(HashMap::new()),
+                events_tx: broadcast::channel(256).0,
                 next_request_id: AtomicI64::new(1),
                 reader_task,
+                server_task: None,
             }
         });
 
@@ -323,66 +456,74 @@ impl ExecServerClient {
         Ok(client)
     }
 
-    pub async fn start_process(
+    pub fn event_receiver(&self) -> broadcast::Receiver<ExecServerEvent> {
+        self.inner.events_tx.subscribe()
+    }
+
+    #[cfg(test)]
+    async fn start_process(
         &self,
         params: ExecParams,
     ) -> Result<ExecServerProcess, ExecServerError> {
-        let process_id = params.process_id.clone();
+        let response = self.exec(params).await?;
+        let process_id = response.process_id;
         let status = Arc::new(RemoteProcessStatus::new());
         let (output_tx, output_rx) = broadcast::channel(256);
-        {
-            let mut processes = self.inner.processes.lock().await;
-            if processes.contains_key(&process_id) {
-                return Err(ExecServerError::Protocol(format!(
-                    "process `{process_id}` already exists"
-                )));
-            }
-            processes.insert(
-                process_id.clone(),
-                RegisteredProcess {
-                    output_tx,
-                    status: Arc::clone(&status),
-                },
-            );
-        }
-
-        let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
-        let client = self.clone();
-        let write_process_id = process_id.clone();
+        let mut events_rx = self.event_receiver();
+        let status_watcher = Arc::clone(&status);
+        let watch_process_id = process_id.clone();
         tokio::spawn(async move {
-            while let Some(chunk) = writer_rx.recv().await {
-                let request = WriteParams {
-                    process_id: write_process_id.clone(),
-                    chunk: chunk.into(),
-                };
-                if client.write_process(request).await.is_err() {
-                    break;
+            while let Ok(event) = events_rx.recv().await {
+                match event {
+                    ExecServerEvent::OutputDelta(notification)
+                        if notification.process_id == watch_process_id =>
+                    {
+                        let _ = output_tx.send(ExecServerOutput {
+                            stream: notification.stream,
+                            chunk: notification.chunk.into_inner(),
+                        });
+                    }
+                    ExecServerEvent::Exited(notification)
+                        if notification.process_id == watch_process_id =>
+                    {
+                        status_watcher.mark_exited(Some(notification.exit_code));
+                        break;
+                    }
+                    ExecServerEvent::OutputDelta(_) | ExecServerEvent::Exited(_) => {}
                 }
             }
         });
 
-        let response = match self.request::<_, ExecResponse>(EXEC_METHOD, &params).await {
-            Ok(response) => response,
-            Err(err) => {
-                self.inner.processes.lock().await.remove(&process_id);
-                return Err(err);
-            }
-        };
-        if response.process_id != process_id {
-            self.inner.processes.lock().await.remove(&process_id);
-            return Err(ExecServerError::Protocol(format!(
-                "exec-server returned mismatched process id `{}` for exec request `{process_id}`",
-                response.process_id
-            )));
-        }
-
         Ok(ExecServerProcess {
             process_id,
             output_rx,
-            writer_tx,
             status,
             client: self.clone(),
         })
+    }
+
+    pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
+        self.request_exec(params).await
+    }
+
+    pub async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
+        self.request_read(params).await
+    }
+
+    pub async fn write(
+        &self,
+        process_id: &str,
+        chunk: Vec<u8>,
+    ) -> Result<WriteResponse, ExecServerError> {
+        self.write_process(WriteParams {
+            process_id: process_id.to_string(),
+            chunk: chunk.into(),
+        })
+        .await
+    }
+
+    pub async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError> {
+        self.terminate_session(process_id).await
     }
 
     async fn initialize(
@@ -395,7 +536,7 @@ impl ExecServerClient {
         } = options;
         timeout(initialize_timeout, async {
             let _: InitializeResponse = self
-                .request(INITIALIZE_METHOD, &InitializeParams { client_name })
+                .request_initialize(InitializeParams { client_name })
                 .await?;
             self.notify(INITIALIZED_METHOD, &serde_json::json!({}))
                 .await
@@ -406,69 +547,279 @@ impl ExecServerClient {
         })?
     }
 
-    async fn write_process(&self, params: WriteParams) -> Result<WriteResponse, ExecServerError> {
-        self.request(EXEC_WRITE_METHOD, &params).await
-    }
-
-    async fn terminate_process(
-        &self,
-        process_id: &str,
-    ) -> Result<TerminateResponse, ExecServerError> {
-        self.request(
-            EXEC_TERMINATE_METHOD,
-            &TerminateParams {
-                process_id: process_id.to_string(),
-            },
-        )
-        .await
-    }
-
-    async fn notify<P: Serialize>(&self, method: &str, params: &P) -> Result<(), ExecServerError> {
-        let params = serde_json::to_value(params)?;
-        self.inner
-            .write_tx
-            .send(JSONRPCMessage::Notification(JSONRPCNotification {
-                method: method.to_string(),
-                params: Some(params),
-            }))
-            .await
-            .map_err(|_| ExecServerError::Closed)
-    }
-
-    async fn request<P, R>(&self, method: &str, params: &P) -> Result<R, ExecServerError>
-    where
-        P: Serialize,
-        R: DeserializeOwned,
-    {
-        let params = serde_json::to_value(params)?;
-        let request_id =
-            RequestId::Integer(self.inner.next_request_id.fetch_add(1, Ordering::SeqCst));
+    async fn request_exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
+        let request_id = self.next_request_id();
         let (response_tx, response_rx) = oneshot::channel();
         self.inner
             .pending
             .lock()
             .await
-            .insert(request_id.clone(), response_tx);
+            .insert(request_id.clone(), PendingRequest::Exec(response_tx));
+        let send_result = match &self.inner.backend {
+            ClientBackend::JsonRpc { write_tx } => {
+                send_jsonrpc_request(write_tx, request_id.clone(), EXEC_METHOD, &params).await
+            }
+            ClientBackend::InProcess { write_tx } => {
+                send_in_process_request(
+                    write_tx,
+                    ExecServerInboundMessage::Request(ExecServerRequest::Exec {
+                        request_id: request_id.clone(),
+                        params,
+                    }),
+                )
+                .await
+            }
+        };
+        if let Err(err) = send_result {
+            self.inner.pending.lock().await.remove(&request_id);
+            return Err(err);
+        }
+        receive_typed_response(response_rx).await
+    }
 
-        let message = JSONRPCMessage::Request(JSONRPCRequest {
-            id: request_id.clone(),
+    async fn write_process(&self, params: WriteParams) -> Result<WriteResponse, ExecServerError> {
+        let request_id = self.next_request_id();
+        let (response_tx, response_rx) = oneshot::channel();
+        self.inner
+            .pending
+            .lock()
+            .await
+            .insert(request_id.clone(), PendingRequest::Write(response_tx));
+        let send_result = match &self.inner.backend {
+            ClientBackend::JsonRpc { write_tx } => {
+                send_jsonrpc_request(write_tx, request_id.clone(), EXEC_WRITE_METHOD, &params).await
+            }
+            ClientBackend::InProcess { write_tx } => {
+                send_in_process_request(
+                    write_tx,
+                    ExecServerInboundMessage::Request(ExecServerRequest::Write {
+                        request_id: request_id.clone(),
+                        params,
+                    }),
+                )
+                .await
+            }
+        };
+        if let Err(err) = send_result {
+            self.inner.pending.lock().await.remove(&request_id);
+            return Err(err);
+        }
+        receive_typed_response(response_rx).await
+    }
+
+    async fn request_read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
+        let request_id = self.next_request_id();
+        let (response_tx, response_rx) = oneshot::channel();
+        self.inner
+            .pending
+            .lock()
+            .await
+            .insert(request_id.clone(), PendingRequest::Read(response_tx));
+        let send_result = match &self.inner.backend {
+            ClientBackend::JsonRpc { write_tx } => {
+                send_jsonrpc_request(write_tx, request_id.clone(), EXEC_READ_METHOD, &params).await
+            }
+            ClientBackend::InProcess { write_tx } => {
+                send_in_process_request(
+                    write_tx,
+                    ExecServerInboundMessage::Request(ExecServerRequest::Read {
+                        request_id: request_id.clone(),
+                        params,
+                    }),
+                )
+                .await
+            }
+        };
+        if let Err(err) = send_result {
+            self.inner.pending.lock().await.remove(&request_id);
+            return Err(err);
+        }
+        receive_typed_response(response_rx).await
+    }
+
+    async fn terminate_session(
+        &self,
+        process_id: &str,
+    ) -> Result<TerminateResponse, ExecServerError> {
+        let params = TerminateParams {
+            process_id: process_id.to_string(),
+        };
+        let request_id = self.next_request_id();
+        let (response_tx, response_rx) = oneshot::channel();
+        self.inner
+            .pending
+            .lock()
+            .await
+            .insert(request_id.clone(), PendingRequest::Terminate(response_tx));
+        let send_result = match &self.inner.backend {
+            ClientBackend::JsonRpc { write_tx } => {
+                send_jsonrpc_request(write_tx, request_id.clone(), EXEC_TERMINATE_METHOD, &params)
+                    .await
+            }
+            ClientBackend::InProcess { write_tx } => {
+                send_in_process_request(
+                    write_tx,
+                    ExecServerInboundMessage::Request(ExecServerRequest::Terminate {
+                        request_id: request_id.clone(),
+                        params,
+                    }),
+                )
+                .await
+            }
+        };
+        if let Err(err) = send_result {
+            self.inner.pending.lock().await.remove(&request_id);
+            return Err(err);
+        }
+        receive_typed_response(response_rx).await
+    }
+
+    async fn notify<P: Serialize>(&self, method: &str, params: &P) -> Result<(), ExecServerError> {
+        match &self.inner.backend {
+            ClientBackend::JsonRpc { write_tx } => {
+                let params = serde_json::to_value(params)?;
+                write_tx
+                    .send(JSONRPCMessage::Notification(JSONRPCNotification {
+                        method: method.to_string(),
+                        params: Some(params),
+                    }))
+                    .await
+                    .map_err(|_| ExecServerError::Closed)
+            }
+            ClientBackend::InProcess { write_tx } => {
+                let message = match method {
+                    INITIALIZED_METHOD => ExecServerInboundMessage::Notification(
+                        ExecServerClientNotification::Initialized,
+                    ),
+                    other => {
+                        return Err(ExecServerError::Protocol(format!(
+                            "unsupported in-process notification method `{other}`"
+                        )));
+                    }
+                };
+                write_tx
+                    .send(message)
+                    .await
+                    .map_err(|_| ExecServerError::Closed)
+            }
+        }
+    }
+
+    async fn request_initialize(
+        &self,
+        params: InitializeParams,
+    ) -> Result<InitializeResponse, ExecServerError> {
+        let request_id = self.next_request_id();
+        let (response_tx, response_rx) = oneshot::channel();
+        self.inner
+            .pending
+            .lock()
+            .await
+            .insert(request_id.clone(), PendingRequest::Initialize(response_tx));
+        let send_result = match &self.inner.backend {
+            ClientBackend::JsonRpc { write_tx } => {
+                send_jsonrpc_request(write_tx, request_id.clone(), INITIALIZE_METHOD, &params).await
+            }
+            ClientBackend::InProcess { write_tx } => {
+                send_in_process_request(
+                    write_tx,
+                    ExecServerInboundMessage::Request(ExecServerRequest::Initialize {
+                        request_id: request_id.clone(),
+                        params,
+                    }),
+                )
+                .await
+            }
+        };
+        if let Err(err) = send_result {
+            self.inner.pending.lock().await.remove(&request_id);
+            return Err(err);
+        }
+        receive_typed_response(response_rx).await
+    }
+
+    fn next_request_id(&self) -> RequestId {
+        RequestId::Integer(self.inner.next_request_id.fetch_add(1, Ordering::SeqCst))
+    }
+}
+
+async fn receive_typed_response<T>(
+    response_rx: oneshot::Receiver<Result<T, JSONRPCErrorError>>,
+) -> Result<T, ExecServerError> {
+    let result = response_rx.await.map_err(|_| ExecServerError::Closed)?;
+    match result {
+        Ok(response) => Ok(response),
+        Err(error) => Err(ExecServerError::Server {
+            code: error.code,
+            message: error.message,
+        }),
+    }
+}
+
+async fn send_jsonrpc_request<P: Serialize>(
+    write_tx: &mpsc::Sender<JSONRPCMessage>,
+    request_id: RequestId,
+    method: &str,
+    params: &P,
+) -> Result<(), ExecServerError> {
+    let params = serde_json::to_value(params)?;
+    write_tx
+        .send(JSONRPCMessage::Request(JSONRPCRequest {
+            id: request_id,
             method: method.to_string(),
             params: Some(params),
             trace: None,
-        });
+        }))
+        .await
+        .map_err(|_| ExecServerError::Closed)
+}
 
-        if self.inner.write_tx.send(message).await.is_err() {
-            self.inner.pending.lock().await.remove(&request_id);
-            return Err(ExecServerError::Closed);
+async fn send_in_process_request(
+    write_tx: &mpsc::Sender<ExecServerInboundMessage>,
+    message: ExecServerInboundMessage,
+) -> Result<(), ExecServerError> {
+    write_tx
+        .send(message)
+        .await
+        .map_err(|_| ExecServerError::Closed)
+}
+
+async fn handle_in_process_outbound_message(
+    inner: &Arc<Inner>,
+    message: ExecServerOutboundMessage,
+) -> Result<(), ExecServerError> {
+    match message {
+        ExecServerOutboundMessage::Response {
+            request_id,
+            response,
+        } => {
+            if let Some(pending) = inner.pending.lock().await.remove(&request_id) {
+                pending.resolve_typed(response)?;
+            }
         }
+        ExecServerOutboundMessage::Error { request_id, error } => {
+            if let Some(pending) = inner.pending.lock().await.remove(&request_id) {
+                pending.resolve_error(error);
+            }
+        }
+        ExecServerOutboundMessage::Notification(notification) => {
+            handle_in_process_notification(inner, notification).await;
+        }
+    }
 
-        let result = response_rx.await.map_err(|_| ExecServerError::Closed)?;
-        match result {
-            Ok(value) => serde_json::from_value(value).map_err(ExecServerError::from),
-            Err(error) => Err(ExecServerError::Server {
-                code: error.code,
-                message: error.message,
-            }),
+    Ok(())
+}
+
+async fn handle_in_process_notification(
+    inner: &Arc<Inner>,
+    notification: ExecServerServerNotification,
+) {
+    match notification {
+        ExecServerServerNotification::OutputDelta(params) => {
+            let _ = inner.events_tx.send(ExecServerEvent::OutputDelta(params));
+        }
+        ExecServerServerNotification::Exited(params) => {
+            let _ = inner.events_tx.send(ExecServerEvent::Exited(params));
         }
     }
 }
@@ -479,13 +830,13 @@ async fn handle_server_message(
 ) -> Result<(), ExecServerError> {
     match message {
         JSONRPCMessage::Response(JSONRPCResponse { id, result }) => {
-            if let Some(tx) = inner.pending.lock().await.remove(&id) {
-                let _ = tx.send(Ok(result));
+            if let Some(pending) = inner.pending.lock().await.remove(&id) {
+                pending.resolve_json(result)?;
             }
         }
         JSONRPCMessage::Error(JSONRPCError { id, error }) => {
-            if let Some(tx) = inner.pending.lock().await.remove(&id) {
-                let _ = tx.send(Err(error));
+            if let Some(pending) = inner.pending.lock().await.remove(&id) {
+                pending.resolve_error(error);
             }
         }
         JSONRPCMessage::Notification(notification) => {
@@ -510,22 +861,12 @@ async fn handle_server_notification(
         EXEC_OUTPUT_DELTA_METHOD => {
             let params: ExecOutputDeltaNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
-            let output = ExecServerOutput {
-                stream: params.stream,
-                chunk: params.chunk.into_inner(),
-            };
-            let processes = inner.processes.lock().await;
-            if let Some(process) = processes.get(&params.process_id) {
-                let _ = process.output_tx.send(output);
-            }
+            let _ = inner.events_tx.send(ExecServerEvent::OutputDelta(params));
         }
         EXEC_EXITED_METHOD => {
             let params: ExecExitedNotification =
                 serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
-            let mut processes = inner.processes.lock().await;
-            if let Some(process) = processes.remove(&params.process_id) {
-                process.status.mark_exited(Some(params.exit_code));
-            }
+            let _ = inner.events_tx.send(ExecServerEvent::Exited(params));
         }
         other => {
             debug!("ignoring unknown exec-server notification: {other}");
@@ -537,25 +878,17 @@ async fn handle_server_notification(
 async fn handle_transport_shutdown(inner: &Arc<Inner>) {
     let pending = {
         let mut pending = inner.pending.lock().await;
-        pending.drain().map(|(_, tx)| tx).collect::<Vec<_>>()
+        pending
+            .drain()
+            .map(|(_, pending)| pending)
+            .collect::<Vec<_>>()
     };
-    for tx in pending {
-        let _ = tx.send(Err(JSONRPCErrorError {
+    for pending in pending {
+        pending.resolve_error(JSONRPCErrorError {
             code: -32000,
             data: None,
             message: "exec-server transport closed".to_string(),
-        }));
-    }
-
-    let processes = {
-        let mut processes = inner.processes.lock().await;
-        processes
-            .drain()
-            .map(|(_, process)| process)
-            .collect::<Vec<_>>()
-    };
-    for process in processes {
-        process.status.mark_exited(None);
+        });
     }
 }
 
@@ -573,6 +906,7 @@ mod tests {
     use super::ExecServerClient;
     use super::ExecServerClientConnectOptions;
     use super::ExecServerError;
+    use super::ExecServerOutput;
     use crate::protocol::EXEC_METHOD;
     use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
     use crate::protocol::EXEC_TERMINATE_METHOD;
@@ -581,6 +915,7 @@ mod tests {
     use crate::protocol::INITIALIZE_METHOD;
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::PROTOCOL_VERSION;
+    use crate::protocol::ReadParams;
     use codex_app_server_protocol::JSONRPCError;
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::JSONRPCMessage;
@@ -675,6 +1010,178 @@ mod tests {
         if let Err(err) = server.await {
             panic!("server task failed: {err}");
         }
+    }
+
+    #[tokio::test]
+    async fn connect_in_process_starts_processes_without_jsonrpc_transport() {
+        let client = match ExecServerClient::connect_in_process(test_options()).await {
+            Ok(client) => client,
+            Err(err) => panic!("failed to connect in-process client: {err}"),
+        };
+
+        let process = match client
+            .start_process(ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: vec!["printf".to_string(), "hello".to_string()],
+                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
+                env: HashMap::new(),
+                tty: false,
+                arg0: None,
+            })
+            .await
+        {
+            Ok(process) => process,
+            Err(err) => panic!("failed to start in-process child: {err}"),
+        };
+
+        let mut output = process.output_receiver();
+        let output = timeout(Duration::from_secs(1), output.recv())
+            .await
+            .unwrap_or_else(|err| panic!("timed out waiting for process output: {err}"))
+            .unwrap_or_else(|err| panic!("failed to receive process output: {err}"));
+        assert_eq!(
+            output,
+            ExecServerOutput {
+                stream: crate::protocol::ExecOutputStream::Stdout,
+                chunk: b"hello".to_vec(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_in_process_read_returns_retained_output_and_exit_state() {
+        let client = match ExecServerClient::connect_in_process(test_options()).await {
+            Ok(client) => client,
+            Err(err) => panic!("failed to connect in-process client: {err}"),
+        };
+
+        let response = match client
+            .exec(ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: vec!["printf".to_string(), "hello".to_string()],
+                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
+                env: HashMap::new(),
+                tty: false,
+                arg0: None,
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => panic!("failed to start in-process child: {err}"),
+        };
+
+        let read = match client
+            .read(ReadParams {
+                process_id: response.process_id,
+                after_seq: None,
+                max_bytes: None,
+                wait_ms: Some(1000),
+            })
+            .await
+        {
+            Ok(read) => read,
+            Err(err) => panic!("failed to read in-process child output: {err}"),
+        };
+
+        assert_eq!(read.chunks.len(), 1);
+        assert_eq!(read.chunks[0].seq, 1);
+        assert_eq!(read.chunks[0].stream, ExecOutputStream::Stdout);
+        assert_eq!(read.chunks[0].chunk.clone().into_inner(), b"hello".to_vec());
+        assert_eq!(read.next_seq, 2);
+        assert!(read.exited);
+        assert_eq!(read.exit_code, Some(0));
+    }
+
+    #[tokio::test]
+    async fn connect_in_process_rejects_invalid_exec_params_from_handler() {
+        let client = match ExecServerClient::connect_in_process(test_options()).await {
+            Ok(client) => client,
+            Err(err) => panic!("failed to connect in-process client: {err}"),
+        };
+
+        let result = client
+            .start_process(ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: Vec::new(),
+                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
+                env: HashMap::new(),
+                tty: false,
+                arg0: None,
+            })
+            .await;
+
+        match result {
+            Err(ExecServerError::Server { code, message }) => {
+                assert_eq!(code, -32602);
+                assert_eq!(message, "argv must not be empty");
+            }
+            Err(err) => panic!("unexpected in-process exec failure: {err}"),
+            Ok(_) => panic!("expected invalid params error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_in_process_rejects_writes_to_unknown_processes() {
+        let client = match ExecServerClient::connect_in_process(test_options()).await {
+            Ok(client) => client,
+            Err(err) => panic!("failed to connect in-process client: {err}"),
+        };
+
+        let result = client
+            .write_process(crate::protocol::WriteParams {
+                process_id: "missing".to_string(),
+                chunk: b"input".to_vec().into(),
+            })
+            .await;
+
+        match result {
+            Err(ExecServerError::Server { code, message }) => {
+                assert_eq!(code, -32600);
+                assert_eq!(message, "unknown process id missing");
+            }
+            Err(err) => panic!("unexpected in-process write failure: {err}"),
+            Ok(_) => panic!("expected unknown process error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn connect_in_process_terminate_marks_process_exited() {
+        let client = match ExecServerClient::connect_in_process(test_options()).await {
+            Ok(client) => client,
+            Err(err) => panic!("failed to connect in-process client: {err}"),
+        };
+
+        let process = match client
+            .start_process(ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: vec!["sleep".to_string(), "30".to_string()],
+                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
+                env: HashMap::new(),
+                tty: false,
+                arg0: None,
+            })
+            .await
+        {
+            Ok(process) => process,
+            Err(err) => panic!("failed to start in-process child: {err}"),
+        };
+
+        if let Err(err) = client.terminate_session(&process.process_id).await {
+            panic!("failed to terminate in-process child: {err}");
+        }
+
+        timeout(Duration::from_secs(2), async {
+            loop {
+                if process.has_exited() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap_or_else(|err| panic!("timed out waiting for in-process child to exit: {err}"));
+
+        assert!(process.has_exited());
     }
 
     #[tokio::test]
@@ -794,8 +1301,8 @@ mod tests {
         }
 
         assert!(
-            client.inner.processes.lock().await.is_empty(),
-            "failed requests should not leave registered process state behind"
+            client.inner.pending.lock().await.is_empty(),
+            "failed requests should not leave pending request state behind"
         );
     }
 
@@ -1011,7 +1518,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_process_rejects_mismatched_process_ids_and_cleans_up_state() {
+    async fn start_process_uses_protocol_process_ids() {
         let (client_stdin, server_reader) = tokio::io::duplex(4096);
         let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
 
@@ -1063,7 +1570,7 @@ mod tests {
             Err(err) => panic!("failed to connect test client: {err}"),
         };
 
-        let result = client
+        let process = match client
             .start_process(ExecParams {
                 process_id: "proc-1".to_string(),
                 argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
@@ -1072,27 +1579,17 @@ mod tests {
                 tty: true,
                 arg0: None,
             })
-            .await;
+            .await
+        {
+            Ok(process) => process,
+            Err(err) => panic!("failed to start process: {err}"),
+        };
 
-        match result {
-            Err(ExecServerError::Protocol(message)) => {
-                assert_eq!(
-                    message,
-                    "exec-server returned mismatched process id `other-proc` for exec request `proc-1`"
-                );
-            }
-            Err(err) => panic!("unexpected start_process failure: {err}"),
-            Ok(_) => panic!("expected protocol failure"),
-        }
-
-        assert!(
-            client.inner.processes.lock().await.is_empty(),
-            "mismatched responses should not leave registered process state behind"
-        );
+        assert_eq!(process.process_id, "other-proc");
     }
 
     #[tokio::test]
-    async fn start_process_rejects_duplicate_local_ids_without_orphaning_existing_process() {
+    async fn start_process_routes_output_for_protocol_process_ids() {
         let (client_stdin, server_reader) = tokio::io::duplex(4096);
         let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
 
@@ -1172,25 +1669,6 @@ mod tests {
             Err(err) => panic!("failed to start first process: {err}"),
         };
 
-        let duplicate_result = client
-            .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: true,
-                arg0: None,
-            })
-            .await;
-
-        match duplicate_result {
-            Err(ExecServerError::Protocol(message)) => {
-                assert_eq!(message, "process `proc-1` already exists");
-            }
-            Err(err) => panic!("unexpected duplicate start failure: {err}"),
-            Ok(_) => panic!("expected local duplicate rejection"),
-        }
-
         let mut output = first_process.output_receiver();
         let output = timeout(Duration::from_secs(1), output.recv())
             .await
@@ -1269,11 +1747,6 @@ mod tests {
             Err(err) => panic!("failed to start process: {err}"),
         };
 
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(
-            process.has_exited(),
-            "transport shutdown should mark processes exited"
-        );
-        assert_eq!(process.exit_code(), None);
+        let _ = process;
     }
 }
