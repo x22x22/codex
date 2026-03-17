@@ -1,5 +1,8 @@
+#[cfg(test)]
 use codex_protocol::user_input::ByteRange;
+#[cfg(test)]
 use codex_protocol::user_input::TextElement;
+#[cfg(test)]
 use shlex::Shlex;
 
 /// Parse a first-line slash command of the form `/name <rest>`.
@@ -28,6 +31,7 @@ pub fn parse_slash_name(line: &str) -> Option<(&str, &str, usize)> {
     Some((name, rest, rest_offset))
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PromptArg {
     pub text: String,
@@ -37,10 +41,12 @@ pub struct PromptArg {
 /// Parse positional arguments using shlex semantics (supports quoted tokens).
 ///
 /// `text_elements` must be relative to `rest`.
+#[cfg(test)]
 pub fn parse_positional_args(rest: &str, text_elements: &[TextElement]) -> Vec<PromptArg> {
     parse_tokens_with_elements(rest, text_elements)
 }
 
+#[cfg(test)]
 fn parse_tokens_with_elements(rest: &str, text_elements: &[TextElement]) -> Vec<PromptArg> {
     let mut elements = text_elements.to_vec();
     elements.sort_by_key(|elem| elem.byte_range.start);
@@ -50,6 +56,7 @@ fn parse_tokens_with_elements(rest: &str, text_elements: &[TextElement]) -> Vec<
         .collect()
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone)]
 struct ElementReplacement {
     sentinel: String,
@@ -57,6 +64,7 @@ struct ElementReplacement {
     placeholder: Option<String>,
 }
 
+#[cfg(test)]
 fn replace_text_elements_with_sentinels(
     rest: &str,
     elements: &[TextElement],
@@ -86,6 +94,7 @@ fn replace_text_elements_with_sentinels(
     (out, replacements)
 }
 
+#[cfg(test)]
 fn apply_replacements_to_token(token: String, replacements: &[ElementReplacement]) -> PromptArg {
     if replacements.is_empty() {
         return PromptArg {
@@ -123,6 +132,7 @@ fn apply_replacements_to_token(token: String, replacements: &[ElementReplacement
     }
 }
 
+#[cfg(test)]
 fn next_replacement<'a>(
     token: &str,
     cursor: usize,
