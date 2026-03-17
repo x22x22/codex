@@ -485,9 +485,7 @@ async fn prepare_realtime_start(
         RealtimeWsMode::Conversational => RealtimeSessionMode::Conversational,
         RealtimeWsMode::Transcription => RealtimeSessionMode::Transcription,
     };
-    let requested_session_id = params
-        .session_id
-        .or_else(|| Some(sess.conversation_id.to_string()));
+    let requested_session_id = params.session_id.or(Some(sess.conversation_id.to_string()));
     let session_config = RealtimeSessionConfig {
         instructions: prompt,
         model,
@@ -620,9 +618,7 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .join("\n");
     (!active_transcript.is_empty())
         .then_some(active_transcript)
-        .or_else(|| {
-            (!handoff.input_transcript.is_empty()).then(|| handoff.input_transcript.clone())
-        })
+        .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))
 }
 
 fn realtime_api_key(
