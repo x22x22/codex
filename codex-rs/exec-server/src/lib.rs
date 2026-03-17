@@ -1,11 +1,17 @@
 mod client;
+mod connection;
+mod local;
 mod protocol;
 mod server;
 
 pub use client::ExecServerClient;
+pub use client::ExecServerClientConnectOptions;
 pub use client::ExecServerError;
-pub use client::ExecServerLaunchCommand;
 pub use client::ExecServerProcess;
+pub use client::RemoteExecServerConnectArgs;
+pub use local::ExecServerLaunchCommand;
+pub use local::SpawnedExecServer;
+pub use local::spawn_local_exec_server;
 pub use protocol::ExecExitedNotification;
 pub use protocol::ExecOutputDeltaNotification;
 pub use protocol::ExecOutputStream;
@@ -17,4 +23,7 @@ pub use protocol::TerminateParams;
 pub use protocol::TerminateResponse;
 pub use protocol::WriteParams;
 pub use protocol::WriteResponse;
+pub use server::ExecServerTransport;
+pub use server::ExecServerTransportParseError;
 pub use server::run_main;
+pub use server::run_main_with_transport;

@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
@@ -17,19 +15,19 @@ use codex_app_server_protocol::RequestId;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::io::BufReader;
-use tokio::process::Child;
-use tokio::process::Command;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tokio_tungstenite::connect_async;
 use tracing::debug;
 use tracing::warn;
 
+use crate::connection::JsonRpcConnection;
+use crate::connection::JsonRpcConnectionEvent;
 use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
@@ -49,9 +47,30 @@ use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExecServerLaunchCommand {
-    pub program: PathBuf,
-    pub args: Vec<String>,
+pub struct ExecServerClientConnectOptions {
+    pub client_name: String,
+}
+
+impl Default for ExecServerClientConnectOptions {
+    fn default() -> Self {
+        Self {
+            client_name: "codex-core".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteExecServerConnectArgs {
+    pub websocket_url: String,
+    pub client_name: String,
+}
+
+impl From<RemoteExecServerConnectArgs> for ExecServerClientConnectOptions {
+    fn from(value: RemoteExecServerConnectArgs) -> Self {
+        Self {
+            client_name: value.client_name,
+        }
+    }
 }
 
 pub struct ExecServerProcess {
@@ -143,24 +162,16 @@ struct RegisteredProcess {
 }
 
 struct Inner {
-    child: StdMutex<Option<Child>>,
-    write_tx: mpsc::UnboundedSender<JSONRPCMessage>,
+    write_tx: mpsc::Sender<JSONRPCMessage>,
     pending: Mutex<HashMap<RequestId, oneshot::Sender<Result<Value, JSONRPCErrorError>>>>,
     processes: Mutex<HashMap<String, RegisteredProcess>>,
     next_request_id: AtomicI64,
     reader_task: JoinHandle<()>,
-    writer_task: JoinHandle<()>,
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
         self.reader_task.abort();
-        self.writer_task.abort();
-        if let Ok(mut child_guard) = self.child.lock()
-            && let Some(child) = child_guard.as_mut()
-        {
-            let _ = child.start_kill();
-        }
     }
 }
 
@@ -173,6 +184,12 @@ pub struct ExecServerClient {
 pub enum ExecServerError {
     #[error("failed to spawn exec-server: {0}")]
     Spawn(#[source] std::io::Error),
+    #[error("failed to connect to exec-server websocket `{url}`: {source}")]
+    WebSocketConnect {
+        url: String,
+        #[source]
+        source: tokio_tungstenite::tungstenite::Error,
+    },
     #[error("exec-server transport closed")]
     Closed,
     #[error("failed to serialize or deserialize exec-server JSON: {0}")]
@@ -184,102 +201,90 @@ pub enum ExecServerError {
 }
 
 impl ExecServerClient {
-    pub async fn spawn(command: ExecServerLaunchCommand) -> Result<Self, ExecServerError> {
-        let mut child = Command::new(&command.program);
-        child.args(&command.args);
-        child.stdin(Stdio::piped());
-        child.stdout(Stdio::piped());
-        child.stderr(Stdio::inherit());
-        child.kill_on_drop(true);
+    pub async fn connect_stdio<R, W>(
+        stdin: W,
+        stdout: R,
+        options: ExecServerClientConnectOptions,
+    ) -> Result<Self, ExecServerError>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        Self::connect(
+            JsonRpcConnection::from_stdio(stdout, stdin, "exec-server stdio".to_string()),
+            options,
+        )
+        .await
+    }
 
-        let mut child = child.spawn().map_err(ExecServerError::Spawn)?;
-        let stdin = child.stdin.take().ok_or_else(|| {
-            ExecServerError::Protocol("exec-server stdin was not captured".to_string())
-        })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            ExecServerError::Protocol("exec-server stdout was not captured".to_string())
-        })?;
+    pub async fn connect_websocket(
+        args: RemoteExecServerConnectArgs,
+    ) -> Result<Self, ExecServerError> {
+        let websocket_url = args.websocket_url.clone();
+        let (stream, _) = connect_async(websocket_url.as_str())
+            .await
+            .map_err(|source| ExecServerError::WebSocketConnect {
+                url: websocket_url.clone(),
+                source,
+            })?;
 
-        let (write_tx, mut write_rx) = mpsc::unbounded_channel::<JSONRPCMessage>();
-        let writer_task = tokio::spawn(async move {
-            let mut stdin = stdin;
-            while let Some(message) = write_rx.recv().await {
-                let encoded = match serde_json::to_vec(&message) {
-                    Ok(encoded) => encoded,
-                    Err(err) => {
-                        warn!("failed to encode exec-server message: {err}");
-                        break;
-                    }
-                };
-                if stdin.write_all(&encoded).await.is_err() {
-                    break;
-                }
-                if stdin.write_all(b"\n").await.is_err() {
-                    break;
-                }
-                if stdin.flush().await.is_err() {
-                    break;
-                }
-            }
-        });
+        Self::connect(
+            JsonRpcConnection::from_websocket(
+                stream,
+                format!("exec-server websocket {websocket_url}"),
+            ),
+            args.into(),
+        )
+        .await
+    }
 
-        let pending = Mutex::new(HashMap::<
-            RequestId,
-            oneshot::Sender<Result<Value, JSONRPCErrorError>>,
-        >::new());
-        let processes = Mutex::new(HashMap::<String, RegisteredProcess>::new());
-        let inner = Arc::new_cyclic(move |weak| {
+    async fn connect(
+        connection: JsonRpcConnection,
+        options: ExecServerClientConnectOptions,
+    ) -> Result<Self, ExecServerError> {
+        let (write_tx, mut incoming_rx) = connection.into_parts();
+        let inner = Arc::new_cyclic(|weak| {
             let weak = weak.clone();
             let reader_task = tokio::spawn(async move {
-                let mut lines = BufReader::new(stdout).lines();
-                loop {
-                    let Some(inner) = weak.upgrade() else {
-                        break;
-                    };
-                    let next_line = lines.next_line().await;
-                    match next_line {
-                        Ok(Some(line)) => {
-                            if line.trim().is_empty() {
-                                continue;
-                            }
-                            match serde_json::from_str::<JSONRPCMessage>(&line) {
-                                Ok(message) => {
-                                    if let Err(err) = handle_server_message(&inner, message).await {
-                                        warn!("failed to handle exec-server message: {err}");
-                                        break;
-                                    }
-                                }
-                                Err(err) => {
-                                    warn!("failed to parse exec-server message: {err}");
-                                    break;
-                                }
+                while let Some(event) = incoming_rx.recv().await {
+                    match event {
+                        JsonRpcConnectionEvent::Message(message) => {
+                            if let Some(inner) = weak.upgrade()
+                                && let Err(err) = handle_server_message(&inner, message).await
+                            {
+                                warn!("exec-server client closing after protocol error: {err}");
+                                handle_transport_shutdown(&inner).await;
+                                return;
                             }
                         }
-                        Ok(None) => break,
-                        Err(err) => {
-                            warn!("failed to read exec-server stdout: {err}");
-                            break;
+                        JsonRpcConnectionEvent::Disconnected { reason } => {
+                            if let Some(reason) = reason {
+                                warn!("exec-server client transport disconnected: {reason}");
+                            }
+                            if let Some(inner) = weak.upgrade() {
+                                handle_transport_shutdown(&inner).await;
+                            }
+                            return;
                         }
                     }
                 }
+
                 if let Some(inner) = weak.upgrade() {
                     handle_transport_shutdown(&inner).await;
                 }
             });
 
             Inner {
-                child: StdMutex::new(Some(child)),
                 write_tx,
-                pending,
-                processes,
+                pending: Mutex::new(HashMap::new()),
+                processes: Mutex::new(HashMap::new()),
                 next_request_id: AtomicI64::new(1),
                 reader_task,
-                writer_task,
             }
         });
 
         let client = Self { inner };
-        client.initialize().await?;
+        client.initialize(options).await?;
         Ok(client)
     }
 
@@ -321,6 +326,29 @@ impl ExecServerClient {
             }
         };
 
+        if !response.running {
+            status.mark_exited(response.exit_code);
+        }
+
+        if let Some(stdout) = response.stdout {
+            let _ = self
+                .inner
+                .processes
+                .lock()
+                .await
+                .get(&process_id)
+                .map(|process| process.output_tx.send(stdout.into_inner()));
+        }
+        if let Some(stderr) = response.stderr {
+            let _ = self
+                .inner
+                .processes
+                .lock()
+                .await
+                .get(&process_id)
+                .map(|process| process.output_tx.send(stderr.into_inner()));
+        }
+
         if let Some(exit_code) = response.exit_code {
             status.mark_exited(Some(exit_code));
         }
@@ -334,12 +362,15 @@ impl ExecServerClient {
         })
     }
 
-    async fn initialize(&self) -> Result<(), ExecServerError> {
+    async fn initialize(
+        &self,
+        options: ExecServerClientConnectOptions,
+    ) -> Result<(), ExecServerError> {
         let _: InitializeResponse = self
             .request(
                 INITIALIZE_METHOD,
                 &InitializeParams {
-                    client_name: "codex-core".to_string(),
+                    client_name: options.client_name,
                 },
             )
             .await?;
@@ -372,6 +403,7 @@ impl ExecServerClient {
                 method: method.to_string(),
                 params: Some(params),
             }))
+            .await
             .map_err(|_| ExecServerError::Closed)
     }
 
@@ -397,7 +429,7 @@ impl ExecServerClient {
             trace: None,
         });
 
-        if self.inner.write_tx.send(message).is_err() {
+        if self.inner.write_tx.send(message).await.is_err() {
             self.inner.pending.lock().await.remove(&request_id);
             return Err(ExecServerError::Closed);
         }
@@ -433,7 +465,7 @@ async fn handle_server_message(
         }
         JSONRPCMessage::Request(request) => {
             return Err(ExecServerError::Protocol(format!(
-                "unexpected exec-server request from child: {}",
+                "unexpected exec-server request from remote server: {}",
                 request.method
             )));
         }
