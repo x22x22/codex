@@ -393,15 +393,14 @@ async fn stop_conversation_state(
     state.input_task.abort();
     let _ = state.input_task.await;
 
-    match state.fanout_task.take() {
-        Some(fanout_task) => match fanout_task_stop {
+    if let Some(fanout_task) = state.fanout_task.take() {
+        match fanout_task_stop {
             RealtimeFanoutTaskStop::Abort => {
                 fanout_task.abort();
                 let _ = fanout_task.await;
             }
             RealtimeFanoutTaskStop::Detach => {}
-        },
-        None => {}
+        }
     }
 }
 
