@@ -109,7 +109,6 @@ Request params:
     "PATH": "/usr/bin:/bin"
   },
   "tty": true,
-  "outputBytesCap": 16384,
   "arg0": null
 }
 ```
@@ -122,19 +121,13 @@ Field definitions:
 - `env`: environment variables passed to the child process.
 - `tty`: when `true`, spawn a PTY-backed interactive process; when `false`,
   spawn a pipe-backed process with closed stdin.
-- `outputBytesCap`: maximum retained stdout/stderr bytes per stream for the
-  in-memory buffer. Defaults to `codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP`.
 - `arg0`: optional argv0 override forwarded to `codex-utils-pty`.
 
 Response:
 
 ```json
 {
-  "processId": "proc-1",
-  "running": true,
-  "exitCode": null,
-  "stdout": null,
-  "stderr": null
+  "processId": "proc-1"
 }
 ```
 
@@ -262,6 +255,7 @@ The crate exports:
 - `ExecServerClientConnectOptions`
 - `RemoteExecServerConnectArgs`
 - `ExecServerLaunchCommand`
+- `ExecServerOutput`
 - `ExecServerProcess`
 - `SpawnedExecServer`
 - `ExecServerError`
@@ -293,6 +287,18 @@ Connect the client to an existing server transport:
 - `ExecServerClient::connect_stdio(...)`
 - `ExecServerClient::connect_websocket(...)`
 
+Timeout behavior:
+
+- stdio and websocket clients both enforce an initialize-handshake timeout
+- websocket clients also enforce a connect timeout before the handshake begins
+
+Process output:
+
+- `ExecServerProcess::output_receiver()` yields `ExecServerOutput`
+- each output event includes both `stream` (`stdout` or `stderr`) and raw bytes
+- `ExecServerProcess::has_exited()` is only updated from an actual exit
+  notification or transport shutdown, not from `terminate()` alone
+
 Spawning a local child process is deliberately separate:
 
 - `spawn_local_exec_server(...)`
@@ -310,8 +316,8 @@ Initialize:
 Start a process:
 
 ```json
-{"id":2,"method":"command/exec","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"outputBytesCap":4096,"arg0":null}}
-{"id":2,"result":{"processId":"proc-1","running":true,"exitCode":null,"stdout":null,"stderr":null}}
+{"id":2,"method":"command/exec","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"arg0":null}}
+{"id":2,"result":{"processId":"proc-1"}}
 {"method":"command/exec/outputDelta","params":{"processId":"proc-1","stream":"stdout","chunk":"cmVhZHkK"}}
 ```
 

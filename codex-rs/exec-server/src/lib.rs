@@ -7,6 +7,7 @@ mod server;
 pub use client::ExecServerClient;
 pub use client::ExecServerClientConnectOptions;
 pub use client::ExecServerError;
+pub use client::ExecServerOutput;
 pub use client::ExecServerProcess;
 pub use client::RemoteExecServerConnectArgs;
 pub use local::ExecServerLaunchCommand;

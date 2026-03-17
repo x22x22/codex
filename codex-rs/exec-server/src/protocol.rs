@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -51,8 +50,6 @@ pub struct ExecParams {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub tty: bool,
-    #[serde(default = "default_output_bytes_cap")]
-    pub output_bytes_cap: usize,
     pub arg0: Option<String>,
 }
 
@@ -60,10 +57,6 @@ pub struct ExecParams {
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
     pub process_id: String,
-    pub running: bool,
-    pub exit_code: Option<i32>,
-    pub stdout: Option<ByteChunk>,
-    pub stderr: Option<ByteChunk>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,10 +104,6 @@ pub struct ExecOutputDeltaNotification {
 pub struct ExecExitedNotification {
     pub process_id: String,
     pub exit_code: i32,
-}
-
-fn default_output_bytes_cap() -> usize {
-    DEFAULT_OUTPUT_BYTES_CAP
 }
 
 mod base64_bytes {
