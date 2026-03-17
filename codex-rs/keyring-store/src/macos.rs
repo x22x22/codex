@@ -325,7 +325,7 @@ mod tests {
             .with_shared_password("shared-value")
             .with_legacy_password("legacy-value");
 
-        let password = load_password_with_store(&store, "Codex Auth", "greg")
+        let password = load_password_with_store(&store, "Codex Auth", "test-account")
             .unwrap()
             .expect("expected password");
 
@@ -345,7 +345,7 @@ mod tests {
     fn load_backfills_shared_password_from_legacy_without_deleting_legacy() {
         let store = MockPasswordStore::default().with_legacy_password("legacy-value");
 
-        let password = load_password_with_store(&store, "Codex Auth", "greg")
+        let password = load_password_with_store(&store, "Codex Auth", "test-account")
             .unwrap()
             .expect("expected password");
 
@@ -367,7 +367,7 @@ mod tests {
             .with_legacy_password("legacy-value")
             .with_save_shared_error("shared write failed");
 
-        let password = load_password_with_store(&store, "Codex Auth", "greg")
+        let password = load_password_with_store(&store, "Codex Auth", "test-account")
             .unwrap()
             .expect("expected password");
 
@@ -384,7 +384,7 @@ mod tests {
     fn save_writes_only_to_shared_password() {
         let store = MockPasswordStore::default().with_legacy_password("legacy-value");
 
-        save_password_with_store(&store, "Codex Auth", "greg", "shared-value").unwrap();
+        save_password_with_store(&store, "Codex Auth", "test-account", "shared-value").unwrap();
 
         assert_eq!(
             store.shared.borrow().clone(),
@@ -403,7 +403,7 @@ mod tests {
             .with_shared_password("shared-value")
             .with_legacy_password("legacy-value");
 
-        let deleted = delete_password_with_store(&store, "Codex Auth", "greg").unwrap();
+        let deleted = delete_password_with_store(&store, "Codex Auth", "test-account").unwrap();
 
         assert!(deleted);
         assert_eq!(store.shared.borrow().clone(), None);
