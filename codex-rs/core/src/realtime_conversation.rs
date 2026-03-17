@@ -352,7 +352,23 @@ pub(crate) async fn handle_start(
     sub_id: String,
     params: ConversationStartParams,
 ) -> CodexResult<()> {
-    if let Err(err) = handle_start_inner(sess, &sub_id, params).await {
+    let prepared_start = match prepare_realtime_start(sess, params).await {
+        Ok(prepared_start) => prepared_start,
+        Err(err) => {
+            error!("failed to prepare realtime conversation: {err}");
+            let message = err.to_string();
+            sess.send_event_raw(Event {
+                id: sub_id,
+                msg: EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+                    payload: RealtimeEvent::Error(message),
+                }),
+            })
+            .await;
+            return Ok(());
+        }
+    };
+
+    if let Err(err) = handle_start_inner(sess, &sub_id, prepared_start).await {
         error!("failed to start realtime conversation: {err}");
         let message = err.to_string();
         sess.send_event_raw(Event {
@@ -367,11 +383,17 @@ pub(crate) async fn handle_start(
     Ok(())
 }
 
-async fn handle_start_inner(
+struct PreparedRealtimeConversationStart {
+    api_provider: ApiProvider,
+    extra_headers: Option<HeaderMap>,
+    requested_session_id: Option<String>,
+    session_config: RealtimeSessionConfig,
+}
+
+async fn prepare_realtime_start(
     sess: &Arc<Session>,
-    sub_id: &str,
     params: ConversationStartParams,
-) -> CodexResult<()> {
+) -> CodexResult<PreparedRealtimeConversationStart> {
     let provider = sess.provider().await;
     let auth = sess.services.auth_manager.auth().await;
     let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
@@ -418,6 +440,25 @@ async fn handle_start_inner(
     };
     let extra_headers =
         realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
+    Ok(PreparedRealtimeConversationStart {
+        api_provider,
+        extra_headers,
+        requested_session_id,
+        session_config,
+    })
+}
+
+async fn handle_start_inner(
+    sess: &Arc<Session>,
+    sub_id: &str,
+    prepared_start: PreparedRealtimeConversationStart,
+) -> CodexResult<()> {
+    let PreparedRealtimeConversationStart {
+        api_provider,
+        extra_headers,
+        requested_session_id,
+        session_config,
+    } = prepared_start;
     info!("starting realtime conversation");
     let (events_rx, realtime_active) = sess
         .conversation

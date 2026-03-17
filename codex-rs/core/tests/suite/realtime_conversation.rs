@@ -434,10 +434,10 @@ async fn conversation_audio_before_start_emits_error() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_start_failure_emits_realtime_error_and_closed() -> Result<()> {
+async fn conversation_start_preflight_failure_emits_realtime_error_only() -> Result<()> {
     if std::env::var_os(REALTIME_CONVERSATION_TEST_SUBPROCESS_ENV_VAR).is_none() {
         return run_realtime_conversation_test_in_subprocess(
-            "suite::realtime_conversation::conversation_start_failure_emits_realtime_error_and_closed",
+            "suite::realtime_conversation::conversation_start_preflight_failure_emits_realtime_error_only",
             None,
         );
     }
@@ -463,6 +463,46 @@ async fn conversation_start_failure_emits_realtime_error_and_closed() -> Result<
     })
     .await;
     assert_eq!(err, "realtime conversation requires API key auth");
+
+    let closed = timeout(Duration::from_millis(200), async {
+        wait_for_event_match(&test.codex, |msg| match msg {
+            EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
+            _ => None,
+        })
+        .await
+    })
+    .await;
+    assert!(closed.is_err(), "preflight failure should not emit closed");
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_connect_failure_emits_realtime_error_and_closed() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_websocket_server(vec![]).await;
+    let mut builder = test_codex().with_config(|config| {
+        config.experimental_realtime_ws_base_url = Some("http://127.0.0.1:1".to_string());
+    });
+    let test = builder.build_with_websocket_server(&server).await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let err = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
+            payload: RealtimeEvent::Error(message),
+        }) => Some(message.clone()),
+        _ => None,
+    })
+    .await;
+    assert!(!err.is_empty());
 
     let closed = wait_for_event_match(&test.codex, |msg| match msg {
         EventMsg::RealtimeConversationClosed(closed) => Some(closed.clone()),
