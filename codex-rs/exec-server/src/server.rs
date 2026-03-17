@@ -3,6 +3,13 @@ mod processor;
 mod routing;
 mod transport;
 
+pub(crate) use handler::ExecServerHandler;
+pub(crate) use routing::ExecServerClientNotification;
+pub(crate) use routing::ExecServerInboundMessage;
+pub(crate) use routing::ExecServerOutboundMessage;
+pub(crate) use routing::ExecServerRequest;
+pub(crate) use routing::ExecServerResponseMessage;
+pub(crate) use routing::ExecServerServerNotification;
 pub use transport::ExecServerTransport;
 pub use transport::ExecServerTransportParseError;
 

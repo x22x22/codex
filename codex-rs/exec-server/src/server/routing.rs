@@ -10,6 +10,7 @@ use serde::de::DeserializeOwned;
 use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
+use crate::protocol::EXEC_READ_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
 use crate::protocol::ExecExitedNotification;
@@ -20,6 +21,8 @@ use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
+use crate::protocol::ReadParams;
+use crate::protocol::ReadResponse;
 use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
@@ -40,6 +43,10 @@ pub(crate) enum ExecServerRequest {
     Exec {
         request_id: RequestId,
         params: ExecParams,
+    },
+    Read {
+        request_id: RequestId,
+        params: ReadParams,
     },
     Write {
         request_id: RequestId,
@@ -73,6 +80,7 @@ pub(crate) enum ExecServerOutboundMessage {
 pub(crate) enum ExecServerResponseMessage {
     Initialize(InitializeResponse),
     Exec(ExecResponse),
+    Read(ReadResponse),
     Write(WriteResponse),
     Terminate(TerminateResponse),
 }
@@ -161,6 +169,9 @@ fn route_request(request: JSONRPCRequest) -> Result<RoutedExecServerMessage, Str
         EXEC_METHOD => Ok(parse_request_params(request, |request_id, params| {
             ExecServerRequest::Exec { request_id, params }
         })),
+        EXEC_READ_METHOD => Ok(parse_request_params(request, |request_id, params| {
+            ExecServerRequest::Read { request_id, params }
+        })),
         EXEC_WRITE_METHOD => Ok(parse_request_params(request, |request_id, params| {
             ExecServerRequest::Write { request_id, params }
         })),
@@ -210,6 +221,7 @@ fn serialize_response(
     match response {
         ExecServerResponseMessage::Initialize(response) => serde_json::to_value(response),
         ExecServerResponseMessage::Exec(response) => serde_json::to_value(response),
+        ExecServerResponseMessage::Read(response) => serde_json::to_value(response),
         ExecServerResponseMessage::Write(response) => serde_json::to_value(response),
         ExecServerResponseMessage::Terminate(response) => serde_json::to_value(response),
     }
@@ -421,12 +433,12 @@ mod tests {
     #[test]
     fn unexpected_client_notifications_are_rejected() {
         let err = route_jsonrpc_message(JSONRPCMessage::Notification(JSONRPCNotification {
-            method: "process/outputDelta".to_string(),
+            method: "process/output".to_string(),
             params: Some(json!({})),
         }))
         .expect_err("unexpected client notification should fail");
 
-        assert_eq!(err, "unexpected notification method: process/outputDelta");
+        assert_eq!(err, "unexpected notification method: process/output");
     }
 
     #[test]

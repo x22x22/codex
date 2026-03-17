@@ -70,7 +70,7 @@ Start simple and explicit:
 
 Server notifications:
 
-- `process/outputDelta`
+- `process/output`
 - `process/exited`
 - optionally `process/started`
 - optionally `process/failed`
@@ -132,7 +132,7 @@ growth.
 
 Suggested behavior:
 
-- stream every output chunk live via `process/outputDelta`
+- stream every output chunk live via `process/output`
 - retain capped output per process in memory
 - keep stdout and stderr separately for pipe-backed processes
 - for PTY-backed processes, treat retained output as a single terminal stream
@@ -234,7 +234,7 @@ If unified exec is later backed by exec-server, the `core` client wrapper should
 keep owning the translation into the existing event model:
 
 - `process/start` success -> `ExecCommandBegin`
-- `process/outputDelta` -> `ExecCommandOutputDelta`
+- `process/output` -> `ExecCommandOutputDelta`
 - local `process/write` call -> `TerminalInteraction`
 - `process/exited` plus retained transcript -> `ExecCommandEnd`
 

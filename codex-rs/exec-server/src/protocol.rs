@@ -7,11 +7,12 @@ use serde::Serialize;
 
 pub const INITIALIZE_METHOD: &str = "initialize";
 pub const INITIALIZED_METHOD: &str = "initialized";
-pub const EXEC_METHOD: &str = "command/exec";
-pub const EXEC_WRITE_METHOD: &str = "command/exec/write";
-pub const EXEC_TERMINATE_METHOD: &str = "command/exec/terminate";
-pub const EXEC_OUTPUT_DELTA_METHOD: &str = "command/exec/outputDelta";
-pub const EXEC_EXITED_METHOD: &str = "command/exec/exited";
+pub const EXEC_METHOD: &str = "process/start";
+pub const EXEC_READ_METHOD: &str = "process/read";
+pub const EXEC_WRITE_METHOD: &str = "process/write";
+pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
+pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
+pub const EXEC_EXITED_METHOD: &str = "process/exited";
 pub const PROTOCOL_VERSION: &str = "exec-server.v0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,8 +46,8 @@ pub struct InitializeResponse {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExecParams {
-    /// Caller-chosen stable process identifier scoped to a single exec-server
-    /// connection. This is a protocol handle, not an OS pid.
+    /// Client-chosen logical process handle scoped to this connection/session.
+    /// This is a protocol key, not an OS pid.
     pub process_id: String,
     pub argv: Vec<String>,
     pub cwd: PathBuf,
@@ -59,6 +60,32 @@ pub struct ExecParams {
 #[serde(rename_all = "camelCase")]
 pub struct ExecResponse {
     pub process_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadParams {
+    pub process_id: String,
+    pub after_seq: Option<u64>,
+    pub max_bytes: Option<usize>,
+    pub wait_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessOutputChunk {
+    pub seq: u64,
+    pub stream: ExecOutputStream,
+    pub chunk: ByteChunk,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadResponse {
+    pub chunks: Vec<ProcessOutputChunk>,
+    pub next_seq: u64,
+    pub exited: bool,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +118,7 @@ pub struct TerminateResponse {
 pub enum ExecOutputStream {
     Stdout,
     Stderr,
+    Pty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
