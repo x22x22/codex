@@ -21,7 +21,6 @@ pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
 pub const REVIEW_EXIT_SUCCESS_TMPL: &str = include_str!("../templates/review/exit_success.xml");
 pub const REVIEW_EXIT_INTERRUPTED_TMPL: &str =
     include_str!("../templates/review/exit_interrupted.xml");
-const STRIP_INPUT_ITEM_METADATA_ENV_VAR: &str = "CODEX_STRIP_INPUT_ITEM_METADATA";
 
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
@@ -61,35 +60,8 @@ impl Prompt {
             reserialize_shell_outputs(&mut input);
         }
 
-        if should_strip_input_item_metadata() {
-            strip_input_item_metadata(&mut input);
-        }
-
         input
     }
-}
-
-fn should_strip_input_item_metadata() -> bool {
-    std::env::var(STRIP_INPUT_ITEM_METADATA_ENV_VAR)
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-}
-
-fn strip_input_item_metadata(items: &mut [ResponseItem]) {
-    items.iter_mut().for_each(|item| match item {
-        ResponseItem::Message { metadata, .. }
-        | ResponseItem::LocalShellCall { metadata, .. }
-        | ResponseItem::FunctionCall { metadata, .. }
-        | ResponseItem::CustomToolCall { metadata, .. } => {
-            *metadata = None;
-        }
-        _ => {}
-    });
 }
 
 fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
