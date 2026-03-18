@@ -15,8 +15,6 @@ use std::sync::Mutex;
 use std::sync::RwLock;
 
 use codex_app_server_protocol::AuthMode as ApiAuthMode;
-use codex_auth::CODEX_API_KEY_ENV_VAR;
-use codex_auth::OPENAI_API_KEY_ENV_VAR;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
