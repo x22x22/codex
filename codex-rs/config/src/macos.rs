@@ -1,6 +1,6 @@
-use super::ConfigRequirementsToml;
-use super::ConfigRequirementsWithSources;
-use super::RequirementSource;
+use crate::ConfigRequirementsToml;
+use crate::ConfigRequirementsWithSources;
+use crate::RequirementSource;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use core_foundation::base::TCFType;
@@ -16,19 +16,19 @@ const MANAGED_PREFERENCES_CONFIG_KEY: &str = "config_toml_base64";
 const MANAGED_PREFERENCES_REQUIREMENTS_KEY: &str = "requirements_toml_base64";
 
 #[derive(Debug, Clone)]
-pub(super) struct ManagedAdminConfigLayer {
+pub struct ManagedAdminConfigLayer {
     pub config: TomlValue,
     pub raw_toml: String,
 }
 
-pub(super) fn managed_preferences_requirements_source() -> RequirementSource {
+fn managed_preferences_requirements_source() -> RequirementSource {
     RequirementSource::MdmManagedPreferences {
         domain: MANAGED_PREFERENCES_APPLICATION_ID.to_string(),
         key: MANAGED_PREFERENCES_REQUIREMENTS_KEY.to_string(),
     }
 }
 
-pub(crate) async fn load_managed_admin_config_layer(
+pub async fn load_managed_admin_config_layer(
     override_base64: Option<&str>,
 ) -> io::Result<Option<ManagedAdminConfigLayer>> {
     if let Some(encoded) = override_base64 {
@@ -61,7 +61,7 @@ fn load_managed_admin_config() -> io::Result<Option<ManagedAdminConfigLayer>> {
         .transpose()
 }
 
-pub(crate) async fn load_managed_admin_requirements_toml(
+pub async fn load_managed_admin_requirements_toml(
     target: &mut ConfigRequirementsWithSources,
     override_base64: Option<&str>,
 ) -> io::Result<()> {

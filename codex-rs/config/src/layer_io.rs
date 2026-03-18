@@ -1,10 +1,10 @@
-use super::LoaderOverrides;
+use crate::LoaderOverrides;
+use crate::config_error_from_toml;
+use crate::io_error_from_config_error;
 #[cfg(target_os = "macos")]
-use super::macos::ManagedAdminConfigLayer;
+use crate::macos::ManagedAdminConfigLayer;
 #[cfg(target_os = "macos")]
-use super::macos::load_managed_admin_config_layer;
-use codex_config::config_error_from_toml;
-use codex_config::io_error_from_config_error;
+use crate::macos::load_managed_admin_config_layer;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::io;
 use std::path::Path;
@@ -16,26 +16,26 @@ use toml::Value as TomlValue;
 const CODEX_MANAGED_CONFIG_SYSTEM_PATH: &str = "/etc/codex/managed_config.toml";
 
 #[derive(Debug, Clone)]
-pub(super) struct MangedConfigFromFile {
+pub struct ManagedConfigFromFile {
     pub managed_config: TomlValue,
     pub file: AbsolutePathBuf,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct ManagedConfigFromMdm {
+pub struct ManagedConfigFromMdm {
     pub managed_config: TomlValue,
     pub raw_toml: String,
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct LoadedConfigLayers {
+pub struct LoadedConfigLayers {
     /// If present, data read from a file such as `/etc/codex/managed_config.toml`.
-    pub managed_config: Option<MangedConfigFromFile>,
+    pub managed_config: Option<ManagedConfigFromFile>,
     /// If present, data read from managed preferences (macOS only).
     pub managed_config_from_mdm: Option<ManagedConfigFromMdm>,
 }
 
-pub(super) async fn load_config_layers_internal(
+pub async fn load_config_layers_internal(
     codex_home: &Path,
     overrides: LoaderOverrides,
 ) -> io::Result<LoadedConfigLayers> {
@@ -59,7 +59,7 @@ pub(super) async fn load_config_layers_internal(
     let managed_config =
         read_config_from_path(&managed_config_path, /*log_missing_as_info*/ false)
             .await?
-            .map(|managed_config| MangedConfigFromFile {
+            .map(|managed_config| ManagedConfigFromFile {
                 managed_config,
                 file: managed_config_path.clone(),
             });
@@ -88,7 +88,7 @@ fn map_managed_admin_layer(layer: ManagedAdminConfigLayer) -> ManagedConfigFromM
     }
 }
 
-pub(super) async fn read_config_from_path(
+async fn read_config_from_path(
     path: impl AsRef<Path>,
     log_missing_as_info: bool,
 ) -> io::Result<Option<TomlValue>> {
@@ -120,8 +120,7 @@ pub(super) async fn read_config_from_path(
     }
 }
 
-/// Return the default managed config path.
-pub(super) fn managed_config_default_path(codex_home: &Path) -> PathBuf {
+fn managed_config_default_path(codex_home: &Path) -> PathBuf {
     #[cfg(unix)]
     {
         let _ = codex_home;

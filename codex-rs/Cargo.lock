@@ -1786,10 +1786,12 @@ name = "codex-config"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "codex-app-server-protocol",
  "codex-execpolicy",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "core-foundation 0.9.4",
  "futures",
  "multimap",
  "pretty_assertions",
@@ -1802,6 +1804,7 @@ dependencies = [
  "toml 0.9.11+spec-1.1.0",
  "toml_edit 0.24.0+spec-1.1.0",
  "tracing",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
