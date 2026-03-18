@@ -85,6 +85,7 @@ pub fn create_fake_rollout_with_source(
         base_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
+        approved_command_prefixes: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,
@@ -167,6 +168,7 @@ pub fn create_fake_rollout_with_text_elements(
         base_instructions: None,
         dynamic_tools: None,
         memory_mode: None,
+        approved_command_prefixes: None,
     };
     let payload = serde_json::to_value(SessionMetaLine {
         meta,
