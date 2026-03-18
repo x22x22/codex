@@ -66,7 +66,7 @@ async fn exec_server_accepts_initialize_over_stdio() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn exec_server_stubs_command_exec_over_stdio() -> anyhow::Result<()> {
+async fn exec_server_stubs_process_start_over_stdio() -> anyhow::Result<()> {
     let binary = cargo_bin("codex-exec-server")?;
     let mut child = Command::new(binary);
     child.stdin(Stdio::piped());
@@ -93,7 +93,7 @@ async fn exec_server_stubs_command_exec_over_stdio() -> anyhow::Result<()> {
 
     let exec = JSONRPCMessage::Request(JSONRPCRequest {
         id: RequestId::Integer(2),
-        method: "command/exec".to_string(),
+        method: "process/start".to_string(),
         params: Some(serde_json::json!({
             "processId": "proc-1",
             "argv": ["true"],
@@ -113,13 +113,13 @@ async fn exec_server_stubs_command_exec_over_stdio() -> anyhow::Result<()> {
     let response: JSONRPCMessage = serde_json::from_str(&response_line)?;
     let JSONRPCMessage::Error(codex_app_server_protocol::JSONRPCError { id, error }) = response
     else {
-        panic!("expected command/exec stub error");
+        panic!("expected process/start stub error");
     };
     assert_eq!(id, RequestId::Integer(2));
     assert_eq!(error.code, -32601);
     assert_eq!(
         error.message,
-        "exec-server stub does not implement `command/exec` yet"
+        "exec-server stub does not implement `process/start` yet"
     );
 
     child.start_kill()?;

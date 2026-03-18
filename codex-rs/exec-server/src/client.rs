@@ -1,54 +1,95 @@
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
+use std::time::Duration;
 
-use codex_app_server_protocol::JSONRPCError;
-use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCMessage;
-use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCRequest;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-use serde_json::Value;
-use tokio::io::AsyncBufReadExt;
-use tokio::io::AsyncWriteExt;
-use tokio::io::BufReader;
-use tokio::process::Child;
-use tokio::sync::Mutex;
-use tokio::sync::mpsc;
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWrite;
+use tokio::time::timeout;
+use tokio_tungstenite::connect_async;
 use tracing::warn;
 
+use crate::client_api::ExecServerClientConnectOptions;
+use crate::client_api::RemoteExecServerConnectArgs;
+use crate::connection::JsonRpcConnection;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
-use crate::server_process::ExecServerLaunchCommand;
-use crate::server_process::spawn_stdio_exec_server;
+use crate::rpc::RpcCallError;
+use crate::rpc::RpcClient;
+use crate::rpc::RpcClientEvent;
+
+mod local_backend;
+use local_backend::LocalBackend;
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
+
+impl Default for ExecServerClientConnectOptions {
+    fn default() -> Self {
+        Self {
+            client_name: "codex-core".to_string(),
+            initialize_timeout: INITIALIZE_TIMEOUT,
+        }
+    }
+}
+
+impl From<RemoteExecServerConnectArgs> for ExecServerClientConnectOptions {
+    fn from(value: RemoteExecServerConnectArgs) -> Self {
+        Self {
+            client_name: value.client_name,
+            initialize_timeout: value.initialize_timeout,
+        }
+    }
+}
+
+impl RemoteExecServerConnectArgs {
+    pub fn new(websocket_url: String, client_name: String) -> Self {
+        Self {
+            websocket_url,
+            client_name,
+            connect_timeout: CONNECT_TIMEOUT,
+            initialize_timeout: INITIALIZE_TIMEOUT,
+        }
+    }
+}
+
+enum ClientBackend {
+    Remote(RpcClient),
+    InProcess(LocalBackend),
+}
+
+impl ClientBackend {
+    fn as_local(&self) -> Option<&LocalBackend> {
+        match self {
+            ClientBackend::Remote(_) => None,
+            ClientBackend::InProcess(backend) => Some(backend),
+        }
+    }
+
+    fn as_remote(&self) -> Option<&RpcClient> {
+        match self {
+            ClientBackend::Remote(client) => Some(client),
+            ClientBackend::InProcess(_) => None,
+        }
+    }
+}
 
 struct Inner {
-    child: StdMutex<Option<Child>>,
-    write_tx: mpsc::UnboundedSender<JSONRPCMessage>,
-    pending: Mutex<HashMap<RequestId, oneshot::Sender<Result<Value, JSONRPCErrorError>>>>,
-    next_request_id: AtomicI64,
-    reader_task: JoinHandle<()>,
-    writer_task: JoinHandle<()>,
+    backend: ClientBackend,
+    reader_task: tokio::task::JoinHandle<()>,
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        self.reader_task.abort();
-        self.writer_task.abort();
-        if let Ok(mut child_guard) = self.child.lock()
-            && let Some(child) = child_guard.as_mut()
+        if let Some(backend) = self.backend.as_local()
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
         {
-            let _ = child.start_kill();
+            let backend = backend.clone();
+            handle.spawn(async move {
+                backend.shutdown().await;
+            });
         }
+        self.reader_task.abort();
     }
 }
 
@@ -61,6 +102,16 @@ pub struct ExecServerClient {
 pub enum ExecServerError {
     #[error("failed to spawn exec-server: {0}")]
     Spawn(#[source] std::io::Error),
+    #[error("timed out connecting to exec-server websocket `{url}` after {timeout:?}")]
+    WebSocketConnectTimeout { url: String, timeout: Duration },
+    #[error("failed to connect to exec-server websocket `{url}`: {source}")]
+    WebSocketConnect {
+        url: String,
+        #[source]
+        source: tokio_tungstenite::tungstenite::Error,
+    },
+    #[error("timed out waiting for exec-server initialize handshake after {timeout:?}")]
+    InitializeTimedOut { timeout: Duration },
     #[error("exec-server transport closed")]
     Closed,
     #[error("failed to serialize or deserialize exec-server JSON: {0}")]
@@ -72,205 +123,145 @@ pub enum ExecServerError {
 }
 
 impl ExecServerClient {
-    pub async fn spawn(command: ExecServerLaunchCommand) -> Result<Self, ExecServerError> {
-        let crate::server_process::SpawnedStdioExecServer {
-            child,
-            stdin,
-            stdout,
-        } = spawn_stdio_exec_server(command)?;
-
-        let (write_tx, mut write_rx) = mpsc::unbounded_channel::<JSONRPCMessage>();
-        let writer_task = tokio::spawn(async move {
-            let mut stdin = stdin;
-            while let Some(message) = write_rx.recv().await {
-                let encoded = match serde_json::to_vec(&message) {
-                    Ok(encoded) => encoded,
-                    Err(err) => {
-                        warn!("failed to encode exec-server message: {err}");
-                        break;
-                    }
-                };
-                if stdin.write_all(&encoded).await.is_err() {
-                    break;
-                }
-                if stdin.write_all(b"\n").await.is_err() {
-                    break;
-                }
-                if stdin.flush().await.is_err() {
-                    break;
-                }
-            }
+    pub async fn connect_in_process(
+        options: ExecServerClientConnectOptions,
+    ) -> Result<Self, ExecServerError> {
+        let backend = LocalBackend::new(crate::server::ExecServerHandler::new());
+        let inner = Arc::new(Inner {
+            backend: ClientBackend::InProcess(backend),
+            reader_task: tokio::spawn(async {}),
         });
-
-        let pending = Mutex::new(HashMap::<
-            RequestId,
-            oneshot::Sender<Result<Value, JSONRPCErrorError>>,
-        >::new());
-        let inner = Arc::new_cyclic(move |weak| {
-            let weak = weak.clone();
-            let reader_task = tokio::spawn(async move {
-                let mut lines = BufReader::new(stdout).lines();
-                loop {
-                    let Some(inner) = weak.upgrade() else {
-                        break;
-                    };
-                    match lines.next_line().await {
-                        Ok(Some(line)) => {
-                            if line.trim().is_empty() {
-                                continue;
-                            }
-
-                            match serde_json::from_str::<JSONRPCMessage>(&line) {
-                                Ok(message) => {
-                                    if let Err(err) = handle_server_message(&inner, message).await {
-                                        warn!("failed to handle exec-server message: {err}");
-                                        break;
-                                    }
-                                }
-                                Err(err) => {
-                                    warn!("failed to parse exec-server message: {err}");
-                                    break;
-                                }
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(err) => {
-                            warn!("failed to read exec-server stdout: {err}");
-                            break;
-                        }
-                    }
-                }
-
-                if let Some(inner) = weak.upgrade() {
-                    fail_pending_requests(&inner).await;
-                }
-            });
-
-            Inner {
-                child: StdMutex::new(Some(child)),
-                write_tx,
-                pending,
-                next_request_id: AtomicI64::new(1),
-                reader_task,
-                writer_task,
-            }
-        });
-
         let client = Self { inner };
-        client
-            .initialize(InitializeParams {
-                client_name: "codex-core".to_string(),
-            })
-            .await?;
-        client.send_notification(INITIALIZED_METHOD, serde_json::json!({}))?;
+        client.initialize(options).await?;
         Ok(client)
+    }
+
+    pub async fn connect_stdio<R, W>(
+        stdin: W,
+        stdout: R,
+        options: ExecServerClientConnectOptions,
+    ) -> Result<Self, ExecServerError>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        Self::connect(
+            JsonRpcConnection::from_stdio(stdout, stdin, "exec-server stdio".to_string()),
+            options,
+        )
+        .await
+    }
+
+    pub async fn connect_websocket(
+        args: RemoteExecServerConnectArgs,
+    ) -> Result<Self, ExecServerError> {
+        let websocket_url = args.websocket_url.clone();
+        let connect_timeout = args.connect_timeout;
+        let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))
+            .await
+            .map_err(|_| ExecServerError::WebSocketConnectTimeout {
+                url: websocket_url.clone(),
+                timeout: connect_timeout,
+            })?
+            .map_err(|source| ExecServerError::WebSocketConnect {
+                url: websocket_url.clone(),
+                source,
+            })?;
+
+        Self::connect(
+            JsonRpcConnection::from_websocket(
+                stream,
+                format!("exec-server websocket {websocket_url}"),
+            ),
+            args.into(),
+        )
+        .await
     }
 
     pub async fn initialize(
         &self,
-        params: InitializeParams,
+        options: ExecServerClientConnectOptions,
     ) -> Result<InitializeResponse, ExecServerError> {
-        self.send_request(INITIALIZE_METHOD, params).await
-    }
+        let ExecServerClientConnectOptions {
+            client_name,
+            initialize_timeout,
+        } = options;
 
-    async fn send_request<P, R>(&self, method: &str, params: P) -> Result<R, ExecServerError>
-    where
-        P: Serialize,
-        R: DeserializeOwned,
-    {
-        let id = RequestId::Integer(self.inner.next_request_id.fetch_add(1, Ordering::SeqCst));
-        let params = serde_json::to_value(params)?;
-        let (tx, rx) = oneshot::channel();
-        self.inner.pending.lock().await.insert(id.clone(), tx);
-
-        if let Err(err) = self
-            .inner
-            .write_tx
-            .send(JSONRPCMessage::Request(JSONRPCRequest {
-                id: id.clone(),
-                method: method.to_string(),
-                params: Some(params),
-                trace: None,
-            }))
-        {
-            let _ = self.inner.pending.lock().await.remove(&id);
-            return Err(ExecServerError::Protocol(format!(
-                "failed to queue exec-server request: {err}"
-            )));
-        }
-
-        let result = rx.await.map_err(|_| ExecServerError::Closed)??;
-        Ok(serde_json::from_value(result)?)
-    }
-
-    fn send_notification<P>(&self, method: &str, params: P) -> Result<(), ExecServerError>
-    where
-        P: Serialize,
-    {
-        let params = serde_json::to_value(params)?;
-        self.inner
-            .write_tx
-            .send(JSONRPCMessage::Notification(JSONRPCNotification {
-                method: method.to_string(),
-                params: Some(params),
-            }))
-            .map_err(|err| {
-                ExecServerError::Protocol(format!(
-                    "failed to queue exec-server notification: {err}"
-                ))
-            })
-    }
-}
-
-impl From<JSONRPCErrorError> for ExecServerError {
-    fn from(error: JSONRPCErrorError) -> Self {
-        Self::Server {
-            code: error.code,
-            message: error.message,
-        }
-    }
-}
-
-async fn handle_server_message(
-    inner: &Inner,
-    message: JSONRPCMessage,
-) -> Result<(), ExecServerError> {
-    match message {
-        JSONRPCMessage::Response(JSONRPCResponse { id, result }) => {
-            if let Some(tx) = inner.pending.lock().await.remove(&id) {
-                let _ = tx.send(Ok(result));
-            }
-            Ok(())
-        }
-        JSONRPCMessage::Error(JSONRPCError { id, error }) => {
-            if let Some(tx) = inner.pending.lock().await.remove(&id) {
-                let _ = tx.send(Err(error));
-                Ok(())
+        timeout(initialize_timeout, async {
+            let response = if let Some(backend) = self.inner.backend.as_local() {
+                backend.initialize().await?
             } else {
-                Err(ExecServerError::Server {
-                    code: error.code,
-                    message: error.message,
-                })
+                let params = InitializeParams { client_name };
+                let Some(remote) = self.inner.backend.as_remote() else {
+                    return Err(ExecServerError::Protocol(
+                        "remote backend missing during initialize".to_string(),
+                    ));
+                };
+                remote.call(INITIALIZE_METHOD, &params).await?
+            };
+            self.notify_initialized().await?;
+            Ok(response)
+        })
+        .await
+        .map_err(|_| ExecServerError::InitializeTimedOut {
+            timeout: initialize_timeout,
+        })?
+    }
+
+    async fn connect(
+        connection: JsonRpcConnection,
+        options: ExecServerClientConnectOptions,
+    ) -> Result<Self, ExecServerError> {
+        let (rpc_client, mut events_rx) = RpcClient::new(connection);
+        let reader_task = tokio::spawn(async move {
+            while let Some(event) = events_rx.recv().await {
+                match event {
+                    RpcClientEvent::Notification(notification) => {
+                        warn!(
+                            "ignoring unexpected exec-server notification during stub phase: {}",
+                            notification.method
+                        );
+                    }
+                    RpcClientEvent::Disconnected { reason } => {
+                        if let Some(reason) = reason {
+                            warn!("exec-server client transport disconnected: {reason}");
+                        }
+                        return;
+                    }
+                }
             }
+        });
+
+        let client = Self {
+            inner: Arc::new(Inner {
+                backend: ClientBackend::Remote(rpc_client),
+                reader_task,
+            }),
+        };
+        client.initialize(options).await?;
+        Ok(client)
+    }
+
+    async fn notify_initialized(&self) -> Result<(), ExecServerError> {
+        match &self.inner.backend {
+            ClientBackend::Remote(client) => client
+                .notify(INITIALIZED_METHOD, &serde_json::json!({}))
+                .await
+                .map_err(ExecServerError::Json),
+            ClientBackend::InProcess(backend) => backend.initialized().await,
         }
-        JSONRPCMessage::Notification(notification) => Err(ExecServerError::Protocol(format!(
-            "unexpected exec-server notification: {}",
-            notification.method
-        ))),
-        JSONRPCMessage::Request(request) => Err(ExecServerError::Protocol(format!(
-            "unexpected exec-server request: {}",
-            request.method
-        ))),
     }
 }
 
-async fn fail_pending_requests(inner: &Inner) {
-    let mut pending = inner.pending.lock().await;
-    for (_, tx) in pending.drain() {
-        let _ = tx.send(Err(JSONRPCErrorError {
-            code: -32000,
-            message: "exec-server transport closed".to_string(),
-            data: None,
-        }));
+impl From<RpcCallError> for ExecServerError {
+    fn from(value: RpcCallError) -> Self {
+        match value {
+            RpcCallError::Closed => Self::Closed,
+            RpcCallError::Json(err) => Self::Json(err),
+            RpcCallError::Server(error) => Self::Server {
+                code: error.code,
+                message: error.message,
+            },
+        }
     }
 }
