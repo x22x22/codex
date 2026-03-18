@@ -73,6 +73,9 @@ pub struct ModelProviderInfo {
     pub request_max_retries: Option<u64>,
     pub stream_max_retries: Option<u64>,
     pub stream_idle_timeout_ms: Option<u64>,
+    #[schemars(
+        description = "Maximum time (in milliseconds) to wait for a websocket connection attempt before treating it as failed."
+    )]
     pub websocket_connect_timeout_ms: Option<u64>,
     #[serde(default)]
     pub requires_openai_auth: bool,
