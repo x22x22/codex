@@ -783,7 +783,7 @@ mod tests {
             Some(RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
                 handoff_id: "call_123".to_string(),
                 item_id: "item_123".to_string(),
-                input_transcript: "delegate this".to_string(),
+                input_transcript: String::new(),
                 active_transcript: Vec::new(),
             }))
         );
@@ -905,7 +905,7 @@ mod tests {
             Some(RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
                 handoff_id: "call_123".to_string(),
                 item_id: "item_123".to_string(),
-                input_transcript: "delegate from done".to_string(),
+                input_transcript: String::new(),
                 active_transcript: Vec::new(),
             }))
         );

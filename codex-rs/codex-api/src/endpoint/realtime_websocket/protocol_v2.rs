@@ -14,7 +14,6 @@ use tracing::debug;
 const CODEX_TOOL_NAME: &str = "codex";
 const DEFAULT_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const DEFAULT_AUDIO_CHANNELS: u16 = 1;
-const TOOL_ARGUMENT_KEYS: [&str; 5] = ["input_transcript", "input", "text", "prompt", "query"];
 
 pub(super) fn parse_realtime_event_v2(payload: &str) -> Option<RealtimeEvent> {
     let (parsed, message_type) = parse_realtime_payload(payload, "realtime v2")?;
@@ -161,28 +160,7 @@ fn parse_handoff_requested_event(item: &JsonMap<String, Value>) -> Option<Realti
     Some(RealtimeEvent::HandoffRequested(RealtimeHandoffRequested {
         handoff_id: call_id.to_string(),
         item_id,
-        input_transcript: extract_input_transcript(arguments),
+        input_transcript: String::new(),
         active_transcript: Vec::new(),
     }))
-}
-
-fn extract_input_transcript(arguments: &str) -> String {
-    if arguments.is_empty() {
-        return String::new();
-    }
-
-    if let Ok(arguments_json) = serde_json::from_str::<Value>(arguments)
-        && let Some(arguments_object) = arguments_json.as_object()
-    {
-        for key in TOOL_ARGUMENT_KEYS {
-            if let Some(value) = arguments_object.get(key).and_then(Value::as_str) {
-                let trimmed = value.trim();
-                if !trimmed.is_empty() {
-                    return trimmed.to_string();
-                }
-            }
-        }
-    }
-
-    arguments.to_string()
 }
