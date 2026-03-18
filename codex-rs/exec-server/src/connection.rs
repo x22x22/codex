@@ -22,6 +22,7 @@ pub(crate) enum JsonRpcConnectionEvent {
 pub(crate) struct JsonRpcConnection {
     outgoing_tx: mpsc::Sender<JSONRPCMessage>,
     incoming_rx: mpsc::Receiver<JsonRpcConnectionEvent>,
+    task_handles: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl JsonRpcConnection {
@@ -35,7 +36,7 @@ impl JsonRpcConnection {
 
         let reader_label = connection_label.clone();
         let incoming_tx_for_reader = incoming_tx.clone();
-        tokio::spawn(async move {
+        let reader_task = tokio::spawn(async move {
             let mut lines = BufReader::new(reader).lines();
             loop {
                 match lines.next_line().await {
@@ -66,7 +67,7 @@ impl JsonRpcConnection {
                         }
                     }
                     Ok(None) => {
-                        send_disconnected(&incoming_tx_for_reader, None).await;
+                        send_disconnected(&incoming_tx_for_reader, /*reason*/ None).await;
                         break;
                     }
                     Err(err) => {
@@ -83,7 +84,7 @@ impl JsonRpcConnection {
             }
         });
 
-        tokio::spawn(async move {
+        let writer_task = tokio::spawn(async move {
             let mut writer = BufWriter::new(writer);
             while let Some(message) = outgoing_rx.recv().await {
                 if let Err(err) = write_jsonrpc_line_message(&mut writer, &message).await {
@@ -102,6 +103,7 @@ impl JsonRpcConnection {
         Self {
             outgoing_tx,
             incoming_rx,
+            task_handles: vec![reader_task, writer_task],
         }
     }
 
@@ -115,7 +117,7 @@ impl JsonRpcConnection {
 
         let reader_label = connection_label.clone();
         let incoming_tx_for_reader = incoming_tx.clone();
-        tokio::spawn(async move {
+        let reader_task = tokio::spawn(async move {
             loop {
                 match websocket_reader.next().await {
                     Some(Ok(Message::Text(text))) => {
@@ -165,7 +167,7 @@ impl JsonRpcConnection {
                         }
                     }
                     Some(Ok(Message::Close(_))) => {
-                        send_disconnected(&incoming_tx_for_reader, None).await;
+                        send_disconnected(&incoming_tx_for_reader, /*reason*/ None).await;
                         break;
                     }
                     Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
@@ -181,14 +183,14 @@ impl JsonRpcConnection {
                         break;
                     }
                     None => {
-                        send_disconnected(&incoming_tx_for_reader, None).await;
+                        send_disconnected(&incoming_tx_for_reader, /*reason*/ None).await;
                         break;
                     }
                 }
             }
         });
 
-        tokio::spawn(async move {
+        let writer_task = tokio::spawn(async move {
             while let Some(message) = outgoing_rx.recv().await {
                 match serialize_jsonrpc_message(&message) {
                     Ok(encoded) => {
@@ -221,6 +223,7 @@ impl JsonRpcConnection {
         Self {
             outgoing_tx,
             incoming_rx,
+            task_handles: vec![reader_task, writer_task],
         }
     }
 
@@ -229,8 +232,9 @@ impl JsonRpcConnection {
     ) -> (
         mpsc::Sender<JSONRPCMessage>,
         mpsc::Receiver<JsonRpcConnectionEvent>,
+        Vec<tokio::task::JoinHandle<()>>,
     ) {
-        (self.outgoing_tx, self.incoming_rx)
+        (self.outgoing_tx, self.incoming_rx, self.task_handles)
     }
 }
 
@@ -323,7 +327,7 @@ mod tests {
         let (connection_writer, reader_from_connection) = tokio::io::duplex(1024);
         let connection =
             JsonRpcConnection::from_stdio(connection_reader, connection_writer, "test".to_string());
-        let (outgoing_tx, mut incoming_rx) = connection.into_parts();
+        let (outgoing_tx, mut incoming_rx, _task_handles) = connection.into_parts();
 
         let incoming_message = JSONRPCMessage::Request(JSONRPCRequest {
             id: RequestId::Integer(7),
@@ -371,7 +375,7 @@ mod tests {
         let (connection_writer, _reader_from_connection) = tokio::io::duplex(1024);
         let connection =
             JsonRpcConnection::from_stdio(connection_reader, connection_writer, "test".to_string());
-        let (_outgoing_tx, mut incoming_rx) = connection.into_parts();
+        let (_outgoing_tx, mut incoming_rx, _task_handles) = connection.into_parts();
 
         if let Err(err) = writer_to_connection.write_all(b"not-json\n").await {
             panic!("failed to write invalid JSON: {err}");
@@ -401,7 +405,7 @@ mod tests {
         let (connection_writer, _reader_from_connection) = tokio::io::duplex(1024);
         let connection =
             JsonRpcConnection::from_stdio(connection_reader, connection_writer, "test".to_string());
-        let (_outgoing_tx, mut incoming_rx) = connection.into_parts();
+        let (_outgoing_tx, mut incoming_rx, _task_handles) = connection.into_parts();
         drop(writer_to_connection);
 
         let event = recv_event(&mut incoming_rx).await;
