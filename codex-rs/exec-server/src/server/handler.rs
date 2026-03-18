@@ -1,6 +1,5 @@
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
-use crate::protocol::PROTOCOL_VERSION;
 use crate::server::invalid_request;
 use crate::server::unauthorized;
 
@@ -34,9 +33,7 @@ impl ExecServerHandler {
             return Err(unauthorized("invalid exec-server auth token".to_string()));
         }
         self.initialize_requested = true;
-        Ok(InitializeResponse {
-            protocol_version: PROTOCOL_VERSION.to_string(),
-        })
+        Ok(InitializeResponse {})
     }
 
     pub(crate) fn initialized(&mut self) -> Result<(), String> {
