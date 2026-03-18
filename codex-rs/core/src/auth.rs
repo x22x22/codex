@@ -1270,8 +1270,12 @@ impl AuthManager {
                 ),
             )));
         }
-        let auth_dot_json =
-            AuthDotJson::from_external_tokens(&refreshed).map_err(RefreshTokenError::Transient)?;
+        let auth_dot_json = AuthDotJson::from_external_access_token(
+            &refreshed.access_token,
+            &refreshed.chatgpt_account_id,
+            refreshed.chatgpt_plan_type.as_deref(),
+        )
+        .map_err(RefreshTokenError::Transient)?;
         save_auth(
             &self.codex_home,
             &auth_dot_json,
