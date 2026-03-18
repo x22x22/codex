@@ -193,12 +193,10 @@ fn parse_managed_config_base64(encoded: &str) -> io::Result<Option<ManagedAdminC
 }
 
 fn is_invalid_security_managed_config_entry(dropped_entry: &str) -> bool {
-    let path = dropped_entry
-        .split_once(':')
-        .map_or(dropped_entry, |(path, _)| path)
-        .trim();
-    let top_level = path.split(['.', '[']).next().unwrap_or(path);
-    matches!(top_level, "approval_policy" | "sandbox_mode")
+    matches!(
+        managed_entry_top_level_key(dropped_entry),
+        "approval_policy" | "sandbox_mode"
+    )
 }
 
 fn parse_managed_requirements_base64(encoded: &str) -> io::Result<ConfigRequirementsToml> {
@@ -210,12 +208,64 @@ fn parse_managed_requirements_base64(encoded: &str) -> io::Result<ConfigRequirem
         )
     })?;
 
-    toml::from_str::<ConfigRequirementsToml>(&raw_toml).map_err(|err| {
+    let parsed = toml::from_str::<TomlValue>(&raw_toml).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Error parsing managed requirements from {source}: {err}"),
+        )
+    })?;
+    let TomlValue::Table(parsed) = parsed else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Error parsing managed requirements from {source}: root must be a table"),
+        ));
+    };
+
+    let sanitized = sanitize_toml_value::<ConfigRequirementsToml>(TomlValue::Table(parsed))
+        .map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Error parsing managed requirements from {source}: {err}"),
+            )
+        })?;
+    if let Some(dropped_entry) = sanitized
+        .dropped_entries
+        .iter()
+        .find(|entry| is_invalid_security_managed_requirements_entry(entry))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Error parsing managed requirements from {source}: {dropped_entry}"),
+        ));
+    }
+    for dropped_entry in &sanitized.dropped_entries {
+        tracing::warn!(
+            dropped_entry = %dropped_entry,
+            "Ignoring invalid MDM managed requirements entry",
+        );
+    }
+
+    sanitized.value.try_into().map_err(|err: toml::de::Error| {
         io::Error::new(
             io::ErrorKind::InvalidData,
             format!("Error parsing managed requirements from {source}: {err}"),
         )
     })
+}
+
+fn is_invalid_security_managed_requirements_entry(dropped_entry: &str) -> bool {
+    matches!(
+        managed_entry_top_level_key(dropped_entry),
+        "allowed_approval_policies" | "allowed_sandbox_modes" | "allowed_web_search_modes"
+    )
+}
+
+fn managed_entry_top_level_key(dropped_entry: &str) -> &str {
+    let path = dropped_entry
+        .split_once(':')
+        .map_or(dropped_entry, |(path, _)| path)
+        .trim();
+    path.split(['.', '[']).next().unwrap_or(path)
 }
 
 fn decode_managed_preferences_base64(encoded: &str) -> io::Result<String> {

@@ -580,6 +580,50 @@ async fn managed_preferences_invalid_requirements_fail_closed() -> anyhow::Resul
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+async fn managed_preferences_ignore_invalid_non_security_requirements_entry() -> anyhow::Result<()>
+{
+    use base64::Engine;
+
+    let tmp = tempdir()?;
+
+    let state = load_config_layers_state(
+        tmp.path(),
+        Some(AbsolutePathBuf::try_from(tmp.path())?),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides {
+            managed_config_path: Some(tmp.path().join("managed_config.toml")),
+            managed_preferences_base64: Some(String::new()),
+            macos_managed_config_requirements_base64: Some(
+                base64::prelude::BASE64_STANDARD.encode(
+                    r#"
+allowed_sandbox_modes = ["read-only"]
+
+[features]
+personality = "bogus"
+"#
+                    .as_bytes(),
+                ),
+            ),
+        },
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    assert_eq!(
+        state.requirements_toml().allowed_sandbox_modes,
+        Some(vec![crate::config_loader::SandboxModeRequirement::ReadOnly])
+    );
+    assert_eq!(state.requirements_toml().feature_requirements, None);
+    assert_eq!(
+        *state.requirements().sandbox_policy.get(),
+        SandboxPolicy::new_read_only_policy()
+    );
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 async fn managed_preferences_requirements_are_applied() -> anyhow::Result<()> {
     use base64::Engine;
 
