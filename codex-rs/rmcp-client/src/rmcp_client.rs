@@ -11,6 +11,8 @@ use std::time::Duration;
 use anyhow::Result;
 use anyhow::anyhow;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::format_headers_for_log;
+use codex_client::log_http_request;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::future::BoxFuture;
@@ -20,6 +22,7 @@ use reqwest::header::ACCEPT;
 use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
+use reqwest::header::HeaderValue;
 use reqwest::header::WWW_AUTHENTICATE;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
@@ -83,6 +86,81 @@ const JSON_MIME_TYPE: &str = "application/json";
 const HEADER_LAST_EVENT_ID: &str = "Last-Event-Id";
 const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
+const CODEX_TRACE_HTTP_HEADERS_ENV: &str = "CODEX_TRACE_HTTP_HEADERS";
+const CODEX_TRACE_HTTP_BODIES_ENV: &str = "CODEX_TRACE_HTTP_BODIES";
+
+fn http_trace_headers_enabled() -> bool {
+    std::env::var_os(CODEX_TRACE_HTTP_HEADERS_ENV).is_some_and(|value| value != "0")
+}
+
+fn http_trace_bodies_enabled() -> bool {
+    std::env::var_os(CODEX_TRACE_HTTP_BODIES_ENV).is_some_and(|value| value != "0")
+}
+
+fn log_mcp_http_request(
+    method: &str,
+    url: &str,
+    headers: &HeaderMap,
+    message: &rmcp::model::ClientJsonRpcMessage,
+) {
+    log_http_request(method, url, headers);
+    if !http_trace_headers_enabled() && !http_trace_bodies_enabled() {
+        return;
+    }
+
+    let body = if http_trace_bodies_enabled() {
+        serde_json::to_string(message).ok()
+    } else {
+        None
+    };
+
+    match message {
+        rmcp::model::JsonRpcMessage::Request(request) => {
+            tracing::info!(
+                method,
+                url,
+                rpc_method = request.request.method(),
+                rpc_id = ?request.id,
+                headers = ?format_headers_for_log(headers),
+                body,
+                "Outbound MCP HTTP request"
+            );
+        }
+        rmcp::model::JsonRpcMessage::Notification(_) => {
+            tracing::info!(
+                method,
+                url,
+                rpc_kind = "notification",
+                headers = ?format_headers_for_log(headers),
+                body,
+                "Outbound MCP HTTP request"
+            );
+        }
+        rmcp::model::JsonRpcMessage::Response(response) => {
+            tracing::info!(
+                method,
+                url,
+                rpc_kind = "response",
+                rpc_id = ?response.id,
+                headers = ?format_headers_for_log(headers),
+                body,
+                "Outbound MCP HTTP request"
+            );
+        }
+        rmcp::model::JsonRpcMessage::Error(error) => {
+            tracing::info!(
+                method,
+                url,
+                rpc_kind = "error",
+                rpc_id = ?error.id,
+                headers = ?format_headers_for_log(headers),
+                body,
+                "Outbound MCP HTTP request"
+            );
+        }
+    }
+}
+
 fn apply_request_scoped_headers(
     mut request: reqwest::RequestBuilder,
     request_headers_state: &Arc<StdMutex<Option<HeaderMap>>>,
@@ -102,16 +180,19 @@ fn apply_request_scoped_headers(
 #[derive(Clone)]
 struct StreamableHttpResponseClient {
     inner: reqwest::Client,
+    default_headers: HeaderMap,
     request_headers_state: Arc<StdMutex<Option<HeaderMap>>>,
 }
 
 impl StreamableHttpResponseClient {
     fn new(
         inner: reqwest::Client,
+        default_headers: HeaderMap,
         request_headers_state: Arc<StdMutex<Option<HeaderMap>>>,
     ) -> Self {
         Self {
             inner,
+            default_headers,
             request_headers_state,
         }
     }
@@ -150,13 +231,25 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
             .inner
             .post(uri.as_ref())
             .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "));
+        let mut request_headers = self.default_headers.clone();
+        request_headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("text/event-stream, application/json"),
+        );
         if let Some(auth_header) = auth_token {
+            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {auth_header}")) {
+                request_headers.insert(AUTHORIZATION, value);
+            }
             request = request.bearer_auth(auth_header);
         }
         if let Some(session_id_value) = session_id.as_ref() {
+            if let Ok(value) = HeaderValue::from_str(session_id_value.as_ref()) {
+                request_headers.insert(HEADER_SESSION_ID, value);
+            }
             request = request.header(HEADER_SESSION_ID, session_id_value.as_ref());
         }
         request = apply_request_scoped_headers(request, &self.request_headers_state);
+        log_mcp_http_request("POST", uri.as_ref(), &request_headers, &message);
 
         let response = request
             .json(&message)
@@ -249,11 +342,19 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         auth_token: Option<String>,
     ) -> std::result::Result<(), StreamableHttpError<Self::Error>> {
         let mut request_builder = self.inner.delete(uri.as_ref());
+        let mut request_headers = self.default_headers.clone();
         if let Some(auth_header) = auth_token {
+            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {auth_header}")) {
+                request_headers.insert(AUTHORIZATION, value);
+            }
             request_builder = request_builder.bearer_auth(auth_header);
+        }
+        if let Ok(value) = HeaderValue::from_str(session.as_ref()) {
+            request_headers.insert(HEADER_SESSION_ID, value);
         }
         request_builder =
             apply_request_scoped_headers(request_builder, &self.request_headers_state);
+        log_http_request("DELETE", uri.as_ref(), &request_headers);
         let response = request_builder
             .header(HEADER_SESSION_ID, session.as_ref())
             .send()
@@ -285,14 +386,29 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
             .get(uri.as_ref())
             .header(ACCEPT, [EVENT_STREAM_MIME_TYPE, JSON_MIME_TYPE].join(", "))
             .header(HEADER_SESSION_ID, session_id.as_ref());
+        let mut request_headers = self.default_headers.clone();
+        request_headers.insert(
+            ACCEPT,
+            HeaderValue::from_static("text/event-stream, application/json"),
+        );
+        if let Ok(value) = HeaderValue::from_str(session_id.as_ref()) {
+            request_headers.insert(HEADER_SESSION_ID, value);
+        }
         if let Some(last_event_id) = last_event_id {
+            if let Ok(value) = HeaderValue::from_str(&last_event_id) {
+                request_headers.insert(HEADER_LAST_EVENT_ID, value);
+            }
             request_builder = request_builder.header(HEADER_LAST_EVENT_ID, last_event_id);
         }
         if let Some(auth_header) = auth_token {
+            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {auth_header}")) {
+                request_headers.insert(AUTHORIZATION, value);
+            }
             request_builder = request_builder.bearer_auth(auth_header);
         }
         request_builder =
             apply_request_scoped_headers(request_builder, &self.request_headers_state);
+        log_http_request("GET", uri.as_ref(), &request_headers);
 
         let response = request_builder
             .send()
@@ -1023,6 +1139,7 @@ impl RmcpClient {
                             let transport = StreamableHttpClientTransport::with_client(
                                 StreamableHttpResponseClient::new(
                                     http_client,
+                                    default_headers.clone(),
                                     request_headers
                                         .clone()
                                         .unwrap_or_else(|| Arc::new(StdMutex::new(None))),
@@ -1045,6 +1162,7 @@ impl RmcpClient {
                     let transport = StreamableHttpClientTransport::with_client(
                         StreamableHttpResponseClient::new(
                             http_client,
+                            default_headers.clone(),
                             request_headers
                                 .clone()
                                 .unwrap_or_else(|| Arc::new(StdMutex::new(None))),
@@ -1254,7 +1372,11 @@ async fn create_oauth_transport_and_runtime(
     };
 
     let auth_client = AuthClient::new(
-        StreamableHttpResponseClient::new(http_client, Arc::new(StdMutex::new(None))),
+        StreamableHttpResponseClient::new(
+            http_client,
+            default_headers.clone(),
+            Arc::new(StdMutex::new(None)),
+        ),
         manager,
     );
     let auth_manager = auth_client.auth_manager.clone();

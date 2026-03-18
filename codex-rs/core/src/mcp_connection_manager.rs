@@ -74,6 +74,7 @@ use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 use tracing::instrument;
 use tracing::warn;
 use url::Url;
@@ -1440,6 +1441,11 @@ async fn start_server_task(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
+    log_startup_request_headers(
+        &server_name,
+        "initialize",
+        initialize_request_headers.as_ref(),
+    );
     let initialize_result = client
         .initialize(
             params,
@@ -1456,6 +1462,7 @@ async fn start_server_task(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
+    log_startup_request_headers(&server_name, "tools/list", list_request_headers.as_ref());
     let tools = list_tools_for_client_uncached(
         &server_name,
         &client,
@@ -1664,6 +1671,48 @@ fn transport_origin(transport: &McpServerTransportConfig) -> Option<String> {
         }
         McpServerTransportConfig::Stdio { .. } => Some("stdio".to_string()),
     }
+}
+
+fn log_startup_request_headers(
+    server_name: &str,
+    phase: &str,
+    headers: Option<&reqwest::header::HeaderMap>,
+) {
+    if std::env::var_os("CODEX_TRACE_HTTP_HEADERS").is_none() {
+        return;
+    }
+
+    let session_id = headers.and_then(|headers| {
+        headers
+            .get("session_id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    });
+    let client_request_id = headers.and_then(|headers| {
+        headers
+            .get("x-client-request-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    });
+    let turn_metadata = headers.and_then(|headers| {
+        headers
+            .get(crate::X_CODEX_TURN_METADATA_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    });
+
+    info!(
+        server = server_name,
+        phase,
+        has_headers = headers.is_some(),
+        has_session_id = session_id.is_some(),
+        session_id,
+        has_client_request_id = client_request_id.is_some(),
+        client_request_id,
+        has_turn_metadata = turn_metadata.is_some(),
+        turn_metadata,
+        "MCP startup request headers snapshot"
+    );
 }
 
 async fn list_tools_for_client_uncached(

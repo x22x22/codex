@@ -8,6 +8,7 @@ use reqwest::IntoUrl;
 use reqwest::Method;
 use reqwest::Response;
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::time::Duration;
 use tracing::Span;
@@ -17,6 +18,11 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 pub struct CodexHttpClient {
     inner: reqwest::Client,
 }
+
+const CODEX_TRACE_HTTP_HEADERS_ENV: &str = "CODEX_TRACE_HTTP_HEADERS";
+const CODEX_TRACE_HTTP_HEADERS_INCLUDE_SENSITIVE_ENV: &str =
+    "CODEX_TRACE_HTTP_HEADERS_INCLUDE_SENSITIVE";
+const REDACTED_HEADER_VALUE: &str = "<redacted>";
 
 impl CodexHttpClient {
     pub fn new(inner: reqwest::Client) -> Self {
@@ -111,9 +117,18 @@ impl CodexRequestBuilder {
     }
 
     pub async fn send(self) -> Result<Response, reqwest::Error> {
-        let headers = trace_headers();
+        let builder = self.builder.headers(trace_headers());
+        if let Some(request_builder) = builder.try_clone()
+            && let Ok(request) = request_builder.build()
+        {
+            log_http_request(
+                self.method.as_str(),
+                request.url().as_str(),
+                request.headers(),
+            );
+        }
 
-        match self.builder.headers(headers).send().await {
+        match builder.send().await {
             Ok(response) => {
                 tracing::debug!(
                     method = %self.method,
@@ -163,6 +178,63 @@ fn trace_headers() -> HeaderMap {
         );
     });
     headers
+}
+
+pub fn log_http_request(method: &str, url: &str, headers: &HeaderMap) {
+    if !http_trace_headers_enabled() {
+        return;
+    }
+
+    tracing::info!(
+        method,
+        url,
+        headers = ?format_headers_for_log(headers),
+        "Outbound HTTP request"
+    );
+}
+
+pub fn format_headers_for_log(headers: &HeaderMap) -> BTreeMap<String, String> {
+    let include_sensitive = http_trace_include_sensitive_headers();
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let name_str = name.as_str().to_ascii_lowercase();
+            let value_str = if include_sensitive || !is_sensitive_header(&name_str) {
+                value.to_str().unwrap_or("<binary>").to_string()
+            } else {
+                REDACTED_HEADER_VALUE.to_string()
+            };
+            (name_str, value_str)
+        })
+        .collect()
+}
+
+fn http_trace_headers_enabled() -> bool {
+    env_flag_enabled(CODEX_TRACE_HTTP_HEADERS_ENV)
+}
+
+fn http_trace_include_sensitive_headers() -> bool {
+    env_flag_enabled(CODEX_TRACE_HTTP_HEADERS_INCLUDE_SENSITIVE_ENV)
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            !normalized.is_empty()
+                && normalized != "0"
+                && normalized != "false"
+                && normalized != "no"
+                && normalized != "off"
+        })
+        .unwrap_or(false)
+}
+
+fn is_sensitive_header(name: &str) -> bool {
+    matches!(
+        name,
+        "authorization" | "proxy-authorization" | "cookie" | "set-cookie" | "x-api-key" | "api-key"
+    )
 }
 
 #[cfg(test)]

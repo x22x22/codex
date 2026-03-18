@@ -5,6 +5,7 @@ use crate::types::RateLimitStatusPayload;
 use crate::types::TurnAttemptsSiblingTurnsResponse;
 use anyhow::Result;
 use codex_client::build_reqwest_client_with_custom_ca;
+use codex_client::log_http_request;
 use codex_core::auth::CodexAuth;
 use codex_core::default_client::get_codex_user_agent;
 use codex_protocol::account::PlanType as AccountPlanType;
@@ -259,7 +260,9 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/usage", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/usage", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let headers = self.headers();
+        log_http_request("GET", &url, &headers);
+        let req = self.http.get(&url).headers(headers);
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let payload: RateLimitStatusPayload = self.decode_json(&url, &ct, &body)?;
         Ok(Self::rate_limit_snapshots_from_payload(payload))
@@ -276,7 +279,9 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/list", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/tasks/list", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let headers = self.headers();
+        log_http_request("GET", &url, &headers);
+        let req = self.http.get(&url).headers(headers);
         let req = if let Some(lim) = limit {
             req.query(&[("limit", lim)])
         } else {
@@ -314,7 +319,9 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/tasks/{}", self.base_url, task_id),
             PathStyle::ChatGptApi => format!("{}/wham/tasks/{}", self.base_url, task_id),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let headers = self.headers();
+        log_http_request("GET", &url, &headers);
+        let req = self.http.get(&url).headers(headers);
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         let parsed: CodeTaskDetailsResponse = self.decode_json(&url, &ct, &body)?;
         Ok((parsed, body, ct))
@@ -335,7 +342,9 @@ impl Client {
                 self.base_url, task_id, turn_id
             ),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let headers = self.headers();
+        log_http_request("GET", &url, &headers);
+        let req = self.http.get(&url).headers(headers);
         let (body, ct) = self.exec_request(req, "GET", &url).await?;
         self.decode_json::<TurnAttemptsSiblingTurnsResponse>(&url, &ct, &body)
     }
@@ -351,7 +360,9 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/config/requirements", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/config/requirements", self.base_url),
         };
-        let req = self.http.get(&url).headers(self.headers());
+        let headers = self.headers();
+        log_http_request("GET", &url, &headers);
+        let req = self.http.get(&url).headers(headers);
         let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
         self.decode_json::<ConfigFileResponse>(&url, &ct, &body)
             .map_err(RequestError::from)
@@ -364,12 +375,10 @@ impl Client {
             PathStyle::CodexApi => format!("{}/api/codex/tasks", self.base_url),
             PathStyle::ChatGptApi => format!("{}/wham/tasks", self.base_url),
         };
-        let req = self
-            .http
-            .post(&url)
-            .headers(self.headers())
-            .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
-            .json(&request_body);
+        let mut headers = self.headers();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        log_http_request("POST", &url, &headers);
+        let req = self.http.post(&url).headers(headers).json(&request_body);
         let (body, ct) = self.exec_request(req, "POST", &url).await?;
         // Extract id from JSON: prefer `task.id`; fallback to top-level `id` when present.
         match serde_json::from_str::<serde_json::Value>(&body) {
