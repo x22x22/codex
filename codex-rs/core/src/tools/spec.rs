@@ -33,8 +33,14 @@ use crate::tools::handlers::multi_agents::MIN_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::request_permissions_tool_description;
 use crate::tools::handlers::request_user_input_tool_description;
 use crate::tools::registry::BuiltinToolKey;
+use crate::tools::registry::CONTAINER_EXEC_TOOL_NAME;
+use crate::tools::registry::EXEC_COMMAND_TOOL_NAME;
+use crate::tools::registry::LOCAL_SHELL_TOOL_NAME;
+use crate::tools::registry::SHELL_COMMAND_TOOL_NAME;
+use crate::tools::registry::SHELL_TOOL_NAME;
 use crate::tools::registry::ToolFeatureKey;
 use crate::tools::registry::ToolRegistryBuilder;
+use crate::tools::registry::WRITE_STDIN_TOOL_NAME;
 use crate::tools::registry::builtin_tool_key;
 use crate::tools::registry::tool_handler_key;
 use codex_features::Feature;
@@ -506,6 +512,10 @@ impl ToolsConfig {
             return true;
         };
         if self.is_feature_explicitly_controlled(feature) {
+            // In explicit grouped mode (`tools.disable_defaults = true`), the
+            // `[tools.<feature>]` table is the source of truth for exposure.
+            // That intentionally bypasses legacy fallback logic such as
+            // top-level `web_search` mode-based enablement.
             return self.is_tool_feature_enabled(feature);
         }
 
@@ -2439,7 +2449,6 @@ fn push_builtin_tool_with_handler_if_enabled<H>(
     invocation_name: &str,
     spec: ToolSpec,
     supports_parallel_tool_calls: bool,
-    handler_name: &str,
     handler: std::sync::Arc<H>,
 ) where
     H: crate::tools::registry::ToolHandler + 'static,
@@ -2451,7 +2460,7 @@ fn push_builtin_tool_with_handler_if_enabled<H>(
             supports_parallel_tool_calls,
             config.code_mode_enabled,
         );
-        builder.register_handler(handler_name, handler);
+        builder.register_handler(invocation_name, handler);
     }
 }
 
@@ -2797,7 +2806,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             push_builtin_tool_spec_if_enabled(
                 &mut builder,
                 config,
-                "exec_command",
+                SHELL_TOOL_NAME,
                 create_shell_tool(exec_permission_approvals_enabled),
                 /*supports_parallel_tool_calls*/ true,
             );
@@ -2806,7 +2815,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             push_builtin_tool_spec_if_enabled(
                 &mut builder,
                 config,
-                "local_shell",
+                LOCAL_SHELL_TOOL_NAME,
                 ToolSpec::LocalShell {},
                 /*supports_parallel_tool_calls*/ true,
             );
@@ -2815,22 +2824,20 @@ pub(crate) fn build_specs_with_discoverable_tools(
             push_builtin_tool_with_handler_if_enabled(
                 &mut builder,
                 config,
-                "exec_command",
+                EXEC_COMMAND_TOOL_NAME,
                 create_exec_command_tool(
                     config.allow_login_shell,
                     exec_permission_approvals_enabled,
                 ),
                 /*supports_parallel_tool_calls*/ true,
-                "exec_command",
                 unified_exec_handler.clone(),
             );
             push_builtin_tool_with_handler_if_enabled(
                 &mut builder,
                 config,
-                "write_stdin",
+                WRITE_STDIN_TOOL_NAME,
                 create_write_stdin_tool(),
                 /*supports_parallel_tool_calls*/ false,
-                "write_stdin",
                 unified_exec_handler,
             );
         }
@@ -2841,7 +2848,7 @@ pub(crate) fn build_specs_with_discoverable_tools(
             push_builtin_tool_spec_if_enabled(
                 &mut builder,
                 config,
-                "shell_command",
+                SHELL_COMMAND_TOOL_NAME,
                 create_shell_command_tool(
                     config.allow_login_shell,
                     exec_permission_approvals_enabled,
@@ -2852,13 +2859,13 @@ pub(crate) fn build_specs_with_discoverable_tools(
     }
 
     if config.shell_type != ConfigShellToolType::Disabled
-        && config.is_builtin_tool_invocation_enabled("exec_command")
+        && config.is_builtin_tool_invocation_enabled(SHELL_TOOL_NAME)
     {
         // Always register shell aliases so older prompts remain compatible.
-        builder.register_handler("shell", shell_handler.clone());
-        builder.register_handler("container.exec", shell_handler.clone());
-        builder.register_handler("local_shell", shell_handler);
-        builder.register_handler("shell_command", shell_command_handler);
+        builder.register_handler(SHELL_TOOL_NAME, shell_handler.clone());
+        builder.register_handler(CONTAINER_EXEC_TOOL_NAME, shell_handler.clone());
+        builder.register_handler(LOCAL_SHELL_TOOL_NAME, shell_handler);
+        builder.register_handler(SHELL_COMMAND_TOOL_NAME, shell_command_handler);
     }
 
     if mcp_tools.is_some() {
@@ -2891,7 +2898,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
         "update_plan",
         PLAN_TOOL.clone(),
         /*supports_parallel_tool_calls*/ false,
-        "update_plan",
         plan_handler,
     );
 
@@ -2902,7 +2908,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             "js_repl",
             create_js_repl_tool(),
             /*supports_parallel_tool_calls*/ false,
-            "js_repl",
             js_repl_handler,
         );
         push_builtin_tool_with_handler_if_enabled(
@@ -2911,7 +2916,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             "js_repl_reset",
             create_js_repl_reset_tool(),
             /*supports_parallel_tool_calls*/ false,
-            "js_repl_reset",
             js_repl_reset_handler,
         );
     }
@@ -2926,7 +2930,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 default_mode_request_user_input: config.default_mode_request_user_input,
             }),
             /*supports_parallel_tool_calls*/ false,
-            "request_user_input",
             request_user_input_handler,
         );
     }
@@ -3011,7 +3014,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             "grep_files",
             create_grep_files_tool(),
             /*supports_parallel_tool_calls*/ true,
-            "grep_files",
             grep_files_handler,
         );
     }
@@ -3028,7 +3030,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             "read_file",
             create_read_file_tool(),
             /*supports_parallel_tool_calls*/ true,
-            "read_file",
             read_file_handler,
         );
     }
@@ -3046,7 +3047,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             "list_dir",
             create_list_dir_tool(),
             /*supports_parallel_tool_calls*/ true,
-            "list_dir",
             list_dir_handler,
         );
     }
@@ -3126,7 +3126,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
         "view_image",
         create_view_image_tool(config.can_request_original_image_detail),
         /*supports_parallel_tool_calls*/ true,
-        "view_image",
         view_image_handler,
     );
 
@@ -3137,7 +3136,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             "artifacts",
             create_artifacts_tool(),
             /*supports_parallel_tool_calls*/ false,
-            "artifacts",
             artifacts_handler,
         );
     }
@@ -3149,7 +3147,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             "spawn_agent",
             create_spawn_agent_tool(config),
             /*supports_parallel_tool_calls*/ false,
-            "spawn_agent",
             Arc::new(SpawnAgentHandler),
         );
         push_builtin_tool_with_handler_if_enabled(
@@ -3158,7 +3155,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             "send_input",
             create_send_input_tool(),
             /*supports_parallel_tool_calls*/ false,
-            "send_input",
             Arc::new(SendInputHandler),
         );
         if !config.multi_agent_v2 {
@@ -3168,7 +3164,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 "resume_agent",
                 create_resume_agent_tool(),
                 /*supports_parallel_tool_calls*/ false,
-                "resume_agent",
                 Arc::new(ResumeAgentHandler),
             );
             builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
@@ -3179,7 +3174,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             "wait_agent",
             create_wait_agent_tool(),
             /*supports_parallel_tool_calls*/ false,
-            "wait_agent",
             Arc::new(WaitAgentHandler),
         );
         push_builtin_tool_with_handler_if_enabled(
@@ -3188,7 +3182,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             "close_agent",
             create_close_agent_tool(),
             /*supports_parallel_tool_calls*/ false,
-            "close_agent",
             Arc::new(CloseAgentHandler),
         );
     }
@@ -3201,7 +3194,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
             "spawn_agents_on_csv",
             create_spawn_agents_on_csv_tool(),
             /*supports_parallel_tool_calls*/ false,
-            "spawn_agents_on_csv",
             agent_jobs_handler.clone(),
         );
         if config.agent_jobs_worker_tools
@@ -3213,7 +3205,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 "report_agent_job_result",
                 create_report_agent_job_result_tool(),
                 /*supports_parallel_tool_calls*/ false,
-                "report_agent_job_result",
                 agent_jobs_handler,
             );
         }

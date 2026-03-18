@@ -13784,7 +13784,7 @@
         ],
         "type": "object"
       },
-      "ToolFeatureConfigV2": {
+      "ToolFeatureConfig": {
         "properties": {
           "enabled": {
             "type": [
@@ -13800,7 +13800,7 @@
           "agent_jobs": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/ToolFeatureConfigV2"
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
               },
               {
                 "type": "null"
@@ -13810,7 +13810,7 @@
           "agents": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/ToolFeatureConfigV2"
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
               },
               {
                 "type": "null"
@@ -13826,7 +13826,7 @@
           "document_generation": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/ToolFeatureConfigV2"
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
               },
               {
                 "type": "null"
@@ -13836,7 +13836,7 @@
           "filesystem": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/ToolFeatureConfigV2"
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
               },
               {
                 "type": "null"
@@ -13846,7 +13846,7 @@
           "image_generation": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/ToolFeatureConfigV2"
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
               },
               {
                 "type": "null"
@@ -13856,7 +13856,7 @@
           "javascript": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/ToolFeatureConfigV2"
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
               },
               {
                 "type": "null"
@@ -13866,7 +13866,7 @@
           "planning": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/ToolFeatureConfigV2"
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
               },
               {
                 "type": "null"
@@ -13876,7 +13876,7 @@
           "shell": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/ToolFeatureConfigV2"
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
               },
               {
                 "type": "null"
@@ -13886,7 +13886,7 @@
           "user_input": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/ToolFeatureConfigV2"
+                "$ref": "#/definitions/v2/ToolFeatureConfig"
               },
               {
                 "type": "null"
@@ -13903,7 +13903,7 @@
           "web_search": {
             "anyOf": [
               {
-                "$ref": "#/definitions/v2/WebSearchFeatureConfigV2"
+                "$ref": "#/definitions/v2/WebSearchFeatureConfig"
               },
               {
                 "type": "null"
@@ -14525,7 +14525,7 @@
         ],
         "type": "string"
       },
-      "WebSearchFeatureConfigV2": {
+      "WebSearchFeatureConfig": {
         "properties": {
           "allowed_domains": {
             "items": {
