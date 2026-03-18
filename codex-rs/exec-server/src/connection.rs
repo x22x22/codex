@@ -354,7 +354,7 @@ mod tests {
 
         let outgoing_message = JSONRPCMessage::Response(JSONRPCResponse {
             id: RequestId::Integer(7),
-            result: serde_json::json!({ "protocolVersion": "exec-server.v0" }),
+            result: serde_json::json!({}),
         });
         if let Err(err) = outgoing_tx.send(outgoing_message.clone()).await {
             panic!("failed to queue outgoing message: {err}");

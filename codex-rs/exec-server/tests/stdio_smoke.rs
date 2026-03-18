@@ -61,7 +61,7 @@ async fn exec_server_accepts_initialize_over_stdio() -> anyhow::Result<()> {
     };
     assert_eq!(id, RequestId::Integer(1));
     let initialize_response: InitializeResponse = serde_json::from_value(result)?;
-    assert_eq!(initialize_response.protocol_version, "exec-server.v0");
+    assert_eq!(initialize_response, InitializeResponse {});
 
     let initialized = JSONRPCMessage::Notification(JSONRPCNotification {
         method: "initialized".to_string(),

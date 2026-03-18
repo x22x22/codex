@@ -14,7 +14,6 @@ use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecResponse;
 use crate::protocol::InitializeResponse;
-use crate::protocol::PROTOCOL_VERSION;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ReadResponse;
 use crate::protocol::TerminateResponse;
@@ -92,9 +91,7 @@ impl ExecServerHandler {
             ));
         }
         self.initialize_requested = true;
-        Ok(InitializeResponse {
-            protocol_version: PROTOCOL_VERSION.to_string(),
-        })
+        Ok(InitializeResponse {})
     }
 
     fn require_initialized(&self) -> Result<(), codex_app_server_protocol::JSONRPCErrorError> {
@@ -478,7 +475,6 @@ mod tests {
     use crate::protocol::ExecOutputStream;
     use crate::protocol::InitializeParams;
     use crate::protocol::InitializeResponse;
-    use crate::protocol::PROTOCOL_VERSION;
     use crate::protocol::ReadParams;
     use crate::protocol::TerminateResponse;
     use crate::protocol::WriteParams;
@@ -504,7 +500,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initialize_response_reports_protocol_version() {
+    async fn initialize_response_is_empty_object() {
         let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(1);
         let mut handler = ExecServerHandler::new(outgoing_tx);
 
@@ -526,9 +522,7 @@ mod tests {
             recv_outbound(&mut outgoing_rx).await,
             ExecServerOutboundMessage::Response {
                 request_id: RequestId::Integer(1),
-                response: ExecServerResponseMessage::Initialize(InitializeResponse {
-                    protocol_version: PROTOCOL_VERSION.to_string(),
-                }),
+                response: ExecServerResponseMessage::Initialize(InitializeResponse {}),
             }
         );
     }
