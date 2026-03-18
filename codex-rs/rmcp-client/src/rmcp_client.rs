@@ -550,9 +550,10 @@ impl RmcpClient {
             env_vars: env_vars.to_vec(),
             cwd,
         };
-        let transport = Self::create_pending_transport(&transport_recipe, None)
-            .await
-            .map_err(io::Error::other)?;
+        let transport =
+            Self::create_pending_transport(&transport_recipe, /*request_headers*/ None)
+                .await
+                .map_err(io::Error::other)?;
 
         Ok(Self {
             state: Mutex::new(ClientState::Connecting {
