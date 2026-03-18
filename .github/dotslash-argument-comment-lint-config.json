@@ -1,0 +1,24 @@
+{
+  "outputs": {
+    "argument-comment-lint": {
+      "platforms": {
+        "macos-aarch64": {
+          "regex": "^libargument_comment_lint@nightly-2025-09-18-aarch64-apple-darwin\\.dylib\\.zst$",
+          "path": "libargument_comment_lint@nightly-2025-09-18-aarch64-apple-darwin.dylib"
+        },
+        "linux-x86_64": {
+          "regex": "^libargument_comment_lint@nightly-2025-09-18-x86_64-unknown-linux-gnu\\.so\\.zst$",
+          "path": "libargument_comment_lint@nightly-2025-09-18-x86_64-unknown-linux-gnu.so"
+        },
+        "linux-aarch64": {
+          "regex": "^libargument_comment_lint@nightly-2025-09-18-aarch64-unknown-linux-gnu\\.so\\.zst$",
+          "path": "libargument_comment_lint@nightly-2025-09-18-aarch64-unknown-linux-gnu.so"
+        },
+        "windows-x86_64": {
+          "regex": "^argument_comment_lint@nightly-2025-09-18-x86_64-pc-windows-msvc\\.dll\\.zst$",
+          "path": "argument_comment_lint@nightly-2025-09-18-x86_64-pc-windows-msvc.dll"
+        }
+      }
+    }
+  }
+}

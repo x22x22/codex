@@ -68,6 +68,10 @@ cd tools/argument-comment-lint
 cargo test
 ```
 
+Stable GitHub releases also publish a DotSlash file named
+`argument-comment-lint` for the prebuilt library on macOS arm64, Linux arm64,
+Linux x64, and Windows x64.
+
 Run the lint against `codex-rs` from the repo root:
 
 ```bash
