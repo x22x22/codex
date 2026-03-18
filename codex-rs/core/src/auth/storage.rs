@@ -19,7 +19,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::warn;
 
+use crate::token_data::PlanType;
 use crate::token_data::TokenData;
+use crate::token_data::parse_chatgpt_jwt_claims;
 use codex_app_server_protocol::AuthMode;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
@@ -54,6 +56,56 @@ pub struct AuthDotJson {
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refresh: Option<DateTime<Utc>>,
+}
+
+impl AuthDotJson {
+    pub(super) fn from_external_access_token(
+        access_token: &str,
+        chatgpt_account_id: &str,
+        chatgpt_plan_type: Option<&str>,
+    ) -> std::io::Result<Self> {
+        let mut token_info =
+            parse_chatgpt_jwt_claims(access_token).map_err(std::io::Error::other)?;
+        token_info.chatgpt_account_id = Some(chatgpt_account_id.to_string());
+        token_info.chatgpt_plan_type = chatgpt_plan_type
+            .map(PlanType::from_raw_value)
+            .or(token_info.chatgpt_plan_type)
+            .or(Some(PlanType::Unknown("unknown".to_string())));
+        let tokens = TokenData {
+            id_token: token_info,
+            access_token: access_token.to_string(),
+            refresh_token: String::new(),
+            account_id: Some(chatgpt_account_id.to_string()),
+        };
+
+        Ok(Self {
+            auth_mode: Some(AuthMode::ChatgptAuthTokens),
+            openai_api_key: None,
+            tokens: Some(tokens),
+            last_refresh: Some(Utc::now()),
+        })
+    }
+
+    pub(super) fn resolved_mode(&self) -> AuthMode {
+        if let Some(mode) = self.auth_mode {
+            return mode;
+        }
+        if self.openai_api_key.is_some() {
+            return AuthMode::ApiKey;
+        }
+        AuthMode::Chatgpt
+    }
+
+    pub(super) fn storage_mode(
+        &self,
+        auth_credentials_store_mode: AuthCredentialsStoreMode,
+    ) -> AuthCredentialsStoreMode {
+        if self.resolved_mode() == AuthMode::ChatgptAuthTokens {
+            AuthCredentialsStoreMode::Ephemeral
+        } else {
+            auth_credentials_store_mode
+        }
+    }
 }
 
 pub(super) fn get_auth_file(codex_home: &Path) -> PathBuf {

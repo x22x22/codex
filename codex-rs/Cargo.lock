@@ -1936,6 +1936,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-core-auth"
+version = "0.0.0"
+dependencies = [
+ "codex-core",
+]
+
+[[package]]
 name = "codex-debug-client"
 version = "0.0.0"
 dependencies = [
