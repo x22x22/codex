@@ -61,7 +61,9 @@ fn write_skill_metadata(home: &Path, name: &str, contents: &str) -> Result<()> {
 fn shell_command_arguments(command: &str) -> Result<String> {
     Ok(serde_json::to_string(&json!({
         "command": command,
-        "timeout_ms": 500,
+        // zsh-fork approval tests can race the test runtime under workspace load,
+        // so keep the shell timeout comfortably above the nominal script runtime.
+        "timeout_ms": 2_000,
     }))?)
 }
 
@@ -70,7 +72,7 @@ async fn submit_turn_with_policies(
     prompt: &str,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
-) -> Result<()> {
+) -> Result<String> {
     test.codex
         .submit(Op::UserTurn {
             items: vec![UserInput::Text {
@@ -90,7 +92,13 @@ async fn submit_turn_with_policies(
             personality: None,
         })
         .await?;
-    Ok(())
+    Ok(
+        wait_for_event_match(test.codex.as_ref(), |event| match event {
+            EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+            _ => None,
+        })
+        .await,
+    )
 }
 
 fn write_skill_with_shell_script(home: &Path, name: &str, script_name: &str) -> Result<PathBuf> {
@@ -147,12 +155,14 @@ fn skill_script_command(test: &TestCodex, script_name: &str) -> Result<(String, 
     Ok((script_path_str, command))
 }
 
-async fn wait_for_exec_approval_request(test: &TestCodex) -> WaitForExecApproval {
+async fn wait_for_exec_approval_request(test: &TestCodex, turn_id: &str) -> WaitForExecApproval {
     wait_for_event_match(test.codex.as_ref(), |event| match event {
-        EventMsg::ExecApprovalRequest(request) => {
+        EventMsg::ExecApprovalRequest(request) if request.turn_id == turn_id => {
             Some(WaitForExecApproval::Approval(request.clone()))
         }
-        EventMsg::TurnComplete(_) => Some(WaitForExecApproval::TurnComplete),
+        EventMsg::TurnComplete(event) if event.turn_id == turn_id => {
+            Some(WaitForExecApproval::TurnComplete)
+        }
         _ => None,
     })
     .await
@@ -163,9 +173,10 @@ enum WaitForExecApproval {
     TurnComplete,
 }
 
-async fn wait_for_turn_complete(test: &TestCodex) {
-    wait_for_event(test.codex.as_ref(), |event| {
-        matches!(event, EventMsg::TurnComplete(_))
+async fn wait_for_turn_complete(test: &TestCodex, turn_id: &str) {
+    wait_for_event(test.codex.as_ref(), |event| match event {
+        EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+        _ => false,
     })
     .await;
 }
@@ -219,7 +230,7 @@ permissions:
         mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
             .await;
 
-    submit_turn_with_policies(
+    let turn_id = submit_turn_with_policies(
         &test,
         "use $mbolin-test-skill",
         AskForApproval::OnRequest,
@@ -227,7 +238,7 @@ permissions:
     )
     .await?;
 
-    let approval = match wait_for_exec_approval_request(&test).await {
+    let approval = match wait_for_exec_approval_request(&test, &turn_id).await {
         WaitForExecApproval::Approval(approval) => approval,
         WaitForExecApproval::TurnComplete => {
             let call_output = mocks
@@ -284,7 +295,7 @@ permissions:
         })
         .await?;
 
-    wait_for_turn_complete(&test).await;
+    wait_for_turn_complete(&test, &turn_id).await;
 
     let call_output = mocks
         .completion
@@ -346,7 +357,7 @@ permissions:
         mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
             .await;
 
-    submit_turn_with_policies(
+    let turn_id = submit_turn_with_policies(
         &test,
         "use $mbolin-test-skill",
         approval_policy,
@@ -354,7 +365,7 @@ permissions:
     )
     .await?;
 
-    let approval = match wait_for_exec_approval_request(&test).await {
+    let approval = match wait_for_exec_approval_request(&test, &turn_id).await {
         WaitForExecApproval::Approval(approval) => approval,
         WaitForExecApproval::TurnComplete => {
             let call_output = mocks
@@ -377,7 +388,7 @@ permissions:
         })
         .await?;
 
-    wait_for_turn_complete(&test).await;
+    wait_for_turn_complete(&test, &turn_id).await;
 
     let call_output = mocks
         .completion
@@ -441,7 +452,7 @@ permissions:
         mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
             .await;
 
-    submit_turn_with_policies(
+    let turn_id = submit_turn_with_policies(
         &test,
         "use $mbolin-test-skill",
         approval_policy,
@@ -449,7 +460,7 @@ permissions:
     )
     .await?;
 
-    let approval = match wait_for_exec_approval_request(&test).await {
+    let approval = match wait_for_exec_approval_request(&test, &turn_id).await {
         WaitForExecApproval::Approval(approval) => approval,
         WaitForExecApproval::TurnComplete => {
             let call_output = mocks
@@ -471,7 +482,7 @@ permissions:
         })
         .await?;
 
-    wait_for_turn_complete(&test).await;
+    wait_for_turn_complete(&test, &turn_id).await;
 
     let call_output = mocks
         .completion
@@ -534,7 +545,7 @@ permissions:
         mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
             .await;
 
-    submit_turn_with_policies(
+    let turn_id = submit_turn_with_policies(
         &test,
         "use $mbolin-test-skill",
         approval_policy,
@@ -542,7 +553,7 @@ permissions:
     )
     .await?;
 
-    let approval = wait_for_exec_approval_request(&test).await;
+    let approval = wait_for_exec_approval_request(&test, &turn_id).await;
     assert!(
         matches!(approval, WaitForExecApproval::TurnComplete),
         "expected reject skill approval policy to skip exec approval"
@@ -614,7 +625,7 @@ async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Res
     )
     .await;
 
-    submit_turn_with_policies(
+    let first_turn_id = submit_turn_with_policies(
         &test,
         "use $mbolin-test-skill",
         AskForApproval::OnRequest,
@@ -622,7 +633,7 @@ async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Res
     )
     .await?;
 
-    let first_approval = wait_for_exec_approval_request(&test).await;
+    let first_approval = wait_for_exec_approval_request(&test, &first_turn_id).await;
     assert!(
         matches!(first_approval, WaitForExecApproval::TurnComplete),
         "expected permissionless skill script to skip exec approval"
@@ -654,7 +665,7 @@ async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Res
     )
     .await;
 
-    submit_turn_with_policies(
+    let second_turn_id = submit_turn_with_policies(
         &test,
         "use $mbolin-test-skill",
         AskForApproval::OnRequest,
@@ -662,7 +673,7 @@ async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Res
     )
     .await?;
 
-    let cached_approval = wait_for_exec_approval_request(&test).await;
+    let cached_approval = wait_for_exec_approval_request(&test, &second_turn_id).await;
     assert!(
         matches!(cached_approval, WaitForExecApproval::TurnComplete),
         "expected permissionless skill rerun to continue skipping exec approval"
@@ -741,7 +752,7 @@ async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> 
     )
     .await;
 
-    submit_turn_with_policies(
+    let first_turn_id = submit_turn_with_policies(
         &test,
         "use $mbolin-test-skill",
         AskForApproval::OnRequest,
@@ -749,7 +760,7 @@ async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> 
     )
     .await?;
 
-    let first_approval = wait_for_exec_approval_request(&test).await;
+    let first_approval = wait_for_exec_approval_request(&test, &first_turn_id).await;
     assert!(
         matches!(first_approval, WaitForExecApproval::TurnComplete),
         "expected empty skill permissions to skip exec approval"
@@ -780,7 +791,7 @@ async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> 
 
     let _ = fs::remove_file(&outside_path);
 
-    submit_turn_with_policies(
+    let second_turn_id = submit_turn_with_policies(
         &test,
         "use $mbolin-test-skill",
         AskForApproval::OnRequest,
@@ -788,7 +799,7 @@ async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> 
     )
     .await?;
 
-    let cached_approval = wait_for_exec_approval_request(&test).await;
+    let cached_approval = wait_for_exec_approval_request(&test, &second_turn_id).await;
     assert!(
         matches!(cached_approval, WaitForExecApproval::TurnComplete),
         "expected empty-permissions skill rerun to continue skipping exec approval"
@@ -880,7 +891,7 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
     )
     .await;
 
-    submit_turn_with_policies(
+    let first_turn_id = submit_turn_with_policies(
         &test,
         "use $mbolin-test-skill",
         AskForApproval::OnRequest,
@@ -888,7 +899,7 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
     )
     .await?;
 
-    let approval = match wait_for_exec_approval_request(&test).await {
+    let approval = match wait_for_exec_approval_request(&test, &first_turn_id).await {
         WaitForExecApproval::Approval(approval) => approval,
         WaitForExecApproval::TurnComplete => {
             panic!("expected exec approval request before completion")
@@ -915,7 +926,7 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
         })
         .await?;
 
-    wait_for_turn_complete(&test).await;
+    wait_for_turn_complete(&test, &first_turn_id).await;
 
     let first_output = first_mocks
         .completion
@@ -951,7 +962,7 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
     let _ = fs::remove_file(&allowed_path);
     let _ = fs::remove_file(&blocked_path);
 
-    submit_turn_with_policies(
+    let second_turn_id = submit_turn_with_policies(
         &test,
         "use $mbolin-test-skill",
         AskForApproval::OnRequest,
@@ -959,7 +970,7 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
     )
     .await?;
 
-    let cached_approval = wait_for_exec_approval_request(&test).await;
+    let cached_approval = wait_for_exec_approval_request(&test, &second_turn_id).await;
     assert!(
         matches!(cached_approval, WaitForExecApproval::TurnComplete),
         "expected second run to reuse the cached session approval"
@@ -1022,7 +1033,7 @@ async fn shell_zsh_fork_still_enforces_workspace_write_sandbox() -> Result<()> {
         mount_function_call_agent_response(&server, tool_call_id, &arguments, "shell_command")
             .await;
 
-    submit_turn_with_policies(
+    let turn_id = submit_turn_with_policies(
         &test,
         "write outside workspace with zsh fork",
         AskForApproval::Never,
@@ -1030,7 +1041,7 @@ async fn shell_zsh_fork_still_enforces_workspace_write_sandbox() -> Result<()> {
     )
     .await?;
 
-    wait_for_turn_complete(&test).await;
+    wait_for_turn_complete(&test, &turn_id).await;
 
     let call_output = mocks
         .completion

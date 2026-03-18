@@ -36,6 +36,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use core_test_support::wait_for_event_with_timeout;
 use core_test_support::zsh_fork::build_zsh_fork_test;
 use core_test_support::zsh_fork::restrictive_workspace_write_policy;
@@ -131,7 +132,7 @@ impl ActionKind {
                     "from pathlib import Path; path = Path({path_str:?}); content = {content:?}; path.write_text(content, encoding='utf-8'); print(path.read_text(encoding='utf-8'), end='')",
                 );
                 let command = format!("python3 -c {script:?}");
-                let event = shell_event(call_id, &command, 5_000, sandbox_permissions)?;
+                let event = shell_event(call_id, &command, 10_000, sandbox_permissions)?;
                 Ok((event, Some(command)))
             }
             ActionKind::FetchUrl {
@@ -546,7 +547,7 @@ async fn submit_turn(
     prompt: &str,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
-) -> Result<()> {
+) -> Result<String> {
     let session_model = test.session_configured.model.clone();
 
     test.codex
@@ -569,7 +570,11 @@ async fn submit_turn(
         })
         .await?;
 
-    Ok(())
+    Ok(wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await)
 }
 
 fn parse_result(item: &Value) -> CommandResult {
@@ -614,13 +619,14 @@ fn parse_result(item: &Value) -> CommandResult {
 
 async fn expect_exec_approval(
     test: &TestCodex,
+    scenario_name: &str,
+    turn_id: &str,
     expected_command: &str,
 ) -> ExecApprovalRequestEvent {
-    let event = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
-        )
+    let event = wait_for_event(&test.codex, |event| match event {
+        EventMsg::ExecApprovalRequest(approval) => approval.turn_id == turn_id,
+        EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+        _ => false,
     })
     .await;
 
@@ -634,20 +640,25 @@ async fn expect_exec_approval(
             assert_eq!(last_arg, expected_command);
             approval
         }
-        EventMsg::TurnComplete(_) => panic!("expected approval request before completion"),
+        EventMsg::TurnComplete(_) => {
+            panic!(
+                "expected approval request before completion for scenario {scenario_name} turn {turn_id}"
+            )
+        }
         other => panic!("unexpected event: {other:?}"),
     }
 }
 
 async fn expect_patch_approval(
     test: &TestCodex,
+    scenario_name: &str,
+    turn_id: &str,
     expected_call_id: &str,
 ) -> ApplyPatchApprovalRequestEvent {
-    let event = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
-        )
+    let event = wait_for_event(&test.codex, |event| match event {
+        EventMsg::ApplyPatchApprovalRequest(approval) => approval.turn_id == turn_id,
+        EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+        _ => false,
     })
     .await;
 
@@ -656,32 +667,43 @@ async fn expect_patch_approval(
             assert_eq!(approval.call_id, expected_call_id);
             approval
         }
-        EventMsg::TurnComplete(_) => panic!("expected patch approval request before completion"),
+        EventMsg::TurnComplete(_) => {
+            panic!(
+                "expected patch approval request before completion for scenario {scenario_name} turn {turn_id}"
+            )
+        }
         other => panic!("unexpected event: {other:?}"),
     }
 }
 
-async fn wait_for_completion_without_approval(test: &TestCodex) {
-    let event = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
-        )
+async fn wait_for_completion_without_approval(
+    test: &TestCodex,
+    scenario_name: &str,
+    turn_id: &str,
+) {
+    let event = wait_for_event(&test.codex, |event| match event {
+        EventMsg::ExecApprovalRequest(approval) => approval.turn_id == turn_id,
+        EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+        _ => false,
     })
     .await;
 
     match event {
         EventMsg::TurnComplete(_) => {}
         EventMsg::ExecApprovalRequest(event) => {
-            panic!("unexpected approval request: {:?}", event.command)
+            panic!(
+                "unexpected approval request for scenario {scenario_name}: {:?}",
+                event.command
+            )
         }
         other => panic!("unexpected event: {other:?}"),
     }
 }
 
-async fn wait_for_completion(test: &TestCodex) {
-    wait_for_event(&test.codex, |event| {
-        matches!(event, EventMsg::TurnComplete(_))
+async fn wait_for_completion_for_turn(test: &TestCodex, turn_id: &str) {
+    wait_for_event(&test.codex, |event| match event {
+        EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+        _ => false,
     })
     .await;
 }
@@ -1645,6 +1667,10 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     let model = model_override.unwrap_or("gpt-5.1");
 
     let mut builder = test_codex().with_model(model).with_config(move |config| {
+        config
+            .features
+            .disable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
         config.permissions.approval_policy = Constrained::allow_any(approval_policy);
         config.permissions.sandbox_policy = Constrained::allow_any(sandbox_policy.clone());
         for feature in features {
@@ -1683,7 +1709,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         scenario.name,
         scenario.approval_policy,
@@ -1693,7 +1719,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
 
     match &scenario.outcome {
         Outcome::Auto => {
-            wait_for_completion_without_approval(&test).await;
+            wait_for_completion_without_approval(&test, scenario.name, &turn_id).await;
         }
         Outcome::ExecApproval {
             decision,
@@ -1702,7 +1728,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
             let command = expected_command
                 .as_deref()
                 .expect("exec approval requires shell command");
-            let approval = expect_exec_approval(&test, command).await;
+            let approval = expect_exec_approval(&test, scenario.name, &turn_id, command).await;
             if let Some(expected_reason) = expected_reason {
                 assert_eq!(
                     approval.reason.as_deref(),
@@ -1718,13 +1744,13 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                     decision: decision.clone(),
                 })
                 .await?;
-            wait_for_completion(&test).await;
+            wait_for_completion_for_turn(&test, &turn_id).await;
         }
         Outcome::PatchApproval {
             decision,
             expected_reason,
         } => {
-            let approval = expect_patch_approval(&test, call_id).await;
+            let approval = expect_patch_approval(&test, scenario.name, &turn_id, call_id).await;
             if let Some(expected_reason) = expected_reason {
                 assert_eq!(
                     approval.reason.as_deref(),
@@ -1739,7 +1765,7 @@ async fn run_scenario(scenario: &ScenarioSpec) -> Result<()> {
                     decision: decision.clone(),
                 })
                 .await?;
-            wait_for_completion(&test).await;
+            wait_for_completion_for_turn(&test, &turn_id).await;
         }
     }
 
@@ -1808,21 +1834,27 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "apply_patch allow session",
         approval_policy,
         sandbox_policy.clone(),
     )
     .await?;
-    let approval = expect_patch_approval(&test, call_id_1).await;
+    let approval = expect_patch_approval(
+        &test,
+        "approving_apply_patch_for_session_skips_future_prompts_for_same_file",
+        &turn_id,
+        call_id_1,
+    )
+    .await;
     test.codex
         .submit(Op::PatchApproval {
             id: approval.call_id,
             decision: ReviewDecision::ApprovedForSession,
         })
         .await?;
-    wait_for_completion(&test).await;
+    wait_for_completion_for_turn(&test, &turn_id).await;
     assert!(fs::read_to_string(&path)?.contains("before"));
 
     let _ = mount_sse_once(
@@ -1843,7 +1875,7 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "apply_patch allow session followup",
         approval_policy,
@@ -1851,11 +1883,10 @@ async fn approving_apply_patch_for_session_skips_future_prompts_for_same_file() 
     )
     .await?;
 
-    let event = wait_for_event(&test.codex, |event| {
-        matches!(
-            event,
-            EventMsg::ApplyPatchApprovalRequest(_) | EventMsg::TurnComplete(_)
-        )
+    let event = wait_for_event(&test.codex, |event| match event {
+        EventMsg::ApplyPatchApprovalRequest(approval) => approval.turn_id == turn_id,
+        EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+        _ => false,
     })
     .await;
     match event {
@@ -1921,7 +1952,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "allow-prefix-first",
         approval_policy,
@@ -1929,7 +1960,13 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     )
     .await?;
 
-    let approval = expect_exec_approval(&test, expected_command.as_str()).await;
+    let approval = expect_exec_approval(
+        &test,
+        "approving_execpolicy_amendment_persists_policy_and_skips_future_prompts",
+        &turn_id,
+        expected_command.as_str(),
+    )
+    .await;
     assert_eq!(
         approval.proposed_execpolicy_amendment,
         Some(expected_execpolicy_amendment.clone())
@@ -1944,7 +1981,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
             },
         })
         .await?;
-    wait_for_completion(&test).await;
+    wait_for_completion_for_turn(&test, &turn_id).await;
 
     let developer_messages = first_results
         .single_request()
@@ -2012,7 +2049,7 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "allow-prefix-second",
         approval_policy,
@@ -2020,7 +2057,12 @@ async fn approving_execpolicy_amendment_persists_policy_and_skips_future_prompts
     )
     .await?;
 
-    wait_for_completion_without_approval(&test).await;
+    wait_for_completion_without_approval(
+        &test,
+        "approving_execpolicy_amendment_persists_policy_and_skips_future_prompts",
+        &turn_id,
+    )
+    .await;
 
     let second_output = parse_result(
         &second_results
@@ -2278,7 +2320,7 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "run allowed touch under zsh fork",
         approval_policy,
@@ -2286,7 +2328,12 @@ async fn matched_prefix_rule_runs_unsandboxed_under_zsh_fork() -> Result<()> {
     )
     .await?;
 
-    wait_for_completion_without_approval(&test).await;
+    wait_for_completion_without_approval(
+        &test,
+        "matched_prefix_rule_runs_unsandboxed_under_zsh_fork",
+        &turn_id,
+    )
+    .await;
 
     let result = parse_result(&results.single_request().function_call_output(call_id));
     assert_eq!(result.exit_code.unwrap_or(0), 0);
@@ -2333,7 +2380,7 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "invalid-prefix-rule",
         approval_policy,
@@ -2341,7 +2388,13 @@ async fn invalid_requested_prefix_rule_falls_back_for_compound_command() -> Resu
     )
     .await?;
 
-    let approval = expect_exec_approval(&test, command).await;
+    let approval = expect_exec_approval(
+        &test,
+        "invalid_requested_prefix_rule_falls_back_for_compound_command",
+        &turn_id,
+        command,
+    )
+    .await;
     let amendment = approval
         .proposed_execpolicy_amendment
         .expect("should have a proposed execpolicy amendment");
@@ -2384,7 +2437,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "invalid-prefix-rule",
         approval_policy,
@@ -2392,7 +2445,13 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     )
     .await?;
 
-    let approval = expect_exec_approval(&test, command).await;
+    let approval = expect_exec_approval(
+        &test,
+        "approving_fallback_rule_for_compound_command_works",
+        &turn_id,
+        command,
+    )
+    .await;
     let approval_id = approval.effective_approval_id();
     let amendment = approval
         .proposed_execpolicy_amendment
@@ -2408,7 +2467,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
             },
         })
         .await?;
-    wait_for_completion(&test).await;
+    wait_for_completion_for_turn(&test, &turn_id).await;
 
     let call_id = "invalid-prefix-rule-again";
     let command =
@@ -2439,7 +2498,7 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "invalid-prefix-rule",
         approval_policy,
@@ -2447,7 +2506,12 @@ async fn approving_fallback_rule_for_compound_command_works() -> Result<()> {
     )
     .await?;
 
-    wait_for_completion_without_approval(&test).await;
+    wait_for_completion_without_approval(
+        &test,
+        "approving_fallback_rule_for_compound_command_works",
+        &turn_id,
+    )
+    .await;
 
     let second_output = parse_result(
         &second_results
@@ -2564,7 +2628,7 @@ allow_local_binding = true
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "allow-network-first",
         approval_policy,
@@ -2579,11 +2643,10 @@ allow_local_binding = true
             .expect("timed out waiting for network approval request");
         let event = wait_for_event_with_timeout(
             &test.codex,
-            |event| {
-                matches!(
-                    event,
-                    EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
-                )
+            |event| match event {
+                EventMsg::ExecApprovalRequest(approval) => approval.turn_id == turn_id,
+                EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+                _ => false,
             },
             remaining,
         )
@@ -2642,7 +2705,7 @@ allow_local_binding = true
             },
         })
         .await?;
-    wait_for_completion(&test).await;
+    wait_for_completion_for_turn(&test, &turn_id).await;
 
     let policy_path = test.home.path().join("rules").join("default.rules");
     let policy_contents = fs::read_to_string(&policy_path)?;
@@ -2704,7 +2767,7 @@ allow_local_binding = true
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "allow-network-second",
         approval_policy,
@@ -2719,11 +2782,10 @@ allow_local_binding = true
             .expect("timed out waiting for second turn completion");
         let event = wait_for_event_with_timeout(
             &test.codex,
-            |event| {
-                matches!(
-                    event,
-                    EventMsg::ExecApprovalRequest(_) | EventMsg::TurnComplete(_)
-                )
+            |event| match event {
+                EventMsg::ExecApprovalRequest(approval) => approval.turn_id == turn_id,
+                EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+                _ => false,
             },
             remaining,
         )
@@ -2813,7 +2875,7 @@ async fn compound_command_with_one_safe_command_still_requires_approval() -> Res
     )
     .await;
 
-    submit_turn(
+    let turn_id = submit_turn(
         &test,
         "compound command",
         approval_policy,
@@ -2821,7 +2883,13 @@ async fn compound_command_with_one_safe_command_still_requires_approval() -> Res
     )
     .await?;
 
-    let approval = expect_exec_approval(&test, expected_command.as_str()).await;
+    let approval = expect_exec_approval(
+        &test,
+        "compound_command_with_one_safe_command_still_requires_approval",
+        &turn_id,
+        expected_command.as_str(),
+    )
+    .await;
     test.codex
         .submit(Op::ExecApproval {
             id: approval.effective_approval_id(),
@@ -2829,7 +2897,7 @@ async fn compound_command_with_one_safe_command_still_requires_approval() -> Res
             decision: ReviewDecision::Denied,
         })
         .await?;
-    wait_for_completion(&test).await;
+    wait_for_completion_for_turn(&test, &turn_id).await;
 
     Ok(())
 }
