@@ -23,6 +23,7 @@ use reqwest::header::HeaderMap;
 use reqwest::header::WWW_AUTHENTICATE;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
+use rmcp::model::ClientJsonRpcMessage;
 use rmcp::model::ClientNotification;
 use rmcp::model::ClientRequest;
 use rmcp::model::CreateElicitationRequestParams;
@@ -83,6 +84,15 @@ const JSON_MIME_TYPE: &str = "application/json";
 const HEADER_LAST_EVENT_ID: &str = "Last-Event-Id";
 const HEADER_SESSION_ID: &str = "Mcp-Session-Id";
 const NON_JSON_RESPONSE_BODY_PREVIEW_BYTES: usize = 8_192;
+
+fn message_uses_request_scoped_headers(message: &ClientJsonRpcMessage) -> bool {
+    matches!(
+        message,
+        ClientJsonRpcMessage::Request(request)
+            if request.request.method() == "tools/call"
+    )
+}
+
 fn apply_request_scoped_headers(
     mut request: reqwest::RequestBuilder,
     request_headers_state: &Arc<StdMutex<Option<HeaderMap>>>,
@@ -156,7 +166,9 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         if let Some(session_id_value) = session_id.as_ref() {
             request = request.header(HEADER_SESSION_ID, session_id_value.as_ref());
         }
-        request = apply_request_scoped_headers(request, &self.request_headers_state);
+        if message_uses_request_scoped_headers(&message) {
+            request = apply_request_scoped_headers(request, &self.request_headers_state);
+        }
 
         let response = request
             .json(&message)
@@ -252,8 +264,6 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
-        request_builder =
-            apply_request_scoped_headers(request_builder, &self.request_headers_state);
         let response = request_builder
             .header(HEADER_SESSION_ID, session.as_ref())
             .send()
@@ -291,8 +301,6 @@ impl StreamableHttpClient for StreamableHttpResponseClient {
         if let Some(auth_header) = auth_token {
             request_builder = request_builder.bearer_auth(auth_header);
         }
-        request_builder =
-            apply_request_scoped_headers(request_builder, &self.request_headers_state);
 
         let response = request_builder
             .send()
@@ -503,38 +511,6 @@ pub struct RmcpClient {
     request_headers: Option<Arc<StdMutex<Option<HeaderMap>>>>,
 }
 
-struct RequestHeadersGuard {
-    state: Option<Arc<StdMutex<Option<HeaderMap>>>>,
-    previous: Option<HeaderMap>,
-}
-
-impl RequestHeadersGuard {
-    fn set(state: Option<Arc<StdMutex<Option<HeaderMap>>>>, headers: Option<HeaderMap>) -> Self {
-        let previous = if let Some(state_ref) = state.as_ref() {
-            let mut guard = state_ref
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let previous = guard.clone();
-            *guard = headers;
-            previous
-        } else {
-            None
-        };
-        Self { state, previous }
-    }
-}
-
-impl Drop for RequestHeadersGuard {
-    fn drop(&mut self) {
-        if let Some(state) = self.state.as_ref() {
-            let mut guard = state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *guard = self.previous.clone();
-        }
-    }
-}
-
 impl RmcpClient {
     pub async fn new_stdio_client(
         program: OsString,
@@ -574,6 +550,7 @@ impl RmcpClient {
         http_headers: Option<HashMap<String, String>>,
         env_http_headers: Option<HashMap<String, String>>,
         store_mode: OAuthCredentialsStoreMode,
+        request_headers: Arc<StdMutex<Option<HeaderMap>>>,
     ) -> Result<Self> {
         let transport_recipe = TransportRecipe::StreamableHttp {
             server_name: server_name.to_string(),
@@ -583,9 +560,9 @@ impl RmcpClient {
             env_http_headers,
             store_mode,
         };
-        let request_headers = Some(Arc::new(StdMutex::new(None)));
         let transport =
-            Self::create_pending_transport(&transport_recipe, request_headers.clone()).await?;
+            Self::create_pending_transport(&transport_recipe, Some(Arc::clone(&request_headers)))
+                .await?;
         Ok(Self {
             state: Mutex::new(ClientState::Connecting {
                 transport: Some(transport),
@@ -593,7 +570,7 @@ impl RmcpClient {
             transport_recipe,
             initialize_context: Mutex::new(None),
             session_recovery_lock: Mutex::new(()),
-            request_headers,
+            request_headers: Some(request_headers),
         })
     }
 
@@ -604,7 +581,6 @@ impl RmcpClient {
         params: InitializeRequestParams,
         timeout: Option<Duration>,
         send_elicitation: SendElicitation,
-        request_headers: Option<HeaderMap>,
     ) -> Result<InitializeResult> {
         let client_handler = LoggingClientHandler::new(params.clone(), send_elicitation);
         let pending_transport = {
@@ -618,8 +594,6 @@ impl RmcpClient {
             }
         };
 
-        let _request_headers_guard =
-            RequestHeadersGuard::set(self.request_headers.clone(), request_headers);
         let (service, oauth_persistor, process_group_guard) =
             Self::connect_pending_transport(pending_transport, client_handler.clone(), timeout)
                 .await?;
@@ -676,11 +650,8 @@ impl RmcpClient {
         &self,
         params: Option<PaginatedRequestParams>,
         timeout: Option<Duration>,
-        request_headers: Option<HeaderMap>,
     ) -> Result<ListToolsWithConnectorIdResult> {
         self.refresh_oauth_if_needed().await;
-        let _request_headers_guard =
-            RequestHeadersGuard::set(self.request_headers.clone(), request_headers);
         let result = self
             .run_service_operation("tools/list", timeout, move |service| {
                 let params = params.clone();
@@ -774,7 +745,6 @@ impl RmcpClient {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
         timeout: Option<Duration>,
-        request_headers: Option<HeaderMap>,
     ) -> Result<CallToolResult> {
         self.refresh_oauth_if_needed().await;
         let arguments = match arguments {
@@ -801,8 +771,6 @@ impl RmcpClient {
             arguments,
             task: None,
         };
-        let _request_headers_guard =
-            RequestHeadersGuard::set(self.request_headers.clone(), request_headers);
         let result = self
             .run_service_operation("tools/call", timeout, move |service| {
                 let rmcp_params = rmcp_params.clone();
