@@ -11,8 +11,8 @@ fn legacy_landlock_flag_is_included_when_requested() {
         command.clone(),
         command_cwd,
         cwd,
-        false,
-        false,
+        /*use_legacy_landlock*/ false,
+        /*allow_network_for_proxy*/ false,
         LinuxSandboxDetachedChildren::Disallow,
     );
     assert_eq!(
@@ -24,8 +24,8 @@ fn legacy_landlock_flag_is_included_when_requested() {
         command,
         command_cwd,
         cwd,
-        true,
-        false,
+        /*use_legacy_landlock*/ true,
+        /*allow_network_for_proxy*/ false,
         LinuxSandboxDetachedChildren::Disallow,
     );
     assert_eq!(
@@ -44,8 +44,8 @@ fn proxy_flag_is_included_when_requested() {
         command,
         command_cwd,
         cwd,
-        true,
-        true,
+        /*use_legacy_landlock*/ true,
+        /*allow_network_for_proxy*/ true,
         LinuxSandboxDetachedChildren::Disallow,
     );
     assert_eq!(
@@ -64,8 +64,8 @@ fn detached_children_flag_is_included_when_requested() {
         command,
         command_cwd,
         cwd,
-        false,
-        false,
+        /*use_legacy_landlock*/ false,
+        /*allow_network_for_proxy*/ false,
         LinuxSandboxDetachedChildren::Allow,
     );
     assert_eq!(
@@ -90,8 +90,8 @@ fn split_policy_flags_are_included() {
         &file_system_sandbox_policy,
         network_sandbox_policy,
         cwd,
-        true,
-        false,
+        /*use_legacy_landlock*/ true,
+        /*allow_network_for_proxy*/ false,
         LinuxSandboxDetachedChildren::Disallow,
     );
 
