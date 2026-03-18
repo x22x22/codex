@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_app_server_protocol::FsCopyParams;
@@ -69,14 +71,19 @@ struct RunningProcess {
     output_notify: Arc<Notify>,
 }
 
+enum ProcessEntry {
+    Starting,
+    Running(Box<RunningProcess>),
+}
+
 pub(crate) struct ExecServerHandler {
     outbound_tx: mpsc::Sender<ExecServerOutboundMessage>,
     file_system: ExecServerFileSystem,
     // Keyed by client-chosen logical `processId` scoped to this connection.
     // This is a protocol handle, not an OS pid.
-    processes: Arc<Mutex<HashMap<String, RunningProcess>>>,
-    initialize_requested: bool,
-    initialized: bool,
+    processes: Arc<Mutex<HashMap<String, ProcessEntry>>>,
+    initialize_requested: AtomicBool,
+    initialized: AtomicBool,
 }
 
 impl ExecServerHandler {
@@ -85,8 +92,8 @@ impl ExecServerHandler {
             outbound_tx,
             file_system: ExecServerFileSystem::default(),
             processes: Arc::new(Mutex::new(HashMap::new())),
-            initialize_requested: false,
-            initialized: false,
+            initialize_requested: AtomicBool::new(false),
+            initialized: AtomicBool::new(false),
         }
     }
 
@@ -95,7 +102,10 @@ impl ExecServerHandler {
             let mut processes = self.processes.lock().await;
             processes
                 .drain()
-                .map(|(_, process)| process)
+                .filter_map(|(_, process)| match process {
+                    ProcessEntry::Starting => None,
+                    ProcessEntry::Running(process) => Some(process),
+                })
                 .collect::<Vec<_>>()
         };
         for process in remaining {
@@ -103,35 +113,34 @@ impl ExecServerHandler {
         }
     }
 
-    pub(crate) fn initialized(&mut self) -> Result<(), String> {
-        if !self.initialize_requested {
+    pub(crate) fn initialized(&self) -> Result<(), String> {
+        if !self.initialize_requested.load(Ordering::SeqCst) {
             return Err("received `initialized` notification before `initialize`".into());
         }
-        self.initialized = true;
+        self.initialized.store(true, Ordering::SeqCst);
         Ok(())
     }
 
     pub(crate) fn initialize(
-        &mut self,
+        &self,
     ) -> Result<InitializeResponse, codex_app_server_protocol::JSONRPCErrorError> {
-        if self.initialize_requested {
+        if self.initialize_requested.swap(true, Ordering::SeqCst) {
             return Err(invalid_request(
                 "initialize may only be sent once per connection".to_string(),
             ));
         }
-        self.initialize_requested = true;
         Ok(InitializeResponse {
             protocol_version: PROTOCOL_VERSION.to_string(),
         })
     }
 
     fn require_initialized(&self) -> Result<(), codex_app_server_protocol::JSONRPCErrorError> {
-        if !self.initialize_requested {
+        if !self.initialize_requested.load(Ordering::SeqCst) {
             return Err(invalid_request(
                 "client must call initialize before using exec methods".to_string(),
             ));
         }
-        if !self.initialized {
+        if !self.initialized.load(Ordering::SeqCst) {
             return Err(invalid_request(
                 "client must send initialized before using exec methods".to_string(),
             ));
@@ -145,17 +154,6 @@ impl ExecServerHandler {
     ) -> Result<ExecResponse, codex_app_server_protocol::JSONRPCErrorError> {
         self.require_initialized()?;
         let process_id = params.process_id.clone();
-        // Same-connection requests are serialized by the RPC processor, and the
-        // in-process client holds the handler mutex across this full call. That
-        // makes this pre-spawn duplicate check safe for the current entrypoints.
-        {
-            let process_map = self.processes.lock().await;
-            if process_map.contains_key(&process_id) {
-                return Err(invalid_request(format!(
-                    "process {process_id} already exists"
-                )));
-            }
-        }
 
         if matches!(
             params.sandbox.as_ref().map(|sandbox| sandbox.mode),
@@ -171,7 +169,17 @@ impl ExecServerHandler {
             .split_first()
             .ok_or_else(|| invalid_params("argv must not be empty".to_string()))?;
 
-        let spawned = if params.tty {
+        {
+            let mut process_map = self.processes.lock().await;
+            if process_map.contains_key(&process_id) {
+                return Err(invalid_request(format!(
+                    "process {process_id} already exists"
+                )));
+            }
+            process_map.insert(process_id.clone(), ProcessEntry::Starting);
+        }
+
+        let spawned_result = if params.tty {
             codex_utils_pty::spawn_pty_process(
                 program,
                 args,
@@ -190,15 +198,24 @@ impl ExecServerHandler {
                 &params.arg0,
             )
             .await
-        }
-        .map_err(|err| internal_error(err.to_string()))?;
+        };
+        let spawned = match spawned_result {
+            Ok(spawned) => spawned,
+            Err(err) => {
+                let mut process_map = self.processes.lock().await;
+                if matches!(process_map.get(&process_id), Some(ProcessEntry::Starting)) {
+                    process_map.remove(&process_id);
+                }
+                return Err(internal_error(err.to_string()));
+            }
+        };
 
         let output_notify = Arc::new(Notify::new());
         {
             let mut process_map = self.processes.lock().await;
             process_map.insert(
                 process_id.clone(),
-                RunningProcess {
+                ProcessEntry::Running(Box::new(RunningProcess {
                     session: spawned.session,
                     tty: params.tty,
                     output: std::collections::VecDeque::new(),
@@ -206,7 +223,7 @@ impl ExecServerHandler {
                     next_seq: 1,
                     exit_code: None,
                     output_notify: Arc::clone(&output_notify),
-                },
+                })),
             );
         }
 
@@ -317,6 +334,12 @@ impl ExecServerHandler {
                 let process = process_map.get(&params.process_id).ok_or_else(|| {
                     invalid_request(format!("unknown process id {}", params.process_id))
                 })?;
+                let ProcessEntry::Running(process) = process else {
+                    return Err(invalid_request(format!(
+                        "process id {} is starting",
+                        params.process_id
+                    )));
+                };
 
                 let mut chunks = Vec::new();
                 let mut total_bytes = 0;
@@ -374,6 +397,12 @@ impl ExecServerHandler {
             let process = process_map.get(&params.process_id).ok_or_else(|| {
                 invalid_request(format!("unknown process id {}", params.process_id))
             })?;
+            let ProcessEntry::Running(process) = process else {
+                return Err(invalid_request(format!(
+                    "process id {} is starting",
+                    params.process_id
+                )));
+            };
             if !process.tty {
                 return Err(invalid_request(format!(
                     "stdin is closed for process {}",
@@ -398,11 +427,12 @@ impl ExecServerHandler {
         self.require_initialized()?;
         let running = {
             let process_map = self.processes.lock().await;
-            if let Some(process) = process_map.get(&params.process_id) {
-                process.session.terminate();
-                true
-            } else {
-                false
+            match process_map.get(&params.process_id) {
+                Some(ProcessEntry::Running(process)) => {
+                    process.session.terminate();
+                    true
+                }
+                Some(ProcessEntry::Starting) | None => false,
             }
         };
 
@@ -410,7 +440,7 @@ impl ExecServerHandler {
     }
 
     pub(crate) async fn handle_message(
-        &mut self,
+        &self,
         message: ExecServerInboundMessage,
     ) -> Result<(), String> {
         match message {
@@ -421,7 +451,7 @@ impl ExecServerHandler {
         }
     }
 
-    async fn handle_request(&mut self, request: ExecServerRequest) -> Result<(), String> {
+    async fn handle_request(&self, request: ExecServerRequest) -> Result<(), String> {
         let outbound = match request {
             ExecServerRequest::Initialize { request_id, .. } => Self::request_outbound(
                 request_id,
@@ -517,13 +547,16 @@ async fn stream_output(
     stream: ExecOutputStream,
     mut receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
     outbound_tx: mpsc::Sender<ExecServerOutboundMessage>,
-    processes: Arc<Mutex<HashMap<String, RunningProcess>>>,
+    processes: Arc<Mutex<HashMap<String, ProcessEntry>>>,
     output_notify: Arc<Notify>,
 ) {
     while let Some(chunk) = receiver.recv().await {
         let notification = {
             let mut processes = processes.lock().await;
-            let Some(process) = processes.get_mut(&process_id) else {
+            let Some(entry) = processes.get_mut(&process_id) else {
+                break;
+            };
+            let ProcessEntry::Running(process) = entry else {
                 break;
             };
             let seq = process.next_seq;
@@ -567,13 +600,13 @@ async fn watch_exit(
     process_id: String,
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
     outbound_tx: mpsc::Sender<ExecServerOutboundMessage>,
-    processes: Arc<Mutex<HashMap<String, RunningProcess>>>,
+    processes: Arc<Mutex<HashMap<String, ProcessEntry>>>,
     output_notify: Arc<Notify>,
 ) {
     let exit_code = exit_rx.await.unwrap_or(-1);
     {
         let mut processes = processes.lock().await;
-        if let Some(process) = processes.get_mut(&process_id) {
+        if let Some(ProcessEntry::Running(process)) = processes.get_mut(&process_id) {
             process.exit_code = Some(exit_code);
         }
     }

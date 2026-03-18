@@ -1,8 +1,5 @@
-use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::AtomicI64;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use codex_app_server_protocol::FsCopyParams;
@@ -19,31 +16,22 @@ use codex_app_server_protocol::FsRemoveParams;
 use codex_app_server_protocol::FsRemoveResponse;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
-use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCMessage;
 use codex_app_server_protocol::JSONRPCNotification;
-use codex_app_server_protocol::JSONRPCResponse;
-use codex_app_server_protocol::RequestId;
 use serde::Serialize;
 use serde_json::Value;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
-use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
-use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
-use tokio_tungstenite::connect_async;
 use tracing::debug;
 use tracing::warn;
 
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::ExecServerEvent;
 use crate::client_api::RemoteExecServerConnectArgs;
-use crate::connection::JsonRpcConnection;
-use crate::connection::JsonRpcConnectionEvent;
 use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
@@ -70,6 +58,7 @@ use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
+use crate::rpc::RpcClientEvent;
 use crate::server::ExecServerOutboundMessage;
 use crate::server::ExecServerServerNotification;
 
@@ -118,8 +107,6 @@ impl RemoteExecServerConnectArgs {
     }
 }
 
-type PendingRequest = oneshot::Sender<Result<Value, JSONRPCErrorError>>;
-
 enum ClientBackend {
     JsonRpc(JsonRpcBackend),
     InProcess(LocalBackend),
@@ -132,21 +119,11 @@ impl ClientBackend {
             ClientBackend::InProcess(backend) => Some(backend),
         }
     }
-
-    fn as_jsonrpc(&self) -> Option<&JsonRpcBackend> {
-        match self {
-            ClientBackend::JsonRpc(backend) => Some(backend),
-            ClientBackend::InProcess(_) => None,
-        }
-    }
 }
 
 struct Inner {
     backend: ClientBackend,
-    pending: Mutex<HashMap<RequestId, PendingRequest>>,
     events_tx: broadcast::Sender<ExecServerEvent>,
-    next_request_id: AtomicI64,
-    transport_tasks: Vec<JoinHandle<()>>,
     reader_task: JoinHandle<()>,
 }
 
@@ -159,9 +136,6 @@ impl Drop for Inner {
             handle.spawn(async move {
                 backend.shutdown().await;
             });
-        }
-        for task in &self.transport_tasks {
-            task.abort();
         }
         self.reader_task.abort();
     }
@@ -213,22 +187,14 @@ impl ExecServerClient {
                         warn!(
                             "in-process exec-server client closing after unexpected response: {err}"
                         );
-                        handle_transport_shutdown(&inner).await;
                         return;
                     }
-                }
-
-                if let Some(inner) = weak.upgrade() {
-                    handle_transport_shutdown(&inner).await;
                 }
             });
 
             Inner {
                 backend: ClientBackend::InProcess(backend),
-                pending: Mutex::new(HashMap::new()),
                 events_tx: broadcast::channel(256).0,
-                next_request_id: AtomicI64::new(1),
-                transport_tasks: Vec::new(),
                 reader_task,
             }
         });
@@ -247,81 +213,50 @@ impl ExecServerClient {
         R: AsyncRead + Unpin + Send + 'static,
         W: AsyncWrite + Unpin + Send + 'static,
     {
-        Self::connect(
-            JsonRpcConnection::from_stdio(stdout, stdin, "exec-server stdio".to_string()),
-            options,
-        )
-        .await
+        let (backend, events_rx) = JsonRpcBackend::connect_stdio(stdin, stdout);
+        Self::connect(backend, events_rx, options).await
     }
 
     pub async fn connect_websocket(
         args: RemoteExecServerConnectArgs,
     ) -> Result<Self, ExecServerError> {
-        let websocket_url = args.websocket_url.clone();
-        let connect_timeout = args.connect_timeout;
-        let (stream, _) = timeout(connect_timeout, connect_async(websocket_url.as_str()))
-            .await
-            .map_err(|_| ExecServerError::WebSocketConnectTimeout {
-                url: websocket_url.clone(),
-                timeout: connect_timeout,
-            })?
-            .map_err(|source| ExecServerError::WebSocketConnect {
-                url: websocket_url.clone(),
-                source,
-            })?;
-
-        Self::connect(
-            JsonRpcConnection::from_websocket(
-                stream,
-                format!("exec-server websocket {websocket_url}"),
-            ),
-            args.into(),
-        )
-        .await
+        let options = args.clone().into();
+        let (backend, events_rx) = JsonRpcBackend::connect_websocket(&args).await?;
+        Self::connect(backend, events_rx, options).await
     }
 
     async fn connect(
-        connection: JsonRpcConnection,
+        backend: JsonRpcBackend,
+        mut rpc_events_rx: mpsc::Receiver<RpcClientEvent>,
         options: ExecServerClientConnectOptions,
     ) -> Result<Self, ExecServerError> {
-        let (write_tx, mut incoming_rx, transport_tasks) = connection.into_parts();
         let inner = Arc::new_cyclic(|weak| {
             let weak = weak.clone();
             let reader_task = tokio::spawn(async move {
-                while let Some(event) = incoming_rx.recv().await {
+                while let Some(event) = rpc_events_rx.recv().await {
                     match event {
-                        JsonRpcConnectionEvent::Message(message) => {
+                        RpcClientEvent::Notification(notification) => {
                             if let Some(inner) = weak.upgrade()
-                                && let Err(err) = handle_server_message(&inner, message).await
+                                && let Err(err) =
+                                    handle_server_notification(&inner, notification).await
                             {
                                 warn!("exec-server client closing after protocol error: {err}");
-                                handle_transport_shutdown(&inner).await;
                                 return;
                             }
                         }
-                        JsonRpcConnectionEvent::Disconnected { reason } => {
+                        RpcClientEvent::Disconnected { reason } => {
                             if let Some(reason) = reason {
                                 warn!("exec-server client transport disconnected: {reason}");
-                            }
-                            if let Some(inner) = weak.upgrade() {
-                                handle_transport_shutdown(&inner).await;
                             }
                             return;
                         }
                     }
                 }
-
-                if let Some(inner) = weak.upgrade() {
-                    handle_transport_shutdown(&inner).await;
-                }
             });
 
             Inner {
-                backend: ClientBackend::JsonRpc(JsonRpcBackend::new(write_tx)),
-                pending: Mutex::new(HashMap::new()),
+                backend: ClientBackend::JsonRpc(backend),
                 events_tx: broadcast::channel(256).0,
-                next_request_id: AtomicI64::new(1),
-                transport_tasks,
                 reader_task,
             }
         });
@@ -504,9 +439,8 @@ impl ExecServerClient {
                 backend.initialize().await?;
             } else {
                 let params = crate::protocol::InitializeParams { client_name };
-                let _: InitializeResponse = self
-                    .send_pending_request(INITIALIZE_METHOD, &params)
-                    .await?;
+                let _: InitializeResponse =
+                    self.send_remote_request(INITIALIZE_METHOD, &params).await?;
             }
             self.notify(INITIALIZED_METHOD, &serde_json::json!({}))
                 .await
@@ -524,11 +458,7 @@ impl ExecServerClient {
         }
     }
 
-    fn next_request_id(&self) -> RequestId {
-        RequestId::Integer(self.inner.next_request_id.fetch_add(1, Ordering::SeqCst))
-    }
-
-    async fn send_pending_request<P, T>(
+    async fn send_remote_request<P, T>(
         &self,
         method: &str,
         params: &P,
@@ -537,21 +467,18 @@ impl ExecServerClient {
         P: Serialize,
         T: serde::de::DeserializeOwned,
     {
-        let request_id = self.next_request_id();
-        let (response_tx, response_rx) = oneshot::channel();
-        self.inner
-            .pending
-            .lock()
-            .await
-            .insert(request_id.clone(), response_tx);
-        let Some(backend) = self.inner.backend.as_jsonrpc() else {
+        let ClientBackend::JsonRpc(backend) = &self.inner.backend else {
             unreachable!("in-process requests return before JSON-RPC setup");
         };
-        let send_result = backend
-            .send_request(request_id.clone(), method, params)
-            .await;
-        self.finish_request(request_id, send_result, response_rx)
-            .await
+        backend.call(method, params).await
+    }
+
+    #[cfg(test)]
+    async fn pending_request_count(&self) -> usize {
+        match &self.inner.backend {
+            ClientBackend::JsonRpc(backend) => backend.pending_request_count().await,
+            ClientBackend::InProcess(_) => 0,
+        }
     }
 
     async fn request_or_local<P, T, Fut>(
@@ -569,37 +496,7 @@ impl ExecServerClient {
             return call_local(backend.clone(), params).await;
         }
 
-        self.send_pending_request(method, &params).await
-    }
-
-    async fn finish_request<T>(
-        &self,
-        request_id: RequestId,
-        send_result: Result<(), ExecServerError>,
-        response_rx: oneshot::Receiver<Result<Value, JSONRPCErrorError>>,
-    ) -> Result<T, ExecServerError>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        if let Err(err) = send_result {
-            self.inner.pending.lock().await.remove(&request_id);
-            return Err(err);
-        }
-        let response = receive_json_response(response_rx).await?;
-        Ok(serde_json::from_value(response)?)
-    }
-}
-
-async fn receive_json_response(
-    response_rx: oneshot::Receiver<Result<Value, JSONRPCErrorError>>,
-) -> Result<Value, ExecServerError> {
-    let result = response_rx.await.map_err(|_| ExecServerError::Closed)?;
-    match result {
-        Ok(response) => Ok(response),
-        Err(error) => Err(ExecServerError::Server {
-            code: error.code,
-            message: error.message,
-        }),
+        self.send_remote_request(method, &params).await
     }
 }
 
@@ -645,35 +542,6 @@ async fn handle_in_process_notification(
     }
 }
 
-async fn handle_server_message(
-    inner: &Arc<Inner>,
-    message: JSONRPCMessage,
-) -> Result<(), ExecServerError> {
-    match message {
-        JSONRPCMessage::Response(JSONRPCResponse { id, result }) => {
-            if let Some(pending) = inner.pending.lock().await.remove(&id) {
-                let _ = pending.send(Ok(result));
-            }
-        }
-        JSONRPCMessage::Error(JSONRPCError { id, error }) => {
-            if let Some(pending) = inner.pending.lock().await.remove(&id) {
-                let _ = pending.send(Err(error));
-            }
-        }
-        JSONRPCMessage::Notification(notification) => {
-            handle_server_notification(inner, notification).await?;
-        }
-        JSONRPCMessage::Request(request) => {
-            return Err(ExecServerError::Protocol(format!(
-                "unexpected exec-server request from remote server: {}",
-                request.method
-            )));
-        }
-    }
-
-    Ok(())
-}
-
 async fn handle_server_notification(
     inner: &Arc<Inner>,
     notification: JSONRPCNotification,
@@ -694,23 +562,6 @@ async fn handle_server_notification(
         }
     }
     Ok(())
-}
-
-async fn handle_transport_shutdown(inner: &Arc<Inner>) {
-    let pending = {
-        let mut pending = inner.pending.lock().await;
-        pending
-            .drain()
-            .map(|(_, pending)| pending)
-            .collect::<Vec<_>>()
-    };
-    for pending in pending {
-        let _ = pending.send(Err(JSONRPCErrorError {
-            code: -32000,
-            data: None,
-            message: "exec-server transport closed".to_string(),
-        }));
-    }
 }
 
 #[cfg(test)]

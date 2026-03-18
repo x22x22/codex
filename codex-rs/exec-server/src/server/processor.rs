@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::warn;
@@ -15,7 +17,7 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
     let (json_outgoing_tx, mut incoming_rx, _connection_tasks) = connection.into_parts();
     let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<ExecServerOutboundMessage>(CHANNEL_CAPACITY);
-    let mut handler = ExecServerHandler::new(outgoing_tx.clone());
+    let handler = Arc::new(ExecServerHandler::new(outgoing_tx.clone()));
 
     let outbound_task = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {
@@ -36,10 +38,12 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
         match event {
             JsonRpcConnectionEvent::Message(message) => match route_jsonrpc_message(message) {
                 Ok(RoutedExecServerMessage::Inbound(message)) => {
-                    if let Err(err) = handler.handle_message(message).await {
-                        warn!("closing exec-server connection after protocol error: {err}");
-                        break;
-                    }
+                    let handler = Arc::clone(&handler);
+                    tokio::spawn(async move {
+                        if let Err(err) = handler.handle_message(message).await {
+                            warn!("exec-server request failed after protocol error: {err}");
+                        }
+                    });
                 }
                 Ok(RoutedExecServerMessage::ImmediateOutbound(message)) => {
                     if outgoing_tx.send(message).await.is_err() {

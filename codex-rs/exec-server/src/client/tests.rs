@@ -13,6 +13,7 @@ use super::ExecServerError;
 use super::ExecServerOutput;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
+use crate::protocol::EXEC_READ_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
@@ -109,6 +110,98 @@ async fn connect_stdio_performs_initialize_handshake() {
     if let Err(err) = client {
         panic!("failed to connect test client: {err}");
     }
+
+    if let Err(err) = server.await {
+        panic!("server task failed: {err}");
+    }
+}
+
+#[tokio::test]
+async fn connect_stdio_matches_out_of_order_responses_by_request_id() {
+    let (client_stdin, server_reader) = tokio::io::duplex(4096);
+    let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
+
+    let server = tokio::spawn(async move {
+        let mut lines = BufReader::new(server_reader).lines();
+
+        let initialize = read_jsonrpc_line(&mut lines).await;
+        let JSONRPCMessage::Request(initialize) = initialize else {
+            panic!("expected initialize request");
+        };
+        write_jsonrpc_line(
+            &mut server_writer,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: initialize.id,
+                result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
+            }),
+        )
+        .await;
+
+        let initialized = read_jsonrpc_line(&mut lines).await;
+        let JSONRPCMessage::Notification(_) = initialized else {
+            panic!("expected initialized notification");
+        };
+
+        let first = read_jsonrpc_line(&mut lines).await;
+        let second = read_jsonrpc_line(&mut lines).await;
+        let (read_request, terminate_request) = match (first, second) {
+            (JSONRPCMessage::Request(first_request), JSONRPCMessage::Request(second_request))
+                if first_request.method == EXEC_READ_METHOD
+                    && second_request.method == EXEC_TERMINATE_METHOD =>
+            {
+                (first_request, second_request)
+            }
+            (JSONRPCMessage::Request(first_request), JSONRPCMessage::Request(second_request))
+                if first_request.method == EXEC_TERMINATE_METHOD
+                    && second_request.method == EXEC_READ_METHOD =>
+            {
+                (second_request, first_request)
+            }
+            _ => panic!("expected read and terminate requests"),
+        };
+
+        write_jsonrpc_line(
+            &mut server_writer,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: terminate_request.id,
+                result: serde_json::json!({ "running": false }),
+            }),
+        )
+        .await;
+        write_jsonrpc_line(
+            &mut server_writer,
+            JSONRPCMessage::Response(JSONRPCResponse {
+                id: read_request.id,
+                result: serde_json::json!({
+                    "chunks": [],
+                    "nextSeq": 1,
+                    "exited": false,
+                    "exitCode": null,
+                }),
+            }),
+        )
+        .await;
+    });
+
+    let client = ExecServerClient::connect_stdio(client_stdin, client_stdout, test_options())
+        .await
+        .unwrap_or_else(|err| panic!("failed to connect test client: {err}"));
+
+    let (read, terminate) = tokio::join!(
+        client.read(ReadParams {
+            process_id: "proc-1".to_string(),
+            after_seq: None,
+            max_bytes: None,
+            wait_ms: Some(0),
+        }),
+        client.terminate("proc-1"),
+    );
+
+    let read = read.unwrap_or_else(|err| panic!("read failed: {err}"));
+    let terminate = terminate.unwrap_or_else(|err| panic!("terminate failed: {err}"));
+    assert_eq!(read.next_seq, 1);
+    assert!(!read.exited);
+    assert!(!terminate.running);
 
     if let Err(err) = server.await {
         panic!("server task failed: {err}");
@@ -459,7 +552,7 @@ async fn start_process_cleans_up_registered_process_after_request_error() {
     }
 
     assert!(
-        client.inner.pending.lock().await.is_empty(),
+        client.pending_request_count().await == 0,
         "failed requests should not leave pending request state behind"
     );
 }

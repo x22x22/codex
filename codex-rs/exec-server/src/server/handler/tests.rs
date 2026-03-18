@@ -8,6 +8,7 @@ use tokio::sync::Notify;
 use tokio::time::timeout;
 
 use super::ExecServerHandler;
+use super::ProcessEntry;
 use super::RetainedOutputChunk;
 use super::RunningProcess;
 use crate::protocol::ExecOutputStream;
@@ -43,7 +44,7 @@ async fn recv_outbound(
 #[tokio::test]
 async fn initialize_response_reports_protocol_version() {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(1);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
 
     if let Err(err) = handler
         .handle_message(ExecServerInboundMessage::Request(
@@ -73,7 +74,7 @@ async fn initialize_response_reports_protocol_version() {
 #[tokio::test]
 async fn exec_methods_require_initialize() {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(1);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
 
     if let Err(err) = handler
         .handle_message(ExecServerInboundMessage::Request(ExecServerRequest::Exec {
@@ -109,7 +110,7 @@ async fn exec_methods_require_initialize() {
 #[tokio::test]
 async fn exec_methods_require_initialized_notification_after_initialize() {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(2);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
 
     if let Err(err) = handler
         .handle_message(ExecServerInboundMessage::Request(
@@ -160,7 +161,7 @@ async fn exec_methods_require_initialized_notification_after_initialize() {
 #[tokio::test]
 async fn initialized_before_initialize_is_a_protocol_error() {
     let (outgoing_tx, _outgoing_rx) = tokio::sync::mpsc::channel(1);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
 
     let result = handler
         .handle_message(ExecServerInboundMessage::Notification(
@@ -182,7 +183,7 @@ async fn initialized_before_initialize_is_a_protocol_error() {
 #[tokio::test]
 async fn initialize_may_only_be_sent_once_per_connection() {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(2);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
 
     if let Err(err) = handler
         .handle_message(ExecServerInboundMessage::Request(
@@ -229,7 +230,7 @@ async fn initialize_may_only_be_sent_once_per_connection() {
 #[tokio::test]
 async fn host_default_sandbox_requests_are_rejected_until_supported() {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(3);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
 
     if let Err(err) = handler
         .handle_message(ExecServerInboundMessage::Request(
@@ -290,7 +291,7 @@ async fn host_default_sandbox_requests_are_rejected_until_supported() {
 #[tokio::test]
 async fn exec_echoes_client_process_ids() {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(4);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
 
     if let Err(err) = handler
         .handle_message(ExecServerInboundMessage::Request(
@@ -375,9 +376,63 @@ async fn exec_echoes_client_process_ids() {
 }
 
 #[tokio::test]
+async fn concurrent_duplicate_execs_reserve_process_ids_atomically() {
+    let (outgoing_tx, _outgoing_rx) = tokio::sync::mpsc::channel(4);
+    let handler = Arc::new(ExecServerHandler::new(outgoing_tx));
+    let _ = handler.initialize().expect("initialize should succeed");
+    handler.initialized().expect("initialized should succeed");
+
+    let params = crate::protocol::ExecParams {
+        process_id: "proc-1".to_string(),
+        argv: vec![
+            "bash".to_string(),
+            "-lc".to_string(),
+            "sleep 30".to_string(),
+        ],
+        cwd: std::env::current_dir().expect("cwd"),
+        env: HashMap::new(),
+        tty: false,
+        arg0: None,
+        sandbox: None,
+    };
+
+    let first = {
+        let handler = Arc::clone(&handler);
+        let params = params.clone();
+        tokio::spawn(async move { handler.exec(params).await })
+    };
+    let second = {
+        let handler = Arc::clone(&handler);
+        let params = params.clone();
+        tokio::spawn(async move { handler.exec(params).await })
+    };
+
+    let (first, second) = tokio::join!(first, second);
+    let results = [
+        first.expect("first task should complete"),
+        second.expect("second task should complete"),
+    ];
+    let successes = results.iter().filter(|result| result.is_ok()).count();
+    let duplicate_errors = results
+        .iter()
+        .filter(|result| {
+            result
+                .as_ref()
+                .err()
+                .is_some_and(|err| err.message == "process proc-1 already exists")
+        })
+        .count();
+
+    assert_eq!(successes, 1);
+    assert_eq!(duplicate_errors, 1);
+
+    handler.shutdown().await;
+}
+
+#[tokio::test]
 async fn writes_to_pipe_backed_processes_are_rejected() {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(4);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
 
     if let Err(err) = handler
         .handle_message(ExecServerInboundMessage::Request(
@@ -461,7 +516,7 @@ async fn writes_to_pipe_backed_processes_are_rejected() {
 #[tokio::test]
 async fn writes_to_unknown_processes_are_rejected() {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(2);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
 
     if let Err(err) = handler
         .handle_message(ExecServerInboundMessage::Request(
@@ -514,7 +569,7 @@ async fn writes_to_unknown_processes_are_rejected() {
 #[tokio::test]
 async fn terminate_unknown_processes_report_running_false() {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(2);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
 
     if let Err(err) = handler
         .handle_message(ExecServerInboundMessage::Request(
@@ -565,7 +620,7 @@ async fn terminate_unknown_processes_report_running_false() {
 #[tokio::test]
 async fn terminate_keeps_process_ids_reserved() {
     let (outgoing_tx, mut outgoing_rx) = tokio::sync::mpsc::channel(2);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
 
     if let Err(err) = handler
         .handle_message(ExecServerInboundMessage::Request(
@@ -658,7 +713,7 @@ async fn terminate_keeps_process_ids_reserved() {
 #[tokio::test]
 async fn read_paginates_retained_output_without_skipping_omitted_chunks() {
     let (outgoing_tx, _outgoing_rx) = tokio::sync::mpsc::channel(1);
-    let mut handler = ExecServerHandler::new(outgoing_tx);
+    let handler = ExecServerHandler::new(outgoing_tx);
     let _ = handler.initialize().expect("initialize should succeed");
     handler.initialized().expect("initialized should succeed");
 
@@ -675,7 +730,7 @@ async fn read_paginates_retained_output_without_skipping_omitted_chunks() {
         let mut process_map = handler.processes.lock().await;
         process_map.insert(
             "proc-1".to_string(),
-            RunningProcess {
+            ProcessEntry::Running(Box::new(RunningProcess {
                 session: spawned.session,
                 tty: false,
                 output: VecDeque::from([
@@ -694,7 +749,7 @@ async fn read_paginates_retained_output_without_skipping_omitted_chunks() {
                 next_seq: 3,
                 exit_code: None,
                 output_notify: Arc::new(Notify::new()),
-            },
+            })),
         );
     }
 

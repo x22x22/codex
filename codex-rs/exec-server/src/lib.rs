@@ -3,6 +3,7 @@ mod client_api;
 mod connection;
 mod local;
 mod protocol;
+mod rpc;
 mod server;
 
 pub use client::ExecServerClient;
