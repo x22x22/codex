@@ -1,5 +1,6 @@
 use super::AuthRequestTelemetryContext;
 use super::ModelClient;
+use super::ModelClientResponseItemIds;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
 use codex_otel::SessionTelemetry;
@@ -24,6 +25,7 @@ fn test_model_client(session_source: SessionSource) -> ModelClient {
         false,
         false,
         None,
+        ModelClientResponseItemIds::Disabled,
     )
 }
 

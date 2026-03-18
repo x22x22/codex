@@ -3,6 +3,8 @@ use crate::config::ConfigBuilder;
 use crate::features::Feature;
 use chrono::TimeZone;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -132,6 +134,60 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
     );
     let text_after_second_persist = std::fs::read_to_string(&rollout_path)?;
     assert_eq!(text_after_second_persist, text);
+
+    recorder.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn recorder_serializes_response_item_ids_when_feature_enabled() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    config
+        .features
+        .enable(Feature::RecordResponseItemId)
+        .expect("test config should allow feature update");
+
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            ThreadId::new(),
+            None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        None,
+        None,
+    )
+    .await?;
+
+    recorder
+        .record_items(&[RolloutItem::ResponseItem(ResponseItem::Message {
+            id: Some("msg-1".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "hello".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        })])
+        .await?;
+    recorder.persist().await?;
+    recorder.flush().await?;
+
+    let text = std::fs::read_to_string(recorder.rollout_path())?;
+    let response_line = text
+        .lines()
+        .find(|line| line.contains("\"type\":\"response_item\""))
+        .expect("response item line should be present");
+    let response_line: serde_json::Value =
+        serde_json::from_str(response_line).expect("response line should be valid json");
+    assert_eq!(response_line["payload"]["id"].as_str(), Some("msg-1"));
 
     recorder.shutdown().await?;
     Ok(())

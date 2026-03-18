@@ -104,6 +104,9 @@ use crate::response_debug_context::extract_response_debug_context;
 use crate::response_debug_context::extract_response_debug_context_from_api_error;
 use crate::response_debug_context::telemetry_api_error_message;
 use crate::response_debug_context::telemetry_transport_error_message;
+use crate::response_item_id_serde::ResponseItemIdSerialization;
+use crate::response_item_id_serde::serialize_response_create_ws_request_body;
+use crate::response_item_id_serde::serialize_responses_request_body;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::FeedbackRequestTags;
 use crate::util::emit_feedback_auth_recovery_tags;
@@ -137,6 +140,7 @@ struct ModelClientState {
     enable_request_compression: bool,
     include_timing_metrics: bool,
     beta_features_header: Option<String>,
+    response_item_ids: ResponseItemIdSerialization,
     disable_websockets: AtomicBool,
     cached_websocket_session: StdMutex<WebsocketSession>,
 }
@@ -176,6 +180,22 @@ impl RequestRouteTelemetry {
 #[derive(Debug, Clone)]
 pub struct ModelClient {
     state: Arc<ModelClientState>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ModelClientResponseItemIds {
+    #[default]
+    Disabled,
+    Enabled,
+}
+
+impl From<ModelClientResponseItemIds> for ResponseItemIdSerialization {
+    fn from(value: ModelClientResponseItemIds) -> Self {
+        match value {
+            ModelClientResponseItemIds::Disabled => ResponseItemIdSerialization::Disabled,
+            ModelClientResponseItemIds::Enabled => ResponseItemIdSerialization::Enabled,
+        }
+    }
 }
 
 /// A turn-scoped streaming session created from a [`ModelClient`].
@@ -257,6 +277,7 @@ impl ModelClient {
         enable_request_compression: bool,
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
+        response_item_ids: ModelClientResponseItemIds,
     ) -> Self {
         let codex_api_key_env_enabled = auth_manager
             .as_ref()
@@ -273,6 +294,7 @@ impl ModelClient {
                 enable_request_compression,
                 include_timing_metrics,
                 beta_features_header,
+                response_item_ids: response_item_ids.into(),
                 disable_websockets: AtomicBool::new(false),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
@@ -1049,7 +1071,18 @@ impl ModelClientSession {
                 client_setup.api_auth,
             )
             .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
-            let stream_result = client.stream_request(request, options).await;
+            let stream_result = if self.client.state.response_item_ids.is_enabled() {
+                let request_body =
+                    serialize_responses_request_body(&request, self.client.state.response_item_ids)
+                        .map_err(|err| {
+                            map_api_error(ApiError::Stream(format!(
+                                "failed to encode responses request: {err}"
+                            )))
+                        })?;
+                client.stream_request_with_body(request_body, options).await
+            } else {
+                client.stream_request(request, options).await
+            };
 
             match stream_result {
                 Ok(stream) => {
@@ -1170,15 +1203,38 @@ impl ModelClientSession {
 
             let ws_request = self.prepare_websocket_request(ws_payload, &request);
             self.websocket_session.last_request = Some(request);
-            let stream_result = self.websocket_session.connection.as_ref().ok_or_else(|| {
+            let connection = self.websocket_session.connection.as_ref().ok_or_else(|| {
                 map_api_error(ApiError::Stream(
                     "websocket connection is unavailable".to_string(),
                 ))
             })?;
-            let stream_result = stream_result
-                .stream_request(ws_request, self.websocket_session.connection_reused())
-                .await
-                .map_err(map_api_error)?;
+            let stream_result = if self.client.state.response_item_ids.is_enabled() {
+                let request_body = match &ws_request {
+                    ResponsesWsRequest::ResponseCreate(request) => {
+                        serialize_response_create_ws_request_body(
+                            request,
+                            self.client.state.response_item_ids,
+                        )
+                    }
+                }
+                .map_err(|err| {
+                    map_api_error(ApiError::Stream(format!(
+                        "failed to encode websocket request: {err}"
+                    )))
+                })?;
+                connection
+                    .stream_request_with_body(
+                        request_body,
+                        self.websocket_session.connection_reused(),
+                    )
+                    .await
+                    .map_err(map_api_error)?
+            } else {
+                connection
+                    .stream_request(ws_request, self.websocket_session.connection_reused())
+                    .await
+                    .map_err(map_api_error)?
+            };
             let (stream, last_request_rx) =
                 map_response_stream(stream_result, session_telemetry.clone());
             self.websocket_session.last_response_rx = Some(last_request_rx);

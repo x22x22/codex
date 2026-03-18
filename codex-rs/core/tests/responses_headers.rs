@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use codex_core::CodexAuth;
 use codex_core::ModelClient;
+use codex_core::ModelClientResponseItemIds;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
 use codex_core::ResponseEvent;
@@ -95,6 +96,7 @@ async fn responses_stream_includes_subagent_header_on_review() {
         false,
         false,
         None,
+        ModelClientResponseItemIds::Disabled,
     );
     let mut client_session = client.new_session();
 
@@ -208,6 +210,7 @@ async fn responses_stream_includes_subagent_header_on_other() {
         false,
         false,
         None,
+        ModelClientResponseItemIds::Disabled,
     );
     let mut client_session = client.new_session();
 
@@ -320,6 +323,7 @@ async fn responses_respects_model_info_overrides_from_config() {
         false,
         false,
         None,
+        ModelClientResponseItemIds::Disabled,
     );
     let mut client_session = client.new_session();
 

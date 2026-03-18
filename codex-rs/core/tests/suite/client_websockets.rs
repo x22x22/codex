@@ -1,6 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 use codex_core::CodexAuth;
 use codex_core::ModelClient;
+use codex_core::ModelClientResponseItemIds;
 use codex_core::ModelClientSession;
 use codex_core::ModelProviderInfo;
 use codex_core::Prompt;
@@ -93,6 +94,29 @@ async fn responses_websocket_streams_request() {
         handshake.header(X_CLIENT_REQUEST_ID_HEADER),
         Some(harness.conversation_id.to_string())
     );
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_includes_response_item_ids_when_feature_enabled() {
+    skip_if_no_network!();
+
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-1"),
+        ev_completed("resp-1"),
+    ]]])
+    .await;
+
+    let harness = websocket_harness_with_response_item_ids(&server).await;
+    let mut client_session = harness.client.new_session();
+    let prompt = prompt_with_input(vec![assistant_message_item("msg-1", "hello")]);
+
+    stream_until_complete(&mut client_session, &harness, &prompt).await;
+
+    let connection = server.single_connection();
+    let body = connection.first().expect("missing request").body_json();
+    assert_eq!(body["input"][0]["id"].as_str(), Some("msg-1"));
 
     server.shutdown().await;
 }
@@ -1551,6 +1575,17 @@ async fn websocket_harness(server: &WebSocketTestServer) -> WebsocketTestHarness
     websocket_harness_with_runtime_metrics(server, false).await
 }
 
+async fn websocket_harness_with_response_item_ids(
+    server: &WebSocketTestServer,
+) -> WebsocketTestHarness {
+    websocket_harness_with_provider_options(
+        websocket_provider(server),
+        /*runtime_metrics_enabled*/ false,
+        ModelClientResponseItemIds::Enabled,
+    )
+    .await
+}
+
 async fn websocket_harness_with_runtime_metrics(
     server: &WebSocketTestServer,
     runtime_metrics_enabled: bool,
@@ -1569,13 +1604,18 @@ async fn websocket_harness_with_options(
     server: &WebSocketTestServer,
     runtime_metrics_enabled: bool,
 ) -> WebsocketTestHarness {
-    websocket_harness_with_provider_options(websocket_provider(server), runtime_metrics_enabled)
-        .await
+    websocket_harness_with_provider_options(
+        websocket_provider(server),
+        runtime_metrics_enabled,
+        ModelClientResponseItemIds::Disabled,
+    )
+    .await
 }
 
 async fn websocket_harness_with_provider_options(
     provider: ModelProviderInfo,
     runtime_metrics_enabled: bool,
+    response_item_ids: ModelClientResponseItemIds,
 ) -> WebsocketTestHarness {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home).await;
@@ -1621,6 +1661,7 @@ async fn websocket_harness_with_provider_options(
         false,
         runtime_metrics_enabled,
         None,
+        response_item_ids,
     );
 
     WebsocketTestHarness {

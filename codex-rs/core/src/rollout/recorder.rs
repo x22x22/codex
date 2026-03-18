@@ -41,8 +41,11 @@ use super::policy::EventPersistenceMode;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::originator;
+use crate::features::Feature;
 use crate::git_info::collect_git_info;
 use crate::path_utils;
+use crate::response_item_id_serde::ResponseItemIdSerialization;
+use crate::response_item_id_serde::serialize_rollout_line;
 use crate::state_db;
 use crate::state_db::StateDbHandle;
 use crate::truncate::TruncationPolicy;
@@ -463,6 +466,11 @@ impl RolloutRecorder {
             state_builder,
             config.model_provider_id.clone(),
             config.memories.generate_memories,
+            if config.features.enabled(Feature::RecordResponseItemId) {
+                ResponseItemIdSerialization::Enabled
+            } else {
+                ResponseItemIdSerialization::Disabled
+            },
         ));
 
         Ok(Self {
@@ -716,8 +724,12 @@ async fn rollout_writer(
     mut state_builder: Option<ThreadMetadataBuilder>,
     default_provider: String,
     generate_memories: bool,
+    response_item_ids: ResponseItemIdSerialization,
 ) -> std::io::Result<()> {
-    let mut writer = file.map(|file| JsonlWriter { file });
+    let mut writer = file.map(|file| JsonlWriter {
+        file,
+        response_item_ids,
+    });
     let mut buffered_items = Vec::<RolloutItem>::new();
     if let Some(builder) = state_builder.as_mut() {
         builder.rollout_path = rollout_path.clone();
@@ -775,6 +787,7 @@ async fn rollout_writer(
                         let file = open_log_file(log_file_info.path.as_path())?;
                         writer = Some(JsonlWriter {
                             file: tokio::fs::File::from_std(file),
+                            response_item_ids,
                         });
 
                         if let Some(session_meta) = meta.take() {
@@ -946,13 +959,7 @@ async fn sync_thread_state_after_write(
 
 struct JsonlWriter {
     file: tokio::fs::File,
-}
-
-#[derive(serde::Serialize)]
-struct RolloutLineRef<'a> {
-    timestamp: String,
-    #[serde(flatten)]
-    item: &'a RolloutItem,
+    response_item_ids: ResponseItemIdSerialization,
 }
 
 impl JsonlWriter {
@@ -964,14 +971,7 @@ impl JsonlWriter {
             .format(timestamp_format)
             .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
-        let line = RolloutLineRef {
-            timestamp,
-            item: rollout_item,
-        };
-        self.write_line(&line).await
-    }
-    async fn write_line(&mut self, item: &impl serde::Serialize) -> std::io::Result<()> {
-        let mut json = serde_json::to_string(item)?;
+        let mut json = serialize_rollout_line(timestamp, rollout_item, self.response_item_ids)?;
         json.push('\n');
         self.file.write_all(json.as_bytes()).await?;
         self.file.flush().await?;

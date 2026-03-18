@@ -71,6 +71,19 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
         request: ResponsesApiRequest,
         options: ResponsesOptions,
     ) -> Result<ResponseStream, ApiError> {
+        let mut body = serde_json::to_value(&request)
+            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
+        if request.store && self.session.provider().is_azure_responses_endpoint() {
+            attach_item_ids(&mut body, &request.input);
+        }
+        self.stream_request_with_body(body, options).await
+    }
+
+    pub async fn stream_request_with_body(
+        &self,
+        body: Value,
+        options: ResponsesOptions,
+    ) -> Result<ResponseStream, ApiError> {
         let ResponsesOptions {
             conversation_id,
             session_source,
@@ -78,12 +91,6 @@ impl<T: HttpTransport, A: AuthProvider> ResponsesClient<T, A> {
             compression,
             turn_state,
         } = options;
-
-        let mut body = serde_json::to_value(&request)
-            .map_err(|e| ApiError::Stream(format!("failed to encode responses request: {e}")))?;
-        if request.store && self.session.provider().is_azure_responses_endpoint() {
-            attach_item_ids(&mut body, &request.input);
-        }
 
         let mut headers = extra_headers;
         if let Some(ref conv_id) = conversation_id {

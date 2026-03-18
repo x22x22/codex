@@ -154,6 +154,7 @@ use uuid::Uuid;
 
 use crate::ModelProviderInfo;
 use crate::client::ModelClient;
+use crate::client::ModelClientResponseItemIds;
 use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -1815,6 +1816,11 @@ impl Session {
                 config.features.enabled(Feature::EnableRequestCompression),
                 config.features.enabled(Feature::RuntimeMetrics),
                 Self::build_model_client_beta_features_header(config.as_ref()),
+                if config.features.enabled(Feature::RecordResponseItemId) {
+                    ModelClientResponseItemIds::Enabled
+                } else {
+                    ModelClientResponseItemIds::Disabled
+                },
             ),
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),

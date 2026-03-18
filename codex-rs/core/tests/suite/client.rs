@@ -1,5 +1,6 @@
 use codex_core::CodexAuth;
 use codex_core::ModelClient;
+use codex_core::ModelClientResponseItemIds;
 use codex_core::ModelProviderInfo;
 use codex_core::NewThread;
 use codex_core::Prompt;
@@ -1835,6 +1836,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         false,
         false,
         None,
+        ModelClientResponseItemIds::Enabled,
     );
     let mut client_session = client.new_session();
 
@@ -1941,6 +1943,107 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         body["input"][7]["call_id"].as_str(),
         Some("custom-tool-call-id")
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_request_includes_response_item_ids_when_feature_enabled() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let sse_body = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n",
+    );
+    let resp_mock = mount_sse_once(&server, sse_body.to_string()).await;
+
+    let provider = ModelProviderInfo {
+        name: "openai".into(),
+        base_url: Some(format!("{}/v1", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home).await;
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let model = codex_core::test_support::get_model_offline(config.model.as_deref());
+    config.model = Some(model.clone());
+    let config = Arc::new(config);
+    let model_info =
+        codex_core::test_support::construct_model_info_offline(model.as_str(), &config);
+    let conversation_id = ThreadId::new();
+    let session_telemetry = SessionTelemetry::new(
+        conversation_id,
+        model.as_str(),
+        model_info.slug.as_str(),
+        None,
+        Some("test@test.com".to_string()),
+        None,
+        "test_originator".to_string(),
+        false,
+        "test".to_string(),
+        SessionSource::Exec,
+    );
+
+    let client = ModelClient::new(
+        None,
+        conversation_id,
+        provider,
+        SessionSource::Exec,
+        config.model_verbosity,
+        false,
+        false,
+        None,
+        ModelClientResponseItemIds::Enabled,
+    );
+    let mut client_session = client.new_session();
+
+    let mut prompt = Prompt::default();
+    prompt.input.push(ResponseItem::Message {
+        id: Some("message-id".into()),
+        role: "assistant".into(),
+        content: vec![ContentItem::OutputText {
+            text: "message".into(),
+        }],
+        end_turn: None,
+        phase: None,
+    });
+
+    let mut stream = client_session
+        .stream(
+            &prompt,
+            &model_info,
+            &session_telemetry,
+            effort,
+            summary.unwrap_or(ReasoningSummary::Auto),
+            None,
+            None,
+        )
+        .await
+        .expect("responses stream to start");
+
+    while let Some(event) = stream.next().await {
+        if let Ok(ResponseEvent::Completed { .. }) = event {
+            break;
+        }
+    }
+
+    let body = resp_mock.single_request().body_json();
+    assert_eq!(body["input"][0]["id"].as_str(), Some("message-id"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -182,6 +182,8 @@ pub enum Feature {
     RealtimeConversation,
     /// Route interactive startup to the app-server-backed TUI implementation.
     TuiAppServer,
+    /// Persist and resend provider ResponseItem ids in internal rollout/client payloads.
+    RecordResponseItemId,
     /// Prevent idle system sleep while a turn is actively running.
     PreventIdleSleep,
     /// Legacy rollout flag for Responses API WebSocket transport experiments.
@@ -837,6 +839,12 @@ pub const FEATURES: &[FeatureSpec] = &[
             menu_description: "Use the app-server-backed TUI implementation.",
             announcement: "",
         },
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::RecordResponseItemId,
+        key: "record_response_item_id",
+        stage: Stage::UnderDevelopment,
         default_enabled: false,
     },
     FeatureSpec {
