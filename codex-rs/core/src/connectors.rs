@@ -25,6 +25,7 @@ use tracing::warn;
 use crate::AuthManager;
 use crate::CodexAuth;
 use crate::SandboxState;
+use crate::TokenData;
 use crate::config::Config;
 use crate::config::types::AppToolApproval;
 use crate::config::types::AppsConfigToml;
@@ -44,7 +45,6 @@ use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginsManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
-use crate::token_data::TokenData;
 use crate::tools::discoverable::DiscoverablePluginInfo;
 use crate::tools::discoverable::DiscoverableTool;
 

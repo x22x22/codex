@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use tracing::warn;
 
-use crate::token_data::TokenData;
+use crate::TokenData;
 use codex_app_server_protocol::AuthMode;
 use codex_keyring_store::DefaultKeyringStore;
 use codex_keyring_store::KeyringStore;
