@@ -1,10 +1,12 @@
 #![expect(clippy::expect_used)]
 
 use anyhow::Context as _;
+use anyhow::Result;
 use anyhow::ensure;
 use codex_arg0::Arg0PathEntryGuard;
 use codex_utils_cargo_bin::CargoBinError;
 use ctor::ctor;
+use std::process::Command;
 use std::sync::OnceLock;
 use tempfile::TempDir;
 
@@ -363,8 +365,66 @@ pub fn format_with_current_shell_display_non_login(command: &str) -> String {
         .expect("serialize current shell command without login")
 }
 
-pub fn stdio_server_bin() -> Result<String, CargoBinError> {
-    codex_utils_cargo_bin::cargo_bin("test_stdio_server").map(|p| p.to_string_lossy().to_string())
+static TEST_STDIO_SERVER_BIN: OnceLock<std::result::Result<String, String>> = OnceLock::new();
+
+pub fn stdio_server_bin() -> Result<String> {
+    TEST_STDIO_SERVER_BIN
+        .get_or_init(|| resolve_stdio_server_bin().map_err(|err| format!("{err:#}")))
+        .as_ref()
+        .map(Clone::clone)
+        .map_err(|err| anyhow::anyhow!("{err}"))
+}
+
+fn resolve_stdio_server_bin() -> Result<String> {
+    let workspace_root = codex_utils_cargo_bin::repo_root()?.join("codex-rs");
+    let binary_path = codex_utils_cargo_bin::cargo_bin("test_stdio_server")
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let source_path = workspace_root.join("rmcp-client/src/bin/test_stdio_server.rs");
+
+    let binary_mtime = binary_path
+        .metadata()
+        .with_context(|| format!("failed to read metadata for {}", binary_path.display()))?
+        .modified()
+        .with_context(|| {
+            format!(
+                "failed to read modification time for {}",
+                binary_path.display()
+            )
+        })?;
+    let source_mtime = source_path
+        .metadata()
+        .with_context(|| format!("failed to read metadata for {}", source_path.display()))?
+        .modified()
+        .with_context(|| {
+            format!(
+                "failed to read modification time for {}",
+                source_path.display()
+            )
+        })?;
+
+    if binary_mtime < source_mtime {
+        let output = Command::new("cargo")
+            .args([
+                "build",
+                "-p",
+                "codex-rmcp-client",
+                "--bin",
+                "test_stdio_server",
+            ])
+            .current_dir(&workspace_root)
+            .output()
+            .context("failed to rebuild test_stdio_server")?;
+        ensure!(
+            output.status.success(),
+            "failed to rebuild test_stdio_server:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    codex_utils_cargo_bin::cargo_bin("test_stdio_server")
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|err| anyhow::anyhow!("{err}"))
 }
 
 pub mod fs_wait {

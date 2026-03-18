@@ -30,6 +30,7 @@ use codex_tui::ExitReason;
 use codex_tui::update_action::UpdateAction;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
+use std::ffi::OsString;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use supports_color::Stream;
@@ -600,6 +601,7 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
+    let raw_args = std::env::args_os().collect::<Vec<_>>();
     let MultitoolCli {
         config_overrides: mut root_config_overrides,
         feature_toggles,
@@ -639,6 +641,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
+            append_trailing_config_flags(&mut exec_cli.config_overrides, &raw_args, &["exec", "e"]);
             codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
         }
         Some(Subcommand::Review(review_args)) => {
@@ -653,6 +656,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 &mut exec_cli.config_overrides,
                 root_config_overrides.clone(),
             );
+            append_trailing_config_flags(&mut exec_cli.config_overrides, &raw_args, &["review"]);
             codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
         }
         Some(Subcommand::McpServer) => {
@@ -1148,6 +1152,50 @@ fn reject_remote_mode_for_subcommand(
     remote_auth_token_env: Option<&str>,
     subcommand: &str,
 ) -> anyhow::Result<()> {
+fn append_trailing_config_flags(
+    subcommand_config_overrides: &mut CliConfigOverrides,
+    raw_args: &[OsString],
+    subcommand_names: &[&str],
+) {
+    subcommand_config_overrides
+        .raw_overrides
+        .extend(config_flags_after_subcommand(raw_args, subcommand_names));
+}
+
+fn config_flags_after_subcommand(raw_args: &[OsString], subcommand_names: &[&str]) -> Vec<String> {
+    let Some(subcommand_index) = raw_args.iter().position(|arg| {
+        arg.to_str()
+            .is_some_and(|arg| subcommand_names.contains(&arg))
+    }) else {
+        return Vec::new();
+    };
+
+    let mut overrides = Vec::new();
+    let mut args = raw_args.iter().skip(subcommand_index + 1);
+    while let Some(arg) = args.next() {
+        let Some(arg) = arg.to_str() else {
+            continue;
+        };
+        if arg == "--" {
+            break;
+        }
+        if arg == "-c" || arg == "--config" {
+            let Some(value) = args.next() else {
+                break;
+            };
+            let Some(value) = value.to_str() else {
+                continue;
+            };
+            overrides.push(value.to_string());
+            continue;
+        }
+        if let Some(value) = arg.strip_prefix("--config=") {
+            overrides.push(value.to_string());
+        }
+    }
+
+    overrides
+}
     if let Some(remote) = remote {
         anyhow::bail!(
             "`--remote {remote}` is only supported for interactive TUI commands, not `codex {subcommand}`"
@@ -1552,6 +1600,39 @@ mod tests {
         );
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some("re-review"));
+    }
+
+    #[test]
+    fn config_flags_after_exec_subcommand_captures_trailing_overrides() {
+        let args = [
+            "codex",
+            "exec",
+            "--skip-git-repo-check",
+            "-c",
+            "openai_base_url=\"https://example.invalid/v1\"",
+            "hello",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            config_flags_after_subcommand(&args, &["exec", "e"]),
+            vec!["openai_base_url=\"https://example.invalid/v1\"".to_string()]
+        );
+    }
+
+    #[test]
+    fn config_flags_after_review_subcommand_captures_trailing_overrides() {
+        let args = ["codex", "review", "-c", "model=\"gpt-5.2-codex\"", "HEAD~1"]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            config_flags_after_subcommand(&args, &["review"]),
+            vec!["model=\"gpt-5.2-codex\"".to_string()]
+        );
     }
 
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {

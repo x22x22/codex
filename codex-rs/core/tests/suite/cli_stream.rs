@@ -117,7 +117,13 @@ async fn responses_mode_stream_cli_supports_openai_base_url_env_fallback() {
         .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()));
 
     let output = cmd.output().unwrap();
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "status={}\nstdout={}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
 
     let request = resp_mock.single_request();
     assert_eq!(request.path(), "/v1/responses");
@@ -152,9 +158,21 @@ async fn responses_mode_stream_cli_supports_openai_base_url_config_override() {
         .env("OPENAI_API_KEY", "dummy");
 
     let output = cmd.output().unwrap();
-    assert!(output.status.success());
+    let requests = resp_mock.requests();
+    assert!(
+        output.status.success(),
+        "status={}\nstdout={}\nstderr={}\nrequest_count={}\nrequest_paths={:?}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+        requests.len(),
+        requests
+            .iter()
+            .map(|request| request.path())
+            .collect::<Vec<_>>(),
+    );
 
-    let request = resp_mock.single_request();
+    let request = requests.into_iter().next().expect("expected mock request");
     assert_eq!(request.path(), "/v1/responses");
 }
 
