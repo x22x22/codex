@@ -29,12 +29,8 @@ pub(crate) fn request_span(
 ) -> Span {
     let initialize_client_info = initialize_client_info(request);
     let method = request.method.as_str();
-    let span = app_server_request_span_template(
-        method,
-        transport_name(transport),
-        &request.id,
-        connection_id,
-    );
+    let span =
+        app_server_request_span_template(method, transport.as_str(), &request.id, connection_id);
 
     record_client_info(
         &span,
@@ -80,13 +76,6 @@ pub(crate) fn typed_request_span(
 
     attach_parent_context(&span, &method, request.id(), None);
     span
-}
-
-fn transport_name(transport: AppServerTransport) -> &'static str {
-    match transport {
-        AppServerTransport::Stdio => "stdio",
-        AppServerTransport::WebSocket { .. } => "websocket",
-    }
 }
 
 fn app_server_request_span_template(

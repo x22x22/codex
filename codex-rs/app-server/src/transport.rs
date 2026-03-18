@@ -51,7 +51,7 @@ use tracing::warn;
 /// plenty for an interactive CLI.
 pub(crate) const CHANNEL_CAPACITY: usize = 128;
 
-fn colorize(text: &str, style: Style) -> String {
+pub(crate) fn colorize(text: &str, style: Style) -> String {
     text.if_supports_color(Stream::Stderr, |value| value.style(style))
         .to_string()
 }
@@ -84,7 +84,8 @@ fn print_websocket_startup_banner(addr: SocketAddr) {
 #[derive(Clone)]
 struct WebSocketListenerState {
     transport_event_tx: mpsc::Sender<TransportEvent>,
-    connection_counter: Arc<AtomicU64>,
+    connection_id_allocator: ConnectionIdAllocator,
+    transport_kind: AppServerTransport,
 }
 
 async fn health_check_handler() -> StatusCode {
@@ -96,10 +97,16 @@ async fn websocket_upgrade_handler(
     ConnectInfo(peer_addr): ConnectInfo<SocketAddr>,
     State(state): State<WebSocketListenerState>,
 ) -> impl IntoResponse {
-    let connection_id = ConnectionId(state.connection_counter.fetch_add(1, Ordering::Relaxed));
+    let connection_id = state.connection_id_allocator.next_connection_id();
     info!(%peer_addr, "websocket client connected");
     websocket.on_upgrade(move |stream| async move {
-        run_websocket_connection(connection_id, stream, state.transport_event_tx).await;
+        run_websocket_connection(
+            connection_id,
+            stream,
+            state.transport_event_tx,
+            state.transport_kind,
+        )
+        .await;
     })
 }
 
@@ -107,6 +114,36 @@ async fn websocket_upgrade_handler(
 pub enum AppServerTransport {
     Stdio,
     WebSocket { bind_address: SocketAddr },
+    RemoteControlled,
+}
+
+impl AppServerTransport {
+    pub const DEFAULT_LISTEN_URL: &'static str = "stdio://";
+
+    pub fn from_listen_url(listen_url: &str) -> Result<Self, AppServerTransportParseError> {
+        if listen_url == Self::DEFAULT_LISTEN_URL {
+            return Ok(Self::Stdio);
+        }
+
+        if let Some(socket_addr) = listen_url.strip_prefix("ws://") {
+            let bind_address = socket_addr.parse::<SocketAddr>().map_err(|_| {
+                AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url.to_string())
+            })?;
+            return Ok(Self::WebSocket { bind_address });
+        }
+
+        Err(AppServerTransportParseError::UnsupportedListenUrl(
+            listen_url.to_string(),
+        ))
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Stdio => "stdio",
+            Self::WebSocket { .. } => "websocket",
+            Self::RemoteControlled => "remote_controlled",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -132,27 +169,6 @@ impl std::fmt::Display for AppServerTransportParseError {
 
 impl std::error::Error for AppServerTransportParseError {}
 
-impl AppServerTransport {
-    pub const DEFAULT_LISTEN_URL: &'static str = "stdio://";
-
-    pub fn from_listen_url(listen_url: &str) -> Result<Self, AppServerTransportParseError> {
-        if listen_url == Self::DEFAULT_LISTEN_URL {
-            return Ok(Self::Stdio);
-        }
-
-        if let Some(socket_addr) = listen_url.strip_prefix("ws://") {
-            let bind_address = socket_addr.parse::<SocketAddr>().map_err(|_| {
-                AppServerTransportParseError::InvalidWebSocketListenUrl(listen_url.to_string())
-            })?;
-            return Ok(Self::WebSocket { bind_address });
-        }
-
-        Err(AppServerTransportParseError::UnsupportedListenUrl(
-            listen_url.to_string(),
-        ))
-    }
-}
-
 impl FromStr for AppServerTransport {
     type Err = AppServerTransportParseError;
 
@@ -161,16 +177,37 @@ impl FromStr for AppServerTransport {
     }
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ConnectionIdAllocator {
+    next_id: Arc<AtomicU64>,
+}
+
+impl ConnectionIdAllocator {
+    pub(crate) fn next_connection_id(&self) -> ConnectionId {
+        ConnectionId(self.next_id.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for ConnectionIdAllocator {
+    fn default() -> Self {
+        Self {
+            next_id: Arc::new(AtomicU64::new(1)),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) enum TransportEvent {
     ConnectionOpened {
         connection_id: ConnectionId,
+        transport_kind: AppServerTransport,
         writer: mpsc::Sender<OutgoingMessage>,
         allow_legacy_notifications: bool,
         disconnect_sender: Option<CancellationToken>,
     },
     ConnectionClosed {
         connection_id: ConnectionId,
+        transport_kind: AppServerTransport,
     },
     IncomingMessage {
         connection_id: ConnectionId,
@@ -179,6 +216,7 @@ pub(crate) enum TransportEvent {
 }
 
 pub(crate) struct ConnectionState {
+    pub(crate) transport_kind: AppServerTransport,
     pub(crate) outbound_initialized: Arc<AtomicBool>,
     pub(crate) outbound_experimental_api_enabled: Arc<AtomicBool>,
     pub(crate) outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
@@ -187,11 +225,13 @@ pub(crate) struct ConnectionState {
 
 impl ConnectionState {
     pub(crate) fn new(
+        transport_kind: AppServerTransport,
         outbound_initialized: Arc<AtomicBool>,
         outbound_experimental_api_enabled: Arc<AtomicBool>,
         outbound_opted_out_notification_methods: Arc<RwLock<HashSet<String>>>,
     ) -> Self {
         Self {
+            transport_kind,
             outbound_initialized,
             outbound_experimental_api_enabled,
             outbound_opted_out_notification_methods,
@@ -249,6 +289,7 @@ pub(crate) async fn start_stdio_connection(
     transport_event_tx
         .send(TransportEvent::ConnectionOpened {
             connection_id,
+            transport_kind: AppServerTransport::Stdio,
             writer: writer_tx,
             allow_legacy_notifications: false,
             disconnect_sender: None,
@@ -285,7 +326,10 @@ pub(crate) async fn start_stdio_connection(
         }
 
         let _ = transport_event_tx_for_reader
-            .send(TransportEvent::ConnectionClosed { connection_id })
+            .send(TransportEvent::ConnectionClosed {
+                connection_id,
+                transport_kind: AppServerTransport::Stdio,
+            })
             .await;
         debug!("stdin reader finished (EOF)");
     }));
@@ -312,6 +356,7 @@ pub(crate) async fn start_websocket_acceptor(
     bind_address: SocketAddr,
     transport_event_tx: mpsc::Sender<TransportEvent>,
     shutdown_token: CancellationToken,
+    connection_id_allocator: ConnectionIdAllocator,
 ) -> IoResult<JoinHandle<()>> {
     let listener = TcpListener::bind(bind_address).await?;
     let local_addr = listener.local_addr()?;
@@ -324,7 +369,10 @@ pub(crate) async fn start_websocket_acceptor(
         .fallback(any(websocket_upgrade_handler))
         .with_state(WebSocketListenerState {
             transport_event_tx,
-            connection_counter: Arc::new(AtomicU64::new(1)),
+            connection_id_allocator,
+            transport_kind: AppServerTransport::WebSocket {
+                bind_address: local_addr,
+            },
         });
     let server = axum::serve(
         listener,
@@ -345,6 +393,7 @@ async fn run_websocket_connection(
     connection_id: ConnectionId,
     websocket_stream: WebSocket,
     transport_event_tx: mpsc::Sender<TransportEvent>,
+    transport_kind: AppServerTransport,
 ) {
     let (writer_tx, writer_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
     let writer_tx_for_reader = writer_tx.clone();
@@ -352,6 +401,7 @@ async fn run_websocket_connection(
     if transport_event_tx
         .send(TransportEvent::ConnectionOpened {
             connection_id,
+            transport_kind,
             writer: writer_tx,
             allow_legacy_notifications: false,
             disconnect_sender: Some(disconnect_token.clone()),
@@ -392,7 +442,10 @@ async fn run_websocket_connection(
     }
 
     let _ = transport_event_tx
-        .send(TransportEvent::ConnectionClosed { connection_id })
+        .send(TransportEvent::ConnectionClosed {
+            connection_id,
+            transport_kind,
+        })
         .await;
 }
 

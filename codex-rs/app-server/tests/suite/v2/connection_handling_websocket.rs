@@ -108,12 +108,21 @@ async fn websocket_transport_serves_health_endpoints_on_same_listener() -> Resul
 }
 
 pub(super) async fn spawn_websocket_server(codex_home: &Path) -> Result<(Child, SocketAddr)> {
+    spawn_websocket_server_with_args(codex_home, &[]).await
+}
+
+pub(super) async fn spawn_websocket_server_with_args(
+    codex_home: &Path,
+    extra_args: &[&str],
+) -> Result<(Child, SocketAddr)> {
     let program = codex_utils_cargo_bin::cargo_bin("codex-app-server")
         .context("should find app-server binary")?;
     let mut cmd = Command::new(program);
-    cmd.arg("--listen")
-        .arg("ws://127.0.0.1:0")
-        .stdin(Stdio::null())
+    cmd.arg("--listen").arg("ws://127.0.0.1:0");
+    for extra_arg in extra_args {
+        cmd.arg(extra_arg);
+    }
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .env("CODEX_HOME", codex_home)
@@ -158,10 +167,11 @@ pub(super) async fn spawn_websocket_server(codex_home: &Path) -> Result<(Child, 
             stripped
         };
 
-        if let Some(bind_addr) = stripped_line
-            .split_whitespace()
-            .find_map(|token| token.strip_prefix("ws://"))
-            .and_then(|addr| addr.parse::<SocketAddr>().ok())
+        if stripped_line.contains("listening on:")
+            && let Some(bind_addr) = stripped_line
+                .split_whitespace()
+                .find_map(|token| token.strip_prefix("ws://"))
+                .and_then(|addr| addr.parse::<SocketAddr>().ok())
         {
             break bind_addr;
         }

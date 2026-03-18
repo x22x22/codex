@@ -2,6 +2,8 @@
 
 `codex app-server` is the interface Codex uses to power rich interfaces such as the [Codex VS Code extension](https://marketplace.visualstudio.com/items?itemName=openai.chatgpt).
 
+For remote-control-only deployments, use `codexd`. It runs the same app-server runtime in a headless daemon mode, connects outbound to the ChatGPT remote control server using ChatGPT auth, and does not expose a local stdio or websocket transport.
+
 ## Table of Contents
 
 - [Protocol](#protocol)
@@ -25,6 +27,24 @@ Supported transports:
 
 - stdio (`--listen stdio://`, default): newline-delimited JSON (JSONL)
 - websocket (`--listen ws://IP:PORT`): one JSON-RPC message per websocket text frame (**experimental / unsupported**)
+- remote control (`--with-remote-control`): also connect outbound to the ChatGPT remote control server derived from `chatgpt_base_url`
+
+You can combine a local transport with remote control in the same process:
+
+```sh
+codex app-server --listen stdio:// --with-remote-control
+codex app-server --listen ws://127.0.0.1:8080 --with-remote-control
+```
+
+Both local and remote-controlled clients share the same in-process app-server state, and remote-controlled clients still use the normal JSON-RPC connection lifecycle, including `initialize`.
+
+For remote-control-only deployments, keep using `codexd`:
+
+```sh
+codexd
+```
+
+`codexd` runs the same runtime with no local listener and remote control enabled by default.
 
 When running with `--listen ws://IP:PORT`, the same listener also serves basic HTTP health probes:
 

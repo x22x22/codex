@@ -331,6 +331,11 @@ struct AppServerCommand {
     )]
     listen: codex_app_server::AppServerTransport,
 
+    /// Also connect outbound to the ChatGPT remote control server derived from
+    /// the configured `chatgpt_base_url`.
+    #[arg(long = "with-remote-control", default_value_t = false)]
+    with_remote_control: bool,
+
     /// Controls whether analytics are enabled by default.
     ///
     /// Analytics are disabled by default for app-server. Users have to explicitly opt in
@@ -630,13 +635,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
                 reject_remote_mode_for_subcommand(root_remote.as_deref(), "app-server")?;
-                let transport = app_server_cli.listen;
-                codex_app_server::run_main_with_transport(
+                codex_app_server::run_main_with_runtime(
                     arg0_paths.clone(),
                     root_config_overrides,
                     codex_core::config_loader::LoaderOverrides::default(),
                     app_server_cli.analytics_default_enabled,
-                    transport,
+                    Some(app_server_cli.listen),
+                    app_server_cli.with_remote_control,
                 )
                 .await?;
             }
@@ -1600,6 +1605,7 @@ mod tests {
             app_server.listen,
             codex_app_server::AppServerTransport::Stdio
         );
+        assert!(!app_server.with_remote_control);
     }
 
     #[test]

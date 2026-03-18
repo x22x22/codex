@@ -9,6 +9,7 @@ use app_test_support::create_mock_responses_server_repeating_assistant;
 use app_test_support::write_mock_responses_config_toml;
 use codex_app_server_protocol::ClientInfo;
 use codex_app_server_protocol::ClientRequest;
+use codex_app_server_protocol::ConfigReadParams;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::InitializeResponse;
@@ -167,6 +168,19 @@ impl TracingHarness {
     where
         T: serde::de::DeserializeOwned,
     {
+        self.request_with_transport(request, trace, AppServerTransport::Stdio)
+            .await
+    }
+
+    async fn request_with_transport<T>(
+        &mut self,
+        request: ClientRequest,
+        trace: Option<W3cTraceContext>,
+        transport: AppServerTransport,
+    ) -> T
+    where
+        T: serde::de::DeserializeOwned,
+    {
         let request_id = match request.id() {
             RequestId::Integer(request_id) => *request_id,
             request_id => panic!("expected integer request id in test harness, got {request_id:?}"),
@@ -175,12 +189,7 @@ impl TracingHarness {
         request.trace = trace;
 
         self.processor
-            .process_request(
-                TEST_CONNECTION_ID,
-                request,
-                AppServerTransport::Stdio,
-                &mut self.session,
-            )
+            .process_request(TEST_CONNECTION_ID, request, transport, &mut self.session)
             .await;
         read_response(&mut self.outgoing_rx, request_id).await
     }
@@ -563,6 +572,73 @@ async fn thread_start_jsonrpc_span_exports_server_span_and_parents_children() ->
     assert_has_internal_descendant_at_min_depth(&spans, server_request_span, 2);
     harness.shutdown().await;
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn request_spans_record_per_connection_transport_kind() -> Result<()> {
+    let _guard = tracing_test_guard().lock().await;
+    let mut harness = TracingHarness::new().await?;
+
+    for (offset, transport, expected_transport) in [
+        (0_i64, AppServerTransport::Stdio, "stdio"),
+        (
+            1_i64,
+            AppServerTransport::WebSocket {
+                bind_address: "127.0.0.1:8080".parse().expect("valid socket address"),
+            },
+            "websocket",
+        ),
+        (
+            2_i64,
+            AppServerTransport::RemoteControlled,
+            "remote_controlled",
+        ),
+    ] {
+        harness.reset_tracing();
+        let baseline_len = harness
+            .tracing
+            .exporter
+            .get_finished_spans()
+            .expect("span export")
+            .len();
+
+        let _: serde_json::Value = harness
+            .request_with_transport(
+                ClientRequest::ConfigRead {
+                    request_id: RequestId::Integer(30_100 + offset),
+                    params: ConfigReadParams {
+                        include_layers: false,
+                        cwd: None,
+                    },
+                },
+                None,
+                transport,
+            )
+            .await;
+
+        let spans = wait_for_new_exported_spans(harness.tracing, baseline_len, |spans| {
+            spans.iter().any(|span| {
+                span.span_kind == SpanKind::Server
+                    && span_attr(span, "rpc.method") == Some("config/read")
+                    && span_attr(span, "rpc.transport") == Some(expected_transport)
+            })
+        })
+        .await;
+        let server_span = spans
+            .iter()
+            .find(|span| {
+                span.span_kind == SpanKind::Server
+                    && span_attr(span, "rpc.method") == Some("config/read")
+            })
+            .expect("config/read server span should be exported");
+        assert_eq!(
+            span_attr(server_span, "rpc.transport"),
+            Some(expected_transport)
+        );
+    }
+
+    harness.shutdown().await;
     Ok(())
 }
 
