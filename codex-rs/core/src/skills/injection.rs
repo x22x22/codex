@@ -10,9 +10,11 @@ use crate::instructions::SkillInstructions;
 use crate::mention_syntax::TOOL_MENTION_SIGIL;
 use crate::mentions::build_skill_name_counts;
 use crate::skills::SkillMetadata;
+use codex_environment::Environment;
 use codex_otel::SessionTelemetry;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::fs;
 
 #[derive(Debug, Default)]
@@ -23,6 +25,23 @@ pub(crate) struct SkillInjections {
 
 pub(crate) async fn build_skill_injections(
     mentioned_skills: &[SkillMetadata],
+    otel: Option<&SessionTelemetry>,
+    analytics_client: &AnalyticsEventsClient,
+    tracking: TrackEventsContext,
+) -> SkillInjections {
+    build_skill_injections_with_environment(
+        mentioned_skills,
+        None,
+        otel,
+        analytics_client,
+        tracking,
+    )
+    .await
+}
+
+pub(crate) async fn build_skill_injections_with_environment(
+    mentioned_skills: &[SkillMetadata],
+    environment: Option<&Environment>,
     otel: Option<&SessionTelemetry>,
     analytics_client: &AnalyticsEventsClient,
     tracking: TrackEventsContext,
@@ -38,7 +57,7 @@ pub(crate) async fn build_skill_injections(
     let mut invocations = Vec::new();
 
     for skill in mentioned_skills {
-        match fs::read_to_string(&skill.path_to_skills_md).await {
+        match read_skill_contents(skill, environment).await {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {
@@ -68,6 +87,22 @@ pub(crate) async fn build_skill_injections(
     analytics_client.track_skill_invocations(tracking, invocations);
 
     result
+}
+
+async fn read_skill_contents(
+    skill: &SkillMetadata,
+    environment: Option<&Environment>,
+) -> std::io::Result<String> {
+    if skill.scope == codex_protocol::protocol::SkillScope::Repo
+        && let Some(environment) = environment
+    {
+        let abs_path = AbsolutePathBuf::try_from(skill.path_to_skills_md.clone())
+            .map_err(std::io::Error::other)?;
+        let bytes = environment.get_filesystem().read_file(&abs_path).await?;
+        return Ok(String::from_utf8_lossy(&bytes).to_string());
+    }
+
+    fs::read_to_string(&skill.path_to_skills_md).await
 }
 
 fn emit_skill_injected_metric(

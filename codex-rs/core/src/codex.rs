@@ -277,6 +277,7 @@ use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
 use crate::skills::build_skill_injections;
+use crate::skills::build_skill_injections_with_environment;
 use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
 use crate::skills::injection::ToolMentionKind;
@@ -2385,7 +2386,8 @@ impl Session {
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_config(&per_turn_config),
+                .skills_for_config_with_environment(&per_turn_config, self.services.environment.as_ref())
+                .await,
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -5441,8 +5443,9 @@ pub(crate) async fn run_turn(
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
-    } = build_skill_injections(
+    } = build_skill_injections_with_environment(
         &mentioned_skills,
+        Some(turn_context.environment.as_ref()),
         Some(&session_telemetry),
         &sess.services.analytics_events_client,
         tracking.clone(),

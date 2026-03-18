@@ -5,9 +5,20 @@ use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigRequirementsToml;
 use crate::plugins::PluginsManager;
+use async_trait::async_trait;
+use codex_environment::CopyOptions;
+use codex_environment::CreateDirectoryOptions;
+use codex_environment::Environment;
+use codex_environment::ExecutorFileSystem;
+use codex_environment::FileMetadata;
+use codex_environment::FileSystemResult;
+use codex_environment::ReadDirectoryEntry;
+use codex_environment::RemoveOptions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &str) {
@@ -15,6 +26,113 @@ fn write_user_skill(codex_home: &TempDir, dir: &str, name: &str, description: &s
     fs::create_dir_all(&skill_dir).unwrap();
     let content = format!("---\nname: {name}\ndescription: {description}\n---\n\n# Body\n");
     fs::write(skill_dir.join("SKILL.md"), content).unwrap();
+}
+
+#[derive(Clone)]
+struct RemappedFileSystem {
+    local_root: AbsolutePathBuf,
+    remote_root: AbsolutePathBuf,
+}
+
+impl RemappedFileSystem {
+    fn new(local_root: &std::path::Path, remote_root: &std::path::Path) -> Self {
+        Self {
+            local_root: AbsolutePathBuf::try_from(local_root.to_path_buf()).unwrap(),
+            remote_root: AbsolutePathBuf::try_from(remote_root.to_path_buf()).unwrap(),
+        }
+    }
+
+    fn remap(&self, path: &AbsolutePathBuf) -> AbsolutePathBuf {
+        let relative = path
+            .as_path()
+            .strip_prefix(self.local_root.as_path())
+            .expect("path should stay under the local test root");
+        AbsolutePathBuf::try_from(self.remote_root.as_path().join(relative)).unwrap()
+    }
+}
+
+#[async_trait]
+impl ExecutorFileSystem for RemappedFileSystem {
+    async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>> {
+        tokio::fs::read(self.remap(path).as_path()).await
+    }
+
+    async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()> {
+        tokio::fs::write(self.remap(path).as_path(), contents).await
+    }
+
+    async fn create_directory(
+        &self,
+        path: &AbsolutePathBuf,
+        options: CreateDirectoryOptions,
+    ) -> FileSystemResult<()> {
+        if options.recursive {
+            tokio::fs::create_dir_all(self.remap(path).as_path()).await
+        } else {
+            tokio::fs::create_dir(self.remap(path).as_path()).await
+        }
+    }
+
+    async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
+        let metadata = tokio::fs::metadata(self.remap(path).as_path()).await?;
+        Ok(FileMetadata {
+            is_directory: metadata.is_dir(),
+            is_file: metadata.is_file(),
+            created_at_ms: 0,
+            modified_at_ms: 0,
+        })
+    }
+
+    async fn read_directory(
+        &self,
+        path: &AbsolutePathBuf,
+    ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+        let mut entries = Vec::new();
+        let mut read_dir = tokio::fs::read_dir(self.remap(path).as_path()).await?;
+        while let Some(entry) = read_dir.next_entry().await? {
+            let metadata = tokio::fs::symlink_metadata(entry.path()).await?;
+            entries.push(ReadDirectoryEntry {
+                file_name: entry.file_name().to_string_lossy().into_owned(),
+                is_directory: metadata.is_dir(),
+                is_file: metadata.is_file(),
+                is_symlink: metadata.file_type().is_symlink(),
+            });
+        }
+        Ok(entries)
+    }
+
+    async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()> {
+        let remapped = self.remap(path);
+        match tokio::fs::symlink_metadata(remapped.as_path()).await {
+            Ok(metadata) => {
+                if metadata.is_dir() {
+                    if options.recursive {
+                        tokio::fs::remove_dir_all(remapped.as_path()).await
+                    } else {
+                        tokio::fs::remove_dir(remapped.as_path()).await
+                    }
+                } else {
+                    tokio::fs::remove_file(remapped.as_path()).await
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound && options.force => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn copy(
+        &self,
+        source_path: &AbsolutePathBuf,
+        destination_path: &AbsolutePathBuf,
+        _options: CopyOptions,
+    ) -> FileSystemResult<()> {
+        tokio::fs::copy(
+            self.remap(source_path).as_path(),
+            self.remap(destination_path).as_path(),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 #[test]
@@ -66,6 +184,55 @@ async fn skills_for_config_reuses_cache_for_same_effective_config() {
     let outcome2 = skills_manager.skills_for_config(&cfg);
     assert_eq!(outcome2.errors, outcome1.errors);
     assert_eq!(outcome2.skills, outcome1.skills);
+}
+
+#[tokio::test]
+async fn skills_for_config_with_environment_reads_repo_skills_from_remote_workspace() {
+    let codex_home = tempfile::tempdir().expect("tempdir");
+    let local_root = tempfile::tempdir().expect("tempdir");
+    let remote_root = tempfile::tempdir().expect("tempdir");
+
+    fs::create_dir_all(local_root.path().join("repo/subdir")).unwrap();
+    fs::create_dir_all(remote_root.path().join("repo/subdir")).unwrap();
+    fs::create_dir_all(local_root.path().join(".git")).unwrap();
+    fs::create_dir_all(remote_root.path().join(".git")).unwrap();
+    fs::create_dir_all(local_root.path().join(".agents/skills/demo")).unwrap();
+    fs::create_dir_all(remote_root.path().join(".agents/skills/demo")).unwrap();
+
+    fs::write(
+        local_root.path().join(".agents/skills/demo/SKILL.md"),
+        "---\nname: local-skill\ndescription: local\n---\n",
+    )
+    .unwrap();
+    fs::write(
+        remote_root.path().join(".agents/skills/demo/SKILL.md"),
+        "---\nname: remote-skill\ndescription: remote\n---\n",
+    )
+    .unwrap();
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(local_root.path().join("repo/subdir")),
+            ..Default::default()
+        })
+        .build()
+        .await
+        .expect("config");
+
+    let environment = Environment::new(Arc::new(RemappedFileSystem::new(
+        local_root.path(),
+        remote_root.path(),
+    )));
+    let plugins_manager = Arc::new(PluginsManager::new(codex_home.path().to_path_buf()));
+    let skills_manager = SkillsManager::new(codex_home.path().to_path_buf(), plugins_manager, true);
+
+    let outcome = skills_manager
+        .skills_for_config_with_environment(&config, &environment)
+        .await;
+
+    assert!(outcome.skills.iter().any(|skill| skill.name == "remote-skill"));
+    assert!(outcome.skills.iter().all(|skill| skill.name != "local-skill"));
 }
 
 #[tokio::test]

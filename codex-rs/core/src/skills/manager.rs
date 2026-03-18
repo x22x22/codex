@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::sync::RwLock;
 
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_environment::Environment;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use toml::Value as TomlValue;
@@ -21,8 +22,11 @@ use crate::config_loader::load_config_layers_state;
 use crate::plugins::PluginsManager;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::build_implicit_skill_path_indexes;
+use crate::skills::loader::dedupe_skill_roots_by_path;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
+use crate::skills::loader::load_skills_from_roots_with_environment;
+use crate::skills::loader::repo_agents_skill_roots_with_environment;
 use crate::skills::loader::skill_roots;
 use crate::skills::system::install_system_skills;
 use crate::skills::system::uninstall_system_skills;
@@ -77,6 +81,43 @@ impl SkillsManager {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.insert(cache_key, outcome.clone());
         outcome
+    }
+
+    pub async fn skills_for_config_with_environment(
+        &self,
+        config: &Config,
+        environment: &Environment,
+    ) -> SkillLoadOutcome {
+        let loaded_plugins = self.plugins_manager.plugins_for_config(config);
+        let mut roots = skill_roots(
+            &config.config_layer_stack,
+            &config.cwd,
+            loaded_plugins.effective_skill_roots(),
+        );
+        roots.extend(
+            repo_agents_skill_roots_with_environment(&config.config_layer_stack, &config.cwd, environment)
+                .await,
+        );
+        dedupe_skill_roots_by_path(&mut roots);
+        if !config.bundled_skills_enabled() {
+            roots.retain(|root| root.scope != SkillScope::System);
+        }
+
+        let mut local_roots = Vec::new();
+        let mut repo_roots = Vec::new();
+        for root in roots {
+            if root.scope == SkillScope::Repo {
+                repo_roots.push(root);
+            } else {
+                local_roots.push(root);
+            }
+        }
+
+        let mut outcome = load_skills_from_roots(local_roots);
+        let remote_repo_outcome = load_skills_from_roots_with_environment(repo_roots, environment).await;
+        outcome.skills.extend(remote_repo_outcome.skills);
+        outcome.errors.extend(remote_repo_outcome.errors);
+        finalize_skill_outcome(outcome, &config.config_layer_stack)
     }
 
     pub(crate) fn skill_roots_for_config(&self, config: &Config) -> Vec<SkillRoot> {
