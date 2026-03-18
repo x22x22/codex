@@ -4636,14 +4636,7 @@ async fn tool_call_metadata_stamps_guardian_direct_review_when_feature_enabled()
 async fn tool_call_metadata_stamps_policy_source_without_review_decision_when_feature_enabled() {
     let (sess, tc, rx, expected_sandbox_policy) = setup_tool_call_metadata_runtime_test().await;
 
-    sess.record_call_approval_outcome(
-        "call-policy-runtime-1".to_string(),
-        ApprovalOutcomeMetadata {
-            review_decision: None,
-            approval_source: codex_protocol::models::ApprovalSourceMetadata::Policy,
-        },
-    )
-    .await;
+    sess.record_policy_outcome("call-policy-runtime-1").await;
     sess.record_response_item_and_emit_turn_item(
         tc.as_ref(),
         function_call_item("call-policy-runtime-1"),
@@ -4790,6 +4783,87 @@ async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
                 == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
             && metadata.approval_source
                 == Some(codex_protocol::models::ApprovalSourceMetadata::User)
+            && metadata.sandbox_policy == Some(expected_sandbox_policy)
+    ));
+}
+
+#[tokio::test]
+async fn tool_call_metadata_snapshot_stamps_guardian_approval_source() {
+    let (_session, turn_context_raw) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context_raw);
+    let expected_sandbox_policy = sandbox_policy_to_metadata(turn_context.sandbox_policy.get());
+    let item = ResponseItem::FunctionCall {
+        id: None,
+        name: "shell".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-guardian-1".to_string(),
+        metadata: None,
+    };
+    let snapshot = ToolApprovalMetadataSnapshot {
+        approval_outcomes_by_call_id: HashMap::from([(
+            "call-guardian-1".to_string(),
+            crate::state::ApprovalOutcomeMetadata {
+                review_decision: Some(codex_protocol::models::ReviewDecisionMetadata::Denied),
+                approval_source: codex_protocol::models::ApprovalSourceMetadata::Guardian,
+            },
+        )]),
+        pending_approval_call_ids: HashSet::new(),
+    };
+
+    let stamped =
+        stamp_tool_approval_metadata_with_snapshot(turn_context.as_ref(), item, Some(&snapshot));
+
+    assert!(matches!(
+        stamped,
+        ResponseItem::FunctionCall {
+            metadata: Some(metadata),
+            ..
+        } if metadata.is_tool_call_escalated == Some(true)
+            && metadata.review_decision
+                == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
+            && metadata.approval_source
+                == Some(codex_protocol::models::ApprovalSourceMetadata::Guardian)
+            && metadata.sandbox_policy == Some(expected_sandbox_policy)
+    ));
+}
+
+#[tokio::test]
+async fn tool_call_metadata_snapshot_stamps_policy_approval_source_without_review_decision() {
+    let (_session, turn_context_raw) = make_session_and_context().await;
+    let turn_context = Arc::new(turn_context_raw);
+    let expected_sandbox_policy = sandbox_policy_to_metadata(turn_context.sandbox_policy.get());
+    let item = ResponseItem::FunctionCall {
+        id: None,
+        name: "shell".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: "call-policy-1".to_string(),
+        metadata: None,
+    };
+    let snapshot = ToolApprovalMetadataSnapshot {
+        approval_outcomes_by_call_id: HashMap::from([(
+            "call-policy-1".to_string(),
+            crate::state::ApprovalOutcomeMetadata {
+                review_decision: None,
+                approval_source: codex_protocol::models::ApprovalSourceMetadata::Policy,
+            },
+        )]),
+        pending_approval_call_ids: HashSet::new(),
+    };
+
+    let stamped =
+        stamp_tool_approval_metadata_with_snapshot(turn_context.as_ref(), item, Some(&snapshot));
+
+    assert!(matches!(
+        stamped,
+        ResponseItem::FunctionCall {
+            metadata: Some(metadata),
+            ..
+        } if metadata.is_tool_call_escalated == Some(true)
+            && metadata.review_decision.is_none()
+            && metadata.approval_source
+                == Some(codex_protocol::models::ApprovalSourceMetadata::Policy)
             && metadata.sandbox_policy == Some(expected_sandbox_policy)
     ));
 }

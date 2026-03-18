@@ -532,30 +532,14 @@ impl CoreShellActionProvider {
     ) -> anyhow::Result<EscalationDecision> {
         let action = match decision {
             Decision::Forbidden => {
-                self.session
-                    .record_call_approval_outcome(
-                        self.call_id.clone(),
-                        ApprovalOutcomeMetadata {
-                            review_decision: None,
-                            approval_source: ApprovalSourceMetadata::Policy,
-                        },
-                    )
-                    .await;
+                self.session.record_policy_outcome(&self.call_id).await;
                 EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
             }
             Decision::Prompt => {
                 if execve_prompt_is_rejected_by_policy(self.approval_policy, &decision_source)
                     .is_some()
                 {
-                    self.session
-                        .record_call_approval_outcome(
-                            self.call_id.clone(),
-                            ApprovalOutcomeMetadata {
-                                review_decision: None,
-                                approval_source: ApprovalSourceMetadata::Policy,
-                            },
-                        )
-                        .await;
+                    self.session.record_policy_outcome(&self.call_id).await;
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {
                     match self
