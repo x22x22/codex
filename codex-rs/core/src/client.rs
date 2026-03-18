@@ -105,8 +105,8 @@ use crate::response_debug_context::extract_response_debug_context_from_api_error
 use crate::response_debug_context::telemetry_api_error_message;
 use crate::response_debug_context::telemetry_transport_error_message;
 use crate::response_item_id_serde::ResponseItemIdSerialization;
-use crate::response_item_id_serde::serialize_response_create_ws_request_body;
 use crate::response_item_id_serde::serialize_responses_request_body;
+use crate::response_item_id_serde::serialize_responses_ws_request_body;
 use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::FeedbackRequestTags;
 use crate::util::emit_feedback_auth_recovery_tags;
@@ -1209,14 +1209,10 @@ impl ModelClientSession {
                 ))
             })?;
             let stream_result = if self.client.state.response_item_ids.is_enabled() {
-                let request_body = match &ws_request {
-                    ResponsesWsRequest::ResponseCreate(request) => {
-                        serialize_response_create_ws_request_body(
-                            request,
-                            self.client.state.response_item_ids,
-                        )
-                    }
-                }
+                let request_body = serialize_responses_ws_request_body(
+                    &ws_request,
+                    self.client.state.response_item_ids,
+                )
                 .map_err(|err| {
                     map_api_error(ApiError::Stream(format!(
                         "failed to encode websocket request: {err}"
