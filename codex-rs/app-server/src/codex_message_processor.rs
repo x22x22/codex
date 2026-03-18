@@ -7000,14 +7000,10 @@ impl CodexMessageProcessor {
         let codex_home = self.config.codex_home.clone();
 
         let upload_result = tokio::task::spawn_blocking(move || {
-            let mut attachment_paths = if include_logs {
-                feedback_rollout_attachment_paths(
-                    codex_home.as_path(),
-                    validated_rollout_path.as_deref(),
-                )
-            } else {
-                Vec::new()
-            };
+            let mut attachment_paths = feedback_rollout_attachment_paths(
+                codex_home.as_path(),
+                validated_rollout_path.as_deref(),
+            );
             if let Some(extra_log_files) = extra_log_files {
                 attachment_paths.extend(extra_log_files);
             }
