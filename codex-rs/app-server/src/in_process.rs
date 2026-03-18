@@ -403,7 +403,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
         let processor_outgoing = Arc::clone(&outgoing_message_sender);
         let (processor_tx, mut processor_rx) = mpsc::channel::<ProcessorCommand>(channel_capacity);
         let mut processor_handle = tokio::spawn(async move {
-            let mut processor = MessageProcessor::new(MessageProcessorArgs {
+            let mut processor = match MessageProcessor::new(MessageProcessorArgs {
                 outgoing: Arc::clone(&processor_outgoing),
                 arg0_paths: args.arg0_paths,
                 config: args.config,
@@ -417,7 +417,15 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 config_warnings: args.config_warnings,
                 session_source: args.session_source,
                 enable_codex_api_key_env: args.enable_codex_api_key_env,
-            });
+            })
+            .await
+            {
+                Ok(processor) => processor,
+                Err(err) => {
+                    warn!("failed to build in-process message processor: {err}");
+                    return;
+                }
+            };
             let mut thread_created_rx = processor.thread_created_receiver();
             let mut session = ConnectionSessionState::default();
             let mut listen_for_threads = true;

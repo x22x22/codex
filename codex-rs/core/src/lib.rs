@@ -181,6 +181,7 @@ pub use file_watcher::FileWatcherEvent;
 pub use safety::get_platform_sandbox;
 pub use tools::spec::parse_tool_input_schema;
 pub use turn_metadata::build_turn_metadata_header;
+pub use unified_exec::executor_environment_for_config;
 pub mod compact;
 pub mod memory_trace;
 pub mod otel_init;

@@ -51,6 +51,7 @@ pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
 pub use backend::ExecutorBackends;
 pub use backend::executor_backends_for_config;
 pub(crate) use backend::UnifiedExecSessionFactoryHandle;
+pub use backend::executor_environment_for_config;
 pub(crate) use backend::local_unified_exec_session_factory;
 pub(crate) use backend::session_execution_backends_for_config;
 pub(crate) use errors::UnifiedExecError;

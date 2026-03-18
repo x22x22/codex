@@ -623,7 +623,13 @@ pub async fn run_main_with_transport(
             config_warnings,
             session_source: SessionSource::VSCode,
             enable_codex_api_key_env: false,
-        });
+        })
+        .await
+        .map_err(|err| {
+            std::io::Error::other(format!(
+                "failed to build app-server message processor: {err}"
+            ))
+        })?;
         let mut thread_created_rx = processor.thread_created_receiver();
         let mut running_turn_count_rx = processor.subscribe_running_assistant_turn_count();
         let mut connections = HashMap::<ConnectionId, ConnectionState>::new();

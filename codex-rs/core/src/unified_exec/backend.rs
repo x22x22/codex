@@ -221,7 +221,6 @@ pub async fn executor_backends_for_config(
         })
         .map_err(|err| io::Error::other(err.to_string()))
 }
-
 fn default_local_exec_server_command() -> ExecServerLaunchCommand {
     let binary_name = if cfg!(windows) {
         "codex-exec-server.exe"
