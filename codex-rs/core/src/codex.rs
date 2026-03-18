@@ -215,6 +215,12 @@ use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::guardian::routes_approval_to_guardian;
+use crate::hook_runtime::PendingInputHookDisposition;
+use crate::hook_runtime::inspect_pending_input;
+use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_pending_input;
+use crate::hook_runtime::run_pending_session_start_hooks;
+use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
@@ -4237,6 +4243,21 @@ impl Session {
         }
     }
 
+    pub async fn prepend_pending_input_with_metadata(
+        &self,
+        input: Vec<crate::state::PendingInputItem>,
+    ) -> Result<(), ()> {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.prepend_pending_input_with_metadata(input);
+                Ok(())
+            }
+            None => Err(()),
+        }
+    }
+
     pub async fn get_pending_input_with_metadata(
         &self,
     ) -> Vec<(ResponseInputItem, Option<ResponseItemMetadata>)> {
@@ -6002,11 +6023,13 @@ pub(crate) async fn run_turn(
         let mut requeued_pending_input = false;
         let mut accepted_pending_input = Vec::new();
         if !pending_response_items.is_empty() {
-            let mut pending_input_iter = pending_response_items.into_iter();
-            while let Some((pending_input_item, message_metadata)) = pending_input_iter.next() {
+            let mut pending_input_iter = pending_response_items
+                .into_iter()
+                .map(|(input, metadata)| crate::state::PendingInputItem { input, metadata });
+            while let Some(pending_input_item) = pending_input_iter.next() {
                 match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
                     PendingInputHookDisposition::Accepted(pending_input) => {
-                        accepted_pending_input.push((*pending_input, message_metadata));
+                        accepted_pending_input.push(*pending_input);
                     }
                     PendingInputHookDisposition::Blocked {
                         additional_contexts,
@@ -6027,8 +6050,8 @@ pub(crate) async fn run_turn(
         }
 
         let has_accepted_pending_input = !accepted_pending_input.is_empty();
-        for (pending_input, message_metadata) in accepted_pending_input {
-            record_pending_input(&sess, &turn_context, pending_input, message_metadata).await;
+        for pending_input in accepted_pending_input {
+            record_pending_input(&sess, &turn_context, pending_input).await;
         }
         record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
 

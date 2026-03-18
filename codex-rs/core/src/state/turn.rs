@@ -284,6 +284,15 @@ impl TurnState {
             .push(PendingInputItem { input, metadata });
     }
 
+    pub(crate) fn prepend_pending_input_with_metadata(&mut self, mut input: Vec<PendingInputItem>) {
+        if input.is_empty() {
+            return;
+        }
+
+        input.append(&mut self.pending_input);
+        self.pending_input = input;
+    }
+
     pub(crate) fn take_pending_input_with_metadata(&mut self) -> Vec<PendingInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
