@@ -3,6 +3,10 @@
 `codex-exec-server` is a small standalone stdio JSON-RPC server for spawning
 and controlling subprocesses through `codex-utils-pty`.
 
+This PR intentionally lands only the standalone binary, client, wire protocol,
+and docs. Exec and filesystem methods are stubbed server-side here and are
+implemented in follow-up PRs.
+
 It currently provides:
 
 - a standalone binary: `codex-exec-server`
@@ -36,10 +40,7 @@ Each connection follows this sequence:
 1. Send `initialize`.
 2. Wait for the `initialize` response.
 3. Send `initialized`.
-4. Start and manage processes with `command/exec`, `command/exec/write`, and
-   `command/exec/terminate`.
-5. Read streaming notifications from `command/exec/outputDelta` and
-   `command/exec/exited`.
+4. Call exec or filesystem RPCs once the follow-up implementation PRs land.
 
 If the server receives any notification other than `initialized`, it replies
 with an error using request id `-1`.
