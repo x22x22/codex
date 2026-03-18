@@ -1082,7 +1082,10 @@ async fn resolve_resume_thread_id(
                     } else {
                         Some(config.cwd.to_string_lossy().to_string())
                     },
-                    search_term: Some(session_id.to_string()),
+                    // Thread names are attached separately from rollout titles, so name
+                    // resolution must scan the filtered list client-side instead of relying
+                    // on the backend `search_term` filter.
+                    search_term: None,
                 },
             },
             "thread/list",
