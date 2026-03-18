@@ -618,7 +618,7 @@ impl AsyncManagedClient {
     }
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
-        let managed = self.client(None).await?;
+        let managed = self.client(/*request_headers*/ None).await?;
         managed.notify_sandbox_state_change(sandbox_state).await
     }
 }
@@ -731,7 +731,7 @@ impl McpConnectionManager {
             let auth_entry = auth_entries.get(&server_name).cloned();
             let sandbox_state = initial_sandbox_state.clone();
             join_set.spawn(async move {
-                let outcome = async_managed_client.client(None).await;
+                let outcome = async_managed_client.client(/*request_headers*/ None).await;
                 if cancel_token.is_cancelled() {
                     return (server_name, Err(StartupOutcomeError::Cancelled));
                 }
@@ -829,7 +829,12 @@ impl McpConnectionManager {
             return false;
         };
 
-        match tokio::time::timeout(timeout, async_managed_client.client(None)).await {
+        match tokio::time::timeout(
+            timeout,
+            async_managed_client.client(/*request_headers*/ None),
+        )
+        .await
+        {
             Ok(Ok(_)) => true,
             Ok(Err(_)) | Err(_) => false,
         }
@@ -849,7 +854,7 @@ impl McpConnectionManager {
                 continue;
             };
 
-            match async_managed_client.client(None).await {
+            match async_managed_client.client(/*request_headers*/ None).await {
                 Ok(_) => {}
                 Err(error) => failures.push(McpStartupFailure {
                     server: server_name.clone(),
@@ -864,7 +869,8 @@ impl McpConnectionManager {
     /// fully-qualified name for the tool.
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
-        self.list_all_tools_with_request_headers(None).await
+        self.list_all_tools_with_request_headers(/*request_headers*/ None)
+            .await
     }
 
     #[instrument(level = "trace", skip_all)]
@@ -893,7 +899,7 @@ impl McpConnectionManager {
             .clients
             .get(CODEX_APPS_MCP_SERVER_NAME)
             .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?
-            .client(None)
+            .client(/*request_headers*/ None)
             .await
             .context("failed to get client")?;
 
@@ -903,7 +909,7 @@ impl McpConnectionManager {
             CODEX_APPS_MCP_SERVER_NAME,
             &managed_client.client,
             managed_client.tool_timeout,
-            None,
+            /*request_headers*/ None,
         )
         .await
         .with_context(|| {
@@ -940,7 +946,8 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client(None).await else {
+            let Ok(managed_client) = async_managed_client.client(/*request_headers*/ None).await
+            else {
                 continue;
             };
             let timeout = managed_client.tool_timeout;
@@ -1006,7 +1013,8 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name_cloned = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client(None).await else {
+            let Ok(managed_client) = async_managed_client.client(/*request_headers*/ None).await
+            else {
                 continue;
             };
             let client = managed_client.client.clone();
@@ -1118,7 +1126,9 @@ impl McpConnectionManager {
         server: &str,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourcesResult> {
-        let managed = self.client_by_name(server, None).await?;
+        let managed = self
+            .client_by_name(server, /*request_headers*/ None)
+            .await?;
         let timeout = managed.tool_timeout;
 
         managed
@@ -1134,7 +1144,9 @@ impl McpConnectionManager {
         server: &str,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
-        let managed = self.client_by_name(server, None).await?;
+        let managed = self
+            .client_by_name(server, /*request_headers*/ None)
+            .await?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
 
@@ -1150,7 +1162,9 @@ impl McpConnectionManager {
         server: &str,
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
-        let managed = self.client_by_name(server, None).await?;
+        let managed = self
+            .client_by_name(server, /*request_headers*/ None)
+            .await?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
         let uri = params.uri.clone();

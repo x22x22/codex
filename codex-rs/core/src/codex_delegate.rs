@@ -669,7 +669,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         parent_ctx.as_ref(),
         &invocation.server,
         &invocation.tool,
-        None,
+        /*request_headers*/ None,
     )
     .await;
     let review_cancel = cancel_token.child_token();
