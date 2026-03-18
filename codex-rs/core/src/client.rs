@@ -95,7 +95,6 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
-use crate::default_client::residency_header_telemetry_for_provider_headers;
 use crate::endpoint_config_telemetry::EndpointConfigTelemetry;
 use crate::endpoint_config_telemetry::EndpointConfigTelemetrySource;
 use crate::error::CodexErr;
@@ -121,6 +120,10 @@ const RESPONSES_WEBSOCKETS_V2_BETA_HEADER_VALUE: &str = "responses_websockets=20
 const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
+#[cfg(test)]
+pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
+    Duration::from_millis(crate::model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
+
 pub fn ws_version_from_features(config: &Config) -> bool {
     config
         .features
@@ -166,18 +169,11 @@ struct CurrentClientSetup {
 #[derive(Clone)]
 struct RequestRouteTelemetry {
     endpoint: &'static str,
-    residency_header_attached: bool,
-    residency_header_value: Option<String>,
 }
 
 impl RequestRouteTelemetry {
-    fn for_endpoint(endpoint: &'static str, provider_headers: &ApiHeaderMap) -> Self {
-        let residency = residency_header_telemetry_for_provider_headers(provider_headers);
-        Self {
-            endpoint,
-            residency_header_attached: residency.attached,
-            residency_header_value: residency.value,
-        }
+    fn for_endpoint(endpoint: &'static str, _provider_headers: &ApiHeaderMap) -> Self {
+        Self { endpoint }
     }
 }
 
@@ -281,35 +277,6 @@ impl ModelClient {
     ) -> Self {
         let endpoint_telemetry_source =
             EndpointConfigTelemetrySource::for_provider_without_id(&provider);
-        Self::new_with_endpoint_telemetry_source(
-            auth_manager,
-            conversation_id,
-            provider,
-            endpoint_telemetry_source,
-            session_source,
-            model_verbosity,
-            responses_websockets_enabled_by_feature,
-            enable_request_compression,
-            include_timing_metrics,
-            beta_features_header,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_with_provider_id(
-        auth_manager: Option<Arc<AuthManager>>,
-        conversation_id: ThreadId,
-        provider_id: &str,
-        provider: ModelProviderInfo,
-        session_source: SessionSource,
-        model_verbosity: Option<VerbosityConfig>,
-        responses_websockets_enabled_by_feature: bool,
-        enable_request_compression: bool,
-        include_timing_metrics: bool,
-        beta_features_header: Option<String>,
-    ) -> Self {
-        let endpoint_telemetry_source =
-            EndpointConfigTelemetrySource::for_provider(provider_id, &provider);
         Self::new_with_endpoint_telemetry_source(
             auth_manager,
             conversation_id,
@@ -646,15 +613,22 @@ impl ModelClient {
             provider_header_names.map(str::to_owned),
             request_route_telemetry.clone(),
         );
+        let websocket_connect_timeout = self.state.provider.websocket_connect_timeout();
         let start = Instant::now();
-        let result = ApiWebSocketResponsesClient::new(api_provider, api_auth)
-            .connect(
+        let result = match tokio::time::timeout(
+            websocket_connect_timeout,
+            ApiWebSocketResponsesClient::new(api_provider, api_auth).connect(
                 headers,
                 crate::default_client::default_headers(),
                 turn_state,
                 Some(websocket_telemetry),
-            )
-            .await;
+            ),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(ApiError::Transport(TransportError::Timeout)),
+        };
         let error_message = result.as_ref().err().map(telemetry_api_error_message);
         let response_debug = result
             .as_ref()
@@ -662,7 +636,7 @@ impl ModelClient {
             .map(extract_response_debug_context_from_api_error)
             .unwrap_or_default();
         let status = result.as_ref().err().and_then(api_error_http_status);
-        session_telemetry.record_websocket_connect_with_endpoint_details(
+        session_telemetry.record_websocket_connect(
             start.elapsed(),
             status,
             error_message.as_deref(),
@@ -672,8 +646,6 @@ impl ModelClient {
             auth_context.recovery_mode,
             auth_context.recovery_phase,
             request_route_telemetry.endpoint,
-            request_route_telemetry.residency_header_attached,
-            request_route_telemetry.residency_header_value.as_deref(),
             provider_header_names,
             endpoint_telemetry.base_url_origin,
             endpoint_telemetry.host_class,
@@ -723,20 +695,19 @@ impl ModelClient {
             auth_recovery_mode: auth_context.recovery_mode,
             auth_recovery_phase: auth_context.recovery_phase,
             auth_connection_reused: Some(false),
+            app_server_auth_state: None,
+            app_server_requires_openai_auth: None,
             provider_header_names,
             base_url_origin: endpoint_telemetry.base_url_origin,
             host_class: endpoint_telemetry.host_class,
             base_url_source: endpoint_telemetry.base_url_source,
             base_url_is_default: endpoint_telemetry.base_url_is_default,
-            residency_header_attached: Some(request_route_telemetry.residency_header_attached),
-            residency_header_value: request_route_telemetry.residency_header_value.as_deref(),
             auth_request_id: response_debug.request_id.as_deref(),
             auth_cf_ray: response_debug.cf_ray.as_deref(),
             auth_error: response_debug.auth_error.as_deref(),
             auth_error_code: response_debug.auth_error_code.as_deref(),
             error_body_class: response_debug.error_body_class,
             safe_error_message: response_debug.safe_error_message,
-            geo_denial_detected: Some(response_debug.geo_denial_detected),
             auth_recovery_followup_success: auth_context
                 .retry_after_unauthorized
                 .then_some(result.is_ok()),
@@ -745,23 +716,6 @@ impl ModelClient {
                 .then_some(status)
                 .flatten(),
         });
-        if status == Some(StatusCode::UNAUTHORIZED.as_u16()) && response_debug.geo_denial_detected {
-            session_telemetry.record_geo_denial(
-                request_route_telemetry.endpoint,
-                auth_context.auth_header_attached,
-                auth_context.auth_header_name,
-                request_route_telemetry.residency_header_attached,
-                request_route_telemetry.residency_header_value.as_deref(),
-                provider_header_names,
-                status,
-                response_debug.request_id.as_deref(),
-                response_debug.cf_ray.as_deref(),
-                response_debug.auth_error.as_deref(),
-                response_debug.auth_error_code.as_deref(),
-                response_debug.error_body_class.unwrap_or_default(),
-                response_debug.safe_error_message,
-            );
-        }
         result
     }
 
@@ -1825,40 +1779,35 @@ impl RequestTelemetry for ApiTelemetry {
         let debug = error
             .map(extract_response_debug_context)
             .unwrap_or_default();
-        self.session_telemetry
-            .record_api_request_with_endpoint_details(
-                attempt,
-                status,
-                error_message.as_deref(),
-                duration,
-                self.auth_context.auth_header_attached,
-                self.auth_context.auth_header_name,
-                self.auth_context.retry_after_unauthorized,
-                self.auth_context.recovery_mode,
-                self.auth_context.recovery_phase,
-                self.request_route_telemetry.endpoint,
-                self.request_route_telemetry.residency_header_attached,
-                self.request_route_telemetry
-                    .residency_header_value
-                    .as_deref(),
-                self.provider_header_names.as_deref(),
-                self.endpoint_telemetry.base_url_origin,
-                self.endpoint_telemetry.host_class,
-                self.endpoint_telemetry.base_url_source,
-                self.endpoint_telemetry.base_url_is_default,
-                self.auth_env_telemetry.openai_api_key_env_present,
-                self.auth_env_telemetry.codex_api_key_env_present,
-                self.auth_env_telemetry.codex_api_key_env_enabled,
-                self.auth_env_telemetry.provider_env_key_name.as_deref(),
-                self.auth_env_telemetry.provider_env_key_present,
-                self.auth_env_telemetry.refresh_token_url_override_present,
-                debug.request_id.as_deref(),
-                debug.cf_ray.as_deref(),
-                debug.auth_error.as_deref(),
-                debug.auth_error_code.as_deref(),
-                debug.error_body_class,
-                debug.safe_error_message,
-            );
+        self.session_telemetry.record_api_request(
+            attempt,
+            status,
+            error_message.as_deref(),
+            duration,
+            self.auth_context.auth_header_attached,
+            self.auth_context.auth_header_name,
+            self.auth_context.retry_after_unauthorized,
+            self.auth_context.recovery_mode,
+            self.auth_context.recovery_phase,
+            self.request_route_telemetry.endpoint,
+            self.provider_header_names.as_deref(),
+            self.endpoint_telemetry.base_url_origin,
+            self.endpoint_telemetry.host_class,
+            self.endpoint_telemetry.base_url_source,
+            self.endpoint_telemetry.base_url_is_default,
+            self.auth_env_telemetry.openai_api_key_env_present,
+            self.auth_env_telemetry.codex_api_key_env_present,
+            self.auth_env_telemetry.codex_api_key_env_enabled,
+            self.auth_env_telemetry.provider_env_key_name.as_deref(),
+            self.auth_env_telemetry.provider_env_key_present,
+            self.auth_env_telemetry.refresh_token_url_override_present,
+            debug.request_id.as_deref(),
+            debug.cf_ray.as_deref(),
+            debug.auth_error.as_deref(),
+            debug.auth_error_code.as_deref(),
+            debug.error_body_class,
+            debug.safe_error_message,
+        );
         emit_feedback_request_tags(&FeedbackRequestTags {
             endpoint: self.request_route_telemetry.endpoint,
             auth_header_attached: self.auth_context.auth_header_attached,
@@ -1876,23 +1825,19 @@ impl RequestTelemetry for ApiTelemetry {
             auth_recovery_mode: self.auth_context.recovery_mode,
             auth_recovery_phase: self.auth_context.recovery_phase,
             auth_connection_reused: None,
+            app_server_auth_state: None,
+            app_server_requires_openai_auth: None,
             provider_header_names: self.provider_header_names.as_deref(),
             base_url_origin: self.endpoint_telemetry.base_url_origin,
             host_class: self.endpoint_telemetry.host_class,
             base_url_source: self.endpoint_telemetry.base_url_source,
             base_url_is_default: self.endpoint_telemetry.base_url_is_default,
-            residency_header_attached: Some(self.request_route_telemetry.residency_header_attached),
-            residency_header_value: self
-                .request_route_telemetry
-                .residency_header_value
-                .as_deref(),
             auth_request_id: debug.request_id.as_deref(),
             auth_cf_ray: debug.cf_ray.as_deref(),
             auth_error: debug.auth_error.as_deref(),
             auth_error_code: debug.auth_error_code.as_deref(),
             error_body_class: debug.error_body_class,
             safe_error_message: debug.safe_error_message,
-            geo_denial_detected: Some(debug.geo_denial_detected),
             auth_recovery_followup_success: self
                 .auth_context
                 .retry_after_unauthorized
@@ -1903,25 +1848,6 @@ impl RequestTelemetry for ApiTelemetry {
                 .then_some(status)
                 .flatten(),
         });
-        if status == Some(StatusCode::UNAUTHORIZED.as_u16()) && debug.geo_denial_detected {
-            self.session_telemetry.record_geo_denial(
-                self.request_route_telemetry.endpoint,
-                self.auth_context.auth_header_attached,
-                self.auth_context.auth_header_name,
-                self.request_route_telemetry.residency_header_attached,
-                self.request_route_telemetry
-                    .residency_header_value
-                    .as_deref(),
-                self.provider_header_names.as_deref(),
-                status,
-                debug.request_id.as_deref(),
-                debug.cf_ray.as_deref(),
-                debug.auth_error.as_deref(),
-                debug.auth_error_code.as_deref(),
-                debug.error_body_class.unwrap_or_default(),
-                debug.safe_error_message,
-            );
-        }
     }
 }
 
@@ -1967,23 +1893,19 @@ impl WebsocketTelemetry for ApiTelemetry {
             auth_recovery_mode: self.auth_context.recovery_mode,
             auth_recovery_phase: self.auth_context.recovery_phase,
             auth_connection_reused: Some(connection_reused),
+            app_server_auth_state: None,
+            app_server_requires_openai_auth: None,
             provider_header_names: self.provider_header_names.as_deref(),
             base_url_origin: self.endpoint_telemetry.base_url_origin,
             host_class: self.endpoint_telemetry.host_class,
             base_url_source: self.endpoint_telemetry.base_url_source,
             base_url_is_default: self.endpoint_telemetry.base_url_is_default,
-            residency_header_attached: Some(self.request_route_telemetry.residency_header_attached),
-            residency_header_value: self
-                .request_route_telemetry
-                .residency_header_value
-                .as_deref(),
             auth_request_id: debug.request_id.as_deref(),
             auth_cf_ray: debug.cf_ray.as_deref(),
             auth_error: debug.auth_error.as_deref(),
             auth_error_code: debug.auth_error_code.as_deref(),
             error_body_class: debug.error_body_class,
             safe_error_message: debug.safe_error_message,
-            geo_denial_detected: Some(debug.geo_denial_detected),
             auth_recovery_followup_success: self
                 .auth_context
                 .retry_after_unauthorized

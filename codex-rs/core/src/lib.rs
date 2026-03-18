@@ -110,7 +110,6 @@ pub type CodexConversation = CodexThread;
 pub use analytics_client::AnalyticsEventsClient;
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
-mod auth_env_telemetry;
 pub mod default_client;
 pub mod project_doc;
 mod rollout;

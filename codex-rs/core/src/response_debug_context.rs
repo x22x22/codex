@@ -21,7 +21,6 @@ pub(crate) struct ResponseDebugContext {
     pub(crate) auth_error_code: Option<String>,
     pub(crate) safe_error_message: Option<&'static str>,
     pub(crate) error_body_class: Option<&'static str>,
-    pub(crate) geo_denial_detected: bool,
 }
 
 pub(crate) fn extract_response_debug_context(transport: &TransportError) -> ResponseDebugContext {
@@ -59,9 +58,6 @@ pub(crate) fn extract_response_debug_context(transport: &TransportError) -> Resp
         .as_deref()
         .and_then(allowlisted_error_body_message);
     context.error_body_class = error_body.as_deref().and_then(classify_error_body_message);
-    context.geo_denial_detected = context.error_body_class
-        == Some(WORKSPACE_NOT_AUTHORIZED_IN_REGION_CLASS)
-        || context.auth_error_code.as_deref() == Some(WORKSPACE_NOT_AUTHORIZED_IN_REGION_CLASS);
 
     context
 }
@@ -163,120 +159,4 @@ fn truncate_with_ellipsis(input: &str, max_bytes: usize) -> String {
     }
     truncated.push_str(ellipsis);
     truncated
-}
-
-#[cfg(test)]
-mod tests {
-    use super::ResponseDebugContext;
-    use super::WORKSPACE_NOT_AUTHORIZED_IN_REGION_CLASS;
-    use super::extract_response_debug_context;
-    use super::telemetry_api_error_message;
-    use super::telemetry_transport_error_message;
-    use codex_api::TransportError;
-    use codex_api::error::ApiError;
-    use http::HeaderMap;
-    use http::HeaderValue;
-    use http::StatusCode;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn extract_response_debug_context_decodes_geo_denial_details() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-oai-request-id", HeaderValue::from_static("req-geo"));
-        headers.insert("cf-ray", HeaderValue::from_static("ray-geo"));
-        headers.insert(
-            "x-error-json",
-            HeaderValue::from_static(
-                "eyJlcnJvciI6eyJjb2RlIjoid29ya3NwYWNlX25vdF9hdXRob3JpemVkX2luX3JlZ2lvbiJ9fQ==",
-            ),
-        );
-
-        let context = extract_response_debug_context(&TransportError::Http {
-            status: StatusCode::UNAUTHORIZED,
-            url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
-            headers: Some(headers),
-            body: Some(
-                r#"{"error":{"message":"Workspace is not authorized in this region."},"status":401}"#
-                    .to_string(),
-            ),
-        });
-
-        assert_eq!(
-            context,
-            ResponseDebugContext {
-                request_id: Some("req-geo".to_string()),
-                cf_ray: Some("ray-geo".to_string()),
-                auth_error: None,
-                auth_error_code: Some("workspace_not_authorized_in_region".to_string()),
-                safe_error_message: Some("Workspace is not authorized in this region."),
-                error_body_class: Some(WORKSPACE_NOT_AUTHORIZED_IN_REGION_CLASS),
-                geo_denial_detected: true,
-            }
-        );
-    }
-
-    #[test]
-    fn extract_response_debug_context_detects_geo_denial_from_error_code_without_body_message() {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-oai-request-id", HeaderValue::from_static("req-geo-code"));
-        headers.insert(
-            "x-error-json",
-            HeaderValue::from_static(
-                "eyJlcnJvciI6eyJjb2RlIjoid29ya3NwYWNlX25vdF9hdXRob3JpemVkX2luX3JlZ2lvbiJ9fQ==",
-            ),
-        );
-
-        let context = extract_response_debug_context(&TransportError::Http {
-            status: StatusCode::UNAUTHORIZED,
-            url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
-            headers: Some(headers),
-            body: Some(String::new()),
-        });
-
-        assert_eq!(
-            context,
-            ResponseDebugContext {
-                request_id: Some("req-geo-code".to_string()),
-                cf_ray: None,
-                auth_error: None,
-                auth_error_code: Some("workspace_not_authorized_in_region".to_string()),
-                safe_error_message: None,
-                error_body_class: None,
-                geo_denial_detected: true,
-            }
-        );
-    }
-
-    #[test]
-    fn telemetry_error_messages_omit_http_bodies() {
-        let transport = TransportError::Http {
-            status: StatusCode::UNAUTHORIZED,
-            url: Some("https://chatgpt.com/backend-api/codex/responses".to_string()),
-            headers: None,
-            body: Some(r#"{"error":{"message":"secret token leaked"}}"#.to_string()),
-        };
-
-        assert_eq!(telemetry_transport_error_message(&transport), "http 401");
-        assert_eq!(
-            telemetry_api_error_message(&ApiError::Transport(transport)),
-            "http 401"
-        );
-    }
-
-    #[test]
-    fn telemetry_error_messages_preserve_non_http_details() {
-        let network = TransportError::Network("dns lookup failed".to_string());
-        let build = TransportError::Build("invalid header value".to_string());
-        let stream = ApiError::Stream("socket closed".to_string());
-
-        assert_eq!(
-            telemetry_transport_error_message(&network),
-            "dns lookup failed"
-        );
-        assert_eq!(
-            telemetry_transport_error_message(&build),
-            "invalid header value"
-        );
-        assert_eq!(telemetry_api_error_message(&stream), "socket closed");
-    }
 }

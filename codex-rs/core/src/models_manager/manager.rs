@@ -3,11 +3,11 @@ use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::AuthManager;
 use crate::auth::AuthMode;
+use crate::auth::CodexAuth;
 use crate::auth_env_telemetry::AuthEnvTelemetry;
 use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::config::Config;
 use crate::default_client::build_reqwest_client;
-use crate::default_client::residency_header_telemetry_for_provider_headers;
 use crate::endpoint_config_telemetry::EndpointConfigTelemetrySource;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
@@ -50,8 +50,6 @@ struct ModelsRequestTelemetry {
     auth_header_attached: bool,
     auth_header_name: Option<&'static str>,
     auth_env_telemetry: AuthEnvTelemetry,
-    residency_header_attached: bool,
-    residency_header_value: Option<String>,
     provider_header_names: Option<String>,
     base_url_origin: &'static str,
     host_class: &'static str,
@@ -92,8 +90,6 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             auth.env_provider_key_name = self.auth_env_telemetry.provider_env_key_name.as_deref(),
             auth.env_provider_key_present = self.auth_env_telemetry.provider_env_key_present,
             auth.env_refresh_token_url_override_present = self.auth_env_telemetry.refresh_token_url_override_present,
-            residency_header_attached = self.residency_header_attached,
-            residency_header_value = self.residency_header_value.as_deref(),
             provider_header_names = self.provider_header_names.as_deref(),
             base_url_origin = self.base_url_origin,
             host_class = self.host_class,
@@ -125,8 +121,6 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             auth.env_provider_key_name = self.auth_env_telemetry.provider_env_key_name.as_deref(),
             auth.env_provider_key_present = self.auth_env_telemetry.provider_env_key_present,
             auth.env_refresh_token_url_override_present = self.auth_env_telemetry.refresh_token_url_override_present,
-            residency_header_attached = self.residency_header_attached,
-            residency_header_value = self.residency_header_value.as_deref(),
             provider_header_names = self.provider_header_names.as_deref(),
             base_url_origin = self.base_url_origin,
             host_class = self.host_class,
@@ -157,88 +151,22 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             auth_recovery_mode: None,
             auth_recovery_phase: None,
             auth_connection_reused: None,
+            app_server_auth_state: None,
+            app_server_requires_openai_auth: None,
             provider_header_names: self.provider_header_names.as_deref(),
             base_url_origin: self.base_url_origin,
             host_class: self.host_class,
             base_url_source: self.base_url_source,
             base_url_is_default: self.base_url_is_default,
-            residency_header_attached: Some(self.residency_header_attached),
-            residency_header_value: self.residency_header_value.as_deref(),
             auth_request_id: response_debug.request_id.as_deref(),
             auth_cf_ray: response_debug.cf_ray.as_deref(),
             auth_error: response_debug.auth_error.as_deref(),
             auth_error_code: response_debug.auth_error_code.as_deref(),
             error_body_class: response_debug.error_body_class,
             safe_error_message: response_debug.safe_error_message,
-            geo_denial_detected: Some(response_debug.geo_denial_detected),
             auth_recovery_followup_success: None,
             auth_recovery_followup_status: None,
         });
-
-        if status == Some(http::StatusCode::UNAUTHORIZED.as_u16())
-            && response_debug.geo_denial_detected
-        {
-            tracing::event!(
-                target: "codex_otel.log_only",
-                tracing::Level::INFO,
-                event.name = "codex.geo_denial",
-                geo_denial_detected = true,
-                request_id = response_debug.request_id.as_deref(),
-                cf_ray = response_debug.cf_ray.as_deref(),
-                endpoint = MODELS_ENDPOINT,
-                auth.header_attached = self.auth_header_attached,
-                auth.header_name = self.auth_header_name,
-                auth.mode = self.auth_mode.as_deref(),
-                auth.env_openai_api_key_present = self.auth_env_telemetry.openai_api_key_env_present,
-                auth.env_codex_api_key_present = self.auth_env_telemetry.codex_api_key_env_present,
-                auth.env_codex_api_key_enabled = self.auth_env_telemetry.codex_api_key_env_enabled,
-                auth.env_provider_key_name = self.auth_env_telemetry.provider_env_key_name.as_deref(),
-                auth.env_provider_key_present = self.auth_env_telemetry.provider_env_key_present,
-                auth.env_refresh_token_url_override_present = self.auth_env_telemetry.refresh_token_url_override_present,
-                residency_header_attached = self.residency_header_attached,
-                residency_header_value = self.residency_header_value.as_deref(),
-                provider_header_names = self.provider_header_names.as_deref(),
-                base_url_origin = self.base_url_origin,
-                host_class = self.host_class,
-                base_url_source = self.base_url_source,
-                base_url_is_default = self.base_url_is_default,
-                http_status = status,
-                auth.error = response_debug.auth_error.as_deref(),
-                auth.error_code = response_debug.auth_error_code.as_deref(),
-                error_body_class = response_debug.error_body_class.unwrap_or_default(),
-                safe_error_message = response_debug.safe_error_message,
-            );
-            tracing::event!(
-                target: "codex_otel.trace_safe",
-                tracing::Level::INFO,
-                event.name = "codex.geo_denial",
-                geo_denial_detected = true,
-                request_id = response_debug.request_id.as_deref(),
-                cf_ray = response_debug.cf_ray.as_deref(),
-                endpoint = MODELS_ENDPOINT,
-                auth.header_attached = self.auth_header_attached,
-                auth.header_name = self.auth_header_name,
-                auth.mode = self.auth_mode.as_deref(),
-                auth.env_openai_api_key_present = self.auth_env_telemetry.openai_api_key_env_present,
-                auth.env_codex_api_key_present = self.auth_env_telemetry.codex_api_key_env_present,
-                auth.env_codex_api_key_enabled = self.auth_env_telemetry.codex_api_key_env_enabled,
-                auth.env_provider_key_name = self.auth_env_telemetry.provider_env_key_name.as_deref(),
-                auth.env_provider_key_present = self.auth_env_telemetry.provider_env_key_present,
-                auth.env_refresh_token_url_override_present = self.auth_env_telemetry.refresh_token_url_override_present,
-                residency_header_attached = self.residency_header_attached,
-                residency_header_value = self.residency_header_value.as_deref(),
-                provider_header_names = self.provider_header_names.as_deref(),
-                base_url_origin = self.base_url_origin,
-                host_class = self.host_class,
-                base_url_source = self.base_url_source,
-                base_url_is_default = self.base_url_is_default,
-                http_status = status,
-                auth.error = response_debug.auth_error.as_deref(),
-                auth.error_code = response_debug.auth_error_code.as_deref(),
-                error_body_class = response_debug.error_body_class.unwrap_or_default(),
-                safe_error_message = response_debug.safe_error_message,
-            );
-        }
     }
 }
 
@@ -305,24 +233,6 @@ impl ModelsManager {
         collaboration_modes_config: CollaborationModesConfig,
         provider: ModelProviderInfo,
     ) -> Self {
-        Self::new_with_provider_and_endpoint_telemetry_source(
-            codex_home,
-            auth_manager,
-            model_catalog,
-            collaboration_modes_config,
-            provider.clone(),
-            EndpointConfigTelemetrySource::for_provider(OPENAI_PROVIDER_ID, &provider),
-        )
-    }
-
-    pub(crate) fn new_with_provider_and_endpoint_telemetry_source(
-        codex_home: PathBuf,
-        auth_manager: Arc<AuthManager>,
-        model_catalog: Option<ModelsResponse>,
-        collaboration_modes_config: CollaborationModesConfig,
-        provider: ModelProviderInfo,
-        endpoint_telemetry_source: EndpointConfigTelemetrySource,
-    ) -> Self {
         let auth_env_telemetry =
             collect_auth_env_telemetry(&provider, auth_manager.codex_api_key_env_enabled());
         let cache_path = codex_home.join(MODEL_CACHE_FILE);
@@ -338,6 +248,8 @@ impl ModelsManager {
                 Self::load_remote_models_from_file()
                     .unwrap_or_else(|err| panic!("failed to load bundled models.json: {err}"))
             });
+        let endpoint_telemetry_source =
+            EndpointConfigTelemetrySource::for_provider_without_id(&provider);
         Self {
             remote_models: RwLock::new(remote_models),
             catalog_mode,
@@ -533,21 +445,18 @@ impl ModelsManager {
         let _timer =
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth = self.auth_manager.auth().await;
-        let auth_mode = self.auth_manager.auth_mode();
+        let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self.provider.to_api_provider(auth_mode)?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let transport = ReqwestTransport::new(build_reqwest_client());
         let endpoint_telemetry = self
             .endpoint_telemetry_source
             .classify(api_provider.base_url.as_str());
-        let residency = residency_header_telemetry_for_provider_headers(&api_provider.headers);
         let request_telemetry: Arc<dyn RequestTelemetry> = Arc::new(ModelsRequestTelemetry {
             auth_mode: auth_mode.map(|mode| TelemetryAuthMode::from(mode).to_string()),
             auth_header_attached: api_auth.auth_header_attached(),
             auth_header_name: api_auth.auth_header_name(),
             auth_env_telemetry: self.auth_env_telemetry.clone(),
-            residency_header_attached: residency.attached,
-            residency_header_value: residency.value,
             provider_header_names: self.provider.telemetry_header_names(),
             base_url_origin: endpoint_telemetry.base_url_origin,
             host_class: endpoint_telemetry.host_class,

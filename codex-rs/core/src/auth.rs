@@ -1244,10 +1244,6 @@ impl AuthManager {
             .unwrap_or(false)
     }
 
-    pub(crate) fn codex_api_key_env_enabled(&self) -> bool {
-        self.enable_codex_api_key_env
-    }
-
     pub fn is_external_auth_active(&self) -> bool {
         self.auth_cached()
             .as_ref()

@@ -597,7 +597,7 @@ fn models_request_telemetry_emits_auth_env_feedback_tags_on_failure() {
         auth_mode: Some(TelemetryAuthMode::Chatgpt.to_string()),
         auth_header_attached: true,
         auth_header_name: Some("authorization"),
-        auth_env: crate::auth_env_telemetry::AuthEnvTelemetry {
+        auth_env_telemetry: crate::auth_env_telemetry::AuthEnvTelemetry {
             openai_api_key_env_present: false,
             codex_api_key_env_present: false,
             codex_api_key_env_enabled: false,
@@ -605,6 +605,11 @@ fn models_request_telemetry_emits_auth_env_feedback_tags_on_failure() {
             provider_env_key_present: Some(false),
             refresh_token_url_override_present: false,
         },
+        provider_header_names: None,
+        base_url_origin: "chatgpt.com",
+        host_class: "openai_chatgpt",
+        base_url_source: "default",
+        base_url_is_default: true,
     };
     let mut headers = HeaderMap::new();
     headers.insert("x-request-id", "req-models-401".parse().unwrap());

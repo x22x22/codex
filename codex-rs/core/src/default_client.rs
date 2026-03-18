@@ -30,12 +30,6 @@ pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 pub const RESIDENCY_HEADER_NAME: &str = "x-openai-internal-codex-residency";
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ResidencyHeaderTelemetry {
-    pub attached: bool,
-    pub value: Option<String>,
-}
-
 #[derive(Debug, Clone)]
 pub struct Originator {
     pub value: String,
@@ -95,33 +89,6 @@ pub fn set_default_client_residency_requirement(enforce_residency: Option<Reside
     *guard = enforce_residency;
 }
 
-pub fn current_residency_header_telemetry() -> ResidencyHeaderTelemetry {
-    let Ok(guard) = REQUIREMENTS_RESIDENCY.read() else {
-        tracing::warn!("Failed to acquire requirements residency lock");
-        return ResidencyHeaderTelemetry::default();
-    };
-    let Some(requirement) = guard.as_ref() else {
-        return ResidencyHeaderTelemetry::default();
-    };
-    ResidencyHeaderTelemetry {
-        attached: true,
-        value: Some(residency_header_value(*requirement).to_string()),
-    }
-}
-
-pub fn residency_header_telemetry_for_provider_headers(
-    provider_headers: &HeaderMap,
-) -> ResidencyHeaderTelemetry {
-    if let Some(value) = provider_headers.get(RESIDENCY_HEADER_NAME) {
-        return ResidencyHeaderTelemetry {
-            attached: true,
-            value: value.to_str().ok().map(str::to_owned),
-        };
-    }
-
-    current_residency_header_telemetry()
-}
-
 pub fn originator() -> Originator {
     if let Ok(guard) = ORIGINATOR.read()
         && let Some(originator) = guard.as_ref()
@@ -151,6 +118,18 @@ pub fn is_first_party_originator(originator_value: &str) -> bool {
 
 pub fn is_first_party_chat_originator(originator_value: &str) -> bool {
     originator_value == "codex_atlas" || originator_value == "codex_chatgpt_desktop"
+}
+
+pub fn client_origin_class(originator_value: &str) -> &'static str {
+    if is_first_party_chat_originator(originator_value) {
+        "first_party_chat"
+    } else if originator_value == DEFAULT_ORIGINATOR {
+        "codex_cli"
+    } else if is_first_party_originator(originator_value) {
+        "first_party_ide"
+    } else {
+        "custom"
+    }
 }
 
 pub fn get_codex_user_agent() -> String {

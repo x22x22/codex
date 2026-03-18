@@ -62,10 +62,33 @@ const RESPONSES_API_ENGINE_SERVICE_TTFT_FIELD: &str = "engine_service_ttft_total
 const RESPONSES_API_ENGINE_IAPI_TBT_FIELD: &str = "engine_iapi_tbt_across_engine_calls_ms";
 const RESPONSES_API_ENGINE_SERVICE_TBT_FIELD: &str = "engine_service_tbt_across_engine_calls_ms";
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuthEnvTelemetryMetadata {
+    pub openai_api_key_env_present: bool,
+    pub codex_api_key_env_present: bool,
+    pub codex_api_key_env_enabled: bool,
+    pub provider_env_key_name: Option<String>,
+    pub provider_env_key_present: Option<bool>,
+    pub refresh_token_url_override_present: bool,
+}
+
+fn client_origin_class(originator: &str) -> &'static str {
+    if matches!(originator, "codex_atlas" | "codex_chatgpt_desktop") {
+        "first_party_chat"
+    } else if originator == "codex_cli_rs" {
+        "codex_cli"
+    } else if originator == "codex_vscode" || originator.starts_with("Codex ") {
+        "first_party_ide"
+    } else {
+        "custom"
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionTelemetryMetadata {
     pub(crate) conversation_id: ThreadId,
     pub(crate) auth_mode: Option<String>,
+    pub(crate) auth_env: AuthEnvTelemetryMetadata,
     pub(crate) account_id: Option<String>,
     pub(crate) account_email: Option<String>,
     pub(crate) originator: String,
@@ -86,6 +109,11 @@ pub struct SessionTelemetry {
 }
 
 impl SessionTelemetry {
+    pub fn with_auth_env(mut self, auth_env: AuthEnvTelemetryMetadata) -> Self {
+        self.metadata.auth_env = auth_env;
+        self
+    }
+
     pub fn with_model(mut self, model: &str, slug: &str) -> Self {
         self.metadata.model = model.to_owned();
         self.metadata.slug = slug.to_owned();
@@ -255,6 +283,7 @@ impl SessionTelemetry {
             metadata: SessionTelemetryMetadata {
                 conversation_id,
                 auth_mode: auth_mode.map(|m| m.to_string()),
+                auth_env: AuthEnvTelemetryMetadata::default(),
                 account_id,
                 account_email,
                 originator: sanitize_metric_tag_value(originator.as_str()),
@@ -291,56 +320,9 @@ impl SessionTelemetry {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn conversation_starts(
         &self,
         provider_name: &str,
-        reasoning_effort: Option<ReasoningEffort>,
-        reasoning_summary: ReasoningSummary,
-        context_window: Option<i64>,
-        auto_compact_token_limit: Option<i64>,
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
-        mcp_servers: Vec<&str>,
-        active_profile: Option<String>,
-    ) {
-        self.conversation_starts_with_endpoint_details(
-            provider_name,
-            "unknown",
-            "unknown",
-            "unknown",
-            false,
-            false,
-            false,
-            false,
-            None,
-            None,
-            false,
-            reasoning_effort,
-            reasoning_summary,
-            context_window,
-            auto_compact_token_limit,
-            approval_policy,
-            sandbox_policy,
-            mcp_servers,
-            active_profile,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn conversation_starts_with_endpoint_details(
-        &self,
-        provider_name: &str,
-        base_url_origin: &str,
-        host_class: &str,
-        base_url_source: &str,
-        base_url_is_default: bool,
-        auth_env_openai_api_key_present: bool,
-        auth_env_codex_api_key_present: bool,
-        auth_env_codex_api_key_enabled: bool,
-        auth_env_provider_key_name: Option<&str>,
-        auth_env_provider_key_present: Option<bool>,
-        auth_env_refresh_token_url_override_present: bool,
         reasoning_effort: Option<ReasoningEffort>,
         reasoning_summary: ReasoningSummary,
         context_window: Option<i64>,
@@ -355,16 +337,6 @@ impl SessionTelemetry {
             common: {
                 event.name = "codex.conversation_starts",
                 provider_name = %provider_name,
-                base_url_origin = base_url_origin,
-                host_class = host_class,
-                base_url_source = base_url_source,
-                base_url_is_default = base_url_is_default,
-                auth.env_openai_api_key_present = auth_env_openai_api_key_present,
-                auth.env_codex_api_key_present = auth_env_codex_api_key_present,
-                auth.env_codex_api_key_enabled = auth_env_codex_api_key_enabled,
-                auth.env_provider_key_name = auth_env_provider_key_name,
-                auth.env_provider_key_present = auth_env_provider_key_present,
-                auth.env_refresh_token_url_override_present = auth_env_refresh_token_url_override_present,
                 reasoning_effort = reasoning_effort.map(|e| e.to_string()),
                 reasoning_summary = %reasoning_summary,
                 context_window = context_window,
@@ -396,7 +368,7 @@ impl SessionTelemetry {
             Ok(response) => (Some(response.status().as_u16()), None),
             Err(error) => (error.status().map(|s| s.as_u16()), Some(error.to_string())),
         };
-        self.record_api_request_with_endpoint_details(
+        self.record_api_request(
             attempt,
             status,
             error.as_deref(),
@@ -407,8 +379,6 @@ impl SessionTelemetry {
             None,
             None,
             "unknown",
-            false,
-            None,
             None,
             "custom",
             "custom_unknown",
@@ -431,7 +401,6 @@ impl SessionTelemetry {
         response
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn record_api_request(
         &self,
         attempt: u64,
@@ -444,59 +413,6 @@ impl SessionTelemetry {
         recovery_mode: Option<&str>,
         recovery_phase: Option<&str>,
         endpoint: &str,
-        request_id: Option<&str>,
-        cf_ray: Option<&str>,
-        auth_error: Option<&str>,
-        auth_error_code: Option<&str>,
-    ) {
-        self.record_api_request_with_endpoint_details(
-            attempt,
-            status,
-            error,
-            duration,
-            auth_header_attached,
-            auth_header_name,
-            retry_after_unauthorized,
-            recovery_mode,
-            recovery_phase,
-            endpoint,
-            false,
-            None,
-            None,
-            "unknown",
-            "unknown",
-            "unknown",
-            false,
-            false,
-            false,
-            false,
-            None,
-            None,
-            false,
-            request_id,
-            cf_ray,
-            auth_error,
-            auth_error_code,
-            None,
-            None,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_api_request_with_endpoint_details(
-        &self,
-        attempt: u64,
-        status: Option<u16>,
-        error: Option<&str>,
-        duration: Duration,
-        auth_header_attached: bool,
-        auth_header_name: Option<&str>,
-        retry_after_unauthorized: bool,
-        recovery_mode: Option<&str>,
-        recovery_phase: Option<&str>,
-        endpoint: &str,
-        residency_header_attached: bool,
-        residency_header_value: Option<&str>,
         provider_header_names: Option<&str>,
         base_url_origin: &str,
         host_class: &str,
@@ -544,8 +460,7 @@ impl SessionTelemetry {
                 auth.recovery_mode = recovery_mode,
                 auth.recovery_phase = recovery_phase,
                 endpoint = endpoint,
-                residency_header_attached = residency_header_attached,
-                residency_header_value = residency_header_value,
+                client_origin = client_origin_class(self.metadata.originator.as_str()),
                 provider_header_names = provider_header_names,
                 base_url_origin = base_url_origin,
                 host_class = host_class,
@@ -569,7 +484,6 @@ impl SessionTelemetry {
         );
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub fn record_websocket_connect(
         &self,
         duration: Duration,
@@ -581,59 +495,6 @@ impl SessionTelemetry {
         recovery_mode: Option<&str>,
         recovery_phase: Option<&str>,
         endpoint: &str,
-        connection_reused: bool,
-        request_id: Option<&str>,
-        cf_ray: Option<&str>,
-        auth_error: Option<&str>,
-        auth_error_code: Option<&str>,
-    ) {
-        self.record_websocket_connect_with_endpoint_details(
-            duration,
-            status,
-            error,
-            auth_header_attached,
-            auth_header_name,
-            retry_after_unauthorized,
-            recovery_mode,
-            recovery_phase,
-            endpoint,
-            false,
-            None,
-            None,
-            "unknown",
-            "unknown",
-            "unknown",
-            false,
-            false,
-            false,
-            false,
-            None,
-            None,
-            false,
-            connection_reused,
-            request_id,
-            cf_ray,
-            auth_error,
-            auth_error_code,
-            None,
-            None,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_websocket_connect_with_endpoint_details(
-        &self,
-        duration: Duration,
-        status: Option<u16>,
-        error: Option<&str>,
-        auth_header_attached: bool,
-        auth_header_name: Option<&str>,
-        retry_after_unauthorized: bool,
-        recovery_mode: Option<&str>,
-        recovery_phase: Option<&str>,
-        endpoint: &str,
-        residency_header_attached: bool,
-        residency_header_value: Option<&str>,
         provider_header_names: Option<&str>,
         base_url_origin: &str,
         host_class: &str,
@@ -672,8 +533,7 @@ impl SessionTelemetry {
                 auth.recovery_mode = recovery_mode,
                 auth.recovery_phase = recovery_phase,
                 endpoint = endpoint,
-                residency_header_attached = residency_header_attached,
-                residency_header_value = residency_header_value,
+                client_origin = client_origin_class(self.metadata.originator.as_str()),
                 provider_header_names = provider_header_names,
                 base_url_origin = base_url_origin,
                 host_class = host_class,
@@ -688,47 +548,6 @@ impl SessionTelemetry {
                 auth.connection_reused = connection_reused,
                 auth.request_id = request_id,
                 auth.cf_ray = cf_ray,
-                auth.error = auth_error,
-                auth.error_code = auth_error_code,
-                error_body_class = error_body_class,
-                safe_error_message = safe_error_message,
-            },
-            log: {},
-            trace: {},
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn record_geo_denial(
-        &self,
-        endpoint: &str,
-        auth_header_attached: bool,
-        auth_header_name: Option<&str>,
-        residency_header_attached: bool,
-        residency_header_value: Option<&str>,
-        provider_header_names: Option<&str>,
-        http_status: Option<u16>,
-        request_id: Option<&str>,
-        cf_ray: Option<&str>,
-        auth_error: Option<&str>,
-        auth_error_code: Option<&str>,
-        error_body_class: &str,
-        safe_error_message: Option<&str>,
-    ) {
-        log_and_trace_event!(
-            self,
-            common: {
-                event.name = "codex.geo_denial",
-                geo_denial_detected = true,
-                request_id = request_id,
-                cf_ray = cf_ray,
-                endpoint = endpoint,
-                auth.header_attached = auth_header_attached,
-                auth.header_name = auth_header_name,
-                residency_header_attached = residency_header_attached,
-                residency_header_value = residency_header_value,
-                provider_header_names = provider_header_names,
-                http_status = http_status,
                 auth.error = auth_error,
                 auth.error_code = auth_error_code,
                 error_body_class = error_body_class,

@@ -7,6 +7,8 @@ use rand::Rng;
 use tracing::debug;
 use tracing::error;
 
+use crate::default_client::client_origin_class;
+use crate::default_client::originator;
 use crate::parse_command::shlex_join;
 
 const INITIAL_DELAY_MS: u64 = 200;
@@ -52,20 +54,19 @@ pub(crate) struct FeedbackRequestTags<'a> {
     pub auth_recovery_mode: Option<&'a str>,
     pub auth_recovery_phase: Option<&'a str>,
     pub auth_connection_reused: Option<bool>,
+    pub app_server_auth_state: Option<&'a str>,
+    pub app_server_requires_openai_auth: Option<bool>,
     pub provider_header_names: Option<&'a str>,
     pub base_url_origin: &'a str,
     pub host_class: &'a str,
     pub base_url_source: &'a str,
     pub base_url_is_default: bool,
-    pub residency_header_attached: Option<bool>,
-    pub residency_header_value: Option<&'a str>,
     pub auth_request_id: Option<&'a str>,
     pub auth_cf_ray: Option<&'a str>,
     pub auth_error: Option<&'a str>,
     pub auth_error_code: Option<&'a str>,
     pub error_body_class: Option<&'a str>,
     pub safe_error_message: Option<&'a str>,
-    pub geo_denial_detected: Option<bool>,
     pub auth_recovery_followup_success: Option<bool>,
     pub auth_recovery_followup_status: Option<u16>,
 }
@@ -108,28 +109,27 @@ pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
     let auth_connection_reused = tags
         .auth_connection_reused
         .map_or_else(String::new, |value| value.to_string());
-    let provider_header_names = tags.provider_header_names.unwrap_or("");
-    let residency_header_attached = tags
-        .residency_header_attached
+    let app_server_auth_state = tags.app_server_auth_state.unwrap_or("");
+    let app_server_requires_openai_auth = tags
+        .app_server_requires_openai_auth
         .map_or_else(String::new, |value| value.to_string());
-    let residency_header_value = tags.residency_header_value.unwrap_or("");
+    let provider_header_names = tags.provider_header_names.unwrap_or("");
     let auth_request_id = tags.auth_request_id.unwrap_or("");
     let auth_cf_ray = tags.auth_cf_ray.unwrap_or("");
     let auth_error = tags.auth_error.unwrap_or("");
     let auth_error_code = tags.auth_error_code.unwrap_or("");
     let error_body_class = tags.error_body_class.unwrap_or("");
     let safe_error_message = tags.safe_error_message.unwrap_or("");
-    let geo_denial_detected = tags
-        .geo_denial_detected
-        .map_or_else(String::new, |value| value.to_string());
     let auth_recovery_followup_success = tags
         .auth_recovery_followup_success
         .map_or_else(String::new, |value| value.to_string());
     let auth_recovery_followup_status = tags
         .auth_recovery_followup_status
         .map_or_else(String::new, |value| value.to_string());
+    let originator = originator().value;
     feedback_tags!(
         endpoint = tags.endpoint,
+        client_origin = client_origin_class(originator.as_str()),
         auth_header_attached = tags.auth_header_attached,
         auth_header_name = auth_header_name,
         auth_mode = auth_mode,
@@ -144,20 +144,19 @@ pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
         auth_recovery_mode = auth_recovery_mode,
         auth_recovery_phase = auth_recovery_phase,
         auth_connection_reused = auth_connection_reused,
+        app_server_auth_state = app_server_auth_state,
+        app_server_requires_openai_auth = app_server_requires_openai_auth,
         provider_header_names = provider_header_names,
         base_url_origin = tags.base_url_origin,
         host_class = tags.host_class,
         base_url_source = tags.base_url_source,
         base_url_is_default = tags.base_url_is_default,
-        residency_header_attached = residency_header_attached,
-        residency_header_value = residency_header_value,
         auth_request_id = auth_request_id,
         auth_cf_ray = auth_cf_ray,
         auth_error = auth_error,
         auth_error_code = auth_error_code,
         error_body_class = error_body_class,
         safe_error_message = safe_error_message,
-        geo_denial_detected = geo_denial_detected,
         auth_recovery_followup_success = auth_recovery_followup_success,
         auth_recovery_followup_status = auth_recovery_followup_status
     );
