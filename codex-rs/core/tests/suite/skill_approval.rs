@@ -30,9 +30,24 @@ use std::path::Path;
 use std::path::PathBuf;
 
 fn absolute_path(path: &Path) -> AbsolutePathBuf {
-    match AbsolutePathBuf::try_from(path) {
+    match AbsolutePathBuf::try_from(canonicalize_existing_prefix(path)) {
         Ok(path) => path,
         Err(err) => panic!("absolute path: {err}"),
+    }
+}
+
+fn canonicalize_existing_prefix(path: &Path) -> PathBuf {
+    match fs::canonicalize(path) {
+        Ok(path) => path,
+        Err(_) => {
+            let Some(parent) = path.parent() else {
+                return path.to_path_buf();
+            };
+            let Some(file_name) = path.file_name() else {
+                return path.to_path_buf();
+            };
+            canonicalize_existing_prefix(parent).join(file_name)
+        }
     }
 }
 
@@ -132,13 +147,20 @@ fn skill_script_command(test: &TestCodex, script_name: &str) -> Result<(String, 
     Ok((script_path_str, command))
 }
 
-async fn wait_for_exec_approval_request(test: &TestCodex) -> Option<ExecApprovalRequestEvent> {
+async fn wait_for_exec_approval_request(test: &TestCodex) -> WaitForExecApproval {
     wait_for_event_match(test.codex.as_ref(), |event| match event {
-        EventMsg::ExecApprovalRequest(request) => Some(Some(request.clone())),
-        EventMsg::TurnComplete(_) => Some(None),
+        EventMsg::ExecApprovalRequest(request) => {
+            Some(WaitForExecApproval::Approval(request.clone()))
+        }
+        EventMsg::TurnComplete(_) => Some(WaitForExecApproval::TurnComplete),
         _ => None,
     })
     .await
+}
+
+enum WaitForExecApproval {
+    Approval(ExecApprovalRequestEvent),
+    TurnComplete,
 }
 
 async fn wait_for_turn_complete(test: &TestCodex) {
@@ -205,10 +227,9 @@ permissions:
     )
     .await?;
 
-    let maybe_approval = wait_for_exec_approval_request(&test).await;
-    let approval = match maybe_approval {
-        Some(approval) => approval,
-        None => {
+    let approval = match wait_for_exec_approval_request(&test).await {
+        WaitForExecApproval::Approval(approval) => approval,
+        WaitForExecApproval::TurnComplete => {
             let call_output = mocks
                 .completion
                 .single_request()
@@ -247,9 +268,11 @@ permissions:
     assert_eq!(
         approval.skill_metadata,
         Some(ExecApprovalRequestSkillMetadata {
-            path_to_skills_md: test
-                .codex_home_path()
-                .join("skills/mbolin-test-skill/agents/openai.yaml"),
+            path_to_skills_md: canonicalize_existing_prefix(
+                &test
+                    .codex_home_path()
+                    .join("skills/mbolin-test-skill/SKILL.md"),
+            ),
         })
     );
 
@@ -331,10 +354,9 @@ permissions:
     )
     .await?;
 
-    let maybe_approval = wait_for_exec_approval_request(&test).await;
-    let approval = match maybe_approval {
-        Some(approval) => approval,
-        None => {
+    let approval = match wait_for_exec_approval_request(&test).await {
+        WaitForExecApproval::Approval(approval) => approval,
+        WaitForExecApproval::TurnComplete => {
             let call_output = mocks
                 .completion
                 .single_request()
@@ -427,10 +449,9 @@ permissions:
     )
     .await?;
 
-    let maybe_approval = wait_for_exec_approval_request(&test).await;
-    let approval = match maybe_approval {
-        Some(approval) => approval,
-        None => {
+    let approval = match wait_for_exec_approval_request(&test).await {
+        WaitForExecApproval::Approval(approval) => approval,
+        WaitForExecApproval::TurnComplete => {
             let call_output = mocks
                 .completion
                 .single_request()
@@ -523,11 +544,9 @@ permissions:
 
     let approval = wait_for_exec_approval_request(&test).await;
     assert!(
-        approval.is_none(),
+        matches!(approval, WaitForExecApproval::TurnComplete),
         "expected reject skill approval policy to skip exec approval"
     );
-
-    wait_for_turn_complete(&test).await;
 
     let call_output = mocks
         .completion
@@ -605,11 +624,9 @@ async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Res
 
     let first_approval = wait_for_exec_approval_request(&test).await;
     assert!(
-        first_approval.is_none(),
+        matches!(first_approval, WaitForExecApproval::TurnComplete),
         "expected permissionless skill script to skip exec approval"
     );
-
-    wait_for_turn_complete(&test).await;
 
     let first_output = first_mocks
         .completion
@@ -647,7 +664,7 @@ async fn shell_zsh_fork_skill_without_permissions_inherits_turn_sandbox() -> Res
 
     let cached_approval = wait_for_exec_approval_request(&test).await;
     assert!(
-        cached_approval.is_none(),
+        matches!(cached_approval, WaitForExecApproval::TurnComplete),
         "expected permissionless skill rerun to continue skipping exec approval"
     );
 
@@ -734,11 +751,9 @@ async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> 
 
     let first_approval = wait_for_exec_approval_request(&test).await;
     assert!(
-        first_approval.is_none(),
+        matches!(first_approval, WaitForExecApproval::TurnComplete),
         "expected empty skill permissions to skip exec approval"
     );
-
-    wait_for_turn_complete(&test).await;
 
     let first_output = first_mocks
         .completion
@@ -775,7 +790,7 @@ async fn shell_zsh_fork_skill_with_empty_permissions_inherits_turn_sandbox() -> 
 
     let cached_approval = wait_for_exec_approval_request(&test).await;
     assert!(
-        cached_approval.is_none(),
+        matches!(cached_approval, WaitForExecApproval::TurnComplete),
         "expected empty-permissions skill rerun to continue skipping exec approval"
     );
 
@@ -873,10 +888,11 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
     )
     .await?;
 
-    let maybe_approval = wait_for_exec_approval_request(&test).await;
-    let approval = match maybe_approval {
-        Some(approval) => approval,
-        None => panic!("expected exec approval request before completion"),
+    let approval = match wait_for_exec_approval_request(&test).await {
+        WaitForExecApproval::Approval(approval) => approval,
+        WaitForExecApproval::TurnComplete => {
+            panic!("expected exec approval request before completion")
+        }
     };
     assert_eq!(approval.call_id, first_call_id);
     assert_eq!(approval.command, vec![script_path_str.clone()]);
@@ -945,7 +961,7 @@ async fn shell_zsh_fork_skill_session_approval_enforces_skill_permissions() -> R
 
     let cached_approval = wait_for_exec_approval_request(&test).await;
     assert!(
-        cached_approval.is_none(),
+        matches!(cached_approval, WaitForExecApproval::TurnComplete),
         "expected second run to reuse the cached session approval"
     );
 
