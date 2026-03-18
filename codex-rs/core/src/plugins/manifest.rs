@@ -1,5 +1,3 @@
-pub(crate) use codex_extensions::plugins::PLUGIN_MANIFEST_PATH;
-pub(crate) use codex_extensions::plugins::PluginManifest;
 pub use codex_extensions::plugins::PluginManifestInterfaceSummary;
 pub(crate) use codex_extensions::plugins::PluginManifestPaths;
 pub(crate) use codex_extensions::plugins::load_plugin_manifest;

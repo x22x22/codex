@@ -262,13 +262,23 @@ fn replace_plugin_root_atomically(
     fs::create_dir_all(parent)
         .map_err(|err| PluginStoreError::io("failed to create plugin cache parent", err))?;
 
-    let target = target_root.join(plugin_version);
-    let staging = target_root.join(format!(".{plugin_version}.tmp"));
-    remove_existing_target(staging.as_path())?;
+    let target = parent.join(format!(
+        ".{}-{}.next",
+        target_root
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .ok_or_else(|| PluginStoreError::Invalid(format!(
+                "plugin cache path has no terminal directory name: {}",
+                target_root.display()
+            )))?,
+        plugin_version
+    ));
+    let staging = target.join(plugin_version);
     remove_existing_target(target.as_path())?;
 
     copy_dir_recursive(source, staging.as_path())?;
-    fs::rename(staging.as_path(), target.as_path())
+    remove_existing_target(target_root)?;
+    fs::rename(target.as_path(), target_root)
         .map_err(|err| PluginStoreError::io("failed to activate plugin cache entry", err))
 }
 

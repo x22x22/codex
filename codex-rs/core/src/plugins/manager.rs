@@ -73,6 +73,7 @@ const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
+const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 140;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallRequest {
@@ -267,6 +268,23 @@ impl From<PluginDetailSummary> for PluginCapabilitySummary {
             app_connector_ids: value.apps,
         }
     }
+}
+
+fn prompt_safe_plugin_description(description: Option<&str>) -> Option<String> {
+    let description = description?
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if description.is_empty() {
+        return None;
+    }
+
+    Some(
+        description
+            .chars()
+            .take(MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN)
+            .collect(),
+    )
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
