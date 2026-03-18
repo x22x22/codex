@@ -3,7 +3,8 @@ use crate::config::ConfigBuilder;
 use crate::features::Feature;
 use chrono::TimeZone;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::items::AgentMessageContent;
+use codex_protocol::items::AgentMessageItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::SandboxPolicy;
@@ -15,6 +16,9 @@ use std::fs::{self};
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -51,6 +55,52 @@ fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<Path
     Ok(path)
 }
 
+fn test_rollout_agent_message(message: &str) -> RolloutItem {
+    let mut events = AgentMessageItem::new(&[AgentMessageContent::Text {
+        text: message.to_string(),
+    }])
+    .as_legacy_events();
+    RolloutItem::EventMsg(events.pop().expect("single agent message event"))
+}
+
+async fn queue_test_rollout_agent_message(
+    tx: &mpsc::Sender<RolloutCmd>,
+    message: &str,
+) -> Result<(), mpsc::error::SendError<RolloutCmd>> {
+    tx.send(RolloutCmd::AddItems(vec![test_rollout_agent_message(
+        message,
+    )]))
+    .await
+}
+
+async fn flush_test_rollout_writer(tx: &mpsc::Sender<RolloutCmd>) -> std::io::Result<()> {
+    let (flush_tx, flush_rx) = oneshot::channel();
+    tx.send(RolloutCmd::Flush { ack: flush_tx })
+        .await
+        .map_err(|e| IoError::other(format!("flush should queue: {e}")))?;
+    flush_rx
+        .await
+        .map_err(|e| IoError::other(format!("flush ack should be sent: {e}")))?
+}
+
+async fn wait_for_test_fault_to_fire(fault: &AtomicUsize) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while fault.load(Ordering::Acquire) != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("injected rollout fault should be consumed");
+}
+
+fn assert_rollout_message_count(text: &str, message: &str, expected: usize) {
+    assert_eq!(
+        text.matches(message).count(),
+        expected,
+        "unexpected rollout count for {message:?}"
+    );
+}
+
 #[tokio::test]
 async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
@@ -81,13 +131,7 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
     );
 
     recorder
-        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
-            AgentMessageEvent {
-                message: "buffered-event".to_string(),
-                phase: None,
-                memory_citation: None,
-            },
-        ))])
+        .record_items(&[test_rollout_agent_message("buffered-event")])
         .await?;
     recorder.flush().await?;
     assert!(
@@ -135,6 +179,118 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
     assert_eq!(text_after_second_persist, text);
 
     recorder.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn rollout_writer_recovers_after_transient_write_failure() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    let fail_next_writes = Arc::new(AtomicUsize::new(1));
+
+    let file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&rollout_path)
+        .await?;
+    let writer = JsonlWriter::with_fail_next_writes(file, fail_next_writes.clone());
+    let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
+    let writer_task = tokio::spawn(rollout_writer(
+        Some(writer),
+        None,
+        rx,
+        None,
+        home.path().to_path_buf(),
+        rollout_path.clone(),
+        None,
+        None,
+        "test-provider".to_string(),
+        false,
+    ));
+
+    queue_test_rollout_agent_message(&tx, "first-write-fails")
+        .await
+        .expect("first write should queue");
+
+    wait_for_test_fault_to_fire(&fail_next_writes).await;
+
+    let _ = queue_test_rollout_agent_message(&tx, "second-write-succeeds").await;
+    let _ = flush_test_rollout_writer(&tx).await;
+
+    drop(tx);
+
+    let text = std::fs::read_to_string(&rollout_path)?;
+    assert!(
+        text.contains("second-write-succeeds"),
+        "expected the message sent after a failure to show up in the rollout"
+    );
+    assert!(
+        text.contains("first-write-fails"),
+        "expected the message from the failed batch to be retried into the rollout"
+    );
+
+    writer_task
+        .await
+        .expect("writer task should join cleanly")
+        .expect("writer task should exit cleanly after channel closes");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn rollout_writer_rolls_back_partial_batch_and_retries_without_duplicates()
+-> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let rollout_path = home.path().join("rollout.jsonl");
+    let fail_next_flushes = Arc::new(AtomicUsize::new(1));
+
+    let file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&rollout_path)
+        .await?;
+    let writer = JsonlWriter::with_fail_next_flushes(file, fail_next_flushes.clone());
+    let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
+    let writer_task = tokio::spawn(rollout_writer(
+        Some(writer),
+        None,
+        rx,
+        None,
+        home.path().to_path_buf(),
+        rollout_path.clone(),
+        None,
+        None,
+        "test-provider".to_string(),
+        false,
+    ));
+
+    tx.send(RolloutCmd::AddItems(vec![
+        test_rollout_agent_message("batch-item-1"),
+        test_rollout_agent_message("batch-item-2"),
+    ]))
+    .await
+    .expect("failed batch should queue");
+    wait_for_test_fault_to_fire(&fail_next_flushes).await;
+
+    queue_test_rollout_agent_message(&tx, "batch-item-3")
+        .await
+        .expect("retry trigger should queue");
+    flush_test_rollout_writer(&tx).await?;
+    drop(tx);
+
+    let text = std::fs::read_to_string(&rollout_path)?;
+    assert_rollout_message_count(&text, "batch-item-1", 1);
+    assert_rollout_message_count(&text, "batch-item-2", 1);
+    assert_rollout_message_count(&text, "batch-item-3", 1);
+    for line in text.lines() {
+        serde_json::from_str::<serde_json::Value>(line).expect("rollout line should be valid JSON");
+    }
+
+    writer_task
+        .await
+        .expect("writer task should join cleanly")
+        .expect("writer task should exit cleanly after channel closes");
+
     Ok(())
 }
 
@@ -198,13 +354,7 @@ async fn metadata_irrelevant_events_touch_state_db_updated_at() -> std::io::Resu
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     recorder
-        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
-            AgentMessageEvent {
-                message: "assistant text".to_string(),
-                phase: None,
-                memory_citation: None,
-            },
-        ))])
+        .record_items(&[test_rollout_agent_message("assistant text")])
         .await?;
     recorder.flush().await?;
 
@@ -249,13 +399,7 @@ async fn metadata_irrelevant_events_fall_back_to_upsert_when_thread_missing() ->
         Utc::now(),
         SessionSource::Cli,
     );
-    let items = vec![RolloutItem::EventMsg(EventMsg::AgentMessage(
-        AgentMessageEvent {
-            message: "assistant text".to_string(),
-            phase: None,
-            memory_citation: None,
-        },
-    ))];
+    let items = vec![test_rollout_agent_message("assistant text")];
 
     sync_thread_state_after_write(
         Some(state_db.as_ref()),
