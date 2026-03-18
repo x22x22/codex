@@ -1849,6 +1849,7 @@ dependencies = [
  "codex-git",
  "codex-hooks",
  "codex-keyring-store",
+ "codex-memories",
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
@@ -2192,6 +2193,23 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wiremock",
+]
+
+[[package]]
+name = "codex-memories"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codex-api",
+ "codex-protocol",
+ "codex-state",
+ "pretty_assertions",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

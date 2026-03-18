@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use codex_memories::memories::citations::get_thread_id_from_citations;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::items::TurnItem;
 use codex_utils_stream_parser::strip_citations;
@@ -14,7 +15,6 @@ use crate::codex::TurnContext;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::function_tool::FunctionCallError;
-use crate::memories::citations::get_thread_id_from_citations;
 use crate::parse_turn_item;
 use crate::state_db;
 use crate::tools::parallel::ToolCallRuntime;

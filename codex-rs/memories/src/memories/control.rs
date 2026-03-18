@@ -1,6 +1,6 @@
 use std::path::Path;
 
-pub(crate) async fn clear_memory_root_contents(memory_root: &Path) -> std::io::Result<()> {
+pub async fn clear_memory_root_contents(memory_root: &Path) -> std::io::Result<()> {
     match tokio::fs::symlink_metadata(memory_root).await {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(std::io::Error::new(

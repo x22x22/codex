@@ -4798,8 +4798,10 @@ mod handlers {
             errors.push("state db unavailable; memory rows were not cleared".to_string());
         }
 
-        let memory_root = crate::memories::memory_root(&config.codex_home);
-        if let Err(err) = crate::memories::clear_memory_root_contents(&memory_root).await {
+        let memory_root = codex_memories::memories::memory_root(&config.codex_home);
+        if let Err(err) =
+            codex_memories::memories::control::clear_memory_root_contents(&memory_root).await
+        {
             errors.push(format!(
                 "failed clearing memory directory {}: {err}",
                 memory_root.display()

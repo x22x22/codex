@@ -4,29 +4,29 @@
 //! - Phase 1: select rollouts, extract stage-1 raw memories, persist stage-1 outputs, and enqueue consolidation.
 //! - Phase 2: claim a global consolidation lock, materialize consolidation inputs, and dispatch one consolidation agent.
 
-pub(crate) mod citations;
-mod control;
 mod phase1;
 mod phase2;
 pub(crate) mod prompts;
 mod start;
-mod storage;
 #[cfg(test)]
 mod tests;
 pub(crate) mod usage;
 
 use codex_protocol::openai_models::ReasoningEffort;
 
-pub(crate) use control::clear_memory_root_contents;
+pub(crate) use codex_memories::memories::memory_root;
 /// Starts the memory startup pipeline for eligible root sessions.
 /// This is the single entrypoint that `codex` uses to trigger memory startup.
 ///
 /// This is the entry point to read and understand this module.
 pub(crate) use start::start_memories_startup_task;
 
-mod artifacts {
-    pub(super) const ROLLOUT_SUMMARIES_SUBDIR: &str = "rollout_summaries";
-    pub(super) const RAW_MEMORIES_FILENAME: &str = "raw_memories.md";
+pub(crate) mod citations {
+    pub(crate) use codex_memories::memories::citations::*;
+}
+
+pub(crate) mod storage {
+    pub(crate) use codex_memories::memories::storage::*;
 }
 
 /// Phase 1 (startup extraction).
@@ -98,18 +98,18 @@ mod metrics {
 use std::path::Path;
 use std::path::PathBuf;
 
-pub fn memory_root(codex_home: &Path) -> PathBuf {
-    codex_home.join("memories")
+pub(crate) async fn clear_memory_root_contents(memory_root: &Path) -> std::io::Result<()> {
+    codex_memories::memories::control::clear_memory_root_contents(memory_root).await
 }
 
-fn rollout_summaries_dir(root: &Path) -> PathBuf {
-    root.join(artifacts::ROLLOUT_SUMMARIES_SUBDIR)
+pub(crate) fn rollout_summaries_dir(root: &Path) -> PathBuf {
+    codex_memories::memories::rollout_summaries_dir(root)
 }
 
-fn raw_memories_file(root: &Path) -> PathBuf {
-    root.join(artifacts::RAW_MEMORIES_FILENAME)
+pub(crate) fn raw_memories_file(root: &Path) -> PathBuf {
+    codex_memories::memories::raw_memories_file(root)
 }
 
-async fn ensure_layout(root: &Path) -> std::io::Result<()> {
-    tokio::fs::create_dir_all(rollout_summaries_dir(root)).await
+pub(crate) async fn ensure_layout(root: &Path) -> std::io::Result<()> {
+    codex_memories::memories::ensure_layout(root).await
 }
