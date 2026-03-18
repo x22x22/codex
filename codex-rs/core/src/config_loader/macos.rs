@@ -235,7 +235,7 @@ fn parse_managed_requirements_base64(encoded: &str) -> io::Result<ConfigRequirem
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("Error parsing managed requirements from {source}: {dropped_entry}"),
+            format!("Error parsing managed security controls from {source}: {dropped_entry}"),
         ));
     }
     for dropped_entry in &sanitized.dropped_entries {

@@ -534,7 +534,7 @@ async fn managed_preferences_ignore_invalid_payload() -> anyhow::Result<()> {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
-async fn managed_preferences_invalid_requirements_fail_closed() -> anyhow::Result<()> {
+async fn managed_preferences_invalid_security_requirements_fail_closed() -> anyhow::Result<()> {
     use base64::Engine;
 
     for (payload, expected_fragment) in [
@@ -566,11 +566,11 @@ async fn managed_preferences_invalid_requirements_fail_closed() -> anyhow::Resul
             CloudRequirementsLoader::default(),
         )
         .await
-        .expect_err("invalid managed requirements should fail closed");
+        .expect_err("invalid managed security requirements should fail closed");
 
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         let message = err.to_string();
-        assert!(message.contains("Error parsing managed requirements from MDM"));
+        assert!(message.contains("Error parsing managed security controls from MDM"));
         assert!(message.contains(expected_fragment), "{message}");
         assert!(message.contains("bogus"), "{message}");
     }
