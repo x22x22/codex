@@ -1845,6 +1845,7 @@ dependencies = [
  "codex-config",
  "codex-connectors",
  "codex-execpolicy",
+ "codex-extensions",
  "codex-file-search",
  "codex-git",
  "codex-hooks",
@@ -2034,6 +2035,18 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "codex-extensions"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "codex-utils-absolute-path",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

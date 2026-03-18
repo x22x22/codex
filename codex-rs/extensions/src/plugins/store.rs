@@ -278,8 +278,8 @@ fn copy_dir_recursive(source: &Path, target: &Path) -> Result<(), PluginStoreErr
     for entry in fs::read_dir(source)
         .map_err(|err| PluginStoreError::io("failed to read plugin source directory", err))?
     {
-        let entry = entry
-            .map_err(|err| PluginStoreError::io("failed to read plugin source entry", err))?;
+        let entry =
+            entry.map_err(|err| PluginStoreError::io("failed to read plugin source entry", err))?;
         let source_path = entry.path();
         let target_path = target.join(entry.file_name());
         let file_type = entry
