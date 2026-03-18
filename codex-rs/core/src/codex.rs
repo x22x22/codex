@@ -359,6 +359,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) config: Config,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
+    pub(crate) subagent_models_manager: Arc<ModelsManager>,
     pub(crate) skills_manager: Arc<SkillsManager>,
     pub(crate) plugins_manager: Arc<PluginsManager>,
     pub(crate) mcp_manager: Arc<McpManager>,
@@ -411,6 +412,7 @@ impl Codex {
             mut config,
             auth_manager,
             models_manager,
+            subagent_models_manager,
             skills_manager,
             plugins_manager,
             mcp_manager,
@@ -589,6 +591,7 @@ impl Codex {
             config.clone(),
             auth_manager.clone(),
             models_manager.clone(),
+            subagent_models_manager.clone(),
             exec_policy,
             tx_event.clone(),
             agent_status_tx.clone(),
@@ -831,7 +834,12 @@ impl TurnContext {
             .apps_enabled_cached(self.auth_manager.as_deref())
     }
 
-    pub(crate) async fn with_model(&self, model: String, models_manager: &ModelsManager) -> Self {
+    pub(crate) async fn with_model(
+        &self,
+        model: String,
+        models_manager: &ModelsManager,
+        subagent_models_manager: &ModelsManager,
+    ) -> Self {
         let mut config = (*self.config).clone();
         config.model = Some(model.clone());
         let model_info = models_manager.get_model_info(model.as_str(), &config).await;
@@ -866,7 +874,7 @@ impl TurnContext {
         let features = self.features.clone();
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
-            available_models: &models_manager
+            available_subagent_models: &subagent_models_manager
                 .list_models(RefreshStrategy::OnlineIfUncached)
                 .await,
             features: &features,
@@ -1282,7 +1290,7 @@ impl Session {
         main_execve_wrapper_exe: Option<&PathBuf>,
         per_turn_config: Config,
         model_info: ModelInfo,
-        models_manager: &ModelsManager,
+        subagent_models_manager: &ModelsManager,
         network: Option<NetworkProxy>,
         environment: Arc<Environment>,
         sub_id: String,
@@ -1305,7 +1313,9 @@ impl Session {
 
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_info: &model_info,
-            available_models: &models_manager.try_list_models().unwrap_or_default(),
+            available_subagent_models: &subagent_models_manager
+                .try_list_models()
+                .unwrap_or_default(),
             features: &per_turn_config.features,
             web_search_mode: Some(per_turn_config.web_search_mode.value()),
             session_source: session_source.clone(),
@@ -1380,6 +1390,7 @@ impl Session {
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
+        subagent_models_manager: Arc<ModelsManager>,
         exec_policy: ExecPolicyManager,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
@@ -1790,6 +1801,7 @@ impl Session {
             auth_manager: Arc::clone(&auth_manager),
             session_telemetry,
             models_manager: Arc::clone(&models_manager),
+            subagent_models_manager: Arc::clone(&subagent_models_manager),
             tool_approvals: Mutex::new(ApprovalStore::default()),
             execve_session_approvals: RwLock::new(HashMap::new()),
             skills_manager,
@@ -2388,7 +2400,7 @@ impl Session {
             self.services.main_execve_wrapper_exe.as_ref(),
             per_turn_config,
             model_info,
-            &self.services.models_manager,
+            &self.services.subagent_models_manager,
             self.services
                 .network_proxy
                 .as_ref()
@@ -5130,9 +5142,9 @@ async fn spawn_review_thread(
     let review_web_search_mode = WebSearchMode::Disabled;
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &review_model_info,
-        available_models: &sess
+        available_subagent_models: &sess
             .services
-            .models_manager
+            .subagent_models_manager
             .list_models(RefreshStrategy::OnlineIfUncached)
             .await,
         features: &review_features,
@@ -5873,7 +5885,11 @@ async fn maybe_run_previous_model_inline_compact(
     };
     let previous_model_turn_context = Arc::new(
         turn_context
-            .with_model(previous_turn_settings.model, &sess.services.models_manager)
+            .with_model(
+                previous_turn_settings.model,
+                &sess.services.models_manager,
+                &sess.services.subagent_models_manager,
+            )
             .await,
     );
 

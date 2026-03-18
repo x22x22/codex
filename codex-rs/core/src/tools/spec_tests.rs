@@ -398,7 +398,7 @@ fn model_provided_unified_exec_is_blocked_for_windows_sandboxed_policies() {
     let available_models = Vec::new();
     let config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -422,7 +422,7 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
     let available_models = Vec::new();
     let config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
@@ -501,7 +501,7 @@ fn test_build_specs_collab_tools_enabled() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -526,7 +526,7 @@ fn test_build_specs_enable_fanout_enables_agent_jobs_and_collab_tools() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -556,7 +556,7 @@ fn view_image_tool_omits_detail_without_original_detail_feature() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -585,7 +585,7 @@ fn view_image_tool_includes_detail_with_original_detail_feature() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -622,7 +622,7 @@ fn test_build_specs_artifact_tool_enabled() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -644,7 +644,7 @@ fn test_build_specs_agent_job_worker_tools_enabled() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::SubAgent(SubAgentSource::Other(
@@ -677,7 +677,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -695,7 +695,7 @@ fn request_user_input_description_reflects_default_mode_feature_flag() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -720,7 +720,7 @@ fn request_permissions_requires_feature_flag() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -735,7 +735,7 @@ fn request_permissions_requires_feature_flag() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -759,7 +759,7 @@ fn request_permissions_tool_is_independent_from_additional_permissions() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -780,7 +780,7 @@ fn get_memory_requires_feature_flag() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -803,7 +803,7 @@ fn js_repl_requires_feature_flag() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -832,7 +832,7 @@ fn js_repl_enabled_adds_tools() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -858,7 +858,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
     let available_models = Vec::new();
     let default_tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &supported_model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &default_features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -875,7 +875,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
 
     let supported_tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &supported_model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &image_generation_features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -895,7 +895,7 @@ fn image_generation_tools_require_feature_and_supported_model() {
 
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &unsupported_model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &image_generation_features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -937,7 +937,7 @@ fn assert_model_tools(
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features,
         web_search_mode,
         session_source: SessionSource::Cli,
@@ -986,7 +986,7 @@ fn web_search_mode_cached_sets_external_web_access_false() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1017,7 +1017,7 @@ fn web_search_mode_live_sets_external_web_access_true() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
@@ -1061,7 +1061,7 @@ fn web_search_config_is_forwarded_to_tool_spec() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
@@ -1099,7 +1099,7 @@ fn web_search_tool_type_text_and_image_sets_search_content_types() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
@@ -1134,7 +1134,7 @@ fn mcp_resource_tools_are_hidden_without_mcp_servers() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1160,7 +1160,7 @@ fn mcp_resource_tools_are_included_when_mcp_servers_are_present() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1400,7 +1400,7 @@ fn test_build_specs_default_shell_present() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
@@ -1428,7 +1428,7 @@ fn shell_zsh_fork_prefers_shell_command_over_unified_exec() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
@@ -1490,7 +1490,7 @@ fn test_parallel_support_flags() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1520,7 +1520,7 @@ fn test_test_model_info_includes_sync_tool() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1556,7 +1556,7 @@ fn test_build_specs_mcp_tools_converted() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Live),
         session_source: SessionSource::Cli,
@@ -1649,7 +1649,7 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1697,7 +1697,7 @@ fn search_tool_description_lists_each_codex_apps_connector_once() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1839,7 +1839,7 @@ fn search_tool_requires_model_capability_only() {
             supports_search_tool: false,
             ..model_info.clone()
         },
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1851,7 +1851,7 @@ fn search_tool_requires_model_capability_only() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1870,7 +1870,7 @@ fn tool_suggest_is_not_registered_without_feature_flag() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1905,7 +1905,7 @@ fn search_tool_description_handles_no_enabled_apps() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1931,7 +1931,7 @@ fn search_tool_description_falls_back_to_connector_name_without_description() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -1979,7 +1979,7 @@ fn search_tool_registers_namespaced_app_tool_aliases() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -2045,7 +2045,7 @@ fn tool_suggest_description_lists_discoverable_tools() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -2126,7 +2126,7 @@ fn test_mcp_tool_property_missing_type_defaults_to_string() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -2186,7 +2186,7 @@ fn test_mcp_tool_integer_normalized_to_number() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -2243,7 +2243,7 @@ fn test_mcp_tool_array_without_items_gets_default_string_items() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -2302,7 +2302,7 @@ fn test_mcp_tool_anyof_defaults_to_string() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -2499,7 +2499,7 @@ fn test_get_openai_tools_mcp_tools_with_additional_properties_schema() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -2610,7 +2610,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -2641,7 +2641,7 @@ fn code_mode_augments_mcp_tool_descriptions_with_namespaced_sample() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -2707,7 +2707,7 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,
@@ -2739,7 +2739,7 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
     let available_models = Vec::new();
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_info: &model_info,
-        available_models: &available_models,
+        available_subagent_models: &available_models,
         features: &features,
         web_search_mode: Some(WebSearchMode::Cached),
         session_source: SessionSource::Cli,

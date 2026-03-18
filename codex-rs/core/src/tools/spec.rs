@@ -255,7 +255,7 @@ impl UnifiedExecShellMode {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ToolsConfig {
-    pub available_models: Vec<ModelPreset>,
+    pub available_subagent_models: Vec<ModelPreset>,
     pub shell_type: ConfigShellToolType,
     shell_command_backend: ShellCommandBackendConfig,
     pub unified_exec_shell_mode: UnifiedExecShellMode,
@@ -286,7 +286,7 @@ pub(crate) struct ToolsConfig {
 
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_info: &'a ModelInfo,
-    pub(crate) available_models: &'a Vec<ModelPreset>,
+    pub(crate) available_subagent_models: &'a Vec<ModelPreset>,
     pub(crate) features: &'a Features,
     pub(crate) web_search_mode: Option<WebSearchMode>,
     pub(crate) session_source: SessionSource,
@@ -311,7 +311,7 @@ impl ToolsConfig {
     pub fn new(params: &ToolsConfigParams) -> Self {
         let ToolsConfigParams {
             model_info,
-            available_models: available_models_ref,
+            available_subagent_models: available_subagent_models_ref,
             features,
             web_search_mode,
             session_source,
@@ -387,7 +387,7 @@ impl ToolsConfig {
             );
 
         Self {
-            available_models: available_models_ref.to_vec(),
+            available_subagent_models: available_subagent_models_ref.to_vec(),
             shell_type,
             shell_command_backend,
             unified_exec_shell_mode: UnifiedExecShellMode::Direct,
@@ -1037,7 +1037,8 @@ fn create_collab_input_items_schema() -> JsonSchema {
 }
 
 fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
-    let available_models_description = spawn_agent_models_description(&config.available_models);
+    let available_subagent_models_description =
+        spawn_agent_models_description(&config.available_subagent_models);
     let properties = BTreeMap::from([
         (
             "message".to_string(),
@@ -1095,7 +1096,7 @@ fn create_spawn_agent_tool(config: &ToolsConfig) -> ToolSpec {
         Agent-role guidance below only helps choose which agent to use after spawning is already authorized; it never authorizes spawning by itself.
         Spawn a sub-agent for a well-scoped task. Returns the agent id (and user-facing nickname when available) to use to communicate with this agent. This spawn_agent tool provides you access to smaller but more efficient sub-agents. A mini model can solve many tasks faster than the main model. You should follow the rules and guidelines below to use this tool.
 
-{available_models_description}
+{available_subagent_models_description}
 ### When to delegate vs. do the subtask yourself
 - First, quickly analyze the overall user task and form a succinct high-level plan. Identify which tasks are immediate blockers on the critical path, and which tasks are sidecar tasks that are needed but can run in parallel without blocking the next local step. As part of that plan, explicitly decide what immediate task you should do locally right now. Do this planning step before delegating to agents so you do not hand off the immediate blocking task to a submodel and then waste time waiting on it.
 - Use the smaller subagent when a subtask is easy enough for it to handle and can run in parallel with your local work. Prefer delegating concrete, bounded sidecar tasks that materially advance the main task without blocking your immediate next local step.

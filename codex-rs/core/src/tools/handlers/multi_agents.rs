@@ -333,13 +333,13 @@ async fn apply_requested_spawn_agent_model_overrides(
     if let Some(requested_model) = requested_model {
         let available_models = session
             .services
-            .models_manager
+            .subagent_models_manager
             .list_models(RefreshStrategy::Offline)
             .await;
         let selected_model_name = find_spawn_agent_model_name(&available_models, requested_model)?;
         let selected_model_info = session
             .services
-            .models_manager
+            .subagent_models_manager
             .get_model_info(&selected_model_name, config)
             .await;
 

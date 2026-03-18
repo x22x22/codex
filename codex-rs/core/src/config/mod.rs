@@ -481,6 +481,10 @@ pub struct Config {
     /// When set, this replaces the bundled catalog for the current process.
     pub model_catalog: Option<ModelsResponse>,
 
+    /// Optional full subagent model catalog loaded from `subagent_model_catalog_json`.
+    /// When set, this replaces the catalog used for spawn_agent model description generation.
+    pub subagent_model_catalog: Option<ModelsResponse>,
+
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
 
@@ -1371,6 +1375,10 @@ pub struct ConfigToml {
     /// Optional path to a JSON model catalog (applied on startup only).
     /// Per-thread `config` overrides are accepted but do not reapply this (no-ops).
     pub model_catalog_json: Option<AbsolutePathBuf>,
+
+    /// Optional path to a JSON subagent model catalog (applied on startup only).
+    /// Per-thread `config` overrides are accepted but do not reapply this (no-ops).
+    pub subagent_model_catalog_json: Option<AbsolutePathBuf>,
 
     /// Optionally specify a personality for the model
     pub personality: Option<Personality>,
@@ -2530,6 +2538,12 @@ impl Config {
                 .clone()
                 .or(cfg.model_catalog_json.clone()),
         )?;
+        let subagent_model_catalog = load_model_catalog(
+            config_profile
+                .subagent_model_catalog_json
+                .clone()
+                .or(cfg.subagent_model_catalog_json.clone()),
+        )?;
 
         let log_dir = cfg
             .log_dir
@@ -2702,6 +2716,7 @@ impl Config {
                 .or(cfg.model_reasoning_summary),
             model_supports_reasoning_summaries: cfg.model_supports_reasoning_summaries,
             model_catalog,
+            subagent_model_catalog,
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url

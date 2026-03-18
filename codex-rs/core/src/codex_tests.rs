@@ -1866,7 +1866,11 @@ async fn turn_context_with_model_updates_model_fields() {
     let (session, mut turn_context) = make_session_and_context().await;
     turn_context.reasoning_effort = Some(ReasoningEffortConfig::Minimal);
     let updated = turn_context
-        .with_model("gpt-5.1".to_string(), &session.services.models_manager)
+        .with_model(
+            "gpt-5.1".to_string(),
+            &session.services.models_manager,
+            &session.services.subagent_models_manager,
+        )
         .await;
     let expected_model_info = session
         .services
@@ -2363,6 +2367,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         session_configuration,
         Arc::clone(&config),
         auth_manager,
+        Arc::clone(&models_manager),
         models_manager,
         ExecPolicyManager::default(),
         tx_event,
@@ -2496,6 +2501,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         auth_manager: auth_manager.clone(),
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
+        subagent_models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         execve_session_approvals: RwLock::new(HashMap::new()),
         skills_manager,
@@ -3290,6 +3296,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         auth_manager: Arc::clone(&auth_manager),
         session_telemetry: session_telemetry.clone(),
         models_manager: Arc::clone(&models_manager),
+        subagent_models_manager: Arc::clone(&models_manager),
         tool_approvals: Mutex::new(ApprovalStore::default()),
         execve_session_approvals: RwLock::new(HashMap::new()),
         skills_manager,
@@ -3469,6 +3476,7 @@ async fn build_settings_update_items_emits_environment_item_for_network_changes(
         .with_model(
             previous_context.model_info.slug.clone(),
             &session.services.models_manager,
+            &session.services.subagent_models_manager,
         )
         .await;
 
@@ -3526,6 +3534,7 @@ async fn build_settings_update_items_emits_environment_item_for_time_changes() {
         .with_model(
             previous_context.model_info.slug.clone(),
             &session.services.models_manager,
+            &session.services.subagent_models_manager,
         )
         .await;
     current_context.current_date = Some("2026-02-27".to_string());
@@ -3560,6 +3569,7 @@ async fn build_settings_update_items_emits_realtime_start_when_session_becomes_l
         .with_model(
             previous_context.model_info.slug.clone(),
             &session.services.models_manager,
+            &session.services.subagent_models_manager,
         )
         .await;
     current_context.realtime_active = true;
@@ -3588,6 +3598,7 @@ async fn build_settings_update_items_emits_realtime_end_when_session_stops_being
         .with_model(
             previous_context.model_info.slug.clone(),
             &session.services.models_manager,
+            &session.services.subagent_models_manager,
         )
         .await;
     current_context.realtime_active = false;
@@ -3621,6 +3632,7 @@ async fn build_settings_update_items_uses_previous_turn_settings_for_realtime_en
         .with_model(
             previous_context.model_info.slug.clone(),
             &session.services.models_manager,
+            &session.services.subagent_models_manager,
         )
         .await;
     current_context.realtime_active = false;
@@ -3889,7 +3901,11 @@ async fn record_context_updates_and_set_reference_context_item_persists_baseline
         "gpt-5.1"
     };
     let turn_context = previous_context
-        .with_model(next_model.to_string(), &session.services.models_manager)
+        .with_model(
+            next_model.to_string(),
+            &session.services.models_manager,
+            &session.services.subagent_models_manager,
+        )
         .await;
     let previous_context_item = previous_context.to_turn_context_item();
     {
@@ -3991,7 +4007,11 @@ async fn record_context_updates_and_set_reference_context_item_persists_full_rei
         "gpt-5.1"
     };
     let turn_context = previous_context
-        .with_model(next_model.to_string(), &session.services.models_manager)
+        .with_model(
+            next_model.to_string(),
+            &session.services.models_manager,
+            &session.services.subagent_models_manager,
+        )
         .await;
     let config = session.get_config().await;
     let recorder = RolloutRecorder::new(

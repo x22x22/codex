@@ -152,6 +152,7 @@ pub(crate) struct ThreadManagerState {
     thread_created_tx: broadcast::Sender<ThreadId>,
     auth_manager: Arc<AuthManager>,
     models_manager: Arc<ModelsManager>,
+    subagent_models_manager: Arc<ModelsManager>,
     skills_manager: Arc<SkillsManager>,
     plugins_manager: Arc<PluginsManager>,
     mcp_manager: Arc<McpManager>,
@@ -183,17 +184,30 @@ impl ThreadManager {
             config.bundled_skills_enabled(),
         ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let models_manager = Arc::new(ModelsManager::new_with_provider(
+            codex_home.clone(),
+            auth_manager.clone(),
+            config.model_catalog.clone(),
+            collaboration_modes_config,
+            openai_models_provider.clone(),
+        ));
+
+        let subagent_models_manager = match config.subagent_model_catalog.clone() {
+            Some(subagent_model_catalog) => Arc::new(ModelsManager::new_with_provider(
+                codex_home,
+                auth_manager.clone(),
+                Some(subagent_model_catalog),
+                collaboration_modes_config,
+                openai_models_provider,
+            )),
+            None => Arc::clone(&models_manager),
+        };
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: Arc::new(ModelsManager::new_with_provider(
-                    codex_home,
-                    auth_manager.clone(),
-                    config.model_catalog.clone(),
-                    collaboration_modes_config,
-                    openai_models_provider,
-                )),
+                models_manager,
+                subagent_models_manager,
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
@@ -244,15 +258,18 @@ impl ThreadManager {
             /*bundled_skills_enabled*/ true,
         ));
         let file_watcher = build_file_watcher(codex_home.clone(), Arc::clone(&skills_manager));
+        let models_manager = Arc::new(ModelsManager::with_provider_for_tests(
+            codex_home,
+            auth_manager.clone(),
+            provider,
+        ));
+        let subagent_models_manager = Arc::clone(&models_manager);
         Self {
             state: Arc::new(ThreadManagerState {
                 threads: Arc::new(RwLock::new(HashMap::new())),
                 thread_created_tx,
-                models_manager: Arc::new(ModelsManager::with_provider_for_tests(
-                    codex_home,
-                    auth_manager.clone(),
-                    provider,
-                )),
+                models_manager,
+                subagent_models_manager,
                 skills_manager,
                 plugins_manager,
                 mcp_manager,
@@ -290,12 +307,26 @@ impl ThreadManager {
         self.state.models_manager.clone()
     }
 
+    pub fn get_subagent_models_manager(&self) -> Arc<ModelsManager> {
+        self.state.subagent_models_manager.clone()
+    }
+
     pub async fn list_models(
         &self,
         refresh_strategy: crate::models_manager::manager::RefreshStrategy,
     ) -> Vec<ModelPreset> {
         self.state
             .models_manager
+            .list_models(refresh_strategy)
+            .await
+    }
+
+    pub async fn list_subagent_models(
+        &self,
+        refresh_strategy: crate::models_manager::manager::RefreshStrategy,
+    ) -> Vec<ModelPreset> {
+        self.state
+            .subagent_models_manager
             .list_models(refresh_strategy)
             .await
     }
@@ -743,6 +774,7 @@ impl ThreadManagerState {
             config,
             auth_manager,
             models_manager: Arc::clone(&self.models_manager),
+            subagent_models_manager: Arc::clone(&self.subagent_models_manager),
             skills_manager: Arc::clone(&self.skills_manager),
             plugins_manager: Arc::clone(&self.plugins_manager),
             mcp_manager: Arc::clone(&self.mcp_manager),
