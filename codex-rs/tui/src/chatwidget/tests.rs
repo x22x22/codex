@@ -8136,7 +8136,7 @@ async fn feedback_upload_consent_popup_snapshot() {
     chat.show_selection_view(crate::bottom_pane::feedback_upload_consent_params(
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::Bug,
-        chat.current_rollout_path.clone(),
+        chat.current_rollout_path.clone().into_iter().collect(),
         &codex_feedback::feedback_diagnostics::FeedbackDiagnostics::new(vec![
             codex_feedback::feedback_diagnostics::FeedbackDiagnostic {
                 headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
@@ -8156,7 +8156,7 @@ async fn feedback_good_result_consent_popup_includes_connectivity_diagnostics_fi
     chat.show_selection_view(crate::bottom_pane::feedback_upload_consent_params(
         chat.app_event_tx.clone(),
         crate::app_event::FeedbackCategory::GoodResult,
-        chat.current_rollout_path.clone(),
+        chat.current_rollout_path.clone().into_iter().collect(),
         &codex_feedback::feedback_diagnostics::FeedbackDiagnostics::new(vec![
             codex_feedback::feedback_diagnostics::FeedbackDiagnostic {
                 headline: "OPENAI_BASE_URL is set and may affect connectivity.".to_string(),
@@ -9500,6 +9500,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".into(),
             turn_id: "turn-1".into(),
+            review_thread_id: None,
             status: GuardianAssessmentStatus::InProgress,
             risk_score: None,
             risk_level: None,
@@ -9518,6 +9519,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".into(),
             turn_id: "turn-1".into(),
+            review_thread_id: None,
             status: GuardianAssessmentStatus::Denied,
             risk_score: Some(96),
             risk_level: Some(GuardianRiskLevel::High),
@@ -9561,6 +9563,7 @@ async fn guardian_approved_exec_renders_approved_request() {
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "thread:child-thread:guardian-1".into(),
             turn_id: "turn-1".into(),
+            review_thread_id: None,
             status: GuardianAssessmentStatus::Approved,
             risk_score: Some(14),
             risk_level: Some(GuardianRiskLevel::Low),
@@ -9708,6 +9711,7 @@ async fn guardian_parallel_reviews_render_aggregate_status_snapshot() {
             msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: id.to_string(),
                 turn_id: "turn-1".to_string(),
+                review_thread_id: None,
                 status: GuardianAssessmentStatus::InProgress,
                 risk_score: None,
                 risk_level: None,
@@ -9737,6 +9741,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".to_string(),
             turn_id: "turn-1".to_string(),
+            review_thread_id: None,
             status: GuardianAssessmentStatus::InProgress,
             risk_score: None,
             risk_level: None,
@@ -9752,6 +9757,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-2".to_string(),
             turn_id: "turn-1".to_string(),
+            review_thread_id: None,
             status: GuardianAssessmentStatus::InProgress,
             risk_score: None,
             risk_level: None,
@@ -9767,6 +9773,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".to_string(),
             turn_id: "turn-1".to_string(),
+            review_thread_id: None,
             status: GuardianAssessmentStatus::Denied,
             risk_score: Some(92),
             risk_level: Some(GuardianRiskLevel::High),

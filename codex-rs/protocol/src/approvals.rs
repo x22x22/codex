@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::ThreadId;
 use crate::mcp::RequestId;
 use crate::models::MacOsSeatbeltProfileExtensions;
 use crate::models::PermissionProfile;
@@ -122,6 +123,10 @@ pub struct GuardianAssessmentEvent {
     /// Uses `#[serde(default)]` for backwards compatibility.
     #[serde(default)]
     pub turn_id: String,
+    /// Hidden guardian review thread that evaluated this request, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub review_thread_id: Option<ThreadId>,
     pub status: GuardianAssessmentStatus,
     /// Numeric risk score from 0-100. Omitted while the assessment is in progress.
     #[serde(default, skip_serializing_if = "Option::is_none")]

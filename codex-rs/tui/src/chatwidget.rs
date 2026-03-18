@@ -62,6 +62,7 @@ use codex_core::config::types::WindowsSandboxModeToml;
 use codex_core::config_loader::ConfigLayerStackOrdering;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
+use codex_core::feedback_rollout_attachment_paths;
 use codex_core::find_thread_name_by_id;
 use codex_core::git_info::current_branch_name;
 use codex_core::git_info::get_git_repo_root;
@@ -1518,15 +1519,18 @@ impl ChatWidget {
         include_logs: bool,
         snapshot: codex_feedback::FeedbackSnapshot,
     ) {
-        let rollout = if include_logs {
-            self.current_rollout_path.clone()
+        let attachment_paths = if include_logs {
+            feedback_rollout_attachment_paths(
+                self.config.codex_home.as_path(),
+                self.current_rollout_path.as_deref(),
+            )
         } else {
-            None
+            Vec::new()
         };
         let view = crate::bottom_pane::FeedbackNoteView::new(
             category,
             snapshot,
-            rollout,
+            attachment_paths,
             self.app_event_tx.clone(),
             include_logs,
             self.feedback_audience,
@@ -1553,7 +1557,10 @@ impl ChatWidget {
         let params = crate::bottom_pane::feedback_upload_consent_params(
             self.app_event_tx.clone(),
             category,
-            self.current_rollout_path.clone(),
+            feedback_rollout_attachment_paths(
+                self.config.codex_home.as_path(),
+                self.current_rollout_path.as_deref(),
+            ),
             snapshot.feedback_diagnostics(),
         );
         self.bottom_pane.show_selection_view(params);

@@ -4297,6 +4297,9 @@ impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
 #[ts(export_to = "v2/")]
 pub struct GuardianApprovalReview {
     pub status: GuardianApprovalReviewStatus,
+    #[serde(alias = "review_thread_id")]
+    #[ts(type = "string | null")]
+    pub review_thread_id: Option<String>,
     #[serde(alias = "risk_score")]
     #[ts(type = "number | null")]
     pub risk_score: Option<u8>,
@@ -7347,6 +7350,7 @@ mod tests {
             review,
             GuardianApprovalReview {
                 status: GuardianApprovalReviewStatus::Denied,
+                review_thread_id: None,
                 risk_score: Some(91),
                 risk_level: Some(GuardianRiskLevel::High),
                 rationale: Some("too risky".to_string()),
@@ -7367,6 +7371,7 @@ mod tests {
             review,
             GuardianApprovalReview {
                 status: GuardianApprovalReviewStatus::Aborted,
+                review_thread_id: None,
                 risk_score: None,
                 risk_level: None,
                 rationale: None,

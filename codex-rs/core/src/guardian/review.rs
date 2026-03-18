@@ -26,6 +26,7 @@ use super::prompt::guardian_output_schema;
 use super::prompt::parse_guardian_assessment;
 use super::review_session::GuardianReviewSessionOutcome;
 use super::review_session::GuardianReviewSessionParams;
+use super::review_session::GuardianReviewSessionRunResult;
 use super::review_session::build_guardian_review_session_config;
 
 pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
@@ -39,9 +40,16 @@ pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
 
 #[derive(Debug)]
 pub(super) enum GuardianReviewOutcome {
-    Completed(anyhow::Result<GuardianAssessment>),
-    TimedOut,
-    Aborted,
+    Completed {
+        result: anyhow::Result<GuardianAssessment>,
+        review_thread_id: Option<codex_protocol::ThreadId>,
+    },
+    TimedOut {
+        review_thread_id: Option<codex_protocol::ThreadId>,
+    },
+    Aborted {
+        review_thread_id: Option<codex_protocol::ThreadId>,
+    },
 }
 
 fn guardian_risk_level_str(level: GuardianRiskLevel) -> &'static str {
@@ -88,6 +96,7 @@ async fn run_guardian_review(
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id.clone(),
                 turn_id: assessment_turn_id.clone(),
+                review_thread_id: None,
                 status: GuardianAssessmentStatus::InProgress,
                 risk_score: None,
                 risk_level: None,
@@ -107,6 +116,7 @@ async fn run_guardian_review(
                 EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                     id: assessment_id,
                     turn_id: assessment_turn_id,
+                    review_thread_id: None,
                     status: GuardianAssessmentStatus::Aborted,
                     risk_score: None,
                     risk_level: None,
@@ -131,32 +141,48 @@ async fn run_guardian_review(
             )
             .await
         }
-        Err(err) => GuardianReviewOutcome::Completed(Err(err.into())),
+        Err(err) => GuardianReviewOutcome::Completed {
+            result: Err(err.into()),
+            review_thread_id: None,
+        },
     };
 
-    let assessment = match outcome {
-        GuardianReviewOutcome::Completed(Ok(assessment)) => assessment,
-        GuardianReviewOutcome::Completed(Err(err)) => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            risk_score: 100,
-            rationale: format!("Automatic approval review failed: {err}"),
-            evidence: vec![],
-        },
-        GuardianReviewOutcome::TimedOut => GuardianAssessment {
-            risk_level: GuardianRiskLevel::High,
-            risk_score: 100,
-            rationale:
-                "Automatic approval review timed out while evaluating the requested approval."
-                    .to_string(),
-            evidence: vec![],
-        },
-        GuardianReviewOutcome::Aborted => {
+    let (assessment, review_thread_id) = match outcome {
+        GuardianReviewOutcome::Completed {
+            result: Ok(assessment),
+            review_thread_id,
+        } => (assessment, review_thread_id),
+        GuardianReviewOutcome::Completed {
+            result: Err(err),
+            review_thread_id,
+        } => (
+            GuardianAssessment {
+                risk_level: GuardianRiskLevel::High,
+                risk_score: 100,
+                rationale: format!("Automatic approval review failed: {err}"),
+                evidence: vec![],
+            },
+            review_thread_id,
+        ),
+        GuardianReviewOutcome::TimedOut { review_thread_id } => (
+            GuardianAssessment {
+                risk_level: GuardianRiskLevel::High,
+                risk_score: 100,
+                rationale:
+                    "Automatic approval review timed out while evaluating the requested approval."
+                        .to_string(),
+                evidence: vec![],
+            },
+            review_thread_id,
+        ),
+        GuardianReviewOutcome::Aborted { review_thread_id } => {
             session
                 .send_event(
                     turn.as_ref(),
                     EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                         id: assessment_id,
                         turn_id: assessment_turn_id,
+                        review_thread_id,
                         status: GuardianAssessmentStatus::Aborted,
                         risk_score: None,
                         risk_level: None,
@@ -193,6 +219,7 @@ async fn run_guardian_review(
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id,
                 turn_id: assessment_turn_id,
+                review_thread_id,
                 status,
                 risk_score: Some(assessment.risk_score),
                 risk_level: Some(assessment.risk_level),
@@ -267,7 +294,12 @@ pub(super) async fn run_guardian_review_session(
     let live_network_config = match session.services.network_proxy.as_ref() {
         Some(network_proxy) => match network_proxy.proxy().current_cfg().await {
             Ok(config) => Some(config),
-            Err(err) => return GuardianReviewOutcome::Completed(Err(err)),
+            Err(err) => {
+                return GuardianReviewOutcome::Completed {
+                    result: Err(err),
+                    review_thread_id: None,
+                };
+            }
         },
         None => None,
     };
@@ -317,7 +349,12 @@ pub(super) async fn run_guardian_review_session(
     );
     let guardian_config = match guardian_config {
         Ok(config) => config,
-        Err(err) => return GuardianReviewOutcome::Completed(Err(err)),
+        Err(err) => {
+            return GuardianReviewOutcome::Completed {
+                result: Err(err),
+                review_thread_id: None,
+            };
+        }
     };
 
     match session
@@ -336,15 +373,27 @@ pub(super) async fn run_guardian_review_session(
         })
         .await
     {
-        GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)) => {
-            GuardianReviewOutcome::Completed(parse_guardian_assessment(
-                last_agent_message.as_deref(),
-            ))
-        }
-        GuardianReviewSessionOutcome::Completed(Err(err)) => {
-            GuardianReviewOutcome::Completed(Err(err))
-        }
-        GuardianReviewSessionOutcome::TimedOut => GuardianReviewOutcome::TimedOut,
-        GuardianReviewSessionOutcome::Aborted => GuardianReviewOutcome::Aborted,
+        GuardianReviewSessionRunResult {
+            review_thread_id,
+            outcome: GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)),
+        } => GuardianReviewOutcome::Completed {
+            result: parse_guardian_assessment(last_agent_message.as_deref()),
+            review_thread_id,
+        },
+        GuardianReviewSessionRunResult {
+            review_thread_id,
+            outcome: GuardianReviewSessionOutcome::Completed(Err(err)),
+        } => GuardianReviewOutcome::Completed {
+            result: Err(err),
+            review_thread_id,
+        },
+        GuardianReviewSessionRunResult {
+            review_thread_id,
+            outcome: GuardianReviewSessionOutcome::TimedOut,
+        } => GuardianReviewOutcome::TimedOut { review_thread_id },
+        GuardianReviewSessionRunResult {
+            review_thread_id,
+            outcome: GuardianReviewSessionOutcome::Aborted,
+        } => GuardianReviewOutcome::Aborted { review_thread_id },
     }
 }

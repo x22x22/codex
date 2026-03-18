@@ -208,6 +208,7 @@ use codex_core::exec_env::create_env;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::features::Stage;
+use codex_core::feedback_rollout_attachment_paths;
 use codex_core::find_archived_thread_path_by_id_str;
 use codex_core::find_thread_name_by_id;
 use codex_core::find_thread_names_by_ids;
@@ -6995,14 +6996,21 @@ impl CodexMessageProcessor {
         } else {
             None
         };
-        let mut attachment_paths = validated_rollout_path.into_iter().collect::<Vec<_>>();
-        if let Some(extra_log_files) = extra_log_files {
-            attachment_paths.extend(extra_log_files);
-        }
-
         let session_source = self.thread_manager.session_source();
+        let codex_home = self.config.codex_home.clone();
 
         let upload_result = tokio::task::spawn_blocking(move || {
+            let mut attachment_paths = if include_logs {
+                feedback_rollout_attachment_paths(
+                    codex_home.as_path(),
+                    validated_rollout_path.as_deref(),
+                )
+            } else {
+                Vec::new()
+            };
+            if let Some(extra_log_files) = extra_log_files {
+                attachment_paths.extend(extra_log_files);
+            }
             snapshot.upload_feedback(
                 &classification,
                 reason.as_deref(),

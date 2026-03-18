@@ -8,6 +8,7 @@ pub const INTERACTIVE_SESSION_SOURCES: &[SessionSource] =
     &[SessionSource::Cli, SessionSource::VSCode];
 
 pub(crate) mod error;
+mod feedback;
 pub mod list;
 pub(crate) mod metadata;
 pub(crate) mod policy;
@@ -17,6 +18,7 @@ pub(crate) mod truncation;
 
 pub use codex_protocol::protocol::SessionMeta;
 pub(crate) use error::map_session_init_error;
+pub use feedback::feedback_rollout_attachment_paths;
 pub use list::find_archived_thread_path_by_id_str;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]

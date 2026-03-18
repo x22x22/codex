@@ -45,11 +45,11 @@ pub(crate) enum FeedbackAudience {
 }
 
 /// Minimal input overlay to collect an optional feedback note, then upload
-/// both logs and rollout with classification + metadata.
+/// logs and rollout attachments with classification + metadata.
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
     snapshot: codex_feedback::FeedbackSnapshot,
-    rollout_path: Option<PathBuf>,
+    attachment_paths: Vec<PathBuf>,
     app_event_tx: AppEventSender,
     include_logs: bool,
     feedback_audience: FeedbackAudience,
@@ -64,7 +64,7 @@ impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
         snapshot: codex_feedback::FeedbackSnapshot,
-        rollout_path: Option<PathBuf>,
+        attachment_paths: Vec<PathBuf>,
         app_event_tx: AppEventSender,
         include_logs: bool,
         feedback_audience: FeedbackAudience,
@@ -72,7 +72,7 @@ impl FeedbackNoteView {
         Self {
             category,
             snapshot,
-            rollout_path,
+            attachment_paths,
             app_event_tx,
             include_logs,
             feedback_audience,
@@ -89,11 +89,6 @@ impl FeedbackNoteView {
         } else {
             Some(note.as_str())
         };
-        let attachment_paths = if self.include_logs {
-            self.rollout_path.iter().cloned().collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
         let classification = feedback_classification(self.category);
 
         let mut thread_id = self.snapshot.thread_id.clone();
@@ -102,7 +97,7 @@ impl FeedbackNoteView {
             classification,
             reason_opt,
             self.include_logs,
-            &attachment_paths,
+            &self.attachment_paths,
             Some(SessionSource::Cli),
             /*logs_override*/ None,
         );
@@ -501,7 +496,7 @@ fn make_feedback_item(
 pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
-    rollout_path: Option<std::path::PathBuf>,
+    attachment_paths: Vec<std::path::PathBuf>,
     feedback_diagnostics: &FeedbackDiagnostics,
 ) -> super::SelectionViewParams {
     use super::popup_consts::standard_popup_hint_line;
@@ -534,10 +529,10 @@ pub(crate) fn feedback_upload_consent_params(
         Line::from("The following files will be sent:".dim()).into(),
         Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
     ];
-    if let Some(path) = rollout_path.as_deref()
-        && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
-    {
-        header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
+    for path in attachment_paths {
+        if let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string()) {
+            header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
+        }
     }
     if !feedback_diagnostics.is_empty() {
         header_lines.push(
@@ -632,7 +627,7 @@ mod tests {
         FeedbackNoteView::new(
             category,
             snapshot,
-            None,
+            Vec::new(),
             tx,
             true,
             FeedbackAudience::External,
@@ -695,7 +690,7 @@ mod tests {
         let view = FeedbackNoteView::new(
             FeedbackCategory::Bug,
             snapshot,
-            None,
+            Vec::new(),
             tx,
             false,
             FeedbackAudience::External,
