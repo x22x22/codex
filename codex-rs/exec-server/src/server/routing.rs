@@ -17,6 +17,13 @@ use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::FS_COPY_METHOD;
+use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
+use crate::protocol::FS_GET_METADATA_METHOD;
+use crate::protocol::FS_READ_DIRECTORY_METHOD;
+use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
@@ -27,6 +34,20 @@ use crate::protocol::TerminateParams;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
+use codex_app_server_protocol::FsCopyParams;
+use codex_app_server_protocol::FsCopyResponse;
+use codex_app_server_protocol::FsCreateDirectoryParams;
+use codex_app_server_protocol::FsCreateDirectoryResponse;
+use codex_app_server_protocol::FsGetMetadataParams;
+use codex_app_server_protocol::FsGetMetadataResponse;
+use codex_app_server_protocol::FsReadDirectoryParams;
+use codex_app_server_protocol::FsReadDirectoryResponse;
+use codex_app_server_protocol::FsReadFileParams;
+use codex_app_server_protocol::FsReadFileResponse;
+use codex_app_server_protocol::FsRemoveParams;
+use codex_app_server_protocol::FsRemoveResponse;
+use codex_app_server_protocol::FsWriteFileParams;
+use codex_app_server_protocol::FsWriteFileResponse;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExecServerInboundMessage {
@@ -56,6 +77,34 @@ pub(crate) enum ExecServerRequest {
         request_id: RequestId,
         params: TerminateParams,
     },
+    FsReadFile {
+        request_id: RequestId,
+        params: FsReadFileParams,
+    },
+    FsWriteFile {
+        request_id: RequestId,
+        params: FsWriteFileParams,
+    },
+    FsCreateDirectory {
+        request_id: RequestId,
+        params: FsCreateDirectoryParams,
+    },
+    FsGetMetadata {
+        request_id: RequestId,
+        params: FsGetMetadataParams,
+    },
+    FsReadDirectory {
+        request_id: RequestId,
+        params: FsReadDirectoryParams,
+    },
+    FsRemove {
+        request_id: RequestId,
+        params: FsRemoveParams,
+    },
+    FsCopy {
+        request_id: RequestId,
+        params: FsCopyParams,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +132,13 @@ pub(crate) enum ExecServerResponseMessage {
     Read(ReadResponse),
     Write(WriteResponse),
     Terminate(TerminateResponse),
+    FsReadFile(FsReadFileResponse),
+    FsWriteFile(FsWriteFileResponse),
+    FsCreateDirectory(FsCreateDirectoryResponse),
+    FsGetMetadata(FsGetMetadataResponse),
+    FsReadDirectory(FsReadDirectoryResponse),
+    FsRemove(FsRemoveResponse),
+    FsCopy(FsCopyResponse),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,6 +234,27 @@ fn route_request(request: JSONRPCRequest) -> Result<RoutedExecServerMessage, Str
         EXEC_TERMINATE_METHOD => Ok(parse_request_params(request, |request_id, params| {
             ExecServerRequest::Terminate { request_id, params }
         })),
+        FS_READ_FILE_METHOD => Ok(parse_request_params(request, |request_id, params| {
+            ExecServerRequest::FsReadFile { request_id, params }
+        })),
+        FS_WRITE_FILE_METHOD => Ok(parse_request_params(request, |request_id, params| {
+            ExecServerRequest::FsWriteFile { request_id, params }
+        })),
+        FS_CREATE_DIRECTORY_METHOD => Ok(parse_request_params(request, |request_id, params| {
+            ExecServerRequest::FsCreateDirectory { request_id, params }
+        })),
+        FS_GET_METADATA_METHOD => Ok(parse_request_params(request, |request_id, params| {
+            ExecServerRequest::FsGetMetadata { request_id, params }
+        })),
+        FS_READ_DIRECTORY_METHOD => Ok(parse_request_params(request, |request_id, params| {
+            ExecServerRequest::FsReadDirectory { request_id, params }
+        })),
+        FS_REMOVE_METHOD => Ok(parse_request_params(request, |request_id, params| {
+            ExecServerRequest::FsRemove { request_id, params }
+        })),
+        FS_COPY_METHOD => Ok(parse_request_params(request, |request_id, params| {
+            ExecServerRequest::FsCopy { request_id, params }
+        })),
         other => Ok(RoutedExecServerMessage::ImmediateOutbound(
             ExecServerOutboundMessage::Error {
                 request_id: request.id,
@@ -224,6 +301,13 @@ fn serialize_response(
         ExecServerResponseMessage::Read(response) => serde_json::to_value(response),
         ExecServerResponseMessage::Write(response) => serde_json::to_value(response),
         ExecServerResponseMessage::Terminate(response) => serde_json::to_value(response),
+        ExecServerResponseMessage::FsReadFile(response) => serde_json::to_value(response),
+        ExecServerResponseMessage::FsWriteFile(response) => serde_json::to_value(response),
+        ExecServerResponseMessage::FsCreateDirectory(response) => serde_json::to_value(response),
+        ExecServerResponseMessage::FsGetMetadata(response) => serde_json::to_value(response),
+        ExecServerResponseMessage::FsReadDirectory(response) => serde_json::to_value(response),
+        ExecServerResponseMessage::FsRemove(response) => serde_json::to_value(response),
+        ExecServerResponseMessage::FsCopy(response) => serde_json::to_value(response),
     }
 }
 
@@ -261,6 +345,8 @@ mod tests {
     use crate::protocol::ExecExitedNotification;
     use crate::protocol::ExecParams;
     use crate::protocol::ExecResponse;
+    use crate::protocol::ExecSandboxConfig;
+    use crate::protocol::ExecSandboxMode;
     use crate::protocol::INITIALIZE_METHOD;
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeParams;
@@ -407,6 +493,51 @@ mod tests {
                 env: std::collections::HashMap::new(),
                 tty: true,
                 arg0: None,
+                sandbox: None,
+            }
+        );
+    }
+
+    #[test]
+    fn routes_exec_requests_with_optional_sandbox_config() {
+        let cwd = std::env::current_dir().expect("cwd");
+        let routed = route_jsonrpc_message(JSONRPCMessage::Request(JSONRPCRequest {
+            id: RequestId::Integer(4),
+            method: EXEC_METHOD.to_string(),
+            params: Some(json!({
+                "processId": "proc-1",
+                "argv": ["bash", "-lc", "true"],
+                "cwd": cwd,
+                "env": {},
+                "tty": true,
+                "arg0": null,
+                "sandbox": {
+                    "mode": "none",
+                },
+            })),
+            trace: None,
+        }))
+        .expect("exec request with sandbox should route");
+
+        let RoutedExecServerMessage::Inbound(ExecServerInboundMessage::Request(
+            ExecServerRequest::Exec { request_id, params },
+        )) = routed
+        else {
+            panic!("expected typed exec request");
+        };
+        assert_eq!(request_id, RequestId::Integer(4));
+        assert_eq!(
+            params,
+            ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
+                cwd: std::env::current_dir().expect("cwd"),
+                env: std::collections::HashMap::new(),
+                tty: true,
+                arg0: None,
+                sandbox: Some(ExecSandboxConfig {
+                    mode: ExecSandboxMode::None,
+                }),
             }
         );
     }

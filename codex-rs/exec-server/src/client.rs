@@ -8,6 +8,20 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_app_server_protocol::FsCopyParams;
+use codex_app_server_protocol::FsCopyResponse;
+use codex_app_server_protocol::FsCreateDirectoryParams;
+use codex_app_server_protocol::FsCreateDirectoryResponse;
+use codex_app_server_protocol::FsGetMetadataParams;
+use codex_app_server_protocol::FsGetMetadataResponse;
+use codex_app_server_protocol::FsReadDirectoryParams;
+use codex_app_server_protocol::FsReadDirectoryResponse;
+use codex_app_server_protocol::FsReadFileParams;
+use codex_app_server_protocol::FsReadFileResponse;
+use codex_app_server_protocol::FsRemoveParams;
+use codex_app_server_protocol::FsRemoveResponse;
+use codex_app_server_protocol::FsWriteFileParams;
+use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -44,6 +58,13 @@ use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::FS_COPY_METHOD;
+use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
+use crate::protocol::FS_GET_METADATA_METHOD;
+use crate::protocol::FS_READ_DIRECTORY_METHOD;
+use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
@@ -165,6 +186,13 @@ enum PendingRequest {
     Read(oneshot::Sender<Result<ReadResponse, JSONRPCErrorError>>),
     Write(oneshot::Sender<Result<WriteResponse, JSONRPCErrorError>>),
     Terminate(oneshot::Sender<Result<TerminateResponse, JSONRPCErrorError>>),
+    FsReadFile(oneshot::Sender<Result<FsReadFileResponse, JSONRPCErrorError>>),
+    FsWriteFile(oneshot::Sender<Result<FsWriteFileResponse, JSONRPCErrorError>>),
+    FsCreateDirectory(oneshot::Sender<Result<FsCreateDirectoryResponse, JSONRPCErrorError>>),
+    FsGetMetadata(oneshot::Sender<Result<FsGetMetadataResponse, JSONRPCErrorError>>),
+    FsReadDirectory(oneshot::Sender<Result<FsReadDirectoryResponse, JSONRPCErrorError>>),
+    FsRemove(oneshot::Sender<Result<FsRemoveResponse, JSONRPCErrorError>>),
+    FsCopy(oneshot::Sender<Result<FsCopyResponse, JSONRPCErrorError>>),
 }
 
 impl PendingRequest {
@@ -183,6 +211,27 @@ impl PendingRequest {
                 let _ = tx.send(Ok(serde_json::from_value(result)?));
             }
             PendingRequest::Terminate(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsReadFile(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsWriteFile(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsCreateDirectory(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsGetMetadata(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsReadDirectory(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsRemove(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsCopy(tx) => {
                 let _ = tx.send(Ok(serde_json::from_value(result)?));
             }
         }
@@ -206,6 +255,27 @@ impl PendingRequest {
             PendingRequest::Terminate(tx) => {
                 let _ = tx.send(Err(error));
             }
+            PendingRequest::FsReadFile(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsWriteFile(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsCreateDirectory(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsGetMetadata(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsReadDirectory(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsRemove(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsCopy(tx) => {
+                let _ = tx.send(Err(error));
+            }
         }
     }
 }
@@ -224,11 +294,23 @@ struct Inner {
     pending: Mutex<HashMap<RequestId, PendingRequest>>,
     events_tx: broadcast::Sender<ExecServerEvent>,
     next_request_id: AtomicI64,
+    transport_tasks: Vec<JoinHandle<()>>,
     reader_task: JoinHandle<()>,
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
+        if let ClientBackend::InProcess { handler } = &self.backend
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
+        {
+            let handler = Arc::clone(handler);
+            handle.spawn(async move {
+                handler.lock().await.shutdown().await;
+            });
+        }
+        for task in &self.transport_tasks {
+            task.abort();
+        }
         self.reader_task.abort();
     }
 }
@@ -294,6 +376,7 @@ impl ExecServerClient {
                 pending: Mutex::new(HashMap::new()),
                 events_tx: broadcast::channel(256).0,
                 next_request_id: AtomicI64::new(1),
+                transport_tasks: Vec::new(),
                 reader_task,
             }
         });
@@ -349,7 +432,7 @@ impl ExecServerClient {
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
     ) -> Result<Self, ExecServerError> {
-        let (write_tx, mut incoming_rx) = connection.into_parts();
+        let (write_tx, mut incoming_rx, transport_tasks) = connection.into_parts();
         let inner = Arc::new_cyclic(|weak| {
             let weak = weak.clone();
             let reader_task = tokio::spawn(async move {
@@ -386,6 +469,7 @@ impl ExecServerClient {
                 pending: Mutex::new(HashMap::new()),
                 events_tx: broadcast::channel(256).0,
                 next_request_id: AtomicI64::new(1),
+                transport_tasks,
                 reader_task,
             }
         });
@@ -465,6 +549,99 @@ impl ExecServerClient {
         self.terminate_session(process_id).await
     }
 
+    pub async fn fs_read_file(
+        &self,
+        params: FsReadFileParams,
+    ) -> Result<FsReadFileResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_read_file(params).await);
+        }
+
+        self.send_pending_request(FS_READ_FILE_METHOD, &params, PendingRequest::FsReadFile)
+            .await
+    }
+
+    pub async fn fs_write_file(
+        &self,
+        params: FsWriteFileParams,
+    ) -> Result<FsWriteFileResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_write_file(params).await);
+        }
+
+        self.send_pending_request(FS_WRITE_FILE_METHOD, &params, PendingRequest::FsWriteFile)
+            .await
+    }
+
+    pub async fn fs_create_directory(
+        &self,
+        params: FsCreateDirectoryParams,
+    ) -> Result<FsCreateDirectoryResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_create_directory(params).await);
+        }
+
+        self.send_pending_request(
+            FS_CREATE_DIRECTORY_METHOD,
+            &params,
+            PendingRequest::FsCreateDirectory,
+        )
+        .await
+    }
+
+    pub async fn fs_get_metadata(
+        &self,
+        params: FsGetMetadataParams,
+    ) -> Result<FsGetMetadataResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_get_metadata(params).await);
+        }
+
+        self.send_pending_request(
+            FS_GET_METADATA_METHOD,
+            &params,
+            PendingRequest::FsGetMetadata,
+        )
+        .await
+    }
+
+    pub async fn fs_read_directory(
+        &self,
+        params: FsReadDirectoryParams,
+    ) -> Result<FsReadDirectoryResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_read_directory(params).await);
+        }
+
+        self.send_pending_request(
+            FS_READ_DIRECTORY_METHOD,
+            &params,
+            PendingRequest::FsReadDirectory,
+        )
+        .await
+    }
+
+    pub async fn fs_remove(
+        &self,
+        params: FsRemoveParams,
+    ) -> Result<FsRemoveResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_remove(params).await);
+        }
+
+        self.send_pending_request(FS_REMOVE_METHOD, &params, PendingRequest::FsRemove)
+            .await
+    }
+
+    pub async fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_copy(params).await);
+        }
+
+        self.send_pending_request(FS_COPY_METHOD, &params, PendingRequest::FsCopy)
+            .await
+    }
+
     async fn initialize(
         &self,
         options: ExecServerClientConnectOptions,
@@ -491,19 +668,7 @@ impl ExecServerClient {
             return server_result_to_client(handler.lock().await.exec(params).await);
         }
 
-        let request_id = self.next_request_id();
-        let (response_tx, response_rx) = oneshot::channel();
-        self.inner
-            .pending
-            .lock()
-            .await
-            .insert(request_id.clone(), PendingRequest::Exec(response_tx));
-        let ClientBackend::JsonRpc { write_tx } = &self.inner.backend else {
-            unreachable!("in-process exec requests return before JSON-RPC setup");
-        };
-        let send_result =
-            send_jsonrpc_request(write_tx, request_id.clone(), EXEC_METHOD, &params).await;
-        self.finish_request(request_id, send_result, response_rx)
+        self.send_pending_request(EXEC_METHOD, &params, PendingRequest::Exec)
             .await
     }
 
@@ -512,19 +677,7 @@ impl ExecServerClient {
             return server_result_to_client(handler.lock().await.write(params).await);
         }
 
-        let request_id = self.next_request_id();
-        let (response_tx, response_rx) = oneshot::channel();
-        self.inner
-            .pending
-            .lock()
-            .await
-            .insert(request_id.clone(), PendingRequest::Write(response_tx));
-        let ClientBackend::JsonRpc { write_tx } = &self.inner.backend else {
-            unreachable!("in-process write requests return before JSON-RPC setup");
-        };
-        let send_result =
-            send_jsonrpc_request(write_tx, request_id.clone(), EXEC_WRITE_METHOD, &params).await;
-        self.finish_request(request_id, send_result, response_rx)
+        self.send_pending_request(EXEC_WRITE_METHOD, &params, PendingRequest::Write)
             .await
     }
 
@@ -533,19 +686,7 @@ impl ExecServerClient {
             return server_result_to_client(handler.lock().await.read(params).await);
         }
 
-        let request_id = self.next_request_id();
-        let (response_tx, response_rx) = oneshot::channel();
-        self.inner
-            .pending
-            .lock()
-            .await
-            .insert(request_id.clone(), PendingRequest::Read(response_tx));
-        let ClientBackend::JsonRpc { write_tx } = &self.inner.backend else {
-            unreachable!("in-process read requests return before JSON-RPC setup");
-        };
-        let send_result =
-            send_jsonrpc_request(write_tx, request_id.clone(), EXEC_READ_METHOD, &params).await;
-        self.finish_request(request_id, send_result, response_rx)
+        self.send_pending_request(EXEC_READ_METHOD, &params, PendingRequest::Read)
             .await
     }
 
@@ -560,20 +701,7 @@ impl ExecServerClient {
             return server_result_to_client(handler.lock().await.terminate(params).await);
         }
 
-        let request_id = self.next_request_id();
-        let (response_tx, response_rx) = oneshot::channel();
-        self.inner
-            .pending
-            .lock()
-            .await
-            .insert(request_id.clone(), PendingRequest::Terminate(response_tx));
-        let ClientBackend::JsonRpc { write_tx } = &self.inner.backend else {
-            unreachable!("in-process terminate requests return before JSON-RPC setup");
-        };
-        let send_result =
-            send_jsonrpc_request(write_tx, request_id.clone(), EXEC_TERMINATE_METHOD, &params)
-                .await;
-        self.finish_request(request_id, send_result, response_rx)
+        self.send_pending_request(EXEC_TERMINATE_METHOD, &params, PendingRequest::Terminate)
             .await
     }
 
@@ -610,24 +738,36 @@ impl ExecServerClient {
             return server_result_to_client(handler.lock().await.initialize());
         }
 
+        self.send_pending_request(INITIALIZE_METHOD, &params, PendingRequest::Initialize)
+            .await
+    }
+
+    fn next_request_id(&self) -> RequestId {
+        RequestId::Integer(self.inner.next_request_id.fetch_add(1, Ordering::SeqCst))
+    }
+
+    async fn send_pending_request<P, T>(
+        &self,
+        method: &str,
+        params: &P,
+        build_pending: impl FnOnce(oneshot::Sender<Result<T, JSONRPCErrorError>>) -> PendingRequest,
+    ) -> Result<T, ExecServerError>
+    where
+        P: Serialize,
+    {
         let request_id = self.next_request_id();
         let (response_tx, response_rx) = oneshot::channel();
         self.inner
             .pending
             .lock()
             .await
-            .insert(request_id.clone(), PendingRequest::Initialize(response_tx));
+            .insert(request_id.clone(), build_pending(response_tx));
         let ClientBackend::JsonRpc { write_tx } = &self.inner.backend else {
-            unreachable!("in-process initialize requests return before JSON-RPC setup");
+            unreachable!("in-process requests return before JSON-RPC setup");
         };
-        let send_result =
-            send_jsonrpc_request(write_tx, request_id.clone(), INITIALIZE_METHOD, &params).await;
+        let send_result = send_jsonrpc_request(write_tx, request_id.clone(), method, params).await;
         self.finish_request(request_id, send_result, response_rx)
             .await
-    }
-
-    fn next_request_id(&self) -> RequestId {
-        RequestId::Integer(self.inner.next_request_id.fetch_add(1, Ordering::SeqCst))
     }
 
     async fn finish_request<T>(
@@ -786,860 +926,4 @@ async fn handle_transport_shutdown(inner: &Arc<Inner>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-    use std::time::Duration;
-
-    use pretty_assertions::assert_eq;
-    use tokio::io::AsyncBufReadExt;
-    use tokio::io::AsyncWriteExt;
-    use tokio::io::BufReader;
-    use tokio::time::timeout;
-
-    use super::ExecServerClient;
-    use super::ExecServerClientConnectOptions;
-    use super::ExecServerError;
-    use super::ExecServerOutput;
-    use crate::protocol::EXEC_METHOD;
-    use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
-    use crate::protocol::EXEC_TERMINATE_METHOD;
-    use crate::protocol::ExecOutputStream;
-    use crate::protocol::ExecParams;
-    use crate::protocol::INITIALIZE_METHOD;
-    use crate::protocol::INITIALIZED_METHOD;
-    use crate::protocol::PROTOCOL_VERSION;
-    use crate::protocol::ReadParams;
-    use codex_app_server_protocol::JSONRPCError;
-    use codex_app_server_protocol::JSONRPCErrorError;
-    use codex_app_server_protocol::JSONRPCMessage;
-    use codex_app_server_protocol::JSONRPCNotification;
-    use codex_app_server_protocol::JSONRPCRequest;
-    use codex_app_server_protocol::JSONRPCResponse;
-
-    fn test_options() -> ExecServerClientConnectOptions {
-        ExecServerClientConnectOptions {
-            client_name: "test-client".to_string(),
-            initialize_timeout: Duration::from_secs(1),
-        }
-    }
-
-    async fn read_jsonrpc_line<R>(lines: &mut tokio::io::Lines<BufReader<R>>) -> JSONRPCMessage
-    where
-        R: tokio::io::AsyncRead + Unpin,
-    {
-        let next_line = timeout(Duration::from_secs(1), lines.next_line()).await;
-        let line_result = match next_line {
-            Ok(line_result) => line_result,
-            Err(err) => panic!("timed out waiting for JSON-RPC line: {err}"),
-        };
-        let maybe_line = match line_result {
-            Ok(maybe_line) => maybe_line,
-            Err(err) => panic!("failed to read JSON-RPC line: {err}"),
-        };
-        let line = match maybe_line {
-            Some(line) => line,
-            None => panic!("server connection closed before JSON-RPC line arrived"),
-        };
-        match serde_json::from_str::<JSONRPCMessage>(&line) {
-            Ok(message) => message,
-            Err(err) => panic!("failed to parse JSON-RPC line: {err}"),
-        }
-    }
-
-    async fn write_jsonrpc_line<W>(writer: &mut W, message: JSONRPCMessage)
-    where
-        W: tokio::io::AsyncWrite + Unpin,
-    {
-        let encoded = match serde_json::to_string(&message) {
-            Ok(encoded) => encoded,
-            Err(err) => panic!("failed to encode JSON-RPC message: {err}"),
-        };
-        if let Err(err) = writer.write_all(format!("{encoded}\n").as_bytes()).await {
-            panic!("failed to write JSON-RPC line: {err}");
-        }
-    }
-
-    #[tokio::test]
-    async fn connect_stdio_performs_initialize_handshake() {
-        let (client_stdin, server_reader) = tokio::io::duplex(4096);
-        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
-
-        let server = tokio::spawn(async move {
-            let mut lines = BufReader::new(server_reader).lines();
-
-            let initialize = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(request) = initialize else {
-                panic!("expected initialize request");
-            };
-            assert_eq!(request.method, INITIALIZE_METHOD);
-            assert_eq!(
-                request.params,
-                Some(serde_json::json!({ "clientName": "test-client" }))
-            );
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id: request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
-                }),
-            )
-            .await;
-
-            let initialized = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Notification(JSONRPCNotification { method, params }) = initialized
-            else {
-                panic!("expected initialized notification");
-            };
-            assert_eq!(method, INITIALIZED_METHOD);
-            assert_eq!(params, Some(serde_json::json!({})));
-        });
-
-        let client =
-            ExecServerClient::connect_stdio(client_stdin, client_stdout, test_options()).await;
-        if let Err(err) = client {
-            panic!("failed to connect test client: {err}");
-        }
-
-        if let Err(err) = server.await {
-            panic!("server task failed: {err}");
-        }
-    }
-
-    #[tokio::test]
-    async fn connect_in_process_starts_processes_without_jsonrpc_transport() {
-        let client = match ExecServerClient::connect_in_process(test_options()).await {
-            Ok(client) => client,
-            Err(err) => panic!("failed to connect in-process client: {err}"),
-        };
-
-        let process = match client
-            .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: vec!["printf".to_string(), "hello".to_string()],
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: false,
-                arg0: None,
-            })
-            .await
-        {
-            Ok(process) => process,
-            Err(err) => panic!("failed to start in-process child: {err}"),
-        };
-
-        let mut output = process.output_receiver();
-        let output = timeout(Duration::from_secs(1), output.recv())
-            .await
-            .unwrap_or_else(|err| panic!("timed out waiting for process output: {err}"))
-            .unwrap_or_else(|err| panic!("failed to receive process output: {err}"));
-        assert_eq!(
-            output,
-            ExecServerOutput {
-                stream: crate::protocol::ExecOutputStream::Stdout,
-                chunk: b"hello".to_vec(),
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn connect_in_process_read_returns_retained_output_and_exit_state() {
-        let client = match ExecServerClient::connect_in_process(test_options()).await {
-            Ok(client) => client,
-            Err(err) => panic!("failed to connect in-process client: {err}"),
-        };
-
-        let response = match client
-            .exec(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: vec!["printf".to_string(), "hello".to_string()],
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: false,
-                arg0: None,
-            })
-            .await
-        {
-            Ok(response) => response,
-            Err(err) => panic!("failed to start in-process child: {err}"),
-        };
-
-        let read = match client
-            .read(ReadParams {
-                process_id: response.process_id,
-                after_seq: None,
-                max_bytes: None,
-                wait_ms: Some(1000),
-            })
-            .await
-        {
-            Ok(read) => read,
-            Err(err) => panic!("failed to read in-process child output: {err}"),
-        };
-
-        assert_eq!(read.chunks.len(), 1);
-        assert_eq!(read.chunks[0].seq, 1);
-        assert_eq!(read.chunks[0].stream, ExecOutputStream::Stdout);
-        assert_eq!(read.chunks[0].chunk.clone().into_inner(), b"hello".to_vec());
-        assert_eq!(read.next_seq, 2);
-        assert!(read.exited);
-        assert_eq!(read.exit_code, Some(0));
-    }
-
-    #[tokio::test]
-    async fn connect_in_process_rejects_invalid_exec_params_from_handler() {
-        let client = match ExecServerClient::connect_in_process(test_options()).await {
-            Ok(client) => client,
-            Err(err) => panic!("failed to connect in-process client: {err}"),
-        };
-
-        let result = client
-            .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: Vec::new(),
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: false,
-                arg0: None,
-            })
-            .await;
-
-        match result {
-            Err(ExecServerError::Server { code, message }) => {
-                assert_eq!(code, -32602);
-                assert_eq!(message, "argv must not be empty");
-            }
-            Err(err) => panic!("unexpected in-process exec failure: {err}"),
-            Ok(_) => panic!("expected invalid params error"),
-        }
-    }
-
-    #[tokio::test]
-    async fn connect_in_process_rejects_writes_to_unknown_processes() {
-        let client = match ExecServerClient::connect_in_process(test_options()).await {
-            Ok(client) => client,
-            Err(err) => panic!("failed to connect in-process client: {err}"),
-        };
-
-        let result = client
-            .write_process(crate::protocol::WriteParams {
-                process_id: "missing".to_string(),
-                chunk: b"input".to_vec().into(),
-            })
-            .await;
-
-        match result {
-            Err(ExecServerError::Server { code, message }) => {
-                assert_eq!(code, -32600);
-                assert_eq!(message, "unknown process id missing");
-            }
-            Err(err) => panic!("unexpected in-process write failure: {err}"),
-            Ok(_) => panic!("expected unknown process error"),
-        }
-    }
-
-    #[tokio::test]
-    async fn connect_in_process_terminate_marks_process_exited() {
-        let client = match ExecServerClient::connect_in_process(test_options()).await {
-            Ok(client) => client,
-            Err(err) => panic!("failed to connect in-process client: {err}"),
-        };
-
-        let process = match client
-            .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: vec!["sleep".to_string(), "30".to_string()],
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: false,
-                arg0: None,
-            })
-            .await
-        {
-            Ok(process) => process,
-            Err(err) => panic!("failed to start in-process child: {err}"),
-        };
-
-        if let Err(err) = client.terminate_session(&process.process_id).await {
-            panic!("failed to terminate in-process child: {err}");
-        }
-
-        timeout(Duration::from_secs(2), async {
-            loop {
-                if process.has_exited() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .unwrap_or_else(|err| panic!("timed out waiting for in-process child to exit: {err}"));
-
-        assert!(process.has_exited());
-    }
-
-    #[tokio::test]
-    async fn connect_stdio_returns_initialize_errors() {
-        let (client_stdin, server_reader) = tokio::io::duplex(4096);
-        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
-
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(server_reader).lines();
-
-            let initialize = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(request) = initialize else {
-                panic!("expected initialize request");
-            };
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Error(JSONRPCError {
-                    id: request.id,
-                    error: JSONRPCErrorError {
-                        code: -32600,
-                        message: "rejected".to_string(),
-                        data: None,
-                    },
-                }),
-            )
-            .await;
-        });
-
-        let result =
-            ExecServerClient::connect_stdio(client_stdin, client_stdout, test_options()).await;
-
-        match result {
-            Err(ExecServerError::Server { code, message }) => {
-                assert_eq!(code, -32600);
-                assert_eq!(message, "rejected");
-            }
-            Err(err) => panic!("unexpected initialize failure: {err}"),
-            Ok(_) => panic!("expected initialize failure"),
-        }
-    }
-
-    #[tokio::test]
-    async fn start_process_cleans_up_registered_process_after_request_error() {
-        let (client_stdin, server_reader) = tokio::io::duplex(4096);
-        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
-
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(server_reader).lines();
-
-            let initialize = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(initialize_request) = initialize else {
-                panic!("expected initialize request");
-            };
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
-                }),
-            )
-            .await;
-
-            let initialized = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Notification(notification) = initialized else {
-                panic!("expected initialized notification");
-            };
-            assert_eq!(notification.method, INITIALIZED_METHOD);
-
-            let exec_request = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(JSONRPCRequest { id, method, .. }) = exec_request else {
-                panic!("expected exec request");
-            };
-            assert_eq!(method, EXEC_METHOD);
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Error(JSONRPCError {
-                    id,
-                    error: JSONRPCErrorError {
-                        code: -32600,
-                        message: "duplicate process".to_string(),
-                        data: None,
-                    },
-                }),
-            )
-            .await;
-        });
-
-        let client = match ExecServerClient::connect_stdio(
-            client_stdin,
-            client_stdout,
-            test_options(),
-        )
-        .await
-        {
-            Ok(client) => client,
-            Err(err) => panic!("failed to connect test client: {err}"),
-        };
-
-        let result = client
-            .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: true,
-                arg0: None,
-            })
-            .await;
-
-        match result {
-            Err(ExecServerError::Server { code, message }) => {
-                assert_eq!(code, -32600);
-                assert_eq!(message, "duplicate process");
-            }
-            Err(err) => panic!("unexpected start_process failure: {err}"),
-            Ok(_) => panic!("expected start_process failure"),
-        }
-
-        assert!(
-            client.inner.pending.lock().await.is_empty(),
-            "failed requests should not leave pending request state behind"
-        );
-    }
-
-    #[tokio::test]
-    async fn connect_stdio_times_out_during_initialize_handshake() {
-        let (client_stdin, server_reader) = tokio::io::duplex(4096);
-        let (_server_writer, client_stdout) = tokio::io::duplex(4096);
-
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(server_reader).lines();
-            let _ = read_jsonrpc_line(&mut lines).await;
-            tokio::time::sleep(Duration::from_millis(200)).await;
-        });
-
-        let result = ExecServerClient::connect_stdio(
-            client_stdin,
-            client_stdout,
-            ExecServerClientConnectOptions {
-                client_name: "test-client".to_string(),
-                initialize_timeout: Duration::from_millis(25),
-            },
-        )
-        .await;
-
-        match result {
-            Err(ExecServerError::InitializeTimedOut { timeout }) => {
-                assert_eq!(timeout, Duration::from_millis(25));
-            }
-            Err(err) => panic!("unexpected initialize timeout failure: {err}"),
-            Ok(_) => panic!("expected initialize timeout"),
-        }
-    }
-
-    #[tokio::test]
-    async fn start_process_preserves_output_stream_metadata() {
-        let (client_stdin, server_reader) = tokio::io::duplex(4096);
-        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
-
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(server_reader).lines();
-
-            let initialize = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(initialize_request) = initialize else {
-                panic!("expected initialize request");
-            };
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
-                }),
-            )
-            .await;
-
-            let initialized = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Notification(notification) = initialized else {
-                panic!("expected initialized notification");
-            };
-            assert_eq!(notification.method, INITIALIZED_METHOD);
-
-            let exec_request = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(JSONRPCRequest { id, method, .. }) = exec_request else {
-                panic!("expected exec request");
-            };
-            assert_eq!(method, EXEC_METHOD);
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id,
-                    result: serde_json::json!({ "processId": "proc-1" }),
-                }),
-            )
-            .await;
-            tokio::time::sleep(Duration::from_millis(25)).await;
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Notification(JSONRPCNotification {
-                    method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
-                    params: Some(serde_json::json!({
-                        "processId": "proc-1",
-                        "stream": "stderr",
-                        "chunk": "ZXJyb3IK"
-                    })),
-                }),
-            )
-            .await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        });
-
-        let client = match ExecServerClient::connect_stdio(
-            client_stdin,
-            client_stdout,
-            test_options(),
-        )
-        .await
-        {
-            Ok(client) => client,
-            Err(err) => panic!("failed to connect test client: {err}"),
-        };
-
-        let process = match client
-            .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: true,
-                arg0: None,
-            })
-            .await
-        {
-            Ok(process) => process,
-            Err(err) => panic!("failed to start process: {err}"),
-        };
-
-        let mut output = process.output_receiver();
-        let output = timeout(Duration::from_secs(1), output.recv())
-            .await
-            .unwrap_or_else(|err| panic!("timed out waiting for process output: {err}"))
-            .unwrap_or_else(|err| panic!("failed to receive process output: {err}"));
-        assert_eq!(output.stream, ExecOutputStream::Stderr);
-        assert_eq!(output.chunk, b"error\n".to_vec());
-    }
-
-    #[tokio::test]
-    async fn terminate_does_not_mark_process_exited_before_exit_notification() {
-        let (client_stdin, server_reader) = tokio::io::duplex(4096);
-        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
-
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(server_reader).lines();
-
-            let initialize = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(initialize_request) = initialize else {
-                panic!("expected initialize request");
-            };
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
-                }),
-            )
-            .await;
-
-            let initialized = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Notification(notification) = initialized else {
-                panic!("expected initialized notification");
-            };
-            assert_eq!(notification.method, INITIALIZED_METHOD);
-
-            let exec_request = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(JSONRPCRequest { id, method, .. }) = exec_request else {
-                panic!("expected exec request");
-            };
-            assert_eq!(method, EXEC_METHOD);
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id,
-                    result: serde_json::json!({ "processId": "proc-1" }),
-                }),
-            )
-            .await;
-
-            let terminate_request = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(JSONRPCRequest { id, method, .. }) = terminate_request
-            else {
-                panic!("expected terminate request");
-            };
-            assert_eq!(method, EXEC_TERMINATE_METHOD);
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id,
-                    result: serde_json::json!({ "running": true }),
-                }),
-            )
-            .await;
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        });
-
-        let client = match ExecServerClient::connect_stdio(
-            client_stdin,
-            client_stdout,
-            test_options(),
-        )
-        .await
-        {
-            Ok(client) => client,
-            Err(err) => panic!("failed to connect test client: {err}"),
-        };
-
-        let process = match client
-            .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: true,
-                arg0: None,
-            })
-            .await
-        {
-            Ok(process) => process,
-            Err(err) => panic!("failed to start process: {err}"),
-        };
-
-        process.terminate();
-        tokio::time::sleep(Duration::from_millis(25)).await;
-        assert!(!process.has_exited(), "terminate should not imply exit");
-        assert_eq!(process.exit_code(), None);
-    }
-
-    #[tokio::test]
-    async fn start_process_uses_protocol_process_ids() {
-        let (client_stdin, server_reader) = tokio::io::duplex(4096);
-        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
-
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(server_reader).lines();
-
-            let initialize = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(initialize_request) = initialize else {
-                panic!("expected initialize request");
-            };
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
-                }),
-            )
-            .await;
-
-            let initialized = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Notification(notification) = initialized else {
-                panic!("expected initialized notification");
-            };
-            assert_eq!(notification.method, INITIALIZED_METHOD);
-
-            let exec_request = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(JSONRPCRequest { id, method, .. }) = exec_request else {
-                panic!("expected exec request");
-            };
-            assert_eq!(method, EXEC_METHOD);
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id,
-                    result: serde_json::json!({ "processId": "other-proc" }),
-                }),
-            )
-            .await;
-        });
-
-        let client = match ExecServerClient::connect_stdio(
-            client_stdin,
-            client_stdout,
-            test_options(),
-        )
-        .await
-        {
-            Ok(client) => client,
-            Err(err) => panic!("failed to connect test client: {err}"),
-        };
-
-        let process = match client
-            .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: true,
-                arg0: None,
-            })
-            .await
-        {
-            Ok(process) => process,
-            Err(err) => panic!("failed to start process: {err}"),
-        };
-
-        assert_eq!(process.process_id, "other-proc");
-    }
-
-    #[tokio::test]
-    async fn start_process_routes_output_for_protocol_process_ids() {
-        let (client_stdin, server_reader) = tokio::io::duplex(4096);
-        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
-
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(server_reader).lines();
-
-            let initialize = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(initialize_request) = initialize else {
-                panic!("expected initialize request");
-            };
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
-                }),
-            )
-            .await;
-
-            let initialized = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Notification(notification) = initialized else {
-                panic!("expected initialized notification");
-            };
-            assert_eq!(notification.method, INITIALIZED_METHOD);
-
-            let exec_request = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(JSONRPCRequest { id, method, .. }) = exec_request else {
-                panic!("expected exec request");
-            };
-            assert_eq!(method, EXEC_METHOD);
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id,
-                    result: serde_json::json!({ "processId": "proc-1" }),
-                }),
-            )
-            .await;
-            tokio::time::sleep(Duration::from_millis(25)).await;
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Notification(JSONRPCNotification {
-                    method: EXEC_OUTPUT_DELTA_METHOD.to_string(),
-                    params: Some(serde_json::json!({
-                        "processId": "proc-1",
-                        "stream": "stdout",
-                        "chunk": "YWxpdmUK"
-                    })),
-                }),
-            )
-            .await;
-        });
-
-        let client = match ExecServerClient::connect_stdio(
-            client_stdin,
-            client_stdout,
-            test_options(),
-        )
-        .await
-        {
-            Ok(client) => client,
-            Err(err) => panic!("failed to connect test client: {err}"),
-        };
-
-        let first_process = match client
-            .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: true,
-                arg0: None,
-            })
-            .await
-        {
-            Ok(process) => process,
-            Err(err) => panic!("failed to start first process: {err}"),
-        };
-
-        let mut output = first_process.output_receiver();
-        let output = timeout(Duration::from_secs(1), output.recv())
-            .await
-            .unwrap_or_else(|err| panic!("timed out waiting for process output: {err}"))
-            .unwrap_or_else(|err| panic!("failed to receive process output: {err}"));
-        assert_eq!(output.stream, ExecOutputStream::Stdout);
-        assert_eq!(output.chunk, b"alive\n".to_vec());
-    }
-
-    #[tokio::test]
-    async fn transport_shutdown_marks_processes_exited_without_exit_codes() {
-        let (client_stdin, server_reader) = tokio::io::duplex(4096);
-        let (mut server_writer, client_stdout) = tokio::io::duplex(4096);
-
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(server_reader).lines();
-
-            let initialize = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(initialize_request) = initialize else {
-                panic!("expected initialize request");
-            };
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
-                }),
-            )
-            .await;
-
-            let initialized = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Notification(notification) = initialized else {
-                panic!("expected initialized notification");
-            };
-            assert_eq!(notification.method, INITIALIZED_METHOD);
-
-            let exec_request = read_jsonrpc_line(&mut lines).await;
-            let JSONRPCMessage::Request(JSONRPCRequest { id, method, .. }) = exec_request else {
-                panic!("expected exec request");
-            };
-            assert_eq!(method, EXEC_METHOD);
-            write_jsonrpc_line(
-                &mut server_writer,
-                JSONRPCMessage::Response(JSONRPCResponse {
-                    id,
-                    result: serde_json::json!({ "processId": "proc-1" }),
-                }),
-            )
-            .await;
-            drop(server_writer);
-        });
-
-        let client = match ExecServerClient::connect_stdio(
-            client_stdin,
-            client_stdout,
-            test_options(),
-        )
-        .await
-        {
-            Ok(client) => client,
-            Err(err) => panic!("failed to connect test client: {err}"),
-        };
-
-        let process = match client
-            .start_process(ExecParams {
-                process_id: "proc-1".to_string(),
-                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
-                cwd: std::env::current_dir().unwrap_or_else(|err| panic!("missing cwd: {err}")),
-                env: HashMap::new(),
-                tty: true,
-                arg0: None,
-            })
-            .await
-        {
-            Ok(process) => process,
-            Err(err) => panic!("failed to start process: {err}"),
-        };
-
-        let _ = process;
-    }
-}
+mod tests;
