@@ -1,28 +1,50 @@
 # codex-exec-server
 
-`codex-exec-server` is a small standalone stdio JSON-RPC server for spawning
-and controlling subprocesses through `codex-utils-pty`.
-
-This PR intentionally lands only the standalone binary, client, wire protocol,
-and docs. Exec and filesystem methods are stubbed server-side here and are
-implemented in follow-up PRs.
+`codex-exec-server` is a small standalone JSON-RPC server for spawning and
+controlling subprocesses through `codex-utils-pty`.
 
 It currently provides:
 
 - a standalone binary: `codex-exec-server`
+- a transport-agnostic server runtime with stdio and websocket entrypoints
 - a Rust client: `ExecServerClient`
+- a direct in-process client mode: `ExecServerClient::connect_in_process`
+- a separate local launch helper: `spawn_local_exec_server`
 - a small protocol module with shared request/response types
 
 This crate is intentionally narrow. It is not wired into the main Codex CLI or
 unified-exec in this PR; it is only the standalone transport layer.
 
+The internal shape is intentionally closer to `app-server` than the first cut:
+
+- transport adapters are separate from the per-connection request processor
+- JSON-RPC route matching is separate from the stateful exec handler
+- the client only speaks the protocol; it does not spawn a server subprocess
+- the client can also bypass the JSON-RPC transport/routing layer in local
+  in-process mode and call the typed handler directly
+- local child-process launch is handled by a separate helper/factory layer
+
+That split is meant to leave reusable seams if exec-server and app-server later
+share transport or JSON-RPC connection utilities. It also keeps the core
+handler testable without the RPC server implementation itself.
+
+Design notes for a likely future integration with unified exec, including
+rough call flow, buffering, and sandboxing boundaries, live in
+[DESIGN.md](./DESIGN.md).
+
 ## Transport
 
-The server speaks newline-delimited JSON-RPC 2.0 over stdio.
+The server speaks the same JSON-RPC message shapes over multiple transports.
 
-- `stdin`: one JSON-RPC message per line
-- `stdout`: one JSON-RPC message per line
-- `stderr`: reserved for logs / process errors
+The standalone binary supports:
+
+- `stdio://` (default)
+- `ws://IP:PORT`
+
+Wire framing:
+
+- stdio: one newline-delimited JSON-RPC message per line on stdin/stdout
+- websocket: one JSON-RPC message per websocket text frame
 
 Like the app-server transport, messages on the wire omit the `"jsonrpc":"2.0"`
 field and use the shared `codex-app-server-protocol` envelope types.
@@ -40,13 +62,19 @@ Each connection follows this sequence:
 1. Send `initialize`.
 2. Wait for the `initialize` response.
 3. Send `initialized`.
-4. Call exec or filesystem RPCs once the follow-up implementation PRs land.
+4. Start and manage processes with `process/start`, `process/read`,
+   `process/write`, and `process/terminate`.
+5. Read streaming notifications from `process/output` and
+   `process/exited`.
 
-If the server receives any notification other than `initialized`, it replies
-with an error using request id `-1`.
+If the client sends exec methods before completing the `initialize` /
+`initialized` handshake, the server rejects them.
 
-If the stdio connection closes, the server terminates any remaining managed
-processes before exiting.
+If a connection closes, the server terminates any remaining managed processes
+for that connection.
+
+TODO: add authentication to the `initialize` setup before this is used across a
+trust boundary.
 
 ## API
 
@@ -73,12 +101,12 @@ Response:
 ### `initialized`
 
 Handshake acknowledgement notification sent by the client after a successful
-`initialize` response.
+`initialize` response. Exec methods are rejected until this arrives.
 
-Params are currently ignored. Sending any other notification method is treated
-as an invalid request.
+Params are currently ignored. Sending any other client notification method is a
+protocol error.
 
-### `command/exec`
+### `process/start`
 
 Starts a new managed process.
 
@@ -93,44 +121,36 @@ Request params:
     "PATH": "/usr/bin:/bin"
   },
   "tty": true,
-  "outputBytesCap": 16384,
   "arg0": null
 }
 ```
 
 Field definitions:
 
-- `processId`: caller-chosen stable id for this process within the connection.
 - `argv`: command vector. It must be non-empty.
 - `cwd`: absolute working directory used for the child process.
 - `env`: environment variables passed to the child process.
 - `tty`: when `true`, spawn a PTY-backed interactive process; when `false`,
   spawn a pipe-backed process with closed stdin.
-- `outputBytesCap`: maximum retained stdout/stderr bytes per stream for the
-  in-memory buffer. Defaults to `codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP`.
 - `arg0`: optional argv0 override forwarded to `codex-utils-pty`.
 
 Response:
 
 ```json
 {
-  "processId": "proc-1",
-  "running": true,
-  "exitCode": null,
-  "stdout": null,
-  "stderr": null
+  "processId": "proc-1"
 }
 ```
 
 Behavior notes:
 
-- Reusing an existing `processId` is rejected.
-- PTY-backed processes accept later writes through `command/exec/write`.
+- `processId` is chosen by the client and must be unique for the connection.
+- PTY-backed processes accept later writes through `process/write`.
 - Pipe-backed processes are launched with stdin closed and reject writes.
-- Output is streamed asynchronously via `command/exec/outputDelta`.
-- Exit is reported asynchronously via `command/exec/exited`.
+- Output is streamed asynchronously via `process/output`.
+- Exit is reported asynchronously via `process/exited`.
 
-### `command/exec/write`
+### `process/write`
 
 Writes raw bytes to a running PTY-backed process stdin.
 
@@ -158,7 +178,48 @@ Behavior notes:
 - Writes to an unknown `processId` are rejected.
 - Writes to a non-PTY process are rejected because stdin is already closed.
 
-### `command/exec/terminate`
+### `process/read`
+
+Reads retained output from a managed process by sequence number.
+
+Request params:
+
+```json
+{
+  "processId": "proc-1",
+  "afterSeq": 0,
+  "maxBytes": 65536,
+  "waitMs": 250
+}
+```
+
+Response:
+
+```json
+{
+  "chunks": [
+    {
+      "seq": 1,
+      "stream": "pty",
+      "chunk": "aGVsbG8K"
+    }
+  ],
+  "nextSeq": 2,
+  "exited": false,
+  "exitCode": null
+}
+```
+
+Behavior notes:
+
+- Output is retained in bounded server memory so callers can poll without
+  relying only on notifications.
+- `afterSeq` is exclusive: `0` reads from the beginning of the retained buffer.
+- `waitMs` waits briefly for new output or exit if nothing is currently
+  available.
+- Once retained output exceeds the per-process cap, oldest chunks are dropped.
+
+### `process/terminate`
 
 Terminates a running managed process.
 
@@ -188,7 +249,7 @@ If the process is already unknown or already removed, the server responds with:
 
 ## Notifications
 
-### `command/exec/outputDelta`
+### `process/output`
 
 Streaming output chunk from a running process.
 
@@ -205,10 +266,10 @@ Params:
 Fields:
 
 - `processId`: process identifier
-- `stream`: `"stdout"` or `"stderr"`
+- `stream`: `"stdout"`, `"stderr"`, or `"pty"` for PTY-backed processes
 - `chunk`: base64-encoded output bytes
 
-### `command/exec/exited`
+### `process/exited`
 
 Final process exit notification.
 
@@ -243,13 +304,58 @@ Typical error cases:
 The crate exports:
 
 - `ExecServerClient`
+- `ExecServerClientConnectOptions`
+- `RemoteExecServerConnectArgs`
 - `ExecServerLaunchCommand`
-- `ExecServerProcess`
+- `ExecServerEvent`
+- `SpawnedExecServer`
 - `ExecServerError`
+- `ExecServerTransport`
+- `spawn_local_exec_server(...)`
 - protocol structs such as `ExecParams`, `ExecResponse`,
   `WriteParams`, `TerminateParams`, `ExecOutputDeltaNotification`, and
   `ExecExitedNotification`
-- `run_main()` for embedding the stdio server in a binary
+- `run_main()` and `run_main_with_transport(...)`
+
+### Binary
+
+Run over stdio:
+
+```text
+codex-exec-server
+```
+
+Run as a websocket server:
+
+```text
+codex-exec-server --listen ws://127.0.0.1:8080
+```
+
+### Client
+
+Connect the client to an existing server transport:
+
+- `ExecServerClient::connect_stdio(...)`
+- `ExecServerClient::connect_websocket(...)`
+- `ExecServerClient::connect_in_process(...)` for a local no-transport mode
+  backed directly by the typed handler
+
+Timeout behavior:
+
+- stdio and websocket clients both enforce an initialize-handshake timeout
+- websocket clients also enforce a connect timeout before the handshake begins
+
+Events:
+
+- `ExecServerClient::event_receiver()` yields `ExecServerEvent`
+- output events include both `stream` (`stdout`, `stderr`, or `pty`) and raw
+  bytes
+- process lifetime is tracked by server notifications such as
+  `process/exited`, not by a client-side process registry
+
+Spawning a local child process is deliberately separate:
+
+- `spawn_local_exec_server(...)`
 
 ## Example session
 
@@ -264,23 +370,23 @@ Initialize:
 Start a process:
 
 ```json
-{"id":2,"method":"command/exec","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"outputBytesCap":4096,"arg0":null}}
-{"id":2,"result":{"processId":"proc-1","running":true,"exitCode":null,"stdout":null,"stderr":null}}
-{"method":"command/exec/outputDelta","params":{"processId":"proc-1","stream":"stdout","chunk":"cmVhZHkK"}}
+{"id":2,"method":"process/start","params":{"processId":"proc-1","argv":["bash","-lc","printf 'ready\\n'; while IFS= read -r line; do printf 'echo:%s\\n' \"$line\"; done"],"cwd":"/tmp","env":{"PATH":"/usr/bin:/bin"},"tty":true,"arg0":null}}
+{"id":2,"result":{"processId":"proc-1"}}
+{"method":"process/output","params":{"processId":"proc-1","stream":"pty","chunk":"cmVhZHkK"}}
 ```
 
 Write to the process:
 
 ```json
-{"id":3,"method":"command/exec/write","params":{"processId":"proc-1","chunk":"aGVsbG8K"}}
+{"id":3,"method":"process/write","params":{"processId":"proc-1","chunk":"aGVsbG8K"}}
 {"id":3,"result":{"accepted":true}}
-{"method":"command/exec/outputDelta","params":{"processId":"proc-1","stream":"stdout","chunk":"ZWNobzpoZWxsbwo="}}
+{"method":"process/output","params":{"processId":"proc-1","stream":"pty","chunk":"ZWNobzpoZWxsbwo="}}
 ```
 
 Terminate it:
 
 ```json
-{"id":4,"method":"command/exec/terminate","params":{"processId":"proc-1"}}
+{"id":4,"method":"process/terminate","params":{"processId":"proc-1"}}
 {"id":4,"result":{"running":true}}
-{"method":"command/exec/exited","params":{"processId":"proc-1","exitCode":0}}
+{"method":"process/exited","params":{"processId":"proc-1","exitCode":0}}
 ```

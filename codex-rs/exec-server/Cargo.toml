@@ -13,8 +13,10 @@ workspace = true
 
 [dependencies]
 base64 = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 codex-app-server-protocol = { workspace = true }
 codex-utils-pty = { workspace = true }
+futures = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -22,11 +24,13 @@ tokio = { workspace = true, features = [
     "io-std",
     "io-util",
     "macros",
+    "net",
     "process",
     "rt-multi-thread",
     "sync",
     "time",
 ] }
+tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
