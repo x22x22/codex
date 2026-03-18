@@ -10,12 +10,6 @@
             "null"
           ]
         },
-        "reviewThreadId": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "riskLevel": {
           "anyOf": [
             {

@@ -10229,7 +10229,6 @@ async fn app_server_guardian_review_started_sets_review_status() {
                 target_item_id: "guardian-1".to_string(),
                 review: GuardianApprovalReview {
                     status: GuardianApprovalReviewStatus::InProgress,
-                    review_thread_id: None,
                     risk_score: None,
                     risk_level: None,
                     rationale: None,
@@ -10268,7 +10267,6 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
                 target_item_id: "guardian-1".to_string(),
                 review: GuardianApprovalReview {
                     status: GuardianApprovalReviewStatus::InProgress,
-                    review_thread_id: None,
                     risk_score: None,
                     risk_level: None,
                     rationale: None,
@@ -10287,7 +10285,6 @@ async fn app_server_guardian_review_denied_renders_denied_request_snapshot() {
                 target_item_id: "guardian-1".to_string(),
                 review: GuardianApprovalReview {
                     status: GuardianApprovalReviewStatus::Denied,
-                    review_thread_id: None,
                     risk_score: Some(96),
                     risk_level: Some(AppServerGuardianRiskLevel::High),
                     rationale: Some("Would exfiltrate local source code.".to_string()),

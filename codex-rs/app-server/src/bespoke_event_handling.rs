@@ -215,9 +215,6 @@ fn guardian_auto_approval_review_notification(
                 GuardianApprovalReviewStatus::Aborted
             }
         },
-        review_thread_id: assessment
-            .review_thread_id
-            .map(|thread_id| thread_id.to_string()),
         risk_score: assessment.risk_score,
         risk_level: assessment.risk_level.map(Into::into),
         rationale: assessment.rationale.clone(),
@@ -2824,7 +2821,6 @@ mod tests {
                     payload.review.status,
                     GuardianApprovalReviewStatus::InProgress
                 );
-                assert_eq!(payload.review.review_thread_id, None);
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.rationale, None);
@@ -2847,7 +2843,7 @@ mod tests {
             &GuardianAssessmentEvent {
                 id: "item-2".to_string(),
                 turn_id: "turn-from-assessment".to_string(),
-                review_thread_id: Some(ThreadId::new()),
+                review_thread_id: None,
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
                 risk_score: Some(91),
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
@@ -2862,7 +2858,6 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-2");
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Denied);
-                assert!(payload.review.review_thread_id.is_some());
                 assert_eq!(payload.review.risk_score, Some(91));
                 assert_eq!(
                     payload.review.risk_level,
@@ -2903,7 +2898,6 @@ mod tests {
                 assert_eq!(payload.turn_id, "turn-from-assessment");
                 assert_eq!(payload.target_item_id, "item-3");
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
-                assert_eq!(payload.review.review_thread_id, None);
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.rationale, None);

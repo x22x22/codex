@@ -9,4 +9,4 @@ import type { GuardianRiskLevel } from "./GuardianRiskLevel";
  * `item/autoApprovalReview/*` notifications. This shape is expected to change
  * soon.
  */
-export type GuardianApprovalReview = { status: GuardianApprovalReviewStatus, reviewThreadId: string | null, riskScore: number | null, riskLevel: GuardianRiskLevel | null, rationale: string | null, };
+export type GuardianApprovalReview = { status: GuardianApprovalReviewStatus, riskScore: number | null, riskLevel: GuardianRiskLevel | null, rationale: string | null, };
