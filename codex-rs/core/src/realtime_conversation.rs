@@ -348,7 +348,7 @@ pub(crate) async fn handle_start(
     let provider = sess.provider().await;
     let auth = sess.services.auth_manager.auth().await;
     let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
-    let mut api_provider = provider.to_api_provider(/*use_chatgpt_base_url*/ false)?;
+    let mut api_provider = provider.to_api_provider(/*use_chatgpt_base_url*/ false);
     let config = sess.get_config().await;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
         api_provider.base_url = realtime_ws_base_url.clone();

@@ -435,7 +435,7 @@ impl ModelsManager {
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
         let api_provider = self
             .provider
-            .to_api_provider(matches!(auth_mode, Some(AuthMode::Chatgpt)))?;
+            .to_api_provider(matches!(auth_mode, Some(AuthMode::Chatgpt)));
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let auth_env = collect_auth_env_telemetry(
             &self.provider,

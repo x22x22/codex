@@ -544,7 +544,7 @@ impl ModelClient {
         let api_provider = self.state.provider.to_api_provider(matches!(
             auth.as_ref().map(CodexAuth::auth_mode),
             Some(crate::auth::AuthMode::Chatgpt)
-        ))?;
+        ));
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
         Ok(CurrentClientSetup {
             auth,
