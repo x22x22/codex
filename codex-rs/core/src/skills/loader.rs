@@ -205,8 +205,13 @@ where
 {
     let mut outcome = SkillLoadOutcome::default();
     for root in roots {
-        discover_skills_under_root_with_environment(&root.path, root.scope, environment, &mut outcome)
-            .await;
+        discover_skills_under_root_with_environment(
+            &root.path,
+            root.scope,
+            environment,
+            &mut outcome,
+        )
+        .await;
     }
 
     finalize_loaded_skills(&mut outcome);
@@ -432,7 +437,8 @@ async fn find_project_root_with_environment(
             continue;
         };
         for marker in project_root_markers {
-            let Ok(marker_path) = AbsolutePathBuf::try_from(ancestor_abs.as_path().join(marker)) else {
+            let Ok(marker_path) = AbsolutePathBuf::try_from(ancestor_abs.as_path().join(marker))
+            else {
                 continue;
             };
             if let Ok(metadata) = file_system.get_metadata(&marker_path).await
@@ -513,7 +519,10 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries,
             Err(e) => {
-                error!("failed to read skills dir {}: {e:#}", dir.as_path().display());
+                error!(
+                    "failed to read skills dir {}: {e:#}",
+                    dir.as_path().display()
+                );
                 continue;
             }
         };
@@ -654,7 +663,10 @@ async fn discover_skills_under_root_with_environment(
         let entries = match file_system.read_directory(&dir).await {
             Ok(entries) => entries,
             Err(e) => {
-                error!("failed to read skills dir {}: {e:#}", dir.as_path().display());
+                error!(
+                    "failed to read skills dir {}: {e:#}",
+                    dir.as_path().display()
+                );
                 continue;
             }
         };
@@ -821,7 +833,7 @@ fn namespaced_skill_name(path: &Path, base_name: &str) -> String {
 
 fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
     // Fail open: optional metadata should not block loading SKILL.md.
-    let Some(skill_dir) = skill_path.as_path().parent() else {
+    let Some(skill_dir) = skill_path.parent() else {
         return LoadedSkillMetadata::default();
     };
     let metadata_path = skill_dir
@@ -881,20 +893,24 @@ async fn load_skill_metadata_with_environment(
     let Some(skill_dir) = skill_path.parent() else {
         return LoadedSkillMetadata::default();
     };
-    let metadata_path = skill_dir
+    let Ok(metadata_path) = skill_dir
         .join(SKILLS_METADATA_DIR)
-        .join(SKILLS_METADATA_FILENAME);
-    let Ok(metadata_path_abs) = AbsolutePathBuf::try_from(metadata_path.clone()) else {
+        .and_then(|path| path.join(SKILLS_METADATA_FILENAME))
+    else {
         return LoadedSkillMetadata::default();
     };
 
-    let contents = match environment.get_filesystem().read_file(&metadata_path_abs).await {
+    let contents = match environment
+        .get_filesystem()
+        .read_file(&metadata_path)
+        .await
+    {
         Ok(contents) => String::from_utf8_lossy(&contents).to_string(),
         Err(_) => return LoadedSkillMetadata::default(),
     };
 
     let parsed: SkillMetadataFile = {
-        let _guard = AbsolutePathBufGuard::new(skill_dir);
+        let _guard = AbsolutePathBufGuard::new(skill_dir.as_path());
         match serde_yaml::from_str(&contents) {
             Ok(parsed) => parsed,
             Err(error) => {
@@ -916,7 +932,7 @@ async fn load_skill_metadata_with_environment(
     } = parsed;
     let (permission_profile, managed_network_override) = normalize_permissions(permissions);
     LoadedSkillMetadata {
-        interface: resolve_interface(interface, skill_dir),
+        interface: resolve_interface(interface, skill_dir.as_path()),
         dependencies: resolve_dependencies(dependencies),
         policy: resolve_policy(policy),
         permission_profile,

@@ -121,6 +121,216 @@ fn emit_skill_injected_metric(
     );
 }
 
+#[cfg(test)]
+mod remote_environment_tests {
+    use super::*;
+    use crate::analytics_client::AnalyticsEventsClient;
+    use crate::analytics_client::build_track_events_context;
+    use crate::config::ConfigBuilder;
+    use crate::test_support::auth_manager_from_auth;
+    use crate::CodexAuth;
+    use async_trait::async_trait;
+    use codex_environment::CopyOptions;
+    use codex_environment::CreateDirectoryOptions;
+    use codex_environment::Environment;
+    use codex_environment::ExecutorFileSystem;
+    use codex_environment::FileMetadata;
+    use codex_environment::FileSystemResult;
+    use codex_environment::ReadDirectoryEntry;
+    use codex_environment::RemoveOptions;
+    use codex_protocol::protocol::SkillScope;
+    use std::fs;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    #[derive(Clone)]
+    struct RemappedFileSystem {
+        local_root: AbsolutePathBuf,
+        remote_root: AbsolutePathBuf,
+    }
+
+    impl RemappedFileSystem {
+        fn new(local_root: &std::path::Path, remote_root: &std::path::Path) -> Self {
+            Self {
+                local_root: AbsolutePathBuf::try_from(local_root.to_path_buf()).unwrap(),
+                remote_root: AbsolutePathBuf::try_from(remote_root.to_path_buf()).unwrap(),
+            }
+        }
+
+        fn remap(&self, path: &AbsolutePathBuf) -> AbsolutePathBuf {
+            let relative = path
+                .as_path()
+                .strip_prefix(self.local_root.as_path())
+                .expect("path should stay under the local test root");
+            AbsolutePathBuf::try_from(self.remote_root.as_path().join(relative)).unwrap()
+        }
+    }
+
+    #[async_trait]
+    impl ExecutorFileSystem for RemappedFileSystem {
+        async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>> {
+            tokio::fs::read(self.remap(path).as_path()).await
+        }
+
+        async fn write_file(
+            &self,
+            path: &AbsolutePathBuf,
+            contents: Vec<u8>,
+        ) -> FileSystemResult<()> {
+            tokio::fs::write(self.remap(path).as_path(), contents).await
+        }
+
+        async fn create_directory(
+            &self,
+            path: &AbsolutePathBuf,
+            options: CreateDirectoryOptions,
+        ) -> FileSystemResult<()> {
+            if options.recursive {
+                tokio::fs::create_dir_all(self.remap(path).as_path()).await
+            } else {
+                tokio::fs::create_dir(self.remap(path).as_path()).await
+            }
+        }
+
+        async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
+            let metadata = tokio::fs::metadata(self.remap(path).as_path()).await?;
+            Ok(FileMetadata {
+                is_directory: metadata.is_dir(),
+                is_file: metadata.is_file(),
+                created_at_ms: 0,
+                modified_at_ms: 0,
+            })
+        }
+
+        async fn read_directory(
+            &self,
+            path: &AbsolutePathBuf,
+        ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+            let mut entries = Vec::new();
+            let mut read_dir = tokio::fs::read_dir(self.remap(path).as_path()).await?;
+            while let Some(entry) = read_dir.next_entry().await? {
+                let metadata = tokio::fs::symlink_metadata(entry.path()).await?;
+                entries.push(ReadDirectoryEntry {
+                    file_name: entry.file_name().to_string_lossy().into_owned(),
+                    is_directory: metadata.is_dir(),
+                    is_file: metadata.is_file(),
+                    is_symlink: metadata.file_type().is_symlink(),
+                });
+            }
+            Ok(entries)
+        }
+
+        async fn remove(
+            &self,
+            path: &AbsolutePathBuf,
+            options: RemoveOptions,
+        ) -> FileSystemResult<()> {
+            let remapped = self.remap(path);
+            match tokio::fs::symlink_metadata(remapped.as_path()).await {
+                Ok(metadata) => {
+                    if metadata.is_dir() {
+                        if options.recursive {
+                            tokio::fs::remove_dir_all(remapped.as_path()).await
+                        } else {
+                            tokio::fs::remove_dir(remapped.as_path()).await
+                        }
+                    } else {
+                        tokio::fs::remove_file(remapped.as_path()).await
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound && options.force => Ok(()),
+                Err(err) => Err(err),
+            }
+        }
+
+        async fn copy(
+            &self,
+            source_path: &AbsolutePathBuf,
+            destination_path: &AbsolutePathBuf,
+            _options: CopyOptions,
+        ) -> FileSystemResult<()> {
+            tokio::fs::copy(
+                self.remap(source_path).as_path(),
+                self.remap(destination_path).as_path(),
+            )
+            .await
+            .map(|_| ())
+        }
+    }
+
+    async fn analytics_client_for_test(codex_home: &TempDir) -> AnalyticsEventsClient {
+        let config = Arc::new(
+            ConfigBuilder::default()
+                .codex_home(codex_home.path().to_path_buf())
+                .build()
+                .await
+                .expect("config"),
+        );
+        let auth_manager = auth_manager_from_auth(CodexAuth::from_api_key("Test API Key"));
+        AnalyticsEventsClient::new(config, auth_manager)
+    }
+
+    #[tokio::test]
+    async fn build_skill_injections_with_environment_reads_remote_repo_skill_contents() {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let local_root = tempfile::tempdir().expect("tempdir");
+        let remote_root = tempfile::tempdir().expect("tempdir");
+
+        fs::create_dir_all(local_root.path().join("repo/.agents/skills/demo")).unwrap();
+        fs::create_dir_all(remote_root.path().join("repo/.agents/skills/demo")).unwrap();
+
+        let local_skill_path = local_root.path().join("repo/.agents/skills/demo/SKILL.md");
+        fs::write(
+            &local_skill_path,
+            "---\nname: demo\ndescription: local\n---\nLOCAL_SKILL_MARKER\n",
+        )
+        .unwrap();
+        fs::write(
+            remote_root.path().join("repo/.agents/skills/demo/SKILL.md"),
+            "---\nname: demo\ndescription: remote\n---\nREMOTE_SKILL_MARKER\n",
+        )
+        .unwrap();
+
+        let mentioned_skills = vec![SkillMetadata {
+            name: "demo".to_string(),
+            description: "demo".to_string(),
+            short_description: None,
+            interface: None,
+            dependencies: None,
+            policy: None,
+            permission_profile: None,
+            managed_network_override: None,
+            path_to_skills_md: local_skill_path,
+            scope: SkillScope::Repo,
+        }];
+        let environment = Environment::new(Arc::new(RemappedFileSystem::new(
+            local_root.path(),
+            remote_root.path(),
+        )));
+        let analytics_client = analytics_client_for_test(&codex_home).await;
+
+        let result = build_skill_injections_with_environment(
+            &mentioned_skills,
+            Some(&environment),
+            None,
+            &analytics_client,
+            build_track_events_context(
+                "gpt-test".to_string(),
+                "thread".to_string(),
+                "turn".to_string(),
+            ),
+        )
+        .await;
+
+        assert!(result.warnings.is_empty());
+        assert_eq!(result.items.len(), 1);
+
+        let serialized = serde_json::to_string(&result.items[0]).expect("serialize response item");
+        assert!(serialized.contains("REMOTE_SKILL_MARKER"));
+        assert!(!serialized.contains("LOCAL_SKILL_MARKER"));
+    }
+}
+
 /// Collect explicitly mentioned skills from structured and text mentions.
 ///
 /// Structured `UserInput::Skill` selections are resolved first by path against

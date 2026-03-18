@@ -1765,9 +1765,11 @@ impl Session {
 
         let session_execution_backends =
             session_execution_backends_for_config(config.as_ref(), None).await?;
-        session_configuration.user_instructions =
-            get_user_instructions_with_environment(config.as_ref(), &session_execution_backends.environment)
-                .await;
+        session_configuration.user_instructions = get_user_instructions_with_environment(
+            config.as_ref(),
+            &session_execution_backends.environment,
+        )
+        .await;
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -2386,7 +2388,10 @@ impl Session {
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_config_with_environment(&per_turn_config, self.services.environment.as_ref())
+                .skills_for_config_with_environment(
+                    &per_turn_config,
+                    self.services.environment.as_ref(),
+                )
                 .await,
         );
         let mut turn_context: TurnContext = Self::make_turn_context(

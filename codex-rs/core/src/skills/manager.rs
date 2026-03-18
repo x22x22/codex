@@ -22,8 +22,8 @@ use crate::config_loader::load_config_layers_state;
 use crate::plugins::PluginsManager;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::build_implicit_skill_path_indexes;
-use crate::skills::loader::dedupe_skill_roots_by_path;
 use crate::skills::loader::SkillRoot;
+use crate::skills::loader::dedupe_skill_roots_by_path;
 use crate::skills::loader::load_skills_from_roots;
 use crate::skills::loader::load_skills_from_roots_with_environment;
 use crate::skills::loader::repo_agents_skill_roots_with_environment;
@@ -95,8 +95,12 @@ impl SkillsManager {
             loaded_plugins.effective_skill_roots(),
         );
         roots.extend(
-            repo_agents_skill_roots_with_environment(&config.config_layer_stack, &config.cwd, environment)
-                .await,
+            repo_agents_skill_roots_with_environment(
+                &config.config_layer_stack,
+                &config.cwd,
+                environment,
+            )
+            .await,
         );
         dedupe_skill_roots_by_path(&mut roots);
         if !config.bundled_skills_enabled() {
@@ -114,7 +118,8 @@ impl SkillsManager {
         }
 
         let mut outcome = load_skills_from_roots(local_roots);
-        let remote_repo_outcome = load_skills_from_roots_with_environment(repo_roots, environment).await;
+        let remote_repo_outcome =
+            load_skills_from_roots_with_environment(repo_roots, environment).await;
         outcome.skills.extend(remote_repo_outcome.skills);
         outcome.errors.extend(remote_repo_outcome.errors);
         finalize_skill_outcome(outcome, &config.config_layer_stack)

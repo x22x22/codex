@@ -2504,7 +2504,9 @@ impl Config {
         let experimental_unified_exec_exec_server_workspace_root = config_profile
             .experimental_unified_exec_exec_server_workspace_root
             .clone()
-            .or(cfg.experimental_unified_exec_exec_server_workspace_root.clone());
+            .or(cfg
+                .experimental_unified_exec_exec_server_workspace_root
+                .clone());
         let experimental_supported_tools = config_profile
             .experimental_supported_tools
             .clone()
