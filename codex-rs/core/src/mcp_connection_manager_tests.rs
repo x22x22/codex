@@ -4,7 +4,6 @@ use codex_protocol::protocol::McpAuthStatus;
 use rmcp::model::JsonObject;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 use tempfile::tempdir;
 
 fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
@@ -416,7 +415,6 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
             client: pending_client,
             startup_snapshot: Some(startup_tools),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_request_headers: Arc::new(StdMutex::new(None)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -442,7 +440,6 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
             client: pending_client,
             startup_snapshot: None,
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_request_headers: Arc::new(StdMutex::new(None)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -465,7 +462,6 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
             client: pending_client,
             startup_snapshot: Some(Vec::new()),
             startup_complete: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            startup_request_headers: Arc::new(StdMutex::new(None)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
@@ -498,7 +494,6 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
             client: failed_client,
             startup_snapshot: Some(startup_tools),
             startup_complete,
-            startup_request_headers: Arc::new(StdMutex::new(None)),
             tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
         },
     );
