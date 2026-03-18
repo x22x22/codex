@@ -32,6 +32,10 @@ impl ZshForkRuntime {
             .features
             .enable(Feature::ShellZshFork)
             .expect("test config should allow feature update");
+        config
+            .features
+            .disable(Feature::ShellSnapshot)
+            .expect("test config should allow feature update");
         config.zsh_path = Some(self.zsh_path.clone());
         config.main_execve_wrapper_exe = Some(self.main_execve_wrapper_exe.clone());
         config.permissions.allow_login_shell = false;

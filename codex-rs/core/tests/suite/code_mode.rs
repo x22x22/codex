@@ -146,6 +146,7 @@ async fn run_code_mode_turn(
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
+            let _ = config.features.disable(Feature::ShellSnapshot);
             config.include_apply_patch_tool = include_apply_patch;
         });
     let test = builder.build(server).await?;
@@ -183,6 +184,7 @@ async fn run_code_mode_turn_with_rmcp(
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
+            let _ = config.features.disable(Feature::ShellSnapshot);
 
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
@@ -301,6 +303,7 @@ async fn code_mode_only_restricts_prompt_tools() -> Result<()> {
 
     let mut builder = test_codex().with_config(|config| {
         let _ = config.features.enable(Feature::CodeModeOnly);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
     test.submit_turn("list tools in code mode only").await?;
@@ -347,6 +350,7 @@ text(output.output);
 
     let mut builder = test_codex().with_config(|config| {
         let _ = config.features.enable(Feature::CodeModeOnly);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
     test.submit_turn("use exec to run nested tool in code mode only")
@@ -406,6 +410,7 @@ async fn code_mode_nested_tool_calls_can_run_in_parallel() -> Result<()> {
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
             let _ = config.features.enable(Feature::CodeMode);
+            let _ = config.features.disable(Feature::ShellSnapshot);
         });
     let test = builder.build(&server).await?;
 
@@ -620,6 +625,7 @@ async fn code_mode_can_yield_and_resume_with_wait() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
     let phase_2_gate = test.workspace_path("code-mode-phase-2.ready");
@@ -766,6 +772,7 @@ async fn code_mode_yield_timeout_works_for_busy_loop() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
 
@@ -860,6 +867,7 @@ async fn code_mode_can_run_multiple_yielded_sessions() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
     let session_a_gate = test.workspace_path("code-mode-session-a.ready");
@@ -1028,6 +1036,7 @@ async fn code_mode_wait_can_terminate_and_continue() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
     let termination_gate = test.workspace_path("code-mode-terminate.ready");
@@ -1154,6 +1163,7 @@ async fn code_mode_wait_returns_error_for_unknown_session() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
 
@@ -1216,6 +1226,7 @@ async fn code_mode_wait_terminate_returns_completed_session_if_it_finished_after
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
     let session_a_gate = test.workspace_path("code-mode-session-a-finished.ready");
@@ -1411,6 +1422,7 @@ async fn code_mode_background_keeps_running_on_later_turn_without_wait() -> Resu
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
     let resumed_file = test.workspace_path("code-mode-yield-resumed.txt");
@@ -1504,6 +1516,7 @@ async fn code_mode_wait_uses_its_own_max_tokens_budget() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
     let completion_gate = test.workspace_path("code-mode-max-tokens.ready");
@@ -2254,6 +2267,7 @@ async fn code_mode_can_call_hidden_dynamic_tools() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let base_test = builder.build(&server).await?;
     let new_thread = base_test
@@ -2483,6 +2497,7 @@ async fn code_mode_can_store_and_load_values_across_turns() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
         let _ = config.features.enable(Feature::CodeMode);
+        let _ = config.features.disable(Feature::ShellSnapshot);
     });
     let test = builder.build(&server).await?;
 

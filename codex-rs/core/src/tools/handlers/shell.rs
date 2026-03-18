@@ -33,6 +33,7 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::runtimes::command_can_use_shell_snapshot;
 use crate::tools::runtimes::shell::ShellRequest;
 use crate::tools::runtimes::shell::ShellRuntime;
 use crate::tools::runtimes::shell::ShellRuntimeBackend;
@@ -458,6 +459,12 @@ impl ShellHandler {
             return Err(FunctionCallError::RespondToModel(format!(
                 "approval policy is {approval_policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {approval_policy:?}"
             )));
+        }
+
+        if command_can_use_shell_snapshot(&exec_params.command) {
+            session
+                .ensure_shell_snapshot_for_cwd(&exec_params.cwd)
+                .await;
         }
 
         // Intercept apply_patch if present.

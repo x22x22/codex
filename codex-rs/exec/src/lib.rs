@@ -1257,8 +1257,8 @@ async fn request_shutdown(
         },
     };
     send_request_with_response::<ThreadUnsubscribeResponse>(client, request, "thread/unsubscribe")
-        .await
-        .map(|_| ())
+        .await?;
+    Ok(())
 }
 
 async fn resolve_server_request(

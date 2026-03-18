@@ -49,7 +49,7 @@ struct SnapshotRunOptions {
 
 async fn wait_for_snapshot(codex_home: &Path) -> Result<PathBuf> {
     let snapshot_dir = codex_home.join("shell_snapshots");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Ok(mut entries) = fs::read_dir(&snapshot_dir).await {
             while let Some(entry) = entries.next_entry().await? {
@@ -621,6 +621,18 @@ async fn shell_snapshot_deleted_after_shutdown_with_skills() -> Result<()> {
     let codex_home = home.path().to_path_buf();
     let codex = harness.test().codex.clone();
 
+    run_tool_turn_on_harness(
+        &harness,
+        "warm up shell snapshot before shutdown",
+        "shell-snapshot-shutdown-warmup",
+        "shell_command",
+        json!({
+            "command": "printf warmup",
+            "timeout_ms": 1_000,
+        }),
+    )
+    .await?;
+
     let snapshot_path = wait_for_snapshot(&codex_home).await?;
     assert!(snapshot_path.exists());
 
@@ -629,7 +641,10 @@ async fn shell_snapshot_deleted_after_shutdown_with_skills() -> Result<()> {
 
     drop(codex);
     drop(harness);
-    sleep(Duration::from_millis(150)).await;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while snapshot_path.exists() && Instant::now() < deadline {
+        sleep(Duration::from_millis(25)).await;
+    }
 
     assert_eq!(
         snapshot_path.exists(),

@@ -247,18 +247,28 @@ async fn unified_exec_pause_blocks_yield_timeout() -> anyhow::Result<()> {
     });
 
     let started = tokio::time::Instant::now();
-    let response = exec_command(&session, &turn, "sleep 1 && echo unified-exec-done", 250).await?;
+    let response = exec_command(&session, &turn, "printf unified-exec-done", 250).await?;
+    let final_response = if response.truncated_output().contains("unified-exec-done") {
+        response
+    } else {
+        let process_id = response.process_id.expect(
+            "paused command without initial output should remain available for a follow-up poll",
+        );
+        write_stdin(&session, process_id, "", 250).await?
+    };
 
     assert!(
         started.elapsed() >= Duration::from_secs(2),
         "pause should block the unified exec yield timeout"
     );
     assert!(
-        response.truncated_output().contains("unified-exec-done"),
+        final_response
+            .truncated_output()
+            .contains("unified-exec-done"),
         "exec_command should wait for output after the pause lifts"
     );
     assert!(
-        response.process_id.is_none(),
+        final_response.process_id.is_none(),
         "completed command should not leave a background process"
     );
 

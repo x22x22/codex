@@ -1735,13 +1735,7 @@ impl Session {
                 default_shell.shell_snapshot = rx;
                 tx
             } else {
-                ShellSnapshot::start_snapshotting(
-                    config.codex_home.clone(),
-                    conversation_id,
-                    session_configuration.cwd.to_path_buf(),
-                    &mut default_shell,
-                    session_telemetry.clone(),
-                )
+                ShellSnapshot::channel(&mut default_shell)
             }
         } else {
             let (tx, rx) = watch::channel(None);
@@ -1864,6 +1858,7 @@ impl Session {
             rollout: Mutex::new(rollout_recorder),
             user_shell: Arc::new(default_shell),
             shell_snapshot_tx,
+            shell_snapshot_refresh_lock: Arc::new(Mutex::new(())),
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             exec_policy,
             auth_manager: Arc::clone(&auth_manager),
@@ -2294,6 +2289,10 @@ impl Session {
             return;
         }
 
+        if self.services.user_shell.shell_snapshot().is_none() {
+            return;
+        }
+
         if matches!(
             session_source,
             SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
@@ -2301,14 +2300,85 @@ impl Session {
             return;
         }
 
-        ShellSnapshot::refresh_snapshot(
-            codex_home.to_path_buf(),
+        self.spawn_shell_snapshot_refresh_if_idle(codex_home.to_path_buf(), next_cwd.to_path_buf());
+    }
+
+    pub(crate) async fn ensure_shell_snapshot_for_cwd(&self, cwd: &Path) {
+        if !self.features.enabled(Feature::ShellSnapshot) {
+            return;
+        }
+
+        let (codex_home, session_source) = {
+            let state = self.state.lock().await;
+            (
+                state.session_configuration.codex_home().clone(),
+                state.session_configuration.session_source.clone(),
+            )
+        };
+
+        if matches!(
+            session_source,
+            SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+        ) {
+            return;
+        }
+
+        if self
+            .services
+            .user_shell
+            .shell_snapshot()
+            .is_some_and(|snapshot| snapshot.path.exists() && snapshot.cwd == cwd)
+        {
+            return;
+        }
+
+        let _refresh_guard = Arc::clone(&self.services.shell_snapshot_refresh_lock)
+            .lock_owned()
+            .await;
+
+        if self
+            .services
+            .user_shell
+            .shell_snapshot()
+            .is_some_and(|snapshot| snapshot.path.exists() && snapshot.cwd == cwd)
+        {
+            return;
+        }
+
+        let _ = ShellSnapshot::ensure_snapshot(
+            codex_home,
             self.conversation_id,
-            next_cwd.to_path_buf(),
+            cwd.to_path_buf(),
             self.services.user_shell.as_ref().clone(),
             self.services.shell_snapshot_tx.clone(),
             self.services.session_telemetry.clone(),
-        );
+        )
+        .await;
+    }
+
+    fn spawn_shell_snapshot_refresh_if_idle(&self, codex_home: PathBuf, cwd: PathBuf) {
+        let Ok(refresh_guard) =
+            Arc::clone(&self.services.shell_snapshot_refresh_lock).try_lock_owned()
+        else {
+            return;
+        };
+
+        let session_id = self.conversation_id;
+        let shell = self.services.user_shell.as_ref().clone();
+        let shell_snapshot_tx = self.services.shell_snapshot_tx.clone();
+        let session_telemetry = self.services.session_telemetry.clone();
+        tokio::spawn(async move {
+            let _refresh_guard = refresh_guard;
+            let _ = ShellSnapshot::ensure_snapshot(
+                codex_home,
+                session_id,
+                cwd,
+                shell,
+                shell_snapshot_tx,
+                session_telemetry,
+            )
+            .await;
+        });
     }
 
     pub(crate) async fn update_settings(

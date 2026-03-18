@@ -123,6 +123,9 @@ pub(crate) async fn execute_user_shell_command(
     // allows commands that use shell features (pipes, &&, redirects, etc.).
     // We do not source rc files or otherwise reformat the script.
     let use_login_shell = true;
+    session
+        .ensure_shell_snapshot_for_cwd(turn_context.cwd.as_path())
+        .await;
     let session_shell = session.user_shell();
     let display_command = session_shell.derive_exec_args(&command, use_login_shell);
     let exec_command = maybe_wrap_shell_lc_with_snapshot(

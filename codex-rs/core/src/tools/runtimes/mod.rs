@@ -45,6 +45,10 @@ pub(crate) fn build_sandbox_command(
     })
 }
 
+pub(crate) fn command_can_use_shell_snapshot(command: &[String]) -> bool {
+    !cfg!(windows) && command.len() >= 3 && command[1] == "-lc"
+}
+
 /// POSIX-only helper: for commands produced by `Shell::derive_exec_args`
 /// for Bash/Zsh/sh of the form `[shell_path, "-lc", "<script>"]`, and
 /// when a snapshot is configured on the session shell, rewrite the argv
@@ -63,7 +67,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     cwd: &Path,
     explicit_env_overrides: &HashMap<String, String>,
 ) -> Vec<String> {
-    if cfg!(windows) {
+    if !command_can_use_shell_snapshot(command) {
         return command.to_vec();
     }
 
@@ -83,15 +87,6 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     } else {
         snapshot.cwd != cwd
     } {
-        return command.to_vec();
-    }
-
-    if command.len() < 3 {
-        return command.to_vec();
-    }
-
-    let flag = command[1].as_str();
-    if flag != "-lc" {
         return command.to_vec();
     }
 

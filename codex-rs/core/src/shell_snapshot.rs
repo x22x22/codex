@@ -36,25 +36,9 @@ const SNAPSHOT_DIR: &str = "shell_snapshots";
 const EXCLUDED_EXPORT_VARS: &[&str] = &["PWD", "OLDPWD"];
 
 impl ShellSnapshot {
-    pub fn start_snapshotting(
-        codex_home: PathBuf,
-        session_id: ThreadId,
-        session_cwd: PathBuf,
-        shell: &mut Shell,
-        session_telemetry: SessionTelemetry,
-    ) -> watch::Sender<Option<Arc<ShellSnapshot>>> {
+    pub fn channel(shell: &mut Shell) -> watch::Sender<Option<Arc<ShellSnapshot>>> {
         let (shell_snapshot_tx, shell_snapshot_rx) = watch::channel(None);
         shell.shell_snapshot = shell_snapshot_rx;
-
-        Self::spawn_snapshot_task(
-            codex_home,
-            session_id,
-            session_cwd,
-            shell.clone(),
-            shell_snapshot_tx.clone(),
-            session_telemetry,
-        );
-
         shell_snapshot_tx
     }
 
@@ -76,6 +60,25 @@ impl ShellSnapshot {
         );
     }
 
+    pub async fn ensure_snapshot(
+        codex_home: PathBuf,
+        session_id: ThreadId,
+        session_cwd: PathBuf,
+        shell: Shell,
+        shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
+        session_telemetry: SessionTelemetry,
+    ) -> Option<Arc<ShellSnapshot>> {
+        Self::create_and_publish_snapshot(
+            codex_home,
+            session_id,
+            session_cwd,
+            shell,
+            shell_snapshot_tx,
+            session_telemetry,
+        )
+        .await
+    }
+
     fn spawn_snapshot_task(
         codex_home: PathBuf,
         session_id: ThreadId,
@@ -87,27 +90,48 @@ impl ShellSnapshot {
         let snapshot_span = info_span!("shell_snapshot", thread_id = %session_id);
         tokio::spawn(
             async move {
-                let timer = session_telemetry.start_timer("codex.shell_snapshot.duration_ms", &[]);
-                let snapshot = ShellSnapshot::try_new(
-                    &codex_home,
+                let _ = Self::create_and_publish_snapshot(
+                    codex_home,
                     session_id,
-                    session_cwd.as_path(),
-                    &snapshot_shell,
+                    session_cwd,
+                    snapshot_shell,
+                    shell_snapshot_tx,
+                    session_telemetry,
                 )
-                .await
-                .map(Arc::new);
-                let success = snapshot.is_ok();
-                let success_tag = if success { "true" } else { "false" };
-                let _ = timer.map(|timer| timer.record(&[("success", success_tag)]));
-                let mut counter_tags = vec![("success", success_tag)];
-                if let Some(failure_reason) = snapshot.as_ref().err() {
-                    counter_tags.push(("failure_reason", *failure_reason));
-                }
-                session_telemetry.counter("codex.shell_snapshot", /*inc*/ 1, &counter_tags);
-                let _ = shell_snapshot_tx.send(snapshot.ok());
+                .await;
             }
             .instrument(snapshot_span),
         );
+    }
+
+    async fn create_and_publish_snapshot(
+        codex_home: PathBuf,
+        session_id: ThreadId,
+        session_cwd: PathBuf,
+        snapshot_shell: Shell,
+        shell_snapshot_tx: watch::Sender<Option<Arc<ShellSnapshot>>>,
+        session_telemetry: SessionTelemetry,
+    ) -> Option<Arc<ShellSnapshot>> {
+        let timer = session_telemetry.start_timer("codex.shell_snapshot.duration_ms", &[]);
+        let snapshot = ShellSnapshot::try_new(
+            &codex_home,
+            session_id,
+            session_cwd.as_path(),
+            &snapshot_shell,
+        )
+        .await
+        .map(Arc::new);
+        let success = snapshot.is_ok();
+        let success_tag = if success { "true" } else { "false" };
+        let _ = timer.map(|timer| timer.record(&[("success", success_tag)]));
+        let mut counter_tags = vec![("success", success_tag)];
+        if let Some(failure_reason) = snapshot.as_ref().err() {
+            counter_tags.push(("failure_reason", *failure_reason));
+        }
+        session_telemetry.counter("codex.shell_snapshot", /*inc*/ 1, &counter_tags);
+        let snapshot = snapshot.ok();
+        let _ = shell_snapshot_tx.send(snapshot.clone());
+        snapshot
     }
 
     async fn try_new(

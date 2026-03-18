@@ -21,6 +21,7 @@ use crate::tools::registry::PostToolUsePayload;
 use crate::tools::registry::PreToolUsePayload;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::runtimes::command_can_use_shell_snapshot;
 use crate::tools::spec::UnifiedExecShellMode;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
@@ -275,6 +276,10 @@ impl ToolHandler for UnifiedExecHandler {
                         return Err(FunctionCallError::RespondToModel(err));
                     }
                 };
+
+                if command_can_use_shell_snapshot(&command) {
+                    context.session.ensure_shell_snapshot_for_cwd(&cwd).await;
+                }
 
                 if let Some(output) = intercept_apply_patch(
                     &command,
