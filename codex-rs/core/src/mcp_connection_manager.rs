@@ -378,7 +378,7 @@ struct ManagedClient {
 }
 
 impl ManagedClient {
-    fn listed_tools(&self) -> Vec<ToolInfo> {
+    fn listed_tools(&self, _request_headers: Option<reqwest::header::HeaderMap>) -> Vec<ToolInfo> {
         let total_start = Instant::now();
         if let Some(cache_context) = self.codex_apps_tools_cache_context.as_ref()
             && let CachedCodexAppsToolsLoad::Hit(tools) =
@@ -425,7 +425,40 @@ struct AsyncManagedClient {
     client: Shared<BoxFuture<'static, Result<ManagedClient, StartupOutcomeError>>>,
     startup_snapshot: Option<Vec<ToolInfo>>,
     startup_complete: Arc<AtomicBool>,
+    startup_request_headers: Arc<StdMutex<Option<reqwest::header::HeaderMap>>>,
     tool_plugin_provenance: Arc<ToolPluginProvenance>,
+}
+
+struct StartupRequestHeadersGuard {
+    state: Arc<StdMutex<Option<reqwest::header::HeaderMap>>>,
+    previous: Option<reqwest::header::HeaderMap>,
+}
+
+impl StartupRequestHeadersGuard {
+    fn set(
+        state: Arc<StdMutex<Option<reqwest::header::HeaderMap>>>,
+        headers: Option<reqwest::header::HeaderMap>,
+    ) -> Self {
+        let previous = {
+            let mut guard = state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let previous = guard.clone();
+            *guard = headers;
+            previous
+        };
+        Self { state, previous }
+    }
+}
+
+impl Drop for StartupRequestHeadersGuard {
+    fn drop(&mut self) {
+        let mut guard = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *guard = self.previous.clone();
+    }
 }
 
 impl AsyncManagedClient {
@@ -451,6 +484,8 @@ impl AsyncManagedClient {
         let startup_tool_filter = tool_filter;
         let startup_complete = Arc::new(AtomicBool::new(false));
         let startup_complete_for_fut = Arc::clone(&startup_complete);
+        let startup_request_headers = Arc::new(StdMutex::new(None));
+        let startup_request_headers_for_fut = Arc::clone(&startup_request_headers);
         let fut = async move {
             let outcome = async {
                 if let Err(error) = validate_mcp_server_name(&server_name) {
@@ -471,6 +506,7 @@ impl AsyncManagedClient {
                         tx_event,
                         elicitation_requests,
                         codex_apps_tools_cache_context,
+                        startup_request_headers: startup_request_headers_for_fut,
                     },
                 )
                 .or_cancel(&cancel_token)
@@ -497,11 +533,17 @@ impl AsyncManagedClient {
             client,
             startup_snapshot,
             startup_complete,
+            startup_request_headers,
             tool_plugin_provenance,
         }
     }
 
-    async fn client(&self) -> Result<ManagedClient, StartupOutcomeError> {
+    async fn client(
+        &self,
+        request_headers: Option<reqwest::header::HeaderMap>,
+    ) -> Result<ManagedClient, StartupOutcomeError> {
+        let _request_headers_guard =
+            StartupRequestHeadersGuard::set(self.startup_request_headers.clone(), request_headers);
         self.client.clone().await
     }
 
@@ -512,7 +554,10 @@ impl AsyncManagedClient {
         None
     }
 
-    async fn listed_tools(&self) -> Option<Vec<ToolInfo>> {
+    async fn listed_tools(
+        &self,
+        request_headers: Option<reqwest::header::HeaderMap>,
+    ) -> Option<Vec<ToolInfo>> {
         let annotate_tools = |tools: Vec<ToolInfo>| {
             let mut tools = tools;
             for tool in &mut tools {
@@ -564,8 +609,8 @@ impl AsyncManagedClient {
         let tools = if let Some(startup_tools) = self.startup_snapshot_while_initializing() {
             Some(startup_tools)
         } else {
-            match self.client().await {
-                Ok(client) => Some(client.listed_tools()),
+            match self.client(request_headers.clone()).await {
+                Ok(client) => Some(client.listed_tools(request_headers)),
                 Err(_) => self.startup_snapshot.clone(),
             }
         };
@@ -573,7 +618,7 @@ impl AsyncManagedClient {
     }
 
     async fn notify_sandbox_state_change(&self, sandbox_state: &SandboxState) -> Result<()> {
-        let managed = self.client().await?;
+        let managed = self.client(None).await?;
         managed.notify_sandbox_state_change(sandbox_state).await
     }
 }
@@ -686,7 +731,7 @@ impl McpConnectionManager {
             let auth_entry = auth_entries.get(&server_name).cloned();
             let sandbox_state = initial_sandbox_state.clone();
             join_set.spawn(async move {
-                let outcome = async_managed_client.client().await;
+                let outcome = async_managed_client.client(None).await;
                 if cancel_token.is_cancelled() {
                     return (server_name, Err(StartupOutcomeError::Cancelled));
                 }
@@ -755,11 +800,15 @@ impl McpConnectionManager {
         (manager, cancel_token)
     }
 
-    async fn client_by_name(&self, name: &str) -> Result<ManagedClient> {
+    async fn client_by_name(
+        &self,
+        name: &str,
+        request_headers: Option<reqwest::header::HeaderMap>,
+    ) -> Result<ManagedClient> {
         self.clients
             .get(name)
             .ok_or_else(|| anyhow!("unknown MCP server '{name}'"))?
-            .client()
+            .client(request_headers)
             .await
             .context("failed to get client")
     }
@@ -780,7 +829,7 @@ impl McpConnectionManager {
             return false;
         };
 
-        match tokio::time::timeout(timeout, async_managed_client.client()).await {
+        match tokio::time::timeout(timeout, async_managed_client.client(None)).await {
             Ok(Ok(_)) => true,
             Ok(Err(_)) | Err(_) => false,
         }
@@ -800,7 +849,7 @@ impl McpConnectionManager {
                 continue;
             };
 
-            match async_managed_client.client().await {
+            match async_managed_client.client(None).await {
                 Ok(_) => {}
                 Err(error) => failures.push(McpStartupFailure {
                     server: server_name.clone(),
@@ -815,9 +864,18 @@ impl McpConnectionManager {
     /// fully-qualified name for the tool.
     #[instrument(level = "trace", skip_all)]
     pub async fn list_all_tools(&self) -> HashMap<String, ToolInfo> {
+        self.list_all_tools_with_request_headers(None).await
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    pub async fn list_all_tools_with_request_headers(
+        &self,
+        request_headers: Option<reqwest::header::HeaderMap>,
+    ) -> HashMap<String, ToolInfo> {
         let mut tools = HashMap::new();
         for managed_client in self.clients.values() {
-            let Some(server_tools) = managed_client.listed_tools().await else {
+            let Some(server_tools) = managed_client.listed_tools(request_headers.clone()).await
+            else {
                 continue;
             };
             tools.extend(qualify_tools(server_tools));
@@ -835,7 +893,7 @@ impl McpConnectionManager {
             .clients
             .get(CODEX_APPS_MCP_SERVER_NAME)
             .ok_or_else(|| anyhow!("unknown MCP server '{CODEX_APPS_MCP_SERVER_NAME}'"))?
-            .client()
+            .client(None)
             .await
             .context("failed to get client")?;
 
@@ -845,6 +903,7 @@ impl McpConnectionManager {
             CODEX_APPS_MCP_SERVER_NAME,
             &managed_client.client,
             managed_client.tool_timeout,
+            None,
         )
         .await
         .with_context(|| {
@@ -881,7 +940,7 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Ok(managed_client) = async_managed_client.client(None).await else {
                 continue;
             };
             let timeout = managed_client.tool_timeout;
@@ -947,7 +1006,7 @@ impl McpConnectionManager {
 
         for (server_name, async_managed_client) in clients_snapshot {
             let server_name_cloned = server_name.clone();
-            let Ok(managed_client) = async_managed_client.client().await else {
+            let Ok(managed_client) = async_managed_client.client(None).await else {
                 continue;
             };
             let client = managed_client.client.clone();
@@ -1015,8 +1074,9 @@ impl McpConnectionManager {
         tool: &str,
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
+        request_headers: Option<reqwest::header::HeaderMap>,
     ) -> Result<CallToolResult> {
-        let client = self.client_by_name(server).await?;
+        let client = self.client_by_name(server, request_headers.clone()).await?;
         if !client.tool_filter.allows(tool) {
             return Err(anyhow!(
                 "tool '{tool}' is disabled for MCP server '{server}'"
@@ -1025,7 +1085,13 @@ impl McpConnectionManager {
 
         let result: rmcp::model::CallToolResult = client
             .client
-            .call_tool(tool.to_string(), arguments, meta, client.tool_timeout)
+            .call_tool(
+                tool.to_string(),
+                arguments,
+                meta,
+                client.tool_timeout,
+                request_headers,
+            )
             .await
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))?;
 
@@ -1052,7 +1118,7 @@ impl McpConnectionManager {
         server: &str,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourcesResult> {
-        let managed = self.client_by_name(server).await?;
+        let managed = self.client_by_name(server, None).await?;
         let timeout = managed.tool_timeout;
 
         managed
@@ -1068,7 +1134,7 @@ impl McpConnectionManager {
         server: &str,
         params: Option<PaginatedRequestParams>,
     ) -> Result<ListResourceTemplatesResult> {
-        let managed = self.client_by_name(server).await?;
+        let managed = self.client_by_name(server, None).await?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
 
@@ -1084,7 +1150,7 @@ impl McpConnectionManager {
         server: &str,
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResult> {
-        let managed = self.client_by_name(server).await?;
+        let managed = self.client_by_name(server, None).await?;
         let client = managed.client.clone();
         let timeout = managed.tool_timeout;
         let uri = params.uri.clone();
@@ -1344,6 +1410,7 @@ async fn start_server_task(
         tx_event,
         elicitation_requests,
         codex_apps_tools_cache_context,
+        startup_request_headers,
     } = params;
     let elicitation = elicitation_capability_for_server(&server_name);
     let params = InitializeRequestParams {
@@ -1369,16 +1436,34 @@ async fn start_server_task(
 
     let send_elicitation = elicitation_requests.make_sender(server_name.clone(), tx_event);
 
+    let initialize_request_headers = startup_request_headers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     let initialize_result = client
-        .initialize(params, startup_timeout, send_elicitation)
+        .initialize(
+            params,
+            startup_timeout,
+            send_elicitation,
+            initialize_request_headers,
+        )
         .await
         .map_err(StartupOutcomeError::from)?;
 
     let list_start = Instant::now();
     let fetch_start = Instant::now();
-    let tools = list_tools_for_client_uncached(&server_name, &client, startup_timeout)
-        .await
-        .map_err(StartupOutcomeError::from)?;
+    let list_request_headers = startup_request_headers
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let tools = list_tools_for_client_uncached(
+        &server_name,
+        &client,
+        startup_timeout,
+        list_request_headers,
+    )
+    .await
+    .map_err(StartupOutcomeError::from)?;
     emit_duration(
         MCP_TOOLS_FETCH_UNCACHED_DURATION_METRIC,
         fetch_start.elapsed(),
@@ -1423,6 +1508,7 @@ struct StartServerTaskParams {
     tx_event: Sender<Event>,
     elicitation_requests: ElicitationRequestManager,
     codex_apps_tools_cache_context: Option<CodexAppsToolsCacheContext>,
+    startup_request_headers: Arc<StdMutex<Option<reqwest::header::HeaderMap>>>,
 }
 
 async fn make_rmcp_client(
@@ -1584,9 +1670,10 @@ async fn list_tools_for_client_uncached(
     server_name: &str,
     client: &Arc<RmcpClient>,
     timeout: Option<Duration>,
+    request_headers: Option<reqwest::header::HeaderMap>,
 ) -> Result<Vec<ToolInfo>> {
     let resp = client
-        .list_tools_with_connector_ids(/*params*/ None, timeout)
+        .list_tools_with_connector_ids(/*params*/ None, timeout, request_headers)
         .await?;
     let tools = resp
         .tools

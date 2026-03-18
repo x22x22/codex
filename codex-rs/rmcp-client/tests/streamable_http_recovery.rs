@@ -94,6 +94,7 @@ async fn create_client(base_url: &str) -> anyhow::Result<RmcpClient> {
                 }
                 .boxed()
             }),
+            /*request_headers*/ None,
         )
         .await?;
 
@@ -107,6 +108,7 @@ async fn call_echo_tool(client: &RmcpClient, message: &str) -> anyhow::Result<Ca
             Some(json!({ "message": message })),
             None,
             Some(Duration::from_secs(5)),
+            /*request_headers*/ None,
         )
         .await
 }

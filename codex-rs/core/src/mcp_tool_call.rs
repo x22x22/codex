@@ -45,6 +45,8 @@ use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationAction;
 use codex_rmcp_client::ElicitationResponse;
+use reqwest::header::HeaderMap;
+use reqwest::header::HeaderValue;
 use rmcp::model::ToolAnnotations;
 use serde::Serialize;
 use std::path::Path;
@@ -81,8 +83,15 @@ pub(crate) async fn handle_mcp_tool_call(
         arguments: arguments_value.clone(),
     };
 
-    let metadata =
-        lookup_mcp_tool_metadata(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
+    let request_headers = build_mcp_request_headers(sess.as_ref(), turn_context.as_ref(), &server);
+    let metadata = lookup_mcp_tool_metadata(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        &server,
+        &tool_name,
+        request_headers.clone(),
+    )
+    .await;
     let app_tool_policy = if server == CODEX_APPS_MCP_SERVER_NAME {
         connectors::app_tool_policy(
             &turn_context.config,
@@ -150,6 +159,7 @@ pub(crate) async fn handle_mcp_tool_call(
                         &tool_name,
                         arguments_value.clone(),
                         request_meta.clone(),
+                        request_headers.clone(),
                     )
                     .await
                     .map_err(|e| format!("tool call error: {e:?}"));
@@ -180,6 +190,7 @@ pub(crate) async fn handle_mcp_tool_call(
                     turn_context.as_ref(),
                     &server,
                     &tool_name,
+                    request_headers.clone(),
                 )
                 .await;
                 result
@@ -236,7 +247,13 @@ pub(crate) async fn handle_mcp_tool_call(
     let start = Instant::now();
     // Perform the tool call.
     let result = sess
-        .call_tool(&server, &tool_name, arguments_value.clone(), request_meta)
+        .call_tool(
+            &server,
+            &tool_name,
+            arguments_value.clone(),
+            request_meta,
+            request_headers.clone(),
+        )
         .await
         .map_err(|e| format!("tool call error: {e:?}"));
     let result = sanitize_mcp_tool_result_for_model(
@@ -262,7 +279,14 @@ pub(crate) async fn handle_mcp_tool_call(
         tool_call_end_event.clone(),
     )
     .await;
-    maybe_track_codex_app_used(sess.as_ref(), turn_context.as_ref(), &server, &tool_name).await;
+    maybe_track_codex_app_used(
+        sess.as_ref(),
+        turn_context.as_ref(),
+        &server,
+        &tool_name,
+        request_headers.clone(),
+    )
+    .await;
 
     let status = if result.is_ok() { "ok" } else { "error" };
     turn_context
@@ -333,11 +357,12 @@ async fn maybe_track_codex_app_used(
     turn_context: &TurnContext,
     server: &str,
     tool_name: &str,
+    request_headers: Option<HeaderMap>,
 ) {
     if server != CODEX_APPS_MCP_SERVER_NAME {
         return;
     }
-    let metadata = lookup_mcp_app_usage_metadata(sess, server, tool_name).await;
+    let metadata = lookup_mcp_app_usage_metadata(sess, server, tool_name, request_headers).await;
     let (connector_id, app_name) = metadata
         .map(|metadata| (metadata.connector_id, metadata.app_name))
         .unwrap_or((None, None));
@@ -388,6 +413,34 @@ pub(crate) struct McpToolApprovalMetadata {
 }
 
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
+
+fn build_mcp_request_headers(
+    sess: &Session,
+    turn_context: &TurnContext,
+    server: &str,
+) -> Option<HeaderMap> {
+    if server != CODEX_APPS_MCP_SERVER_NAME {
+        return None;
+    }
+
+    let session_id = sess.conversation_id.to_string();
+    let mut headers = HeaderMap::new();
+    if let Ok(value) = HeaderValue::from_str(&session_id) {
+        headers.insert("session_id", value.clone());
+        headers.insert("x-client-request-id", value);
+    }
+    if let Some(turn_metadata) = turn_context.turn_metadata_state.current_header_value()
+        && let Ok(value) = HeaderValue::from_str(&turn_metadata)
+    {
+        headers.insert(crate::X_CODEX_TURN_METADATA_HEADER, value);
+    }
+
+    if headers.is_empty() {
+        None
+    } else {
+        Some(headers)
+    }
+}
 
 fn build_mcp_tool_call_request_meta(
     server: &str,
@@ -741,13 +794,14 @@ pub(crate) async fn lookup_mcp_tool_metadata(
     turn_context: &TurnContext,
     server: &str,
     tool_name: &str,
+    request_headers: Option<HeaderMap>,
 ) -> Option<McpToolApprovalMetadata> {
     let tools = sess
         .services
         .mcp_connection_manager
         .read()
         .await
-        .list_all_tools()
+        .list_all_tools_with_request_headers(request_headers.clone())
         .await;
 
     let tool_info = tools
@@ -798,13 +852,14 @@ async fn lookup_mcp_app_usage_metadata(
     sess: &Session,
     server: &str,
     tool_name: &str,
+    request_headers: Option<HeaderMap>,
 ) -> Option<McpAppUsageMetadata> {
     let tools = sess
         .services
         .mcp_connection_manager
         .read()
         .await
-        .list_all_tools()
+        .list_all_tools_with_request_headers(request_headers)
         .await;
 
     tools.into_values().find_map(|tool_info| {
