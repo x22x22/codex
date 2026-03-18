@@ -1,24 +1,46 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_app_server_protocol::JSONRPCNotification;
+use serde_json::Value;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWrite;
+use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_tungstenite::connect_async;
+use tracing::debug;
 use tracing::warn;
 
 use crate::client_api::ExecServerClientConnectOptions;
+use crate::client_api::ExecServerEvent;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
+use crate::protocol::EXEC_EXITED_METHOD;
+use crate::protocol::EXEC_METHOD;
+use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
+use crate::protocol::EXEC_READ_METHOD;
+use crate::protocol::EXEC_TERMINATE_METHOD;
+use crate::protocol::EXEC_WRITE_METHOD;
+use crate::protocol::ExecExitedNotification;
+use crate::protocol::ExecOutputDeltaNotification;
+use crate::protocol::ExecParams;
+use crate::protocol::ExecResponse;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
 use crate::protocol::InitializeResponse;
+use crate::protocol::ReadParams;
+use crate::protocol::ReadResponse;
+use crate::protocol::TerminateParams;
+use crate::protocol::TerminateResponse;
+use crate::protocol::WriteParams;
+use crate::protocol::WriteResponse;
 use crate::rpc::RpcCallError;
 use crate::rpc::RpcClient;
 use crate::rpc::RpcClientEvent;
 use crate::rpc::RpcNotificationSender;
+use crate::rpc::RpcServerOutboundMessage;
 
 mod local_backend;
 use local_backend::LocalBackend;
@@ -78,6 +100,7 @@ impl ClientBackend {
 
 struct Inner {
     backend: ClientBackend,
+    events_tx: broadcast::Sender<ExecServerEvent>,
     reader_task: tokio::task::JoinHandle<()>,
 }
 
@@ -128,14 +151,32 @@ impl ExecServerClient {
     pub async fn connect_in_process(
         options: ExecServerClientConnectOptions,
     ) -> Result<Self, ExecServerError> {
-        let (outgoing_tx, _outgoing_rx) = mpsc::channel(1);
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<RpcServerOutboundMessage>(256);
         let backend = LocalBackend::new(crate::server::ExecServerHandler::new(
             RpcNotificationSender::new(outgoing_tx),
         ));
-        let inner = Arc::new(Inner {
-            backend: ClientBackend::InProcess(backend),
-            reader_task: tokio::spawn(async {}),
+        let inner = Arc::new_cyclic(|weak| {
+            let weak = weak.clone();
+            let reader_task = tokio::spawn(async move {
+                while let Some(message) = outgoing_rx.recv().await {
+                    if let Some(inner) = weak.upgrade()
+                        && let Err(err) = handle_in_process_outbound_message(&inner, message).await
+                    {
+                        warn!(
+                            "in-process exec-server client closing after unexpected response: {err}"
+                        );
+                        return;
+                    }
+                }
+            });
+
+            Inner {
+                backend: ClientBackend::InProcess(backend),
+                events_tx: broadcast::channel(256).0,
+                reader_task,
+            }
         });
+
         let client = Self { inner };
         client.initialize(options).await?;
         Ok(client)
@@ -183,6 +224,10 @@ impl ExecServerClient {
         .await
     }
 
+    pub fn event_receiver(&self) -> broadcast::Receiver<ExecServerEvent> {
+        self.inner.events_tx.subscribe()
+    }
+
     pub async fn initialize(
         &self,
         options: ExecServerClientConnectOptions,
@@ -213,36 +258,111 @@ impl ExecServerClient {
         })?
     }
 
+    pub async fn exec(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
+        if let Some(backend) = self.inner.backend.as_local() {
+            return backend.exec(params).await;
+        }
+        let Some(remote) = self.inner.backend.as_remote() else {
+            return Err(ExecServerError::Protocol(
+                "remote backend missing during exec".to_string(),
+            ));
+        };
+        remote.call(EXEC_METHOD, &params).await.map_err(Into::into)
+    }
+
+    pub async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
+        if let Some(backend) = self.inner.backend.as_local() {
+            return backend.exec_read(params).await;
+        }
+        let Some(remote) = self.inner.backend.as_remote() else {
+            return Err(ExecServerError::Protocol(
+                "remote backend missing during read".to_string(),
+            ));
+        };
+        remote
+            .call(EXEC_READ_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn write(
+        &self,
+        process_id: &str,
+        chunk: Vec<u8>,
+    ) -> Result<WriteResponse, ExecServerError> {
+        let params = WriteParams {
+            process_id: process_id.to_string(),
+            chunk: chunk.into(),
+        };
+        if let Some(backend) = self.inner.backend.as_local() {
+            return backend.exec_write(params).await;
+        }
+        let Some(remote) = self.inner.backend.as_remote() else {
+            return Err(ExecServerError::Protocol(
+                "remote backend missing during write".to_string(),
+            ));
+        };
+        remote
+            .call(EXEC_WRITE_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError> {
+        let params = TerminateParams {
+            process_id: process_id.to_string(),
+        };
+        if let Some(backend) = self.inner.backend.as_local() {
+            return backend.terminate(params).await;
+        }
+        let Some(remote) = self.inner.backend.as_remote() else {
+            return Err(ExecServerError::Protocol(
+                "remote backend missing during terminate".to_string(),
+            ));
+        };
+        remote
+            .call(EXEC_TERMINATE_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
     async fn connect(
         connection: JsonRpcConnection,
         options: ExecServerClientConnectOptions,
     ) -> Result<Self, ExecServerError> {
         let (rpc_client, mut events_rx) = RpcClient::new(connection);
-        let reader_task = tokio::spawn(async move {
-            while let Some(event) = events_rx.recv().await {
-                match event {
-                    RpcClientEvent::Notification(notification) => {
-                        warn!(
-                            "ignoring unexpected exec-server notification during stub phase: {}",
-                            notification.method
-                        );
-                    }
-                    RpcClientEvent::Disconnected { reason } => {
-                        if let Some(reason) = reason {
-                            warn!("exec-server client transport disconnected: {reason}");
+        let inner = Arc::new_cyclic(|weak| {
+            let weak = weak.clone();
+            let reader_task = tokio::spawn(async move {
+                while let Some(event) = events_rx.recv().await {
+                    match event {
+                        RpcClientEvent::Notification(notification) => {
+                            if let Some(inner) = weak.upgrade()
+                                && let Err(err) =
+                                    handle_server_notification(&inner, notification).await
+                            {
+                                warn!("exec-server client closing after protocol error: {err}");
+                                return;
+                            }
                         }
-                        return;
+                        RpcClientEvent::Disconnected { reason } => {
+                            if let Some(reason) = reason {
+                                warn!("exec-server client transport disconnected: {reason}");
+                            }
+                            return;
+                        }
                     }
                 }
+            });
+
+            Inner {
+                backend: ClientBackend::Remote(rpc_client),
+                events_tx: broadcast::channel(256).0,
+                reader_task,
             }
         });
 
-        let client = Self {
-            inner: Arc::new(Inner {
-                backend: ClientBackend::Remote(rpc_client),
-                reader_task,
-            }),
-        };
+        let client = Self { inner };
         client.initialize(options).await?;
         Ok(client)
     }
@@ -269,4 +389,40 @@ impl From<RpcCallError> for ExecServerError {
             },
         }
     }
+}
+
+async fn handle_in_process_outbound_message(
+    inner: &Arc<Inner>,
+    message: RpcServerOutboundMessage,
+) -> Result<(), ExecServerError> {
+    match message {
+        RpcServerOutboundMessage::Response { .. } | RpcServerOutboundMessage::Error { .. } => Err(
+            ExecServerError::Protocol("unexpected in-process RPC response".to_string()),
+        ),
+        RpcServerOutboundMessage::Notification(notification) => {
+            handle_server_notification(inner, notification).await
+        }
+    }
+}
+
+async fn handle_server_notification(
+    inner: &Arc<Inner>,
+    notification: JSONRPCNotification,
+) -> Result<(), ExecServerError> {
+    match notification.method.as_str() {
+        EXEC_OUTPUT_DELTA_METHOD => {
+            let params: ExecOutputDeltaNotification =
+                serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
+            let _ = inner.events_tx.send(ExecServerEvent::OutputDelta(params));
+        }
+        EXEC_EXITED_METHOD => {
+            let params: ExecExitedNotification =
+                serde_json::from_value(notification.params.unwrap_or(Value::Null))?;
+            let _ = inner.events_tx.send(ExecServerEvent::Exited(params));
+        }
+        other => {
+            debug!("ignoring unknown exec-server notification: {other}");
+        }
+    }
+    Ok(())
 }
