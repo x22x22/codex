@@ -214,6 +214,7 @@ use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::mcp_connection_manager::filter_non_codex_apps_mcp_tools_only;
+use crate::mcp_connection_manager::to_mcp_server_configs;
 use crate::memories;
 use crate::mentions::build_connector_slug_counts;
 use crate::mentions::build_skill_name_counts;
@@ -1890,8 +1891,9 @@ impl Session {
             cancel_guard.cancel();
             *cancel_guard = CancellationToken::new();
         }
+        let extracted_mcp_servers = to_mcp_server_configs(&mcp_servers);
         let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-            &mcp_servers,
+            &extracted_mcp_servers,
             config.mcp_oauth_credentials_store_mode,
             auth_statuses.clone(),
             &session_configuration.approval_policy,
@@ -4006,8 +4008,9 @@ impl Session {
             guard.cancel();
             *guard = CancellationToken::new();
         }
+        let extracted_mcp_servers = to_mcp_server_configs(&mcp_servers);
         let (refreshed_manager, cancel_token) = McpConnectionManager::new(
-            &mcp_servers,
+            &extracted_mcp_servers,
             store_mode,
             auth_statuses,
             &turn_context.config.permissions.approval_policy,

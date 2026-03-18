@@ -84,7 +84,7 @@ fn group_tools_by_server_strips_prefix_and_groups() {
 
 #[test]
 fn tool_plugin_provenance_collects_app_and_mcp_sources() {
-    let provenance = ToolPluginProvenance::from_capability_summaries(&[
+    let provenance = tool_plugin_provenance_from_capability_summaries(&[
         PluginCapabilitySummary {
             display_name: "alpha-plugin".to_string(),
             app_connector_ids: vec![AppConnectorId("connector_example".to_string())],

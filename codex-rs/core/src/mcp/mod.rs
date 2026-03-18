@@ -21,75 +21,21 @@ use crate::CodexAuth;
 use crate::config::Config;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
+use crate::mcp::auth::McpAuthStatusEntry;
 use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::SandboxState;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
+use crate::mcp_connection_manager::to_mcp_server_configs;
 use crate::plugins::PluginCapabilitySummary;
 use crate::plugins::PluginsManager;
 
-const MCP_TOOL_NAME_PREFIX: &str = "mcp";
-const MCP_TOOL_NAME_DELIMITER: &str = "__";
-pub(crate) const CODEX_APPS_MCP_SERVER_NAME: &str = "codex_apps";
+pub use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+pub use codex_mcp::ToolPluginProvenance;
+pub use codex_mcp::group_tools_by_server;
+pub use codex_mcp::split_qualified_tool_name;
+
 const CODEX_CONNECTORS_TOKEN_ENV_VAR: &str = "CODEX_CONNECTORS_TOKEN";
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ToolPluginProvenance {
-    plugin_display_names_by_connector_id: HashMap<String, Vec<String>>,
-    plugin_display_names_by_mcp_server_name: HashMap<String, Vec<String>>,
-}
-
-impl ToolPluginProvenance {
-    pub fn plugin_display_names_for_connector_id(&self, connector_id: &str) -> &[String] {
-        self.plugin_display_names_by_connector_id
-            .get(connector_id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
-    pub fn plugin_display_names_for_mcp_server_name(&self, server_name: &str) -> &[String] {
-        self.plugin_display_names_by_mcp_server_name
-            .get(server_name)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
-    fn from_capability_summaries(capability_summaries: &[PluginCapabilitySummary]) -> Self {
-        let mut tool_plugin_provenance = Self::default();
-        for plugin in capability_summaries {
-            for connector_id in &plugin.app_connector_ids {
-                tool_plugin_provenance
-                    .plugin_display_names_by_connector_id
-                    .entry(connector_id.0.clone())
-                    .or_default()
-                    .push(plugin.display_name.clone());
-            }
-
-            for server_name in &plugin.mcp_server_names {
-                tool_plugin_provenance
-                    .plugin_display_names_by_mcp_server_name
-                    .entry(server_name.clone())
-                    .or_default()
-                    .push(plugin.display_name.clone());
-            }
-        }
-
-        for plugin_names in tool_plugin_provenance
-            .plugin_display_names_by_connector_id
-            .values_mut()
-            .chain(
-                tool_plugin_provenance
-                    .plugin_display_names_by_mcp_server_name
-                    .values_mut(),
-            )
-        {
-            plugin_names.sort_unstable();
-            plugin_names.dedup();
-        }
-
-        tool_plugin_provenance
-    }
-}
 
 fn codex_apps_mcp_bearer_token_env_var() -> Option<String> {
     match env::var(CODEX_CONNECTORS_TOKEN_ENV_VAR) {
@@ -219,8 +165,27 @@ impl McpManager {
 
     pub fn tool_plugin_provenance(&self, config: &Config) -> ToolPluginProvenance {
         let loaded_plugins = self.plugins_manager.plugins_for_config(config);
-        ToolPluginProvenance::from_capability_summaries(loaded_plugins.capability_summaries())
+        tool_plugin_provenance_from_capability_summaries(loaded_plugins.capability_summaries())
     }
+}
+
+fn tool_plugin_provenance_from_capability_summaries(
+    capability_summaries: &[PluginCapabilitySummary],
+) -> ToolPluginProvenance {
+    let mut tool_plugin_provenance = ToolPluginProvenance::default();
+    for plugin in capability_summaries {
+        for connector_id in &plugin.app_connector_ids {
+            tool_plugin_provenance
+                .record_connector_plugin_name(connector_id.0.clone(), plugin.display_name.clone());
+        }
+
+        for server_name in &plugin.mcp_server_names {
+            tool_plugin_provenance
+                .record_server_plugin_name(server_name.clone(), plugin.display_name.clone());
+        }
+    }
+    tool_plugin_provenance.sort_and_dedup();
+    tool_plugin_provenance
 }
 
 fn configured_mcp_servers(
@@ -282,8 +247,9 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
         use_legacy_landlock: config.features.use_legacy_landlock(),
     };
 
+    let extracted_mcp_servers = to_mcp_server_configs(&mcp_servers);
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-        &mcp_servers,
+        &extracted_mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries.clone(),
         &config.permissions.approval_policy,
@@ -302,39 +268,9 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
 
     snapshot
 }
-
-pub fn split_qualified_tool_name(qualified_name: &str) -> Option<(String, String)> {
-    let mut parts = qualified_name.split(MCP_TOOL_NAME_DELIMITER);
-    let prefix = parts.next()?;
-    if prefix != MCP_TOOL_NAME_PREFIX {
-        return None;
-    }
-    let server_name = parts.next()?;
-    let tool_name: String = parts.collect::<Vec<_>>().join(MCP_TOOL_NAME_DELIMITER);
-    if tool_name.is_empty() {
-        return None;
-    }
-    Some((server_name.to_string(), tool_name))
-}
-
-pub fn group_tools_by_server(
-    tools: &HashMap<String, Tool>,
-) -> HashMap<String, HashMap<String, Tool>> {
-    let mut grouped = HashMap::new();
-    for (qualified_name, tool) in tools {
-        if let Some((server_name, tool_name)) = split_qualified_tool_name(qualified_name) {
-            grouped
-                .entry(server_name)
-                .or_insert_with(HashMap::new)
-                .insert(tool_name, tool.clone());
-        }
-    }
-    grouped
-}
-
 pub(crate) async fn collect_mcp_snapshot_from_manager(
     mcp_connection_manager: &McpConnectionManager,
-    auth_status_entries: HashMap<String, crate::mcp::auth::McpAuthStatusEntry>,
+    auth_status_entries: HashMap<String, McpAuthStatusEntry>,
 ) -> McpListToolsResponseEvent {
     let (tools, resources, resource_templates) = tokio::join!(
         mcp_connection_manager.list_all_tools(),

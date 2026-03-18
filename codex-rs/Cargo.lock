@@ -1430,6 +1430,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-login",
+ "codex-mcp",
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
@@ -1849,6 +1850,7 @@ dependencies = [
  "codex-git",
  "codex-hooks",
  "codex-keyring-store",
+ "codex-mcp",
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
@@ -2165,6 +2167,33 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "wiremock",
+]
+
+[[package]]
+name = "codex-mcp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "codex-app-server-protocol",
+ "codex-async-utils",
+ "codex-config",
+ "codex-otel",
+ "codex-protocol",
+ "codex-rmcp-client",
+ "futures",
+ "pretty_assertions",
+ "regex-lite",
+ "rmcp",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
 ]
 
 [[package]]

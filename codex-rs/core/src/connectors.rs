@@ -40,6 +40,7 @@ use crate::mcp::auth::compute_auth_statuses;
 use crate::mcp::with_codex_apps_mcp;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
+use crate::mcp_connection_manager::to_mcp_server_configs;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginsManager;
 use crate::plugins::list_tool_suggest_discoverable_plugins;
@@ -215,8 +216,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         use_legacy_landlock: config.features.use_legacy_landlock(),
     };
 
+    let extracted_mcp_servers = to_mcp_server_configs(&mcp_servers);
     let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
-        &mcp_servers,
+        &extracted_mcp_servers,
         config.mcp_oauth_credentials_store_mode,
         auth_status_entries,
         &config.permissions.approval_policy,

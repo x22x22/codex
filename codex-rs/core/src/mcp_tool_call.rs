@@ -51,6 +51,12 @@ use std::path::Path;
 use std::sync::Arc;
 use toml_edit::value;
 
+pub(crate) use codex_mcp::MCP_TOOL_APPROVAL_ACCEPT;
+pub(crate) use codex_mcp::MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION;
+pub(crate) use codex_mcp::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
+use codex_mcp::MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX;
+pub(crate) use codex_mcp::is_mcp_tool_approval_question_id;
+
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
 pub(crate) async fn handle_mcp_tool_call(
@@ -420,14 +426,6 @@ struct McpToolApprovalElicitationRequest<'a> {
     prompt_options: McpToolApprovalPromptOptions,
 }
 
-pub(crate) const MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX: &str = "mcp_tool_call_approval";
-pub(crate) const MCP_TOOL_APPROVAL_ACCEPT: &str = "Allow";
-pub(crate) const MCP_TOOL_APPROVAL_ACCEPT_FOR_SESSION: &str = "Allow for this session";
-// Internal-only token used when guardian auto-reviews delegated MCP approvals on the
-// RequestUserInput compatibility path. That legacy MCP prompt has allow/cancel labels but no
-// real "Decline" answer, so this lets guardian denials round-trip distinctly from user cancel.
-// This is not a user-facing option.
-pub(crate) const MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC: &str = "__codex_mcp_decline__";
 const MCP_TOOL_APPROVAL_ACCEPT_AND_REMEMBER: &str = "Allow and don't ask me again";
 const MCP_TOOL_APPROVAL_CANCEL: &str = "Cancel";
 const MCP_TOOL_APPROVAL_KIND_KEY: &str = "codex_approval_kind";
@@ -444,12 +442,6 @@ const MCP_TOOL_APPROVAL_TOOL_TITLE_KEY: &str = "tool_title";
 const MCP_TOOL_APPROVAL_TOOL_DESCRIPTION_KEY: &str = "tool_description";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_KEY: &str = "tool_params";
 const MCP_TOOL_APPROVAL_TOOL_PARAMS_DISPLAY_KEY: &str = "tool_params_display";
-
-pub(crate) fn is_mcp_tool_approval_question_id(question_id: &str) -> bool {
-    question_id
-        .strip_prefix(MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX)
-        .is_some_and(|suffix| suffix.starts_with('_'))
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct McpToolApprovalKey {
