@@ -4609,27 +4609,45 @@ async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
 async fn tool_call_metadata_stamps_guardian_direct_review_when_feature_enabled() {
     let (sess, tc, rx, expected_sandbox_policy) = setup_tool_call_metadata_runtime_test().await;
 
-    sess.record_call_approval_outcome(
-        "call-guardian-runtime-1".to_string(),
-        ApprovalOutcomeMetadata::reviewed(
-            &ReviewDecision::Denied,
-            codex_protocol::models::ApprovalSourceMetadata::Guardian,
-        ),
+    sess.record_direct_approval_outcome(
+        "call-guardian-runtime-1",
+        &ReviewDecision::Denied,
+        codex_protocol::models::ApprovalSourceMetadata::Guardian,
     )
     .await;
     sess.record_response_item_and_emit_turn_item(
         tc.as_ref(),
-        function_call_item("call-guardian-runtime-1"),
+        ResponseItem::FunctionCall {
+            id: None,
+            name: "shell".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            call_id: "call-guardian-runtime-1".to_string(),
+            metadata: None,
+        },
     )
     .await;
-    assert_next_emitted_function_call_metadata(
-        &rx,
-        expected_sandbox_policy,
-        true,
-        Some(codex_protocol::models::ReviewDecisionMetadata::Denied),
-        Some(codex_protocol::models::ApprovalSourceMetadata::Guardian),
-    )
-    .await;
+
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected raw response item event")
+        .expect("channel open");
+    assert!(matches!(
+        event.msg,
+        EventMsg::RawResponseItem(ref ev)
+            if matches!(
+                &ev.item,
+                ResponseItem::FunctionCall {
+                    metadata: Some(metadata),
+                    ..
+                } if metadata.is_tool_call_escalated == Some(true)
+                    && metadata.review_decision
+                        == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
+                    && metadata.approval_source
+                        == Some(codex_protocol::models::ApprovalSourceMetadata::Guardian)
+                    && metadata.sandbox_policy == Some(expected_sandbox_policy)
+            )
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4746,12 +4764,10 @@ async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
         },
     )
     .await;
-    sess.record_call_approval_outcome(
-        "call-restamp-1".to_string(),
-        ApprovalOutcomeMetadata::reviewed(
-            &ReviewDecision::Denied,
-            codex_protocol::models::ApprovalSourceMetadata::User,
-        ),
+    sess.record_direct_approval_outcome(
+        "call-restamp-1",
+        &ReviewDecision::Denied,
+        codex_protocol::models::ApprovalSourceMetadata::User,
     )
     .await;
 

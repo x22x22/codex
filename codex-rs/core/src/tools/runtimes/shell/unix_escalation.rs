@@ -13,7 +13,6 @@ use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
-use crate::state::ApprovalOutcomeMetadata;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -441,12 +440,10 @@ impl CoreShellActionProvider {
                     )
                     .await;
                     session
-                        .record_call_approval_outcome(
-                            call_id.clone(),
-                            ApprovalOutcomeMetadata::reviewed(
-                                &decision,
-                                ApprovalSourceMetadata::Guardian,
-                            ),
+                        .record_direct_approval_outcome(
+                            &call_id,
+                            &decision,
+                            ApprovalSourceMetadata::Guardian,
                         )
                         .await;
                     return decision;
