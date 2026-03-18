@@ -33,7 +33,7 @@ use crate::config::types::McpServerConfig;
 use crate::features::Feature;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::protocol::SandboxPolicy;
-use crate::rollout::recorder::RolloutRecorder;
+use crate::rollout::RolloutRecorder;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;

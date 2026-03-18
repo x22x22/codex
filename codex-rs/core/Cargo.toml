@@ -42,9 +42,11 @@ codex-git = { workspace = true }
 codex-hooks = { workspace = true }
 codex-keyring-store = { workspace = true }
 codex-network-proxy = { workspace = true }
+codex-mcp = { workspace = true }
 codex-otel = { workspace = true }
 codex-artifacts = { workspace = true }
 codex-protocol = { workspace = true }
+codex-rollout = { workspace = true }
 codex-rmcp-client = { workspace = true }
 codex-state = { workspace = true }
 codex-utils-absolute-path = { workspace = true }

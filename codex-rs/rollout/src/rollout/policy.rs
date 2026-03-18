@@ -46,7 +46,7 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
 
 /// Whether a `ResponseItem` should be persisted for the memories.
 #[inline]
-pub(crate) fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
+pub fn should_persist_response_item_for_memories(item: &ResponseItem) -> bool {
     match item {
         ResponseItem::Message { role, .. } => role != "developer",
         ResponseItem::LocalShellCall { .. }

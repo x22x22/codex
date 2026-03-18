@@ -100,8 +100,9 @@ use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
-use codex_core::find_thread_path_by_id_str;
-use codex_core::find_thread_path_by_name_str;
+use codex_rollout::RolloutRecorder;
+use codex_rollout::find_thread_path_by_id_str;
+use codex_rollout::find_thread_path_by_name_str;
 
 const DEFAULT_ANALYTICS_ENABLED: bool = true;
 
@@ -1406,11 +1407,11 @@ async fn resolve_resume_path(
         } else {
             Some(config.cwd.as_path())
         };
-        match codex_core::RolloutRecorder::find_latest_thread_path(
+        match RolloutRecorder::find_latest_thread_path(
             config,
             /*page_size*/ 1,
             /*cursor*/ None,
-            codex_core::ThreadSortKey::UpdatedAt,
+            codex_rollout::ThreadSortKey::UpdatedAt,
             &[],
             Some(default_provider_filter.as_slice()),
             &config.model_provider_id,

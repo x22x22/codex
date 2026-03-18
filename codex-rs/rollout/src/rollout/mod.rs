@@ -7,16 +7,13 @@ pub const ARCHIVED_SESSIONS_SUBDIR: &str = "archived_sessions";
 pub const INTERACTIVE_SESSION_SOURCES: &[SessionSource] =
     &[SessionSource::Cli, SessionSource::VSCode];
 
-pub(crate) mod error;
 pub mod list;
-pub(crate) mod metadata;
-pub(crate) mod policy;
+pub mod metadata;
+pub mod policy;
 pub mod recorder;
-pub(crate) mod session_index;
-pub(crate) mod truncation;
+pub mod session_index;
 
 pub use codex_protocol::protocol::SessionMeta;
-pub(crate) use error::map_session_init_error;
 pub use list::find_archived_thread_path_by_id_str;
 pub use list::find_thread_path_by_id_str;
 #[deprecated(note = "use find_thread_path_by_id_str")]

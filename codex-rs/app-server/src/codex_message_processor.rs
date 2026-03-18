@@ -178,14 +178,10 @@ use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
-use codex_core::Cursor as RolloutCursor;
 use codex_core::NewThread;
-use codex_core::RolloutRecorder;
-use codex_core::SessionMeta;
 use codex_core::SteerInputError;
 use codex_core::ThreadConfigSnapshot;
 use codex_core::ThreadManager;
-use codex_core::ThreadSortKey as CoreThreadSortKey;
 use codex_core::auth::AuthMode as CoreAuthMode;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
@@ -208,17 +204,12 @@ use codex_core::exec_env::create_env;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::features::Stage;
-use codex_core::find_archived_thread_path_by_id_str;
-use codex_core::find_thread_name_by_id;
-use codex_core::find_thread_names_by_ids;
-use codex_core::find_thread_path_by_id_str;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::mcp::auth::discover_supported_scopes;
 use codex_core::mcp::auth::resolve_oauth_scopes;
 use codex_core::mcp::collect_mcp_snapshot;
 use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
 use codex_core::plugins::MarketplacePluginSourceSummary;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
@@ -226,13 +217,7 @@ use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::plugins::load_plugin_apps;
-use codex_core::read_head_for_summary;
-use codex_core::read_session_meta_line;
-use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_core::state_db::StateDbHandle;
-use codex_core::state_db::get_state_db;
-use codex_core::state_db::reconcile_rollout;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
@@ -270,6 +255,24 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
 use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
+use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
+use codex_rollout::Cursor as RolloutCursor;
+use codex_rollout::RolloutRecorder;
+use codex_rollout::SESSIONS_SUBDIR;
+use codex_rollout::SessionMeta;
+use codex_rollout::ThreadItem;
+use codex_rollout::ThreadSortKey as CoreThreadSortKey;
+use codex_rollout::find_archived_thread_path_by_id_str;
+use codex_rollout::find_thread_name_by_id;
+use codex_rollout::find_thread_names_by_ids;
+use codex_rollout::find_thread_path_by_id_str;
+use codex_rollout::parse_cursor;
+use codex_rollout::read_head_for_summary;
+use codex_rollout::read_session_meta_line;
+use codex_rollout::rollout_date_parts;
+use codex_rollout::state_db::StateDbHandle;
+use codex_rollout::state_db::get_state_db;
+use codex_rollout::state_db::reconcile_rollout;
 use codex_state::StateRuntime;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
@@ -2698,10 +2701,7 @@ impl CodexMessageProcessor {
         let rollout_path_display = archived_path.display().to_string();
         let fallback_provider = self.config.model_provider_id.clone();
         let state_db_ctx = get_state_db(&self.config).await;
-        let archived_folder = self
-            .config
-            .codex_home
-            .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
+        let archived_folder = self.config.codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
 
         let result: Result<Thread, JSONRPCErrorError> = async {
             let canonical_archived_dir = tokio::fs::canonicalize(&archived_folder).await.map_err(
@@ -2759,7 +2759,7 @@ impl CodexMessageProcessor {
                 });
             };
 
-            let sessions_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
+            let sessions_folder = self.config.codex_home.join(SESSIONS_SUBDIR);
             let dest_dir = sessions_folder.join(year).join(month).join(day);
             let restored_path = dest_dir.join(&file_name);
             tokio::fs::create_dir_all(&dest_dir)
@@ -4109,7 +4109,7 @@ impl CodexMessageProcessor {
                 }
             }
             GetConversationSummaryParams::ThreadId { conversation_id } => {
-                match codex_core::find_thread_path_by_id_str(
+                match find_thread_path_by_id_str(
                     &self.config.codex_home,
                     &conversation_id.to_string(),
                 )
@@ -4961,7 +4961,7 @@ impl CodexMessageProcessor {
         rollout_path: &Path,
     ) -> Result<(), JSONRPCErrorError> {
         // Verify rollout_path is under sessions dir.
-        let rollout_folder = self.config.codex_home.join(codex_core::SESSIONS_SUBDIR);
+        let rollout_folder = self.config.codex_home.join(SESSIONS_SUBDIR);
 
         let canonical_sessions_dir = match tokio::fs::canonicalize(&rollout_folder).await {
             Ok(path) => path,
@@ -5046,10 +5046,7 @@ impl CodexMessageProcessor {
 
         // Move the rollout file to archived.
         let result: std::io::Result<()> = async move {
-            let archive_folder = self
-                .config
-                .codex_home
-                .join(codex_core::ARCHIVED_SESSIONS_SUBDIR);
+            let archive_folder = self.config.codex_home.join(ARCHIVED_SESSIONS_SUBDIR);
             tokio::fs::create_dir_all(&archive_folder).await?;
             let archived_path = archive_folder.join(&file_name);
             tokio::fs::rename(&canonical_rollout_path, &archived_path).await?;
@@ -7720,7 +7717,7 @@ async fn read_summary_from_state_db_context_by_thread_id(
 }
 
 async fn summary_from_thread_list_item(
-    it: codex_core::ThreadItem,
+    it: ThreadItem,
     fallback_provider: &str,
     state_db_ctx: Option<&StateDbHandle>,
 ) -> Option<ConversationSummary> {

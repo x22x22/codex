@@ -39,8 +39,9 @@ use super::list::parse_timestamp_uuid_from_filename;
 use super::metadata;
 use super::policy::EventPersistenceMode;
 use super::policy::is_persisted_response_item;
-use crate::config::Config;
-use crate::default_client::originator;
+use crate::RolloutConfig;
+use crate::RolloutConfigSnapshot;
+use crate::StateDbConfig;
 use crate::git_info::collect_git_info;
 use crate::path_utils;
 use crate::state_db;
@@ -163,7 +164,7 @@ impl RolloutRecorder {
     /// List threads (rollout files) under the provided Codex home directory.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_threads(
-        config: &Config,
+        config: &(impl StateDbConfig + ?Sized),
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -189,7 +190,7 @@ impl RolloutRecorder {
     /// List archived threads (rollout files) under the archived sessions directory.
     #[allow(clippy::too_many_arguments)]
     pub async fn list_archived_threads(
-        config: &Config,
+        config: &(impl StateDbConfig + ?Sized),
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -214,7 +215,7 @@ impl RolloutRecorder {
 
     #[allow(clippy::too_many_arguments)]
     async fn list_threads_with_db_fallback(
-        config: &Config,
+        config: &(impl StateDbConfig + ?Sized),
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -224,7 +225,7 @@ impl RolloutRecorder {
         archived: bool,
         search_term: Option<&str>,
     ) -> std::io::Result<ThreadsPage> {
-        let codex_home = config.codex_home.as_path();
+        let codex_home = config.codex_home();
         // Filesystem-first listing intentionally overfetches so we can repair stale/missing
         // SQLite rollout paths before the final DB-backed page is returned.
         let fs_page_size = page_size.saturating_mul(2).max(page_size);
@@ -298,7 +299,7 @@ impl RolloutRecorder {
     /// Find the newest recorded thread path, optionally filtering to a matching cwd.
     #[allow(clippy::too_many_arguments)]
     pub async fn find_latest_thread_path(
-        config: &Config,
+        config: &(impl StateDbConfig + ?Sized),
         page_size: usize,
         cursor: Option<&Cursor>,
         sort_key: ThreadSortKey,
@@ -307,7 +308,7 @@ impl RolloutRecorder {
         default_provider: &str,
         filter_cwd: Option<&Path>,
     ) -> std::io::Result<Option<PathBuf>> {
-        let codex_home = config.codex_home.as_path();
+        let codex_home = config.codex_home();
         let state_db_ctx = state_db::get_state_db(config).await;
         if state_db_ctx.is_some() {
             let mut db_cursor = cursor.cloned();
@@ -368,11 +369,12 @@ impl RolloutRecorder {
     ///
     /// For resumed sessions, this immediately opens the existing rollout file.
     pub async fn new(
-        config: &Config,
+        config: &(impl RolloutConfig + ?Sized),
         params: RolloutRecorderParams,
         state_db_ctx: Option<StateDbHandle>,
         state_builder: Option<ThreadMetadataBuilder>,
     ) -> std::io::Result<Self> {
+        let config_snapshot = RolloutConfigSnapshot::new(config);
         let (file, deferred_log_file_info, rollout_path, meta, event_persistence_mode) =
             match params {
                 RolloutRecorderParams::Create {
@@ -383,7 +385,8 @@ impl RolloutRecorder {
                     dynamic_tools,
                     event_persistence_mode,
                 } => {
-                    let log_file_info = precompute_log_file_info(config, conversation_id)?;
+                    let log_file_info =
+                        precompute_log_file_info(&config_snapshot, conversation_id)?;
                     let path = log_file_info.path.clone();
                     let session_id = log_file_info.conversation_id;
                     let started_at = log_file_info.timestamp;
@@ -400,20 +403,20 @@ impl RolloutRecorder {
                         id: session_id,
                         forked_from_id,
                         timestamp,
-                        cwd: config.cwd.clone(),
-                        originator: originator().value,
+                        cwd: config_snapshot.cwd().to_path_buf(),
+                        originator: config_snapshot.originator(),
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         agent_nickname: source.get_nickname(),
                         agent_role: source.get_agent_role(),
                         source,
-                        model_provider: Some(config.model_provider_id.clone()),
+                        model_provider: Some(config_snapshot.model_provider_id().to_string()),
                         base_instructions: Some(base_instructions),
                         dynamic_tools: if dynamic_tools.is_empty() {
                             None
                         } else {
                             Some(dynamic_tools)
                         },
-                        memory_mode: (!config.memories.generate_memories)
+                        memory_mode: (!config_snapshot.generate_memories())
                             .then_some("disabled".to_string()),
                     };
 
@@ -443,7 +446,7 @@ impl RolloutRecorder {
             };
 
         // Clone the cwd for the spawned task to collect git info asynchronously
-        let cwd = config.cwd.clone();
+        let cwd = config_snapshot.cwd().to_path_buf();
 
         // A reasonably-sized bounded channel. If the buffer fills up the send
         // future will yield, which is fine – we only need to ensure we do not
@@ -461,8 +464,8 @@ impl RolloutRecorder {
             rollout_path.clone(),
             state_db_ctx.clone(),
             state_builder,
-            config.model_provider_id.clone(),
-            config.memories.generate_memories,
+            config_snapshot.model_provider_id().to_string(),
+            config_snapshot.generate_memories(),
         ));
 
         Ok(Self {
@@ -481,7 +484,7 @@ impl RolloutRecorder {
         self.state_db.clone()
     }
 
-    pub(crate) async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {
+    pub async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {
         let mut filtered = Vec::new();
         for item in items {
             // Note that function calls may look a bit strange if they are
@@ -527,7 +530,7 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
     }
 
-    pub(crate) async fn load_rollout_items(
+    pub async fn load_rollout_items(
         path: &Path,
     ) -> std::io::Result<(Vec<RolloutItem>, Option<ThreadId>, usize)> {
         trace!("Resuming rollout from {path:?}");
@@ -659,13 +662,13 @@ struct LogFileInfo {
 }
 
 fn precompute_log_file_info(
-    config: &Config,
+    config: &(impl StateDbConfig + ?Sized),
     conversation_id: ThreadId,
 ) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions/YYYY/MM/DD path.
     let timestamp = OffsetDateTime::now_local()
         .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
-    let mut dir = config.codex_home.clone();
+    let mut dir = config.codex_home().to_path_buf();
     dir.push(SESSIONS_SUBDIR);
     dir.push(timestamp.year().to_string());
     dir.push(format!("{:02}", u8::from(timestamp.month())));
