@@ -64,7 +64,6 @@ use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
-use codex_app_server_protocol::HazelnutScope as ApiHazelnutScope;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -95,7 +94,6 @@ use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
-use codex_app_server_protocol::ProductSurface as ApiProductSurface;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
@@ -109,10 +107,6 @@ use codex_app_server_protocol::SkillsConfigWriteParams;
 use codex_app_server_protocol::SkillsConfigWriteResponse;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
-use codex_app_server_protocol::SkillsRemoteReadParams;
-use codex_app_server_protocol::SkillsRemoteReadResponse;
-use codex_app_server_protocol::SkillsRemoteWriteParams;
-use codex_app_server_protocol::SkillsRemoteWriteResponse;
 use codex_app_server_protocol::Thread;
 use codex_app_server_protocol::ThreadArchiveParams;
 use codex_app_server_protocol::ThreadArchiveResponse;
@@ -226,7 +220,7 @@ use codex_core::mcp::group_tools_by_server;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::parse_cursor;
 use codex_core::plugins::MarketplaceError;
-use codex_core::plugins::MarketplacePluginSourceSummary;
+use codex_core::plugins::MarketplacePluginSource;
 use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
@@ -236,8 +230,6 @@ use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_core::skills::remote::export_remote_skill;
-use codex_core::skills::remote::list_remote_skills;
 use codex_core::state_db::StateDbHandle;
 use codex_core::state_db::get_state_db;
 use codex_core::state_db::reconcile_rollout;
@@ -267,8 +259,6 @@ use codex_protocol::protocol::McpAuthStatus as CoreMcpAuthStatus;
 use codex_protocol::protocol::McpServerRefreshConfig;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
-use codex_protocol::protocol::RemoteSkillHazelnutScope;
-use codex_protocol::protocol::RemoteSkillProductSurface;
 use codex_protocol::protocol::ReviewDelivery as CoreReviewDelivery;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::ReviewTarget as CoreReviewTarget;
@@ -357,24 +347,6 @@ enum ThreadShutdownResult {
     Complete,
     SubmitFailed,
     TimedOut,
-}
-
-fn convert_remote_scope(scope: ApiHazelnutScope) -> RemoteSkillHazelnutScope {
-    match scope {
-        ApiHazelnutScope::WorkspaceShared => RemoteSkillHazelnutScope::WorkspaceShared,
-        ApiHazelnutScope::AllShared => RemoteSkillHazelnutScope::AllShared,
-        ApiHazelnutScope::Personal => RemoteSkillHazelnutScope::Personal,
-        ApiHazelnutScope::Example => RemoteSkillHazelnutScope::Example,
-    }
-}
-
-fn convert_remote_product_surface(product_surface: ApiProductSurface) -> RemoteSkillProductSurface {
-    match product_surface {
-        ApiProductSurface::Chatgpt => RemoteSkillProductSurface::Chatgpt,
-        ApiProductSurface::Codex => RemoteSkillProductSurface::Codex,
-        ApiProductSurface::Api => RemoteSkillProductSurface::Api,
-        ApiProductSurface::Atlas => RemoteSkillProductSurface::Atlas,
-    }
 }
 
 impl Drop for ActiveLogin {
@@ -728,14 +700,6 @@ impl CodexMessageProcessor {
             }
             ClientRequest::PluginRead { request_id, params } => {
                 self.plugin_read(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::SkillsRemoteList { request_id, params } => {
-                self.skills_remote_list(to_connection_request_id(request_id), params)
-                    .await;
-            }
-            ClientRequest::SkillsRemoteExport { request_id, params } => {
-                self.skills_remote_export(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::AppsList { request_id, params } => {
@@ -5466,8 +5430,8 @@ impl CodexMessageProcessor {
                                 enabled: plugin.enabled,
                                 name: plugin.name,
                                 source: marketplace_plugin_source_to_info(plugin.source),
-                                install_policy: plugin.install_policy.into(),
-                                auth_policy: plugin.auth_policy.into(),
+                                install_policy: plugin.policy.installation.into(),
+                                auth_policy: plugin.policy.authentication.into(),
                                 interface: plugin.interface.map(plugin_interface_to_info),
                             })
                             .collect(),
@@ -5556,8 +5520,8 @@ impl CodexMessageProcessor {
                 source: marketplace_plugin_source_to_info(outcome.plugin.source),
                 installed: outcome.plugin.installed,
                 enabled: outcome.plugin.enabled,
-                install_policy: outcome.plugin.install_policy.into(),
-                auth_policy: outcome.plugin.auth_policy.into(),
+                install_policy: outcome.plugin.policy.installation.into(),
+                auth_policy: outcome.plugin.policy.authentication.into(),
                 interface: outcome.plugin.interface.map(plugin_interface_to_info),
             },
             description: outcome.plugin.description,
@@ -5569,79 +5533,6 @@ impl CodexMessageProcessor {
         self.outgoing
             .send_response(request_id, PluginReadResponse { plugin })
             .await;
-    }
-
-    async fn skills_remote_list(
-        &self,
-        request_id: ConnectionRequestId,
-        params: SkillsRemoteReadParams,
-    ) {
-        let hazelnut_scope = convert_remote_scope(params.hazelnut_scope);
-        let product_surface = convert_remote_product_surface(params.product_surface);
-        let enabled = if params.enabled { Some(true) } else { None };
-
-        let auth = self.auth_manager.auth().await;
-        match list_remote_skills(
-            &self.config,
-            auth.as_ref(),
-            hazelnut_scope,
-            product_surface,
-            enabled,
-        )
-        .await
-        {
-            Ok(skills) => {
-                let data = skills
-                    .into_iter()
-                    .map(|skill| codex_app_server_protocol::RemoteSkillSummary {
-                        id: skill.id,
-                        name: skill.name,
-                        description: skill.description,
-                    })
-                    .collect();
-                self.outgoing
-                    .send_response(request_id, SkillsRemoteReadResponse { data })
-                    .await;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to list remote skills: {err}"),
-                )
-                .await;
-            }
-        }
-    }
-
-    async fn skills_remote_export(
-        &self,
-        request_id: ConnectionRequestId,
-        params: SkillsRemoteWriteParams,
-    ) {
-        let SkillsRemoteWriteParams { hazelnut_id } = params;
-        let auth = self.auth_manager.auth().await;
-        let response = export_remote_skill(&self.config, auth.as_ref(), hazelnut_id.as_str()).await;
-
-        match response {
-            Ok(downloaded) => {
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        SkillsRemoteWriteResponse {
-                            id: downloaded.id,
-                            path: downloaded.path,
-                        },
-                    )
-                    .await;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to download remote skill: {err}"),
-                )
-                .await;
-            }
-        }
     }
 
     async fn skills_config_write(
@@ -7566,7 +7457,7 @@ fn plugin_skills_to_info(skills: &[codex_core::skills::SkillMetadata]) -> Vec<Sk
 }
 
 fn plugin_interface_to_info(
-    interface: codex_core::plugins::PluginManifestInterfaceSummary,
+    interface: codex_core::plugins::PluginManifestInterface,
 ) -> PluginInterface {
     PluginInterface {
         display_name: interface.display_name,
@@ -7586,9 +7477,9 @@ fn plugin_interface_to_info(
     }
 }
 
-fn marketplace_plugin_source_to_info(source: MarketplacePluginSourceSummary) -> PluginSource {
+fn marketplace_plugin_source_to_info(source: MarketplacePluginSource) -> PluginSource {
     match source {
-        MarketplacePluginSourceSummary::Local { path } => PluginSource::Local { path },
+        MarketplacePluginSource::Local { path } => PluginSource::Local { path },
     }
 }
 
