@@ -539,12 +539,13 @@ impl UnifiedExecProcessManager {
 
     pub(crate) async fn open_session_with_exec_env(
         &self,
+        process_id: i32,
         env: &ExecRequest,
         tty: bool,
         spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         self.session_factory
-            .open_session(env, tty, spawn_lifecycle)
+            .open_session(process_id, env, tty, spawn_lifecycle)
             .await
     }
 
@@ -581,6 +582,7 @@ impl UnifiedExecProcessManager {
             })
             .await;
         let req = UnifiedExecToolRequest {
+            process_id: request.process_id,
             command: request.command.clone(),
             cwd,
             env,

@@ -78,4 +78,13 @@ developer message Codex inserts when realtime becomes active. It only affects
 the realtime start message in prompt history and does not change websocket
 backend prompt settings or the realtime end/inactive message.
 
+## Unified exec over exec-server
+
+`experimental_unified_exec_use_exec_server` routes `exec_command` and
+`write_stdin` process launches through `codex-exec-server` instead of spawning
+them directly in-process. When
+`experimental_unified_exec_spawn_local_exec_server` is also enabled, Codex
+starts a session-scoped local `codex-exec-server` subprocess on startup and
+uses that connection for unified-exec calls.
+
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).

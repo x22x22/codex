@@ -1,6 +1,7 @@
 #![allow(clippy::module_inception)]
 
 use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
@@ -16,8 +17,12 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
+use crate::sandboxing::ExecRequest;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::formatted_truncate_text;
+use codex_exec_server::ExecParams;
+use codex_exec_server::ExecServerClient;
+use codex_exec_server::ExecServerEvent;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::SpawnedPty;
 
@@ -56,7 +61,7 @@ pub(crate) struct OutputHandles {
 
 #[derive(Debug)]
 pub(crate) struct UnifiedExecProcess {
-    process_handle: ExecCommandSession,
+    process_handle: ProcessBackend,
     output_rx: broadcast::Receiver<Vec<u8>>,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
@@ -69,9 +74,45 @@ pub(crate) struct UnifiedExecProcess {
     _spawn_lifecycle: SpawnLifecycleHandle,
 }
 
+enum ProcessBackend {
+    Local(ExecCommandSession),
+    Remote(RemoteExecSession),
+}
+
+impl std::fmt::Debug for ProcessBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Local(process_handle) => f.debug_tuple("Local").field(process_handle).finish(),
+            Self::Remote(process_handle) => f.debug_tuple("Remote").field(process_handle).finish(),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct RemoteExecSession {
+    process_key: String,
+    client: ExecServerClient,
+    writer_tx: mpsc::Sender<Vec<u8>>,
+    exited: Arc<AtomicBool>,
+    exit_code: Arc<StdMutex<Option<i32>>>,
+}
+
+impl std::fmt::Debug for RemoteExecSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteExecSession")
+            .field("process_key", &self.process_key)
+            .field("exited", &self.exited.load(Ordering::SeqCst))
+            .field(
+                "exit_code",
+                &self.exit_code.lock().ok().and_then(|guard| *guard),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 impl UnifiedExecProcess {
-    pub(super) fn new(
-        process_handle: ExecCommandSession,
+    fn new(
+        process_handle: ProcessBackend,
         initial_output_rx: tokio::sync::broadcast::Receiver<Vec<u8>>,
         sandbox_type: SandboxType,
         spawn_lifecycle: SpawnLifecycleHandle,
@@ -123,7 +164,10 @@ impl UnifiedExecProcess {
     }
 
     pub(super) fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
-        self.process_handle.writer_sender()
+        match &self.process_handle {
+            ProcessBackend::Local(process_handle) => process_handle.writer_sender(),
+            ProcessBackend::Remote(process_handle) => process_handle.writer_tx.clone(),
+        }
     }
 
     pub(super) fn output_handles(&self) -> OutputHandles {
@@ -149,17 +193,38 @@ impl UnifiedExecProcess {
     }
 
     pub(super) fn has_exited(&self) -> bool {
-        self.process_handle.has_exited()
+        match &self.process_handle {
+            ProcessBackend::Local(process_handle) => process_handle.has_exited(),
+            ProcessBackend::Remote(process_handle) => process_handle.exited.load(Ordering::SeqCst),
+        }
     }
 
     pub(super) fn exit_code(&self) -> Option<i32> {
-        self.process_handle.exit_code()
+        match &self.process_handle {
+            ProcessBackend::Local(process_handle) => process_handle.exit_code(),
+            ProcessBackend::Remote(process_handle) => process_handle
+                .exit_code
+                .lock()
+                .ok()
+                .and_then(|guard| *guard),
+        }
     }
 
     pub(super) fn terminate(&self) {
         self.output_closed.store(true, Ordering::Release);
         self.output_closed_notify.notify_waiters();
-        self.process_handle.terminate();
+        match &self.process_handle {
+            ProcessBackend::Local(process_handle) => process_handle.terminate(),
+            ProcessBackend::Remote(process_handle) => {
+                let client = process_handle.client.clone();
+                let process_key = process_handle.process_key.clone();
+                if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                    handle.spawn(async move {
+                        let _ = client.terminate(&process_key).await;
+                    });
+                }
+            }
+        }
         self.cancellation_token.cancel();
         self.output_task.abort();
     }
@@ -232,7 +297,12 @@ impl UnifiedExecProcess {
             mut exit_rx,
         } = spawned;
         let output_rx = codex_utils_pty::combine_output_receivers(stdout_rx, stderr_rx);
-        let managed = Self::new(process_handle, output_rx, sandbox_type, spawn_lifecycle);
+        let managed = Self::new(
+            ProcessBackend::Local(process_handle),
+            output_rx,
+            sandbox_type,
+            spawn_lifecycle,
+        );
 
         let exit_ready = matches!(exit_rx.try_recv(), Ok(_) | Err(TryRecvError::Closed));
 
@@ -258,6 +328,89 @@ impl UnifiedExecProcess {
                 cancellation_token.cancel();
             }
         });
+
+        Ok(managed)
+    }
+
+    pub(super) async fn from_exec_server(
+        client: ExecServerClient,
+        process_id: i32,
+        env: &ExecRequest,
+        tty: bool,
+        spawn_lifecycle: SpawnLifecycleHandle,
+    ) -> Result<Self, UnifiedExecError> {
+        let process_key = process_id.to_string();
+        let mut events_rx = client.event_receiver();
+        client
+            .exec(ExecParams {
+                process_id: process_key.clone(),
+                argv: env.command.clone(),
+                cwd: env.cwd.clone(),
+                env: env.env.clone(),
+                tty,
+                arg0: env.arg0.clone(),
+                sandbox: None,
+            })
+            .await
+            .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+
+        let (output_tx, output_rx) = broadcast::channel(256);
+        let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(256);
+        let exited = Arc::new(AtomicBool::new(false));
+        let exit_code = Arc::new(StdMutex::new(None));
+
+        let managed = Self::new(
+            ProcessBackend::Remote(RemoteExecSession {
+                process_key: process_key.clone(),
+                client: client.clone(),
+                writer_tx,
+                exited: Arc::clone(&exited),
+                exit_code: Arc::clone(&exit_code),
+            }),
+            output_rx,
+            env.sandbox,
+            spawn_lifecycle,
+        );
+
+        {
+            let client = client.clone();
+            tokio::spawn(async move {
+                while let Some(chunk) = writer_rx.recv().await {
+                    if client.write(&process_key, chunk).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+
+        {
+            let process_key = process_id.to_string();
+            let exited = Arc::clone(&exited);
+            let exit_code = Arc::clone(&exit_code);
+            let cancellation_token = managed.cancellation_token();
+            tokio::spawn(async move {
+                while let Ok(event) = events_rx.recv().await {
+                    match event {
+                        ExecServerEvent::OutputDelta(notification)
+                            if notification.process_id == process_key =>
+                        {
+                            let _ = output_tx.send(notification.chunk.into_inner());
+                        }
+                        ExecServerEvent::Exited(notification)
+                            if notification.process_id == process_key =>
+                        {
+                            exited.store(true, Ordering::SeqCst);
+                            if let Ok(mut guard) = exit_code.lock() {
+                                *guard = Some(notification.exit_code);
+                            }
+                            cancellation_token.cancel();
+                            break;
+                        }
+                        ExecServerEvent::OutputDelta(_) | ExecServerEvent::Exited(_) => {}
+                    }
+                }
+            });
+        }
 
         Ok(managed)
     }

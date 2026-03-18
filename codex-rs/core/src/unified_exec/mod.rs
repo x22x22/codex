@@ -50,6 +50,7 @@ pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
 
 pub(crate) use backend::UnifiedExecSessionFactoryHandle;
 pub(crate) use backend::local_unified_exec_session_factory;
+pub(crate) use backend::unified_exec_session_factory_for_config;
 pub(crate) use errors::UnifiedExecError;
 pub(crate) use process::NoopSpawnLifecycle;
 #[cfg(unix)]

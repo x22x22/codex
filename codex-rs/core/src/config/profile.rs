@@ -49,6 +49,8 @@ pub struct ConfigProfile {
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub include_apply_patch_tool: Option<bool>,
     pub experimental_use_unified_exec_tool: Option<bool>,
+    pub experimental_unified_exec_use_exec_server: Option<bool>,
+    pub experimental_unified_exec_spawn_local_exec_server: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub tools_view_image: Option<bool>,
     pub tools: Option<ToolsToml>,

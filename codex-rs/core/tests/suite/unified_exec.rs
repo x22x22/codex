@@ -270,6 +270,78 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_can_route_through_in_process_exec_server() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    skip_if_sandbox!(Ok(()));
+    skip_if_windows!(Ok(()));
+
+    let builder = test_codex().with_config(|config| {
+        config.use_experimental_unified_exec_tool = true;
+        config.experimental_unified_exec_use_exec_server = true;
+        config
+            .features
+            .enable(Feature::UnifiedExec)
+            .expect("test config should allow feature update");
+    });
+    let harness = TestCodexHarness::with_builder(builder).await?;
+
+    let call_id = "uexec-exec-server-inprocess";
+    let marker = "unified_exec_exec_server_inprocess_marker";
+    let args = json!({
+        "cmd": format!("printf {marker}"),
+        "yield_time_ms": 250,
+    });
+
+    let responses = vec![
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_function_call(call_id, "exec_command", &serde_json::to_string(&args)?),
+            ev_completed("resp-1"),
+        ]),
+        sse(vec![
+            ev_response_created("resp-2"),
+            ev_assistant_message("msg-1", "done"),
+            ev_completed("resp-2"),
+        ]),
+    ];
+    mount_sse_sequence(harness.server(), responses).await;
+
+    let test = harness.test();
+    let codex = test.codex.clone();
+    let cwd = test.cwd_path().to_path_buf();
+    let session_model = test.session_configured.model.clone();
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![UserInput::Text {
+                text: "route unified exec through the in-process exec-server".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+            cwd,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: session_model,
+            effort: None,
+            summary: None,
+            service_tier: None,
+            collaboration_mode: None,
+            personality: None,
+        })
+        .await?;
+
+    wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
+
+    let output = harness.function_call_stdout(call_id).await;
+    assert!(
+        output.contains(marker),
+        "expected unified exec output from exec-server backend, got: {output:?}"
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unified_exec_emits_exec_command_begin_event() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));

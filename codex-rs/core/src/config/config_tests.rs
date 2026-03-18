@@ -1695,6 +1695,29 @@ fn legacy_toggles_map_to_features() -> std::io::Result<()> {
     assert!(config.include_apply_patch_tool);
 
     assert!(config.use_experimental_unified_exec_tool);
+    assert!(!config.experimental_unified_exec_use_exec_server);
+    assert!(!config.experimental_unified_exec_spawn_local_exec_server);
+
+    Ok(())
+}
+
+#[test]
+fn unified_exec_exec_server_flags_load_from_config() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let cfg = ConfigToml {
+        experimental_unified_exec_use_exec_server: Some(true),
+        experimental_unified_exec_spawn_local_exec_server: Some(true),
+        ..Default::default()
+    };
+
+    let config = Config::load_from_base_config_with_overrides(
+        cfg,
+        ConfigOverrides::default(),
+        codex_home.path().to_path_buf(),
+    )?;
+
+    assert!(config.experimental_unified_exec_use_exec_server);
+    assert!(config.experimental_unified_exec_spawn_local_exec_server);
 
     Ok(())
 }
@@ -4262,6 +4285,8 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
             web_search_config: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
+            experimental_unified_exec_use_exec_server: false,
+            experimental_unified_exec_spawn_local_exec_server: false,
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
             features: Features::with_defaults().into(),
@@ -4401,6 +4426,8 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
+        experimental_unified_exec_use_exec_server: false,
+        experimental_unified_exec_spawn_local_exec_server: false,
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         features: Features::with_defaults().into(),
@@ -4538,6 +4565,8 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
+        experimental_unified_exec_use_exec_server: false,
+        experimental_unified_exec_spawn_local_exec_server: false,
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         features: Features::with_defaults().into(),
@@ -4661,6 +4690,8 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         web_search_mode: Constrained::allow_any(WebSearchMode::Cached),
         web_search_config: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
+        experimental_unified_exec_use_exec_server: false,
+        experimental_unified_exec_spawn_local_exec_server: false,
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
         features: Features::with_defaults().into(),

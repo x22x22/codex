@@ -3,14 +3,27 @@ use super::*;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::make_session_and_context;
+use crate::config::ConfigBuilder;
+use crate::config::ConfigOverrides;
+use crate::exec::ExecExpiration;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::sandboxing::ExecRequest;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::WriteStdinRequest;
+use codex_exec_server::ExecServerLaunchCommand;
+use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::permissions::FileSystemSandboxPolicy;
+use codex_protocol::permissions::NetworkSandboxPolicy;
 use core_test_support::skip_if_sandbox;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
+use tempfile::TempDir;
 use tokio::time::Duration;
+use toml::Value as TomlValue;
 
 async fn test_session_and_turn() -> (Arc<Session>, Arc<TurnContext>) {
     let (session, mut turn) = make_session_and_context().await;
@@ -80,6 +93,28 @@ async fn write_stdin(
             max_output_tokens: None,
         })
         .await
+}
+
+fn test_exec_request(command: Vec<String>, cwd: &std::path::Path) -> ExecRequest {
+    let sandbox_policy = SandboxPolicy::DangerFullAccess;
+    let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+    let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
+    ExecRequest {
+        command,
+        cwd: cwd.to_path_buf(),
+        env: HashMap::new(),
+        network: None,
+        expiration: ExecExpiration::Timeout(Duration::from_secs(5)),
+        sandbox: crate::exec::SandboxType::None,
+        windows_sandbox_level: WindowsSandboxLevel::default(),
+        windows_sandbox_private_desktop: false,
+        sandbox_permissions: SandboxPermissions::UseDefault,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        justification: None,
+        arg0: None,
+    }
 }
 
 #[test]
@@ -230,6 +265,93 @@ async fn unified_exec_timeouts() -> anyhow::Result<()> {
         "subsequent poll should retrieve output"
     );
 
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unified_exec_can_spawn_a_local_exec_server_backend() -> anyhow::Result<()> {
+    skip_if_sandbox!(Ok(()));
+
+    let codex_home = TempDir::new()?;
+    let cwd = TempDir::new()?;
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .cli_overrides(vec![
+            (
+                "experimental_unified_exec_use_exec_server".to_string(),
+                TomlValue::Boolean(true),
+            ),
+            (
+                "experimental_unified_exec_spawn_local_exec_server".to_string(),
+                TomlValue::Boolean(true),
+            ),
+        ])
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(cwd.path().to_path_buf()),
+            ..Default::default()
+        })
+        .build()
+        .await?;
+    let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("core crate should be under codex-rs")
+        .to_path_buf();
+    let cargo = PathBuf::from(env!("CARGO"));
+    let build_status = Command::new(&cargo)
+        .current_dir(&workspace_root)
+        .args([
+            "build",
+            "-p",
+            "codex-exec-server",
+            "--bin",
+            "codex-exec-server",
+        ])
+        .status()?;
+    assert!(build_status.success(), "failed to build codex-exec-server");
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace_root.join("target"));
+    let binary_name = if cfg!(windows) {
+        "codex-exec-server.exe"
+    } else {
+        "codex-exec-server"
+    };
+    let session_factory = unified_exec_session_factory_for_config(
+        &config,
+        Some(ExecServerLaunchCommand {
+            program: target_dir.join("debug").join(binary_name),
+            args: Vec::new(),
+        }),
+    )
+    .await?;
+    let manager = UnifiedExecProcessManager::with_session_factory(
+        DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
+        session_factory,
+    );
+    let process = manager
+        .open_session_with_exec_env(
+            1000,
+            &test_exec_request(
+                vec![
+                    "bash".to_string(),
+                    "-c".to_string(),
+                    "printf unified_exec_spawned_exec_server_backend_marker".to_string(),
+                ],
+                cwd.path(),
+            ),
+            false,
+            Box::new(NoopSpawnLifecycle),
+        )
+        .await?;
+    let mut output_rx = process.output_receiver();
+    let chunk = tokio::time::timeout(Duration::from_secs(5), output_rx.recv()).await??;
+
+    assert_eq!(
+        String::from_utf8_lossy(&chunk),
+        "unified_exec_spawned_exec_server_backend_marker"
+    );
+
+    process.terminate();
     Ok(())
 }
 
