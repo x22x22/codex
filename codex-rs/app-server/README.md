@@ -722,6 +722,7 @@ Streaming stdin/stdout uses base64 so PTY sessions can carry arbitrary bytes:
 - `command/exec/outputDelta.capReached` is `true` on the final streamed chunk for a stream when `outputBytesCap` truncates that stream; later output on that stream is dropped.
 - `command/exec.params.env` overrides the server-computed environment per key; set a key to `null` to unset an inherited variable.
 - `command/exec/resize` is only supported for PTY-backed `command/exec` sessions.
+- When `experimental_unified_exec_use_exec_server = true`, `command/exec` reuses the selected executor backend. In that mode, streaming exec/write/terminate are supported remotely, while sandboxed execution, initial terminal sizing, `command/exec/resize`, and `closeStdin` remain unsupported and return explicit errors.
 
 ### Example: Filesystem utilities
 

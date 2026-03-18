@@ -1,3 +1,4 @@
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -25,6 +26,12 @@ pub(crate) type UnifiedExecSessionFactoryHandle = Arc<dyn UnifiedExecSessionFact
 pub(crate) struct SessionExecutionBackends {
     pub(crate) unified_exec_session_factory: UnifiedExecSessionFactoryHandle,
     pub(crate) environment: Arc<Environment>,
+    pub(crate) exec_server_client: Option<ExecServerClient>,
+}
+
+pub struct ExecutorBackends {
+    pub environment: Arc<Environment>,
+    pub exec_server_client: Option<ExecServerClient>,
 }
 
 #[async_trait]
@@ -157,6 +164,7 @@ pub(crate) async fn session_execution_backends_for_config(
         return Ok(SessionExecutionBackends {
             unified_exec_session_factory: local_unified_exec_session_factory(),
             environment: Arc::new(Environment::default()),
+            exec_server_client: None,
         });
     }
 
@@ -179,15 +187,39 @@ pub(crate) async fn session_execution_backends_for_config(
             spawn_local_exec_server(command, ExecServerClientConnectOptions::default())
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        return Ok(exec_server_backends_from_spawned_server(Arc::new(
-            spawned_server,
-        ), path_mapper));
+        return Ok(exec_server_backends_from_spawned_server(
+            Arc::new(spawned_server),
+            path_mapper,
+        ));
     }
 
     let client = ExecServerClient::connect_in_process(ExecServerClientConnectOptions::default())
         .await
         .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
     Ok(exec_server_backends_from_client(client, path_mapper))
+}
+
+pub async fn executor_environment_for_config(
+    config: &Config,
+    local_exec_server_command: Option<ExecServerLaunchCommand>,
+) -> io::Result<Arc<Environment>> {
+    session_execution_backends_for_config(config, local_exec_server_command)
+        .await
+        .map(|backends| backends.environment)
+        .map_err(|err| io::Error::other(err.to_string()))
+}
+
+pub async fn executor_backends_for_config(
+    config: &Config,
+    local_exec_server_command: Option<ExecServerLaunchCommand>,
+) -> io::Result<ExecutorBackends> {
+    session_execution_backends_for_config(config, local_exec_server_command)
+        .await
+        .map(|backends| ExecutorBackends {
+            environment: backends.environment,
+            exec_server_client: backends.exec_server_client,
+        })
+        .map_err(|err| io::Error::other(err.to_string()))
 }
 
 fn default_local_exec_server_command() -> ExecServerLaunchCommand {
@@ -217,9 +249,10 @@ fn exec_server_backends_from_client(
             path_mapper.clone(),
         ),
         environment: Arc::new(Environment::new(Arc::new(ExecServerFileSystem::new(
-            client,
+            client.clone(),
             path_mapper,
         )))),
+        exec_server_client: Some(client),
     }
 }
 
@@ -236,6 +269,7 @@ fn exec_server_backends_from_spawned_server(
             spawned_server.client().clone(),
             path_mapper,
         )))),
+        exec_server_client: Some(spawned_server.client().clone()),
     }
 }
 

@@ -18,6 +18,7 @@ use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::path::Path;
 use tempfile::TempDir;
 use tokio::time::Duration;
 use tokio::time::Instant;
@@ -437,6 +438,84 @@ async fn command_exec_streaming_does_not_buffer_output() -> Result<()> {
     assert_eq!(response.stdout, "");
     assert_eq!(response.stderr, "");
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn command_exec_remote_backend_supports_streaming_write_and_terminate() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
+    let codex_home = TempDir::new()?;
+    create_command_exec_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        "danger-full-access",
+        true,
+    )?;
+    let (mut process, bind_addr) = spawn_websocket_server(codex_home.path()).await?;
+    let mut ws = connect_websocket(bind_addr).await?;
+    send_initialize_request(&mut ws, 1, "remote_command_exec_client").await?;
+    read_initialize_response(&mut ws, 1).await?;
+
+    send_request(
+        &mut ws,
+        "command/exec",
+        2,
+        Some(serde_json::to_value(CommandExecParams {
+            command: vec!["sh".to_string(), "-lc".to_string(), "cat".to_string()],
+            process_id: Some("remote-cat-1".to_string()),
+            tty: false,
+            stream_stdin: true,
+            stream_stdout_stderr: true,
+            output_bytes_cap: None,
+            disable_output_cap: false,
+            disable_timeout: false,
+            timeout_ms: None,
+            cwd: None,
+            env: None,
+            size: None,
+            sandbox_policy: None,
+        })?),
+    )
+    .await?;
+
+    send_request(
+        &mut ws,
+        "command/exec/write",
+        3,
+        Some(serde_json::to_value(CommandExecWriteParams {
+            process_id: "remote-cat-1".to_string(),
+            delta_base64: Some(STANDARD.encode("remote-stdin\n")),
+            close_stdin: false,
+        })?),
+    )
+    .await?;
+    let write_response = super::connection_handling_websocket::read_response_for_id(&mut ws, 3).await?;
+    assert_eq!(write_response.id, RequestId::Integer(3));
+
+    let delta = read_command_exec_delta_ws(&mut ws).await?;
+    assert_eq!(delta.process_id, "remote-cat-1");
+    assert_eq!(String::from_utf8(STANDARD.decode(&delta.delta_base64)?)?, "remote-stdin\n");
+
+    send_request(
+        &mut ws,
+        "command/exec/terminate",
+        4,
+        Some(serde_json::to_value(CommandExecTerminateParams {
+            process_id: "remote-cat-1".to_string(),
+        })?),
+    )
+    .await?;
+    let terminate_response = super::connection_handling_websocket::read_response_for_id(&mut ws, 4).await?;
+    assert_eq!(terminate_response.id, RequestId::Integer(4));
+
+    let response = super::connection_handling_websocket::read_response_for_id(&mut ws, 2).await?;
+    let response: CommandExecResponse = to_response(response)?;
+    assert_ne!(response.exit_code, 0);
+    assert_eq!(response.stdout, "");
+    assert_eq!(response.stderr, "");
+
+    process.kill().await.context("failed to stop websocket app-server process")?;
     Ok(())
 }
 
@@ -883,4 +962,33 @@ fn process_with_marker_exists(marker: &str) -> Result<bool> {
         .context("spawn ps -axo command")?;
     let stdout = String::from_utf8(output.stdout).context("decode ps output")?;
     Ok(stdout.lines().any(|line| line.contains(marker)))
+}
+
+fn create_command_exec_config_toml(
+    codex_home: &Path,
+    server_uri: &str,
+    approval_policy: &str,
+    sandbox_mode: &str,
+    use_exec_server: bool,
+) -> std::io::Result<()> {
+    let mut config = format!(
+        r#"
+model = "mock-model"
+approval_policy = "{approval_policy}"
+sandbox_mode = "{sandbox_mode}"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+    );
+    if use_exec_server {
+        config.push_str("\nexperimental_unified_exec_use_exec_server = true\n");
+    }
+    std::fs::write(codex_home.join("config.toml"), config)
 }

@@ -48,6 +48,8 @@ pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
     process_manager::set_deterministic_process_ids_for_tests(enabled);
 }
 
+pub use backend::ExecutorBackends;
+pub use backend::executor_backends_for_config;
 pub(crate) use backend::UnifiedExecSessionFactoryHandle;
 pub(crate) use backend::local_unified_exec_session_factory;
 pub(crate) use backend::session_execution_backends_for_config;
