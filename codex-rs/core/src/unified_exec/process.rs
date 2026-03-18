@@ -341,7 +341,7 @@ impl UnifiedExecProcess {
     ) -> Result<Self, UnifiedExecError> {
         let process_key = process_id.to_string();
         let mut events_rx = client.event_receiver();
-        client
+        let response = client
             .exec(ExecParams {
                 process_id: process_key.clone(),
                 argv: env.command.clone(),
@@ -353,6 +353,7 @@ impl UnifiedExecProcess {
             })
             .await
             .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+        let process_key = response.process_id;
 
         let (output_tx, output_rx) = broadcast::channel(256);
         let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(256);
@@ -374,9 +375,10 @@ impl UnifiedExecProcess {
 
         {
             let client = client.clone();
+            let writer_process_key = process_key.clone();
             tokio::spawn(async move {
                 while let Some(chunk) = writer_rx.recv().await {
-                    if client.write(&process_key, chunk).await.is_err() {
+                    if client.write(&writer_process_key, chunk).await.is_err() {
                         break;
                     }
                 }
@@ -384,7 +386,7 @@ impl UnifiedExecProcess {
         }
 
         {
-            let process_key = process_id.to_string();
+            let process_key = process_key.clone();
             let exited = Arc::clone(&exited);
             let exit_code = Arc::clone(&exit_code);
             let cancellation_token = managed.cancellation_token();

@@ -17,4 +17,8 @@ isDirectory: boolean,
 /**
  * Whether this entry resolves to a regular file.
  */
-isFile: boolean, };
+isFile: boolean, 
+/**
+ * Whether this entry is a symlink.
+ */
+isSymlink: boolean, };

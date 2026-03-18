@@ -43,6 +43,10 @@ use crate::server::routing::invalid_params;
 use crate::server::routing::invalid_request;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
+#[cfg(test)]
+const EXITED_PROCESS_RETENTION: Duration = Duration::from_millis(25);
+#[cfg(not(test))]
+const EXITED_PROCESS_RETENTION: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 struct RetainedOutputChunk {
@@ -613,11 +617,16 @@ async fn watch_exit(
     let _ = outbound_tx
         .send(ExecServerOutboundMessage::Notification(
             ExecServerServerNotification::Exited(ExecExitedNotification {
-                process_id,
+                process_id: process_id.clone(),
                 exit_code,
             }),
         ))
         .await;
+    tokio::spawn(async move {
+        tokio::time::sleep(EXITED_PROCESS_RETENTION).await;
+        let mut processes = processes.lock().await;
+        processes.remove(&process_id);
+    });
 }
 
 #[cfg(test)]

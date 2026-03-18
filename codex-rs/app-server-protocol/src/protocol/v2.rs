@@ -2210,6 +2210,8 @@ pub struct FsReadDirectoryEntry {
     pub is_directory: bool,
     /// Whether this entry resolves to a regular file.
     pub is_file: bool,
+    /// Whether this entry is a symlink.
+    pub is_symlink: bool,
 }
 
 /// Directory entries returned by `fs/readDirectory`.

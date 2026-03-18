@@ -590,35 +590,33 @@ async fn terminate_keeps_process_ids_reserved() {
         panic!("initialized should succeed: {err}");
     }
 
-    let spawned = codex_utils_pty::spawn_pipe_process_no_stdin(
-        "bash",
-        &["-lc".to_string(), "sleep 30".to_string()],
-        std::env::current_dir().expect("cwd").as_path(),
-        &HashMap::new(),
-        &None,
-    )
-    .await
-    .expect("spawn test process");
-    {
-        let mut process_map = handler.processes.lock().await;
-        process_map.insert(
-            "proc-1".to_string(),
-            super::RunningProcess {
-                session: spawned.session,
+    if let Err(err) = handler
+        .handle_message(ExecServerInboundMessage::Request(ExecServerRequest::Exec {
+            request_id: RequestId::Integer(2),
+            params: crate::protocol::ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: vec![
+                    "bash".to_string(),
+                    "-lc".to_string(),
+                    "sleep 30".to_string(),
+                ],
+                cwd: std::env::current_dir().expect("cwd"),
+                env: HashMap::new(),
                 tty: false,
-                output: std::collections::VecDeque::new(),
-                retained_bytes: 0,
-                next_seq: 1,
-                exit_code: None,
-                output_notify: Arc::new(Notify::new()),
+                arg0: None,
+                sandbox: None,
             },
-        );
+        }))
+        .await
+    {
+        panic!("exec should not fail the handler: {err}");
     }
+    let _ = recv_outbound(&mut outgoing_rx).await;
 
     if let Err(err) = handler
         .handle_message(ExecServerInboundMessage::Request(
             ExecServerRequest::Terminate {
-                request_id: RequestId::Integer(2),
+                request_id: RequestId::Integer(3),
                 params: crate::protocol::TerminateParams {
                     process_id: "proc-1".to_string(),
                 },
@@ -632,7 +630,7 @@ async fn terminate_keeps_process_ids_reserved() {
     assert_eq!(
         recv_outbound(&mut outgoing_rx).await,
         ExecServerOutboundMessage::Response {
-            request_id: RequestId::Integer(2),
+            request_id: RequestId::Integer(3),
             response: ExecServerResponseMessage::Terminate(TerminateResponse { running: true }),
         }
     );
@@ -641,6 +639,18 @@ async fn terminate_keeps_process_ids_reserved() {
         handler.processes.lock().await.contains_key("proc-1"),
         "terminated ids should stay reserved until exit cleanup removes them"
     );
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(1);
+    loop {
+        if !handler.processes.lock().await.contains_key("proc-1") {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "terminated ids should be removed after the exit retention window"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 
     handler.shutdown().await;
 }

@@ -107,10 +107,11 @@ impl UnifiedExecSessionFactory for ExecServerUnifiedExecSessionFactory {
             return open_local_session(env, tty, spawn_lifecycle).await;
         }
 
-        if env.sandbox == SandboxType::WindowsRestrictedToken {
+        if env.sandbox != SandboxType::None {
             debug!(
                 process_id,
-                "falling back to local unified-exec backend because Windows restricted-token execution is not modeled by exec-server",
+                sandbox = ?env.sandbox,
+                "falling back to local unified-exec backend because sandboxed execution is not modeled by exec-server",
             );
             return open_local_session(env, tty, spawn_lifecycle).await;
         }
