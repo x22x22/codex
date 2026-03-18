@@ -34,7 +34,7 @@ rough call flow, buffering, and sandboxing boundaries, live in
 
 ## Transport
 
-The server speaks the same JSON-RPC message shapes over multiple transports.
+The server speaks the shared JSON-RPC message shapes over multiple transports.
 
 The standalone binary supports:
 
@@ -43,17 +43,10 @@ The standalone binary supports:
 
 Wire framing:
 
-- stdio: one newline-delimited JSON-RPC message per line on stdin/stdout
+- stdio: one newline-delimited JSON message per line on stdin/stdout
 - websocket: one JSON-RPC message per websocket text frame
 
-Like the app-server transport, messages on the wire omit the `"jsonrpc":"2.0"`
-field and use the shared `codex-app-server-protocol` envelope types.
-
-The current protocol version is:
-
-```text
-exec-server.v0
-```
+Messages on the wire use the shared `codex-app-server-protocol` envelope types.
 
 ## Lifecycle
 

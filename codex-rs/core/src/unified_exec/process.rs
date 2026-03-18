@@ -349,7 +349,6 @@ impl UnifiedExecProcess {
                 env: env.env.clone(),
                 tty,
                 arg0: env.arg0.clone(),
-                sandbox: None,
             })
             .await
             .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
