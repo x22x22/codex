@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tracing::debug;
 use tracing::warn;
@@ -21,7 +20,7 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
     let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
     let notifications = RpcNotificationSender::new(outgoing_tx.clone());
-    let handler = Arc::new(Mutex::new(ExecServerHandler::new(notifications)));
+    let handler = Arc::new(ExecServerHandler::new(notifications));
 
     let outbound_task = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {
@@ -101,7 +100,7 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
         }
     }
 
-    handler.lock().await.shutdown().await;
+    handler.shutdown().await;
     drop(outgoing_tx);
     let _ = outbound_task.await;
 }
