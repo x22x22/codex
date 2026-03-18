@@ -152,11 +152,7 @@ impl ExecutorFileSystem for RemappedFileSystem {
         Ok(entries)
     }
 
-    async fn remove(
-        &self,
-        path: &AbsolutePathBuf,
-        options: RemoveOptions,
-    ) -> FileSystemResult<()> {
+    async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()> {
         let remapped = self.remap(path);
         match tokio::fs::symlink_metadata(remapped.as_path()).await {
             Ok(metadata) => {

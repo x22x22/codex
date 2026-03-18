@@ -394,7 +394,9 @@ pub async fn discover_project_doc_paths_with_environment(
                     .map_err(|err| {
                         std::io::Error::new(
                             std::io::ErrorKind::InvalidInput,
-                            format!("marker path must stay absolute for project-doc discovery: {err}"),
+                            format!(
+                                "marker path must stay absolute for project-doc discovery: {err}"
+                            ),
                         )
                     })?;
                 let marker_exists = match file_system.get_metadata(&marker_path).await {
@@ -417,12 +419,14 @@ pub async fn discover_project_doc_paths_with_environment(
         let mut dirs = Vec::new();
         let mut cursor = dir.as_path();
         loop {
-            dirs.push(AbsolutePathBuf::try_from(cursor.to_path_buf()).map_err(|err| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!("search dir must stay absolute for project-doc discovery: {err}"),
-                )
-            })?);
+            dirs.push(
+                AbsolutePathBuf::try_from(cursor.to_path_buf()).map_err(|err| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("search dir must stay absolute for project-doc discovery: {err}"),
+                    )
+                })?,
+            );
             if cursor == root.as_path() {
                 break;
             }

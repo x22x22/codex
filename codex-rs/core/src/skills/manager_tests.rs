@@ -194,18 +194,18 @@ async fn skills_for_config_with_environment_reads_repo_skills_from_remote_worksp
 
     fs::create_dir_all(local_root.path().join("repo/subdir")).unwrap();
     fs::create_dir_all(remote_root.path().join("repo/subdir")).unwrap();
-    fs::create_dir_all(local_root.path().join(".git")).unwrap();
-    fs::create_dir_all(remote_root.path().join(".git")).unwrap();
-    fs::create_dir_all(local_root.path().join(".agents/skills/demo")).unwrap();
-    fs::create_dir_all(remote_root.path().join(".agents/skills/demo")).unwrap();
+    fs::create_dir_all(local_root.path().join("repo/.git")).unwrap();
+    fs::create_dir_all(remote_root.path().join("repo/.git")).unwrap();
+    fs::create_dir_all(local_root.path().join("repo/.agents/skills/demo")).unwrap();
+    fs::create_dir_all(remote_root.path().join("repo/.agents/skills/demo")).unwrap();
 
     fs::write(
-        local_root.path().join(".agents/skills/demo/SKILL.md"),
+        local_root.path().join("repo/.agents/skills/demo/SKILL.md"),
         "---\nname: local-skill\ndescription: local\n---\n",
     )
     .unwrap();
     fs::write(
-        remote_root.path().join(".agents/skills/demo/SKILL.md"),
+        remote_root.path().join("repo/.agents/skills/demo/SKILL.md"),
         "---\nname: remote-skill\ndescription: remote\n---\n",
     )
     .unwrap();
@@ -231,8 +231,18 @@ async fn skills_for_config_with_environment_reads_repo_skills_from_remote_worksp
         .skills_for_config_with_environment(&config, &environment)
         .await;
 
-    assert!(outcome.skills.iter().any(|skill| skill.name == "remote-skill"));
-    assert!(outcome.skills.iter().all(|skill| skill.name != "local-skill"));
+    assert!(
+        outcome
+            .skills
+            .iter()
+            .any(|skill| skill.name == "remote-skill")
+    );
+    assert!(
+        outcome
+            .skills
+            .iter()
+            .all(|skill| skill.name != "local-skill")
+    );
 }
 
 #[tokio::test]

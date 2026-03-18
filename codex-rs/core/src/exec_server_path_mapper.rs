@@ -34,8 +34,8 @@ mod tests {
             AbsolutePathBuf::try_from("/Users/starr/code/codex").unwrap(),
             AbsolutePathBuf::try_from("/home/dev-user/codex").unwrap(),
         );
-        let path = AbsolutePathBuf::try_from("/Users/starr/code/codex/codex-rs/core/src/lib.rs")
-            .unwrap();
+        let path =
+            AbsolutePathBuf::try_from("/Users/starr/code/codex/codex-rs/core/src/lib.rs").unwrap();
         assert_eq!(
             mapper.map_path(&path),
             AbsolutePathBuf::try_from("/home/dev-user/codex/codex-rs/core/src/lib.rs").unwrap()
