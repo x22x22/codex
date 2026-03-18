@@ -212,7 +212,7 @@ fn build_process_exec_tool_request(
     codex_linux_sandbox_exe: &Option<PathBuf>,
     use_legacy_landlock: bool,
 ) -> Result<ExecRequest> {
-    let mut exec_req = build_exec_request(
+    build_exec_request(
         params,
         sandbox_policy,
         file_system_sandbox_policy,
@@ -220,9 +220,8 @@ fn build_process_exec_tool_request(
         sandbox_cwd,
         codex_linux_sandbox_exe,
         use_legacy_landlock,
-    )?;
-    exec_req.allow_detached_children_in_linux_sandbox();
-    Ok(exec_req)
+    )
+    .map(crate::sandboxing::allow_detached_children_in_linux_sandbox)
 }
 
 /// Transform a portable exec request into the concrete argv/env that should be

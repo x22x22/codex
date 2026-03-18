@@ -78,23 +78,23 @@ pub struct ExecRequest {
     pub arg0: Option<String>,
 }
 
-impl ExecRequest {
-    pub(crate) fn allow_detached_children_in_linux_sandbox(&mut self) {
-        const ALLOW_DETACHED_CHILDREN: &str = "--allow-detached-children";
+pub(crate) fn allow_detached_children_in_linux_sandbox(
+    mut exec_request: ExecRequest,
+) -> ExecRequest {
+    const ALLOW_DETACHED_CHILDREN: &str = "--allow-detached-children";
 
-        if self.sandbox != SandboxType::LinuxSeccomp {
-            return;
-        }
-
-        if let Some(separator) = self.command.iter().position(|arg| arg == "--")
-            && !self.command[..separator]
-                .iter()
-                .any(|arg| arg == ALLOW_DETACHED_CHILDREN)
-        {
-            self.command
-                .insert(separator, ALLOW_DETACHED_CHILDREN.to_string());
-        }
+    if exec_request.sandbox == SandboxType::LinuxSeccomp
+        && let Some(separator) = exec_request.command.iter().position(|arg| arg == "--")
+        && !exec_request.command[..separator]
+            .iter()
+            .any(|arg| arg == ALLOW_DETACHED_CHILDREN)
+    {
+        exec_request
+            .command
+            .insert(separator, ALLOW_DETACHED_CHILDREN.to_string());
     }
+
+    exec_request
 }
 
 /// Bundled arguments for sandbox transformation.
