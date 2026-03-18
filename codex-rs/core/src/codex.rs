@@ -88,8 +88,10 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
 use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ReviewDecisionMetadata;
 use codex_protocol::models::UserMessageType;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
@@ -213,6 +215,7 @@ use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_pending_session_start_hooks;
 use crate::hook_runtime::run_user_prompt_submit_hooks;
+use crate::guardian::routes_approval_to_guardian;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
@@ -1079,6 +1082,35 @@ fn stamp_message_metadata_on_response_item(
     }
 }
 
+fn review_decision_to_metadata(decision: &ReviewDecision) -> ReviewDecisionMetadata {
+    match decision {
+        ReviewDecision::Approved => ReviewDecisionMetadata::Approved,
+        ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+            ReviewDecisionMetadata::ApprovedWithAmendment
+        }
+        ReviewDecision::ApprovedForSession => ReviewDecisionMetadata::ApprovedForSession,
+        ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment,
+        } => match network_policy_amendment.action {
+            codex_protocol::protocol::NetworkPolicyRuleAction::Allow => {
+                ReviewDecisionMetadata::ApprovedWithNetworkPolicyAllow
+            }
+            codex_protocol::protocol::NetworkPolicyRuleAction::Deny => {
+                ReviewDecisionMetadata::DeniedWithNetworkPolicyDeny
+            }
+        },
+        ReviewDecision::Denied => ReviewDecisionMetadata::Denied,
+        ReviewDecision::Abort => ReviewDecisionMetadata::Abort,
+    }
+}
+
+fn approval_source_for_turn(turn_context: &TurnContext) -> ApprovalSourceMetadata {
+    if routes_approval_to_guardian(turn_context) {
+        ApprovalSourceMetadata::Guardian
+    } else {
+        ApprovalSourceMetadata::User
+    }
+}
 fn response_item_tool_call_id(item: &ResponseItem) -> Option<&str> {
     match item {
         ResponseItem::LocalShellCall {
@@ -1162,10 +1194,12 @@ fn stamp_tool_approval_metadata_with_snapshot(
         Some(outcome) => {
             metadata.is_tool_call_escalated = Some(true);
             metadata.review_decision = outcome.review_decision;
+            metadata.approval_source = Some(outcome.approval_source);
         }
         None if !has_pending_approval => {
             metadata.is_tool_call_escalated = Some(false);
             metadata.review_decision = None;
+            metadata.approval_source = None;
         }
         None => {
             return stamp_tool_metadata_on_response_item(response_item, metadata);
@@ -3030,6 +3064,7 @@ impl Session {
                         effective_approval_id.clone(),
                         PendingApprovalMetadata {
                             call_id: call_id.clone(),
+                            approval_source: approval_source_for_turn(turn_context),
                         },
                     );
                     ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
@@ -3101,6 +3136,7 @@ impl Session {
                         approval_id.clone(),
                         PendingApprovalMetadata {
                             call_id: call_id.clone(),
+                            approval_source: approval_source_for_turn(turn_context),
                         },
                     );
                     ts.insert_pending_approval(approval_id.clone(), tx_approve)
@@ -3398,13 +3434,22 @@ impl Session {
             .remove_pending_approval_call_id(approval_id)
             .unwrap_or_else(|| PendingApprovalMetadata {
                 call_id: approval_id.to_string(),
+                approval_source: ApprovalSourceMetadata::Unknown,
             });
         drop(ts);
         drop(active);
         self.record_call_approval_outcome(
             pending_approval.call_id,
-            ApprovalOutcomeMetadata::reviewed(decision),
+            ApprovalOutcomeMetadata::reviewed_with_source(
+                decision,
+                pending_approval.approval_source,
+            ),
         )
+        .await;
+    }
+
+    pub async fn record_policy_outcome(&self, call_id: &str) {
+        self.record_call_approval_outcome(call_id.to_string(), ApprovalOutcomeMetadata::policy())
         .await;
     }
 

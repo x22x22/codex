@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
+use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItemMetadata;
 use codex_protocol::models::ReviewDecisionMetadata;
@@ -68,15 +69,24 @@ pub(crate) struct PendingInputItem {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PendingApprovalMetadata {
     pub(crate) call_id: String,
+    pub(crate) approval_source: ApprovalSourceMetadata,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ApprovalOutcomeMetadata {
     pub(crate) review_decision: Option<ReviewDecisionMetadata>,
+    pub(crate) approval_source: ApprovalSourceMetadata,
 }
 
 impl ApprovalOutcomeMetadata {
     pub(crate) fn reviewed(decision: &ReviewDecision) -> Self {
+        Self::reviewed_with_source(decision, ApprovalSourceMetadata::User)
+    }
+
+    pub(crate) fn reviewed_with_source(
+        decision: &ReviewDecision,
+        approval_source: ApprovalSourceMetadata,
+    ) -> Self {
         let review_decision = match decision {
             ReviewDecision::Approved => ReviewDecisionMetadata::Approved,
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
@@ -98,6 +108,14 @@ impl ApprovalOutcomeMetadata {
         };
         Self {
             review_decision: Some(review_decision),
+            approval_source,
+        }
+    }
+
+    pub(crate) fn policy() -> Self {
+        Self {
+            review_decision: None,
+            approval_source: ApprovalSourceMetadata::Policy,
         }
     }
 }
