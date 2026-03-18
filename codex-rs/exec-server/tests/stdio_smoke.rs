@@ -109,6 +109,7 @@ async fn exec_server_client_streams_output_and_accepts_writes() -> anyhow::Resul
             env,
             tty: true,
             arg0: None,
+            sandbox: None,
         })
         .await?;
     let process_id = response.process_id;
@@ -174,6 +175,7 @@ async fn exec_server_client_connects_over_websocket() -> anyhow::Result<()> {
             env,
             tty: true,
             arg0: None,
+            sandbox: None,
         })
         .await?;
     let process_id = response.process_id;
@@ -248,6 +250,7 @@ async fn websocket_disconnect_terminates_processes_for_that_connection() -> anyh
                 env,
                 tty: false,
                 arg0: None,
+                sandbox: None,
             })
             .await?;
     }
