@@ -38,6 +38,7 @@ use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
@@ -121,11 +122,11 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
         let reason = retry_reason.clone().or_else(|| req.justification.clone());
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
-                return review_approval_request(
+                let decision = review_approval_request(
                     session,
                     turn,
                     GuardianApprovalRequest::ExecCommand {
-                        id: call_id,
+                        id: call_id.clone(),
                         command,
                         cwd,
                         sandbox_permissions: req.sandbox_permissions,
@@ -136,6 +137,14 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
                     retry_reason,
                 )
                 .await;
+                session
+                    .record_direct_approval_outcome(
+                        &call_id,
+                        &decision,
+                        ApprovalSourceMetadata::Guardian,
+                    )
+                    .await;
+                return decision;
             }
             with_cached_approval(&session.services, "unified_exec", keys, || async move {
                 let available_decisions = None;

@@ -25,6 +25,7 @@ use codex_execpolicy::MatchOptions;
 use codex_execpolicy::Policy;
 use codex_execpolicy::RuleMatch;
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
@@ -424,7 +425,7 @@ impl CoreShellActionProvider {
         Ok(stopwatch
             .pause_for(async move {
                 if routes_approval_to_guardian(&turn) {
-                    return review_approval_request(
+                    let decision = review_approval_request(
                         &session,
                         &turn,
                         GuardianApprovalRequest::Execve {
@@ -438,6 +439,14 @@ impl CoreShellActionProvider {
                         /*retry_reason*/ None,
                     )
                     .await;
+                    session
+                        .record_direct_approval_outcome(
+                            &call_id,
+                            &decision,
+                            ApprovalSourceMetadata::Guardian,
+                        )
+                        .await;
+                    return decision;
                 }
                 let available_decisions = vec![
                     Some(ReviewDecision::Approved),

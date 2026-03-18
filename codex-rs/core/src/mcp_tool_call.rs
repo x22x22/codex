@@ -34,6 +34,7 @@ use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
 use crate::state_db;
 use codex_protocol::mcp::CallToolResult;
+use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::ReviewDecision;
@@ -532,6 +533,8 @@ async fn maybe_request_mcp_tool_approval(
             monitor_reason.clone(),
         )
         .await;
+        sess.record_direct_approval_outcome(call_id, &decision, ApprovalSourceMetadata::Guardian)
+            .await;
         let decision = mcp_tool_approval_decision_from_guardian(decision);
         apply_mcp_tool_approval_decision(
             sess,

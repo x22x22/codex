@@ -35,6 +35,7 @@ use crate::tools::sandboxing::ToolRuntime;
 use crate::tools::sandboxing::sandbox_override_for_first_attempt;
 use crate::tools::sandboxing::with_cached_approval;
 use codex_network_proxy::NetworkProxy;
+use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::ReviewDecision;
 use futures::future::BoxFuture;
@@ -153,11 +154,11 @@ impl Approvable<ShellRequest> for ShellRuntime {
         let call_id = ctx.call_id.to_string();
         Box::pin(async move {
             if routes_approval_to_guardian(turn) {
-                return review_approval_request(
+                let decision = review_approval_request(
                     session,
                     turn,
                     GuardianApprovalRequest::Shell {
-                        id: call_id,
+                        id: call_id.clone(),
                         command,
                         cwd,
                         sandbox_permissions: req.sandbox_permissions,
@@ -167,6 +168,14 @@ impl Approvable<ShellRequest> for ShellRuntime {
                     retry_reason,
                 )
                 .await;
+                session
+                    .record_direct_approval_outcome(
+                        &call_id,
+                        &decision,
+                        ApprovalSourceMetadata::Guardian,
+                    )
+                    .await;
+                return decision;
             }
             with_cached_approval(&session.services, "shell", keys, move || async move {
                 let available_decisions = None;
