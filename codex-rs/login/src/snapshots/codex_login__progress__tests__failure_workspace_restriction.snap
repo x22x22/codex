@@ -1,0 +1,8 @@
+---
+source: login/src/progress.rs
+expression: "format_login_progress(phase).expect(\"sample should render\")"
+---
+This account can't be used here
+Codex couldn't finish signing in while validating OAuth callback. Switch to an allowed account or contact your workspace admin.
+Help: https://developers.openai.com/codex/auth
+Details: workspace_restriction - Login is restricted to workspace id org-required

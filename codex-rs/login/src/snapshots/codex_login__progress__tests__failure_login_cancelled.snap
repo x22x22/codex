@@ -1,0 +1,8 @@
+---
+source: login/src/progress.rs
+expression: "format_login_progress(phase).expect(\"sample should render\")"
+---
+Sign-in was cancelled
+Codex couldn't finish signing in while waiting for OAuth callback. Run `codex login` to try again.
+Help: https://developers.openai.com/codex/auth
+Details: login_cancelled - Login was not completed

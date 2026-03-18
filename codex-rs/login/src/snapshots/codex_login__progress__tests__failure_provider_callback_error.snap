@@ -1,0 +1,8 @@
+---
+source: login/src/progress.rs
+expression: "format_login_progress(phase).expect(\"sample should render\")"
+---
+The sign-in page reported a problem
+Codex couldn't finish signing in while validating OAuth callback. Try again, switch accounts, or contact your workspace admin if access is restricted.
+Help: https://developers.openai.com/codex/auth
+Details: provider_callback_error - Sign-in failed: access_denied

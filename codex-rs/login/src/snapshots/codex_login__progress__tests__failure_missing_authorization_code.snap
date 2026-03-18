@@ -1,0 +1,8 @@
+---
+source: login/src/progress.rs
+expression: "format_login_progress(phase).expect(\"sample should render\")"
+---
+Didn't get a sign-in code back
+Codex couldn't finish signing in while validating OAuth callback. Try again. If it keeps happening, restart the login flow from Codex.
+Help: https://developers.openai.com/codex/auth
+Details: missing_authorization_code - Missing authorization code. Sign-in could not be completed.

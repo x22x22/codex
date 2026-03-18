@@ -1,0 +1,8 @@
+---
+source: login/src/progress.rs
+expression: "format_login_progress(phase).expect(\"sample should render\")"
+---
+Couldn't reach the auth server
+Codex couldn't finish signing in while exchanging authorization code for tokens. Check your network, proxy, or custom CA setup, then try again.
+Help: https://developers.openai.com/codex/auth
+Details: token_exchange_connect - error sending request (endpoint: https://auth.openai.com/oauth/token)

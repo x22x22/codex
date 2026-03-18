@@ -1,0 +1,5 @@
+---
+source: login/src/progress.rs
+expression: "format_login_progress(phase).expect(\"sample should render\")"
+---
+Browser sign-in received. Finishing up...

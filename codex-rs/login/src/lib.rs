@@ -1,16 +1,23 @@
 mod device_code_auth;
 mod pkce;
+mod progress;
 mod server;
+mod token_exchange_error;
 
 pub use codex_client::BuildCustomCaTransportError as BuildLoginHttpClientError;
 pub use device_code_auth::DeviceCode;
 pub use device_code_auth::complete_device_code_login;
 pub use device_code_auth::request_device_code;
 pub use device_code_auth::run_device_code_login;
+pub use progress::LoginFailureCategory;
+pub use progress::LoginFailurePhase;
+pub use progress::LoginPhase;
+pub use progress::LoginProgressSender;
 pub use server::LoginServer;
 pub use server::ServerOptions;
 pub use server::ShutdownHandle;
 pub use server::run_login_server;
+pub use server::run_login_server_with_progress;
 
 // Re-export commonly used auth types and helpers from codex-core for compatibility
 pub use codex_app_server_protocol::AuthMode;

@@ -1,0 +1,8 @@
+---
+source: login/src/progress.rs
+expression: "format_login_progress(phase).expect(\"sample should render\")"
+---
+Couldn't open your browser
+Codex couldn't finish signing in while opening browser. Use the sign-in link printed above, or run `codex login --device-auth` on a remote machine.
+Help: https://developers.openai.com/codex/auth
+Details: browser_launch_failed - No browser found

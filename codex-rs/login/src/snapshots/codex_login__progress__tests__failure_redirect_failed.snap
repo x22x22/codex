@@ -1,0 +1,8 @@
+---
+source: login/src/progress.rs
+expression: "format_login_progress(phase).expect(\"sample should render\")"
+---
+Couldn't return to Codex after sign-in
+Codex couldn't finish signing in while redirecting back to Codex. Return to Codex and retry sign-in.
+Help: https://developers.openai.com/codex/auth
+Details: redirect_failed - invalid redirect header

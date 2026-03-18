@@ -22,9 +22,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
+use crate::progress::LoginFailureCategory;
+use crate::progress::LoginFailurePhase;
+use crate::progress::LoginPhase;
+use crate::progress::LoginProgressSender;
+use crate::token_exchange_error::TokenExchangeError;
+use crate::token_exchange_error::parse_token_endpoint_error;
 use base64::Engine;
 use chrono::Utc;
 use codex_app_server_protocol::AuthMode;
@@ -49,21 +56,76 @@ use tracing::warn;
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEFAULT_PORT: u16 = 1455;
 
+/// Runtime observer for structured login progress events.
+///
+/// This is intentionally separate from [`ServerOptions`]: options describe how to start a login
+/// server, while this value represents an observer attached to one concrete run. If the sender is
+/// absent, progress emission becomes a no-op so TUI/app-server callers can keep using the same
+/// startup path without manufacturing a channel they never read.
+#[derive(Clone, Default)]
+struct ProgressEmitter(Option<LoginProgressSender>);
+
+impl ProgressEmitter {
+    /// Wraps a live progress channel for a single login attempt.
+    fn new(progress_tx: LoginProgressSender) -> Self {
+        Self(Some(progress_tx))
+    }
+
+    /// Sends one progress phase to the observer, dropping the event if nobody is listening.
+    ///
+    /// Progress is best-effort. A closed receiver must not fail the login flow itself, or a UI
+    /// teardown could turn a successful sign-in into a spurious auth error.
+    fn emit(&self, phase: LoginPhase) {
+        if let Some(progress_tx) = &self.0 {
+            let _ = progress_tx.send(phase);
+        }
+    }
+}
+
 /// Options for launching the local login callback server.
-#[derive(Debug, Clone)]
+///
+/// These values are startup configuration only. Per-run observation belongs in
+/// [`run_login_server_with_progress`], not here; putting a live channel on this struct makes a
+/// reusable configuration object look like part of the running server's state.
+#[derive(Clone)]
 pub struct ServerOptions {
+    /// Codex home directory used to read and write local auth state.
     pub codex_home: PathBuf,
+    /// OAuth client ID to send to the authorization and token endpoints.
     pub client_id: String,
+    /// OAuth issuer base URL.
+    ///
+    /// The default is the production OpenAI issuer. Tests and advanced flows may override this to
+    /// point at a local mock or non-default deployment.
     pub issuer: String,
+    /// Preferred localhost callback port.
+    ///
+    /// Use `0` to request an ephemeral port from the OS. A fixed port is convenient for manual
+    /// testing, but callers should expect retries if another login server is still shutting down.
     pub port: u16,
+    /// Whether to open the system browser after the callback handler is ready.
+    ///
+    /// Headless callers should set this to `false` and present the returned [`LoginServer::auth_url`]
+    /// themselves. Opening the browser before the handler is ready can lose the redirect in locked
+    /// down environments, so the implementation waits for readiness first.
     pub open_browser: bool,
+    /// Optional state override for deterministic tests.
+    ///
+    /// Production callers should leave this unset. Reusing a fixed state outside tests weakens the
+    /// CSRF protection that the callback validation is meant to provide.
     pub force_state: Option<String>,
+    /// Optional workspace restriction enforced after ID token validation.
     pub forced_chatgpt_workspace_id: Option<String>,
+    /// Credential store mode used when persisting the completed login.
     pub cli_auth_credentials_store_mode: AuthCredentialsStoreMode,
 }
 
 impl ServerOptions {
     /// Creates a server configuration with the default issuer and port.
+    ///
+    /// The returned options are suitable for a normal interactive browser login. Callers that run
+    /// in headless mode usually set `open_browser = false` before starting the server; forgetting
+    /// to do so can spawn a browser on machines where the user cannot complete the flow.
     pub fn new(
         codex_home: PathBuf,
         client_id: String,
@@ -84,8 +146,16 @@ impl ServerOptions {
 }
 
 /// Handle for a running login callback server.
+///
+/// This handle owns the background task that waits for the OAuth callback and persists
+/// credentials. Dropping it does not implicitly cancel the flow; call [`Self::cancel`] or use a
+/// [`ShutdownHandle`] if the UI needs to abort an in-flight attempt.
 pub struct LoginServer {
+    /// Provider authorization URL for this login attempt.
     pub auth_url: String,
+    /// Actual localhost port bound by the callback server.
+    ///
+    /// This can differ from [`ServerOptions::port`] when the caller requested port `0`.
     pub actual_port: u16,
     server_handle: tokio::task::JoinHandle<io::Result<()>>,
     shutdown_handle: ShutdownHandle,
@@ -93,6 +163,11 @@ pub struct LoginServer {
 
 impl LoginServer {
     /// Waits for the login callback loop to finish.
+    ///
+    /// Returns `Ok(())` only after credentials were persisted and the browser was redirected to
+    /// the local success page. Startup failures that happen before the handle is returned are
+    /// reported directly by [`run_login_server`] instead, so callers should not expect this method
+    /// to cover bind or browser-launch errors.
     pub async fn block_until_done(self) -> io::Result<()> {
         self.server_handle
             .await
@@ -100,17 +175,27 @@ impl LoginServer {
     }
 
     /// Requests shutdown of the callback server.
+    ///
+    /// This is a local cancellation signal, not a provider-side OAuth revocation. If the user has
+    /// already completed the browser flow, cancelling here only stops the localhost server loop.
     pub fn cancel(&self) {
         self.shutdown_handle.shutdown();
     }
 
     /// Returns a cloneable cancel handle for the running server.
+    ///
+    /// Use this when another task owns the UI lifetime and needs to cancel the login without
+    /// taking ownership of the whole [`LoginServer`].
     pub fn cancel_handle(&self) -> ShutdownHandle {
         self.shutdown_handle.clone()
     }
 }
 
 /// Handle used to signal the login server loop to exit.
+///
+/// Clones all target the same [`tokio::sync::Notify`], so any clone can cancel the active login
+/// attempt. This type is intentionally narrow: it can stop the local server loop, but it does not
+/// expose progress or completion state.
 #[derive(Clone, Debug)]
 pub struct ShutdownHandle {
     shutdown_notify: Arc<tokio::sync::Notify>,
@@ -118,26 +203,60 @@ pub struct ShutdownHandle {
 
 impl ShutdownHandle {
     /// Signals the login loop to terminate.
+    ///
+    /// Shutdown is asynchronous. The caller should still await [`LoginServer::block_until_done`]
+    /// if it needs to observe the final completion error.
     pub fn shutdown(&self) {
         self.shutdown_notify.notify_waiters();
     }
 }
 
 /// Starts a local callback server and returns the browser auth URL.
+///
+/// Use this when the caller only needs the URL, cancellation, and final completion result. If the
+/// UI needs live phase updates for stderr or another progress surface, use
+/// [`run_login_server_with_progress`] instead; otherwise the login will still work, but the caller
+/// will have no way to tell whether it is binding, waiting for the browser, or exchanging tokens.
 pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
+    run_login_server_impl(opts, ProgressEmitter::default())
+}
+
+/// Starts a local callback server and publishes structured progress events to `progress_tx`.
+///
+/// The returned server handle and the progress stream describe the same login attempt. The caller
+/// must drain the receiver side of `progress_tx` if it cares about those events; creating a sender
+/// and then ignoring the receiver makes the API look observed while silently discarding the
+/// milestones this function exists to expose.
+pub fn run_login_server_with_progress(
+    opts: ServerOptions,
+    progress_tx: LoginProgressSender,
+) -> io::Result<LoginServer> {
+    run_login_server_impl(opts, ProgressEmitter::new(progress_tx))
+}
+
+fn run_login_server_impl(
+    opts: ServerOptions,
+    progress: ProgressEmitter,
+) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
-    let server = bind_server(opts.port)?;
+    let server = bind_server(opts.port, &progress)?;
     let actual_port = match server.server_addr().to_ip() {
         Some(addr) => addr.port(),
         None => {
+            progress.emit(LoginPhase::Failed {
+                phase: LoginFailurePhase::BindLocalServer,
+                category: LoginFailureCategory::LocalServerUnavailable,
+                message: "Unable to determine the server port".to_string(),
+            });
             return Err(io::Error::new(
                 io::ErrorKind::AddrInUse,
                 "Unable to determine the server port",
             ));
         }
     };
+    progress.emit(LoginPhase::LocalServerBound { port: actual_port });
     let server = Arc::new(server);
 
     let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
@@ -149,10 +268,6 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         &state,
         opts.forced_chatgpt_workspace_id.as_deref(),
     );
-
-    if opts.open_browser {
-        let _ = webbrowser::open(&auth_url);
-    }
 
     // Map blocking reads from server.recv() to an async channel.
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Request>(16);
@@ -173,23 +288,53 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     };
 
     let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel::<()>();
     let server_handle = {
+        let opts = opts.clone();
+        let progress = progress.clone();
         let shutdown_notify = shutdown_notify.clone();
         let server = server;
         tokio::spawn(async move {
+            let _ = ready_tx.send(());
+            progress.emit(LoginPhase::WaitingForCallback);
+
             let result = loop {
                 tokio::select! {
                     _ = shutdown_notify.notified() => {
-                        break Err(io::Error::other("Login was not completed"));
+                        let message = "Login was not completed".to_string();
+                        progress.emit(
+                            LoginPhase::Failed {
+                                phase: LoginFailurePhase::WaitForCallback,
+                                category: LoginFailureCategory::LoginCancelled,
+                                message: message.clone(),
+                            },
+                        );
+                        break Err(io::Error::other(message));
                     }
                     maybe_req = rx.recv() => {
                         let Some(req) = maybe_req else {
-                            break Err(io::Error::other("Login was not completed"));
+                            let message = "Login was not completed".to_string();
+                            progress.emit(
+                                LoginPhase::Failed {
+                                    phase: LoginFailurePhase::WaitForCallback,
+                                    category: LoginFailureCategory::LoginCancelled,
+                                    message: message.clone(),
+                                },
+                            );
+                            break Err(io::Error::other(message));
                         };
 
                         let url_raw = req.url().to_string();
-                        let response =
-                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
+                        let response = process_request(
+                            &url_raw,
+                            &opts,
+                            &progress,
+                            &redirect_uri,
+                            &pkce,
+                            actual_port,
+                            &state,
+                        )
+                        .await;
 
                         let exit_result = match response {
                             HandledRequest::Response(response) => {
@@ -228,6 +373,27 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
         })
     };
 
+    if opts.open_browser {
+        if ready_rx.recv_timeout(Duration::from_secs(2)).is_err() {
+            progress.emit(LoginPhase::Failed {
+                phase: LoginFailurePhase::BindLocalServer,
+                category: LoginFailureCategory::LocalServerUnavailable,
+                message: "Timed out waiting for callback handler readiness".to_string(),
+            });
+            return Err(io::Error::other(
+                "Timed out waiting for callback handler readiness",
+            ));
+        }
+        progress.emit(LoginPhase::OpeningBrowser);
+        if let Err(err) = webbrowser::open(&auth_url) {
+            progress.emit(LoginPhase::Failed {
+                phase: LoginFailurePhase::OpenBrowser,
+                category: LoginFailureCategory::BrowserLaunchFailed,
+                message: err.to_string(),
+            });
+        }
+    }
+
     Ok(LoginServer {
         auth_url,
         actual_port,
@@ -250,6 +416,7 @@ enum HandledRequest {
 async fn process_request(
     url_raw: &str,
     opts: &ServerOptions,
+    progress: &ProgressEmitter,
     redirect_uri: &str,
     pkce: &PkceCodes,
     actual_port: u16,
@@ -274,6 +441,12 @@ async fn process_request(
             let has_state = params.get("state").is_some_and(|state| !state.is_empty());
             let has_error = params.get("error").is_some_and(|error| !error.is_empty());
             let state_valid = params.get("state").map(String::as_str) == Some(state);
+            progress.emit(LoginPhase::CallbackReceived {
+                has_code,
+                has_state,
+                has_error,
+                state_valid,
+            });
             info!(
                 path = %path,
                 has_code,
@@ -290,6 +463,11 @@ async fn process_request(
                     has_error,
                     "login callback state mismatch"
                 );
+                progress.emit(LoginPhase::Failed {
+                    phase: LoginFailurePhase::ValidateCallback,
+                    category: LoginFailureCategory::CallbackStateMismatch,
+                    message: "State mismatch".to_string(),
+                });
                 return HandledRequest::Response(
                     Response::from_string("State mismatch").with_status_code(400),
                 );
@@ -297,12 +475,16 @@ async fn process_request(
             if let Some(error_code) = params.get("error") {
                 let error_description = params.get("error_description").map(String::as_str);
                 let message = oauth_callback_error_message(error_code, error_description);
-                eprintln!("OAuth callback error: {message}");
                 warn!(
                     error_code,
                     has_error_description = error_description.is_some_and(|s| !s.trim().is_empty()),
                     "oauth callback returned error"
                 );
+                progress.emit(LoginPhase::Failed {
+                    phase: LoginFailurePhase::ValidateCallback,
+                    category: LoginFailureCategory::ProviderCallbackError,
+                    message: message.clone(),
+                });
                 return login_error_response(
                     &message,
                     io::ErrorKind::PermissionDenied,
@@ -313,8 +495,15 @@ async fn process_request(
             let code = match params.get("code") {
                 Some(c) if !c.is_empty() => c.clone(),
                 _ => {
+                    let message =
+                        "Missing authorization code. Sign-in could not be completed.".to_string();
+                    progress.emit(LoginPhase::Failed {
+                        phase: LoginFailurePhase::ValidateCallback,
+                        category: LoginFailureCategory::MissingAuthorizationCode,
+                        message: message.clone(),
+                    });
                     return login_error_response(
-                        "Missing authorization code. Sign-in could not be completed.",
+                        &message,
                         io::ErrorKind::InvalidData,
                         Some("missing_authorization_code"),
                         /*error_description*/ None,
@@ -322,6 +511,7 @@ async fn process_request(
                 }
             };
 
+            progress.emit(LoginPhase::ExchangingToken);
             match exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, &code)
                 .await
             {
@@ -330,7 +520,12 @@ async fn process_request(
                         opts.forced_chatgpt_workspace_id.as_deref(),
                         &tokens.id_token,
                     ) {
-                        eprintln!("Workspace restriction error: {message}");
+                        warn!(%message, "workspace restriction blocked login");
+                        progress.emit(LoginPhase::Failed {
+                            phase: LoginFailurePhase::ValidateCallback,
+                            category: LoginFailureCategory::WorkspaceRestriction,
+                            message: message.clone(),
+                        });
                         return login_error_response(
                             &message,
                             io::ErrorKind::PermissionDenied,
@@ -342,6 +537,7 @@ async fn process_request(
                     let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
                         .await
                         .ok();
+                    progress.emit(LoginPhase::PersistingCredentials);
                     if let Err(err) = persist_tokens_async(
                         &opts.codex_home,
                         api_key.clone(),
@@ -352,7 +548,12 @@ async fn process_request(
                     )
                     .await
                     {
-                        eprintln!("Persist error: {err}");
+                        error!(%err, "failed to persist login credentials");
+                        progress.emit(LoginPhase::Failed {
+                            phase: LoginFailurePhase::PersistCredentials,
+                            category: LoginFailureCategory::PersistFailed,
+                            message: err.to_string(),
+                        });
                         return login_error_response(
                             "Sign-in completed but credentials could not be saved locally.",
                             io::ErrorKind::Other,
@@ -368,18 +569,34 @@ async fn process_request(
                         &tokens.access_token,
                     );
                     match tiny_http::Header::from_bytes(&b"Location"[..], success_url.as_bytes()) {
-                        Ok(header) => HandledRequest::RedirectWithHeader(header),
-                        Err(_) => login_error_response(
-                            "Sign-in completed but redirecting back to Codex failed.",
-                            io::ErrorKind::Other,
-                            Some("redirect_failed"),
-                            /*error_description*/ None,
-                        ),
+                        Ok(header) => {
+                            progress.emit(LoginPhase::Succeeded);
+                            HandledRequest::RedirectWithHeader(header)
+                        }
+                        Err(_) => {
+                            let message = "Sign-in completed but redirecting back to Codex failed."
+                                .to_string();
+                            progress.emit(LoginPhase::Failed {
+                                phase: LoginFailurePhase::RedirectBackToCodex,
+                                category: LoginFailureCategory::RedirectFailed,
+                                message: message.clone(),
+                            });
+                            login_error_response(
+                                &message,
+                                io::ErrorKind::Other,
+                                Some("redirect_failed"),
+                                /*error_description*/ None,
+                            )
+                        }
                     }
                 }
                 Err(err) => {
-                    eprintln!("Token exchange error: {err}");
                     error!("login callback token exchange failed");
+                    progress.emit(LoginPhase::Failed {
+                        phase: LoginFailurePhase::ExchangeToken,
+                        category: err.failure_category(),
+                        message: err.to_string(),
+                    });
                     login_error_response(
                         &format!("Token exchange failed: {err}"),
                         io::ErrorKind::Other,
@@ -523,14 +740,18 @@ fn send_cancel_request(port: u16) -> io::Result<()> {
     Ok(())
 }
 
-fn bind_server(port: u16) -> io::Result<Server> {
+fn bind_server(port: u16, progress: &ProgressEmitter) -> io::Result<Server> {
     let bind_address = format!("127.0.0.1:{port}");
     let mut cancel_attempted = false;
     let mut attempts = 0;
     const MAX_ATTEMPTS: u32 = 10;
     const RETRY_DELAY: Duration = Duration::from_millis(200);
+    let started_at = Instant::now();
 
     loop {
+        progress.emit(LoginPhase::BindingLocalServer {
+            attempt: attempts + 1,
+        });
         match Server::http(&bind_address) {
             Ok(server) => return Ok(server),
             Err(err) => {
@@ -545,6 +766,8 @@ fn bind_server(port: u16) -> io::Result<Server> {
                 if is_addr_in_use {
                     if !cancel_attempted {
                         cancel_attempted = true;
+                        progress
+                            .emit(LoginPhase::PreviousLoginServerDetected { attempt: attempts });
                         if let Err(cancel_err) = send_cancel_request(port) {
                             eprintln!("Failed to cancel previous login server: {cancel_err}");
                         }
@@ -553,16 +776,28 @@ fn bind_server(port: u16) -> io::Result<Server> {
                     thread::sleep(RETRY_DELAY);
 
                     if attempts >= MAX_ATTEMPTS {
-                        return Err(io::Error::new(
-                            io::ErrorKind::AddrInUse,
-                            format!("Port {bind_address} is already in use"),
-                        ));
+                        let message = format!(
+                            "Port {bind_address} is already in use after {} ms",
+                            started_at.elapsed().as_millis()
+                        );
+                        progress.emit(LoginPhase::Failed {
+                            phase: LoginFailurePhase::BindLocalServer,
+                            category: LoginFailureCategory::LocalServerUnavailable,
+                            message: message.clone(),
+                        });
+                        return Err(io::Error::new(io::ErrorKind::AddrInUse, message));
                     }
 
                     continue;
                 }
 
-                return Err(io::Error::other(err));
+                let message = err.to_string();
+                progress.emit(LoginPhase::Failed {
+                    phase: LoginFailurePhase::BindLocalServer,
+                    category: LoginFailureCategory::LocalServerUnavailable,
+                    message: message.clone(),
+                });
+                return Err(io::Error::other(message));
             }
         }
     }
@@ -570,22 +805,12 @@ fn bind_server(port: u16) -> io::Result<Server> {
 
 /// Tokens returned by the OAuth authorization-code exchange.
 pub(crate) struct ExchangedTokens {
+    /// OIDC ID token returned by the token endpoint.
     pub id_token: String,
+    /// OAuth access token returned by the token endpoint.
     pub access_token: String,
+    /// OAuth refresh token returned by the token endpoint.
     pub refresh_token: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TokenEndpointErrorDetail {
-    error_code: Option<String>,
-    error_message: Option<String>,
-    display_message: String,
-}
-
-impl std::fmt::Display for TokenEndpointErrorDetail {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.display_message.fmt(f)
-    }
 }
 
 const REDACTED_URL_VALUE: &str = "<redacted>";
@@ -651,14 +876,6 @@ fn redact_sensitive_url_parts(url: &mut url::Url) {
     url.set_query(Some(&redacted_query));
 }
 
-/// Redacts any URL attached to a reqwest transport error before it is logged or returned.
-fn redact_sensitive_error_url(mut err: reqwest::Error) -> reqwest::Error {
-    if let Some(url) = err.url_mut() {
-        redact_sensitive_url_parts(url);
-    }
-    err
-}
-
 /// Sanitizes a free-form URL string for structured logging.
 ///
 /// This is used for caller-supplied issuer values, which may contain credentials or query
@@ -678,13 +895,17 @@ fn sanitize_url_for_logging(url: &str) -> String {
 /// non-JSON error text is preserved there. Structured logging stays narrower: it logs reviewed
 /// fields from parsed token responses and redacted transport errors, but does not log the final
 /// callback-layer `%err` string.
+///
+/// The `code` argument must be the short-lived authorization code from the current callback. A
+/// stale code from an old browser tab will usually fail with a rejected token endpoint response,
+/// which is expected and should be surfaced as an auth failure rather than retried blindly.
 pub(crate) async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
     pkce: &PkceCodes,
     code: &str,
-) -> io::Result<ExchangedTokens> {
+) -> Result<ExchangedTokens, TokenExchangeError> {
     #[derive(serde::Deserialize)]
     struct TokenResponse {
         id_token: String,
@@ -692,7 +913,11 @@ pub(crate) async fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
+    let endpoint = sanitize_url_for_logging(&format!("{issuer}/oauth/token"));
+    let client =
+        build_reqwest_client_with_custom_ca(reqwest::Client::builder()).map_err(|error| {
+            TokenExchangeError::http_client_setup(endpoint.clone(), error.to_string())
+        })?;
     info!(
         issuer = %sanitize_url_for_logging(issuer),
         redirect_uri = %redirect_uri,
@@ -713,21 +938,24 @@ pub(crate) async fn exchange_code_for_tokens(
     let resp = match resp {
         Ok(resp) => resp,
         Err(error) => {
-            let error = redact_sensitive_error_url(error);
+            let error = TokenExchangeError::transport(endpoint.clone(), error);
             error!(
-                is_timeout = error.is_timeout(),
-                is_connect = error.is_connect(),
-                is_request = error.is_request(),
+                is_timeout = error.as_transport_error().is_some_and(reqwest::Error::is_timeout),
+                is_connect = error.as_transport_error().is_some_and(reqwest::Error::is_connect),
+                is_request = error.as_transport_error().is_some_and(reqwest::Error::is_request),
                 error = %error,
                 "oauth token exchange transport failure"
             );
-            return Err(io::Error::other(error));
+            return Err(error);
         }
     };
 
     let status = resp.status();
     if !status.is_success() {
-        let body = resp.text().await.map_err(io::Error::other)?;
+        let body = resp
+            .text()
+            .await
+            .map_err(|error| TokenExchangeError::transport(endpoint.clone(), error))?;
         let detail = parse_token_endpoint_error(&body);
         warn!(
             %status,
@@ -735,12 +963,15 @@ pub(crate) async fn exchange_code_for_tokens(
             error_message = detail.error_message.as_deref().unwrap_or("unknown"),
             "oauth token exchange returned non-success status"
         );
-        return Err(io::Error::other(format!(
-            "token endpoint returned status {status}: {detail}"
-        )));
+        return Err(TokenExchangeError::endpoint_rejected(
+            endpoint, status, detail,
+        ));
     }
 
-    let tokens: TokenResponse = resp.json().await.map_err(io::Error::other)?;
+    let tokens: TokenResponse = resp
+        .json()
+        .await
+        .map_err(|error| TokenExchangeError::response_malformed(endpoint.clone(), error))?;
     info!(%status, "oauth token exchange succeeded");
     Ok(ExchangedTokens {
         id_token: tokens.id_token,
@@ -750,6 +981,11 @@ pub(crate) async fn exchange_code_for_tokens(
 }
 
 /// Persists exchanged credentials using the configured local auth store.
+///
+/// This runs the existing synchronous save path on a blocking thread so the async callback task
+/// does not stall the runtime. Callers should pass the raw token strings from the current exchange
+/// only; persisting mismatched ID/access/refresh tokens can leave Codex with a locally valid file
+/// that fails on the next authenticated request.
 pub(crate) async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
@@ -865,6 +1101,10 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
 }
 
 /// Validates the ID token against an optional workspace restriction.
+///
+/// Returns `Ok(())` when no restriction is configured. When a restriction is present, the token
+/// must carry a `chatgpt_account_id` claim matching that workspace; otherwise the browser flow
+/// should fail before any credentials are written.
 pub(crate) fn ensure_workspace_allowed(
     expected: Option<&str>,
     id_token: &str,
@@ -929,75 +1169,6 @@ fn oauth_callback_error_message(error_code: &str, error_description: Option<&str
     format!("Sign-in failed: {error_code}")
 }
 
-/// Extracts token endpoint error detail for both structured logging and caller-visible errors.
-///
-/// Parsed JSON fields are safe to log individually. If the response is not JSON, the raw body is
-/// preserved only for the returned error path so the CLI/browser can still surface the backend
-/// detail, while the structured log path continues to use the explicitly parsed safe fields above.
-fn parse_token_endpoint_error(body: &str) -> TokenEndpointErrorDetail {
-    let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return TokenEndpointErrorDetail {
-            error_code: None,
-            error_message: None,
-            display_message: "unknown error".to_string(),
-        };
-    }
-
-    let parsed = serde_json::from_str::<JsonValue>(trimmed).ok();
-    if let Some(json) = parsed {
-        let error_code = json
-            .get("error")
-            .and_then(JsonValue::as_str)
-            .filter(|error_code| !error_code.trim().is_empty())
-            .map(ToString::to_string)
-            .or_else(|| {
-                json.get("error")
-                    .and_then(JsonValue::as_object)
-                    .and_then(|error_obj| error_obj.get("code"))
-                    .and_then(JsonValue::as_str)
-                    .filter(|code| !code.trim().is_empty())
-                    .map(ToString::to_string)
-            });
-        if let Some(description) = json.get("error_description").and_then(JsonValue::as_str)
-            && !description.trim().is_empty()
-        {
-            return TokenEndpointErrorDetail {
-                error_code,
-                error_message: Some(description.to_string()),
-                display_message: description.to_string(),
-            };
-        }
-        if let Some(error_obj) = json.get("error")
-            && let Some(message) = error_obj.get("message").and_then(JsonValue::as_str)
-            && !message.trim().is_empty()
-        {
-            return TokenEndpointErrorDetail {
-                error_code,
-                error_message: Some(message.to_string()),
-                display_message: message.to_string(),
-            };
-        }
-        if let Some(error_code) = error_code {
-            return TokenEndpointErrorDetail {
-                display_message: error_code.clone(),
-                error_code: Some(error_code),
-                error_message: None,
-            };
-        }
-    }
-
-    // Preserve non-JSON token-endpoint bodies for the returned error so CLI/browser flows still
-    // surface the backend detail users and admins need, but keep that text out of structured logs
-    // by only logging explicitly parsed fields above and avoiding `%err` logging at the callback
-    // layer.
-    TokenEndpointErrorDetail {
-        error_code: None,
-        error_message: None,
-        display_message: trimmed.to_string(),
-    }
-}
-
 /// Renders the branded error page used by callback failures.
 fn render_login_error_page(
     message: &str,
@@ -1051,6 +1222,11 @@ fn html_escape(input: &str) -> String {
 }
 
 /// Exchanges an authenticated ID token for an API-key style access token.
+///
+/// This is a compatibility step for the existing login persistence path, not the primary OAuth
+/// exchange. A failure here is non-fatal to the main browser login flow today because Codex can
+/// still persist the OIDC tokens; callers that treat this as mandatory would regress successful
+/// sign-ins on deployments where the legacy exchange is unavailable.
 pub(crate) async fn obtain_api_key(
     issuer: &str,
     client_id: &str,
@@ -1089,71 +1265,9 @@ pub(crate) async fn obtain_api_key(
 mod tests {
     use pretty_assertions::assert_eq;
 
-    use super::TokenEndpointErrorDetail;
-    use super::parse_token_endpoint_error;
     use super::redact_sensitive_query_value;
     use super::redact_sensitive_url_parts;
     use super::sanitize_url_for_logging;
-
-    #[test]
-    fn parse_token_endpoint_error_prefers_error_description() {
-        let detail = parse_token_endpoint_error(
-            r#"{"error":"invalid_grant","error_description":"refresh token expired"}"#,
-        );
-
-        assert_eq!(
-            detail,
-            TokenEndpointErrorDetail {
-                error_code: Some("invalid_grant".to_string()),
-                error_message: Some("refresh token expired".to_string()),
-                display_message: "refresh token expired".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_token_endpoint_error_reads_nested_error_message_and_code() {
-        let detail = parse_token_endpoint_error(
-            r#"{"error":{"code":"proxy_auth_required","message":"proxy authentication required"}}"#,
-        );
-
-        assert_eq!(
-            detail,
-            TokenEndpointErrorDetail {
-                error_code: Some("proxy_auth_required".to_string()),
-                error_message: Some("proxy authentication required".to_string()),
-                display_message: "proxy authentication required".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_token_endpoint_error_falls_back_to_error_code() {
-        let detail = parse_token_endpoint_error(r#"{"error":"temporarily_unavailable"}"#);
-
-        assert_eq!(
-            detail,
-            TokenEndpointErrorDetail {
-                error_code: Some("temporarily_unavailable".to_string()),
-                error_message: None,
-                display_message: "temporarily_unavailable".to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_token_endpoint_error_preserves_plain_text_for_display() {
-        let detail = parse_token_endpoint_error("service unavailable");
-
-        assert_eq!(
-            detail,
-            TokenEndpointErrorDetail {
-                error_code: None,
-                error_message: None,
-                display_message: "service unavailable".to_string(),
-            }
-        );
-    }
 
     #[test]
     fn redact_sensitive_query_value_only_scrubs_known_keys() {

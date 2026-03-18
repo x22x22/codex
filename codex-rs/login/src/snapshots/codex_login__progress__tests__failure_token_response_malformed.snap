@@ -1,0 +1,8 @@
+---
+source: login/src/progress.rs
+expression: "format_login_progress(phase).expect(\"sample should render\")"
+---
+The auth server sent an unexpected response
+Codex couldn't finish signing in while exchanging authorization code for tokens. Try again. If this repeats, contact support with the details below.
+Help: https://developers.openai.com/codex/auth
+Details: token_response_malformed - expected value at line 1 column 1

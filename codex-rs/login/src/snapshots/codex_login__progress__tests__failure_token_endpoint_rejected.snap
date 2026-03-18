@@ -1,0 +1,8 @@
+---
+source: login/src/progress.rs
+expression: "format_login_progress(phase).expect(\"sample should render\")"
+---
+The auth server rejected the sign-in
+Codex couldn't finish signing in while exchanging authorization code for tokens. Try again. If this repeats, your account or workspace may not be allowed to use Codex.
+Help: https://developers.openai.com/codex/auth
+Details: token_endpoint_rejected - token endpoint returned status 403 Forbidden: denied

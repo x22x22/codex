@@ -16,7 +16,7 @@ use codex_core::auth::logout;
 use codex_core::config::Config;
 use codex_login::ServerOptions;
 use codex_login::run_device_code_login;
-use codex_login::run_login_server;
+use codex_login::run_login_server_with_progress;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_utils_cli::CliConfigOverrides;
 use std::fs::OpenOptions;
@@ -34,7 +34,7 @@ const CHATGPT_LOGIN_DISABLED_MESSAGE: &str =
     "ChatGPT login is disabled. Use API key login instead.";
 const API_KEY_LOGIN_DISABLED_MESSAGE: &str =
     "API key login is disabled. Use ChatGPT login instead.";
-const LOGIN_SUCCESS_MESSAGE: &str = "Successfully logged in";
+const LOGIN_SUCCESS_MESSAGE: &str = "Signed in. You're good to go.";
 
 /// Installs a small file-backed tracing layer for direct `codex login` flows.
 ///
@@ -104,10 +104,62 @@ fn init_login_file_logging(config: &Config) -> Option<WorkerGuard> {
     Some(guard)
 }
 
-fn print_login_server_start(actual_port: u16, auth_url: &str) {
+fn print_login_server_start(auth_url: &str) {
     eprintln!(
-        "Starting local login server on http://localhost:{actual_port}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{auth_url}\n\nOn a remote or headless machine? Use `codex login --device-auth` instead."
+        "If a browser window didn't open, use this link to sign in:\n\n{auth_url}\n\nOn a remote or headless machine? Use `codex login --device-auth` instead."
     );
+}
+
+/// Starts the background task that renders browser-login progress events to stderr.
+///
+/// The returned sender is passed into `codex-login` for one concrete attempt, and the join handle
+/// resolves to `true` if a structured failure was rendered. Callers use that boolean to avoid
+/// printing a second generic terminal error after the progress stream already produced the
+/// user-facing failure block.
+fn spawn_browser_login_progress_printer() -> (
+    codex_login::LoginProgressSender,
+    tokio::task::JoinHandle<bool>,
+) {
+    let (progress_tx, mut progress_rx) =
+        tokio::sync::mpsc::unbounded_channel::<codex_login::LoginPhase>();
+
+    let progress_task = tokio::spawn(async move {
+        let mut saw_failure = false;
+        while let Some(phase) = progress_rx.recv().await {
+            if matches!(phase, codex_login::LoginPhase::Failed { .. }) {
+                saw_failure = true;
+            }
+            if phase.is_user_visible() {
+                eprintln!("{phase}");
+            }
+        }
+        saw_failure
+    });
+
+    (progress_tx, progress_task)
+}
+
+/// Runs one browser login attempt with CLI progress rendering attached.
+///
+/// The result pairs the underlying login outcome with whether the progress printer already showed
+/// a structured failure. Callers should only emit a fallback `Error logging in: ...` line when the
+/// second value is `false`; otherwise the user would see duplicate error messages for the same
+/// failure.
+async fn run_browser_login(opts: ServerOptions) -> (std::io::Result<()>, bool) {
+    let (progress_tx, progress_task) = spawn_browser_login_progress_printer();
+    let server = match run_login_server_with_progress(opts, progress_tx) {
+        Ok(server) => server,
+        Err(err) => {
+            let saw_failure = progress_task.await.unwrap_or(false);
+            return (Err(err), saw_failure);
+        }
+    };
+
+    print_login_server_start(&server.auth_url);
+
+    let result = server.block_until_done().await;
+    let saw_failure = progress_task.await.unwrap_or(false);
+    (result, saw_failure)
 }
 
 pub async fn login_with_chatgpt(
@@ -121,11 +173,8 @@ pub async fn login_with_chatgpt(
         forced_chatgpt_workspace_id,
         cli_auth_credentials_store_mode,
     );
-    let server = run_login_server(opts)?;
-
-    print_login_server_start(server.actual_port, &server.auth_url);
-
-    server.block_until_done().await
+    let (result, _saw_failure) = run_browser_login(opts).await;
+    result
 }
 
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
@@ -140,19 +189,23 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
 
     let forced_chatgpt_workspace_id = config.forced_chatgpt_workspace_id.clone();
 
-    match login_with_chatgpt(
+    let opts = ServerOptions::new(
         config.codex_home,
+        CLIENT_ID.to_string(),
         forced_chatgpt_workspace_id,
         config.cli_auth_credentials_store_mode,
-    )
-    .await
-    {
-        Ok(_) => {
+    );
+
+    let (result, saw_structured_failure) = run_browser_login(opts).await;
+    match result {
+        Ok(()) => {
             eprintln!("{LOGIN_SUCCESS_MESSAGE}");
             std::process::exit(0);
         }
         Err(e) => {
-            eprintln!("Error logging in: {e}");
+            if !saw_structured_failure {
+                eprintln!("Error logging in: {e}");
+            }
             std::process::exit(1);
         }
     }
@@ -286,22 +339,16 @@ pub async fn run_login_with_device_code_fallback_to_browser(
         Err(e) => {
             if e.kind() == std::io::ErrorKind::NotFound {
                 eprintln!("Device code login is not enabled; falling back to browser login.");
-                match run_login_server(opts) {
-                    Ok(server) => {
-                        print_login_server_start(server.actual_port, &server.auth_url);
-                        match server.block_until_done().await {
-                            Ok(()) => {
-                                eprintln!("{LOGIN_SUCCESS_MESSAGE}");
-                                std::process::exit(0);
-                            }
-                            Err(e) => {
-                                eprintln!("Error logging in: {e}");
-                                std::process::exit(1);
-                            }
-                        }
+                let (result, saw_structured_failure) = run_browser_login(opts).await;
+                match result {
+                    Ok(()) => {
+                        eprintln!("{LOGIN_SUCCESS_MESSAGE}");
+                        std::process::exit(0);
                     }
                     Err(e) => {
-                        eprintln!("Error logging in: {e}");
+                        if !saw_structured_failure {
+                            eprintln!("Error logging in: {e}");
+                        }
                         std::process::exit(1);
                     }
                 }

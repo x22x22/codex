@@ -1,0 +1,8 @@
+---
+source: login/src/progress.rs
+expression: "format_login_progress(phase).expect(\"sample should render\")"
+---
+Couldn't save your Codex credentials
+Codex couldn't finish signing in while saving credentials locally. Check permissions for your Codex home directory, then try again.
+Help: https://developers.openai.com/codex/auth
+Details: persist_failed - permission denied
