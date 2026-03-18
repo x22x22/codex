@@ -59,7 +59,6 @@ pub fn load_for_prompt_bytes(
     mode: PromptImageMode,
 ) -> Result<EncodedImage, ImageProcessingError> {
     let path_buf = path.to_path_buf();
-
     let key = ImageCacheKey {
         digest: sha1_digest(&file_bytes),
         mode,
