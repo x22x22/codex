@@ -27,6 +27,7 @@ pub const OLLAMA_CHAT_PROVIDER_REMOVED_ERROR: &str = "`ollama-chat` is no longer
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[schemars(rename = "WireApi")]
 pub enum WireApi {
     #[default]
     Responses,
@@ -57,6 +58,7 @@ impl<'de> Deserialize<'de> for WireApi {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
+#[schemars(rename = "ModelProviderInfo")]
 pub struct ModelProviderInfo {
     pub name: String,
     pub base_url: Option<String>,

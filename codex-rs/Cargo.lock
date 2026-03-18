@@ -1601,7 +1601,6 @@ name = "codex-auth"
 version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
- "chrono",
  "codex-api",
  "codex-app-server-protocol",
  "http 1.4.0",
