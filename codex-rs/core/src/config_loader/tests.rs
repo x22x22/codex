@@ -482,6 +482,14 @@ async fn managed_preferences_invalid_security_config_entry_fails_closed() -> any
             "sandbox_mode = \"bogus\"\nmodel = \"managed\"\n",
             "sandbox_mode",
         ),
+        (
+            "[profiles.team]\napproval_policy = \"bogus\"\n",
+            "profiles.team.approval_policy",
+        ),
+        (
+            "[profiles.team]\nsandbox_mode = \"bogus\"\n",
+            "profiles.team.sandbox_mode",
+        ),
     ] {
         let tmp = tempdir()?;
         let err = load_config_layers_state(

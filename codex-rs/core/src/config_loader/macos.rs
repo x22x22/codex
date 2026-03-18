@@ -194,7 +194,7 @@ fn parse_managed_config_base64(encoded: &str) -> io::Result<Option<ManagedAdminC
 
 fn is_invalid_security_managed_config_entry(dropped_entry: &str) -> bool {
     matches!(
-        managed_entry_top_level_key(dropped_entry),
+        managed_entry_leaf_key(dropped_entry),
         "approval_policy" | "sandbox_mode"
     )
 }
@@ -261,11 +261,22 @@ fn is_invalid_security_managed_requirements_entry(dropped_entry: &str) -> bool {
 }
 
 fn managed_entry_top_level_key(dropped_entry: &str) -> &str {
+    let path = managed_entry_path(dropped_entry);
+    path.split(['.', '[']).next().unwrap_or(path)
+}
+
+fn managed_entry_leaf_key(dropped_entry: &str) -> &str {
+    let path = managed_entry_path(dropped_entry);
+    let leaf = path.rsplit('.').next().unwrap_or(path);
+    leaf.split('[').next().unwrap_or(leaf)
+}
+
+fn managed_entry_path(dropped_entry: &str) -> &str {
     let path = dropped_entry
         .split_once(':')
         .map_or(dropped_entry, |(path, _)| path)
         .trim();
-    path.split(['.', '[']).next().unwrap_or(path)
+    path
 }
 
 fn decode_managed_preferences_base64(encoded: &str) -> io::Result<String> {
