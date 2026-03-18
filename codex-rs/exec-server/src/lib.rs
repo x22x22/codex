@@ -1,5 +1,6 @@
 mod client;
 mod protocol;
+mod rpc;
 mod server;
 mod server_process;
 
