@@ -2,6 +2,7 @@
 members = [
     "backend-client",
     "ansi-escape",
+    "auth",
     "async-utils",
     "app-server",
     "app-server-client",
@@ -86,6 +87,7 @@ license = "Apache-2.0"
 app_test_support = { path = "app-server/tests/common" }
 codex-ansi-escape = { path = "ansi-escape" }
 codex-api = { path = "codex-api" }
+codex-auth = { path = "auth" }
 codex-artifacts = { path = "artifacts" }
 codex-package-manager = { path = "package-manager" }
 codex-app-server = { path = "app-server" }
