@@ -1552,6 +1552,15 @@
       },
       "type": "object"
     },
+    "ToolFeatureToml": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ToolSuggestConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1587,15 +1596,6 @@
         "plugin"
       ],
       "type": "string"
-    },
-    "ToolFeatureToml": {
-      "additionalProperties": false,
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      },
-      "type": "object"
     },
     "ToolsToml": {
       "additionalProperties": false,
