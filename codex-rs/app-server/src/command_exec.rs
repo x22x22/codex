@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -25,6 +27,11 @@ use codex_core::exec::ExecExpiration;
 use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
 use codex_core::exec::SandboxType;
 use codex_core::sandboxing::ExecRequest;
+use codex_exec_server::ExecServerClient;
+use codex_exec_server::ExecServerEvent;
+use codex_exec_server::ExecOutputStream as RemoteExecOutputStream;
+use codex_exec_server::ExecParams as RemoteExecParams;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::ProcessHandle;
 use codex_utils_pty::SpawnedProcess;
@@ -45,13 +52,211 @@ const EXEC_TIMEOUT_EXIT_CODE: i32 = 124;
 
 #[derive(Clone)]
 pub(crate) struct CommandExecManager {
+    backend: CommandExecBackend,
     sessions: Arc<Mutex<HashMap<ConnectionProcessId, CommandExecSession>>>,
     next_generated_process_id: Arc<AtomicI64>,
 }
 
+#[cfg(test)]
+mod remote_backend_tests {
+    use super::*;
+    use crate::outgoing_message::{ConnectionId, ConnectionRequestId, OutgoingMessageSender};
+    use codex_app_server_protocol::RequestId;
+    use codex_core::exec::ExecExpiration;
+    use codex_core::sandboxing::SandboxPermissions;
+    use codex_exec_server::{ExecServerClient, ExecServerClientConnectOptions};
+    use codex_protocol::config_types::WindowsSandboxLevel;
+    use codex_protocol::permissions::{FileSystemSandboxPolicy, NetworkSandboxPolicy};
+    use codex_protocol::protocol::{ReadOnlyAccess, SandboxPolicy};
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+    use tokio::sync::mpsc;
+
+    fn remote_exec_request(
+        sandbox_policy: SandboxPolicy,
+        sandbox: SandboxType,
+    ) -> ExecRequest {
+        let file_system_sandbox_policy = FileSystemSandboxPolicy::from(&sandbox_policy);
+        let network_sandbox_policy = NetworkSandboxPolicy::from(&sandbox_policy);
+        ExecRequest {
+            command: vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 30".to_string()],
+            cwd: PathBuf::from("."),
+            env: HashMap::new(),
+            network: None,
+            expiration: ExecExpiration::DefaultTimeout,
+            sandbox,
+            windows_sandbox_level: WindowsSandboxLevel::Disabled,
+            windows_sandbox_private_desktop: false,
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            sandbox_policy,
+            file_system_sandbox_policy,
+            network_sandbox_policy,
+            justification: None,
+            arg0: None,
+        }
+    }
+
+    fn start_params(
+        outgoing: Arc<OutgoingMessageSender>,
+        request_id: ConnectionRequestId,
+        process_id: &str,
+        exec_request: ExecRequest,
+        tty: bool,
+    ) -> StartCommandExecParams {
+        StartCommandExecParams {
+            outgoing,
+            request_id,
+            process_id: Some(process_id.to_string()),
+            exec_request,
+            started_network_proxy: None,
+            tty,
+            stream_stdin: false,
+            stream_stdout_stderr: false,
+            output_bytes_cap: Some(DEFAULT_OUTPUT_BYTES_CAP),
+            size: None,
+        }
+    }
+
+    async fn remote_manager(tempdir: &TempDir) -> CommandExecManager {
+        let client = ExecServerClient::connect_in_process(ExecServerClientConnectOptions::default())
+            .await
+            .expect("connect in process exec server");
+        CommandExecManager::new(CommandExecBackend::ExecServer(RemoteCommandExecBackend::new(
+            client,
+            tempdir.path().to_path_buf(),
+            None,
+        )))
+    }
+
+    #[tokio::test]
+    async fn command_exec_remote_backend_rejects_resize() {
+        let tempdir = TempDir::new().expect("tempdir");
+        let manager = remote_manager(&tempdir).await;
+        let (tx, _rx) = mpsc::channel(1);
+        let request_id = ConnectionRequestId {
+            connection_id: ConnectionId(11),
+            request_id: RequestId::Integer(2),
+        };
+
+        manager
+            .start(start_params(
+                Arc::new(OutgoingMessageSender::new(tx)),
+                request_id.clone(),
+                "proc-remote-resize",
+                remote_exec_request(SandboxPolicy::DangerFullAccess, SandboxType::None),
+                true,
+            ))
+            .await
+            .expect("start remote process");
+
+        let err = manager
+            .resize(
+                request_id.clone(),
+                CommandExecResizeParams {
+                    process_id: "proc-remote-resize".to_string(),
+                    size: CommandExecTerminalSize {
+                        cols: 120,
+                        rows: 40,
+                    },
+                },
+            )
+            .await
+            .expect_err("resize should fail");
+
+        assert_eq!(err.code, INVALID_REQUEST_ERROR_CODE);
+        assert_eq!(err.message, "remote command/exec does not support resize");
+
+        let _ = manager
+            .terminate(
+                request_id,
+                CommandExecTerminateParams {
+                    process_id: "proc-remote-resize".to_string(),
+                },
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    async fn command_exec_remote_backend_rejects_sandboxed_execution() {
+        let tempdir = TempDir::new().expect("tempdir");
+        let manager = remote_manager(&tempdir).await;
+        let (tx, _rx) = mpsc::channel(1);
+        let request_id = ConnectionRequestId {
+            connection_id: ConnectionId(12),
+            request_id: RequestId::Integer(5),
+        };
+        let sandbox_policy = SandboxPolicy::ReadOnly {
+            access: ReadOnlyAccess::FullAccess,
+            network_access: false,
+        };
+
+        let err = manager
+            .start(start_params(
+                Arc::new(OutgoingMessageSender::new(tx)),
+                request_id,
+                "proc-remote-sandbox",
+                remote_exec_request(sandbox_policy, SandboxType::MacosSeatbelt),
+                true,
+            ))
+            .await
+            .expect_err("sandboxed remote exec should fail");
+
+        assert_eq!(err.code, INVALID_REQUEST_ERROR_CODE);
+        assert_eq!(
+            err.message,
+            "remote command/exec does not support sandboxed execution"
+        );
+        assert_eq!(err.data, None);
+    }
+}
+
 impl Default for CommandExecManager {
     fn default() -> Self {
+        Self::new(CommandExecBackend::Local)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) enum CommandExecBackend {
+    Local,
+    ExecServer(RemoteCommandExecBackend),
+}
+
+#[derive(Clone)]
+pub(crate) struct RemoteCommandExecBackend {
+    client: ExecServerClient,
+    local_workspace_root: PathBuf,
+    remote_workspace_root: Option<PathBuf>,
+}
+
+impl RemoteCommandExecBackend {
+    pub(crate) fn new(
+        client: ExecServerClient,
+        local_workspace_root: PathBuf,
+        remote_workspace_root: Option<PathBuf>,
+    ) -> Self {
         Self {
+            client,
+            local_workspace_root,
+            remote_workspace_root,
+        }
+    }
+
+    fn map_path(&self, path: &Path) -> PathBuf {
+        match &self.remote_workspace_root {
+            Some(remote_workspace_root) => match path.strip_prefix(&self.local_workspace_root) {
+                Ok(relative) => remote_workspace_root.join(relative),
+                Err(_) => path.to_path_buf(),
+            },
+            None => path.to_path_buf(),
+        }
+    }
+}
+
+impl CommandExecManager {
+    pub(crate) fn new(backend: CommandExecBackend) -> Self {
+        Self {
+            backend,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             next_generated_process_id: Arc::new(AtomicI64::new(1)),
         }
@@ -119,6 +324,20 @@ struct SpawnProcessOutputParams {
     output_bytes_cap: Option<usize>,
 }
 
+struct RunRemoteCommandParams {
+    outgoing: Arc<OutgoingMessageSender>,
+    request_id: ConnectionRequestId,
+    process_id: Option<String>,
+    remote_process_id: String,
+    client: ExecServerClient,
+    control_rx: mpsc::Receiver<CommandControlRequest>,
+    stream_stdin: bool,
+    stream_stdout_stderr: bool,
+    expiration: ExecExpiration,
+    output_bytes_cap: Option<usize>,
+    started_network_proxy: Option<StartedNetworkProxy>,
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 enum InternalProcessId {
     Generated(i64),
@@ -127,6 +346,7 @@ enum InternalProcessId {
 
 trait InternalProcessIdExt {
     fn error_repr(&self) -> String;
+    fn protocol_repr(&self) -> String;
 }
 
 impl InternalProcessIdExt for InternalProcessId {
@@ -134,6 +354,13 @@ impl InternalProcessIdExt for InternalProcessId {
         match self {
             Self::Generated(id) => id.to_string(),
             Self::Client(id) => serde_json::to_string(id).unwrap_or_else(|_| format!("{id:?}")),
+        }
+    }
+
+    fn protocol_repr(&self) -> String {
+        match self {
+            Self::Generated(id) => id.to_string(),
+            Self::Client(id) => id.clone(),
         }
     }
 }
@@ -173,6 +400,30 @@ impl CommandExecManager {
             connection_id: request_id.connection_id,
             process_id: process_id.clone(),
         };
+
+        if let CommandExecBackend::ExecServer(remote_backend) = &self.backend {
+            return self
+                .start_remote(
+                    remote_backend.clone(),
+                    process_key,
+                    StartCommandExecParams {
+                        outgoing,
+                        request_id,
+                        process_id: match process_id {
+                            InternalProcessId::Generated(_) => None,
+                            InternalProcessId::Client(process_id) => Some(process_id),
+                        },
+                        exec_request,
+                        started_network_proxy,
+                        tty,
+                        stream_stdin,
+                        stream_stdout_stderr,
+                        output_bytes_cap,
+                        size,
+                    },
+                )
+                .await;
+        }
 
         if matches!(exec_request.sandbox, SandboxType::WindowsRestrictedToken) {
             if tty || stream_stdin || stream_stdout_stderr {
@@ -297,6 +548,105 @@ impl CommandExecManager {
                 stream_stdout_stderr,
                 expiration,
                 output_bytes_cap,
+            })
+            .await;
+            sessions.lock().await.remove(&process_key);
+        });
+        Ok(())
+    }
+
+    async fn start_remote(
+        &self,
+        remote_backend: RemoteCommandExecBackend,
+        process_key: ConnectionProcessId,
+        params: StartCommandExecParams,
+    ) -> Result<(), JSONRPCErrorError> {
+        let StartCommandExecParams {
+            outgoing,
+            request_id,
+            process_id,
+            exec_request,
+            started_network_proxy,
+            tty,
+            stream_stdin,
+            stream_stdout_stderr,
+            output_bytes_cap,
+            size,
+        } = params;
+
+        if exec_request.sandbox != SandboxType::None
+            || !matches!(exec_request.sandbox_policy, SandboxPolicy::DangerFullAccess)
+        {
+            return Err(invalid_request(
+                "remote command/exec does not support sandboxed execution".to_string(),
+            ));
+        }
+
+        if size.is_some() {
+            return Err(invalid_request(
+                "remote command/exec does not support terminal sizing".to_string(),
+            ));
+        }
+
+        let remote_process_id = process_key.process_id.protocol_repr();
+        let ExecRequest {
+            command,
+            cwd,
+            env,
+            expiration,
+            sandbox: _sandbox,
+            arg0,
+            ..
+        } = exec_request;
+        let (control_tx, control_rx) = mpsc::channel(32);
+        {
+            let mut sessions = self.sessions.lock().await;
+            if sessions.contains_key(&process_key) {
+                return Err(invalid_request(format!(
+                    "duplicate active command/exec process id: {}",
+                    process_key.process_id.error_repr(),
+                )));
+            }
+            sessions.insert(
+                process_key.clone(),
+                CommandExecSession::Active { control_tx },
+            );
+        }
+
+        let remote_cwd = remote_backend.map_path(cwd.as_path());
+        if let Err(err) = remote_backend
+            .client
+            .exec(RemoteExecParams {
+                process_id: remote_process_id.clone(),
+                argv: command,
+                cwd: remote_cwd,
+                env,
+                tty,
+                arg0,
+                sandbox: None,
+            })
+            .await
+        {
+            self.sessions.lock().await.remove(&process_key);
+            return Err(internal_error(format!("failed to spawn command: {err}")));
+        }
+
+        let notification_process_id = process_id.clone();
+        let client = remote_backend.client.clone();
+        let sessions = Arc::clone(&self.sessions);
+        tokio::spawn(async move {
+            run_remote_command(RunRemoteCommandParams {
+                outgoing,
+                request_id: request_id.clone(),
+                process_id: notification_process_id,
+                remote_process_id,
+                client,
+                control_rx,
+                stream_stdin: tty || stream_stdin,
+                stream_stdout_stderr: tty || stream_stdout_stderr,
+                expiration,
+                output_bytes_cap,
+                started_network_proxy,
             })
             .await;
             sessions.lock().await.remove(&process_key);
@@ -562,6 +912,128 @@ async fn run_command(params: RunCommandParams) {
         .await;
 }
 
+async fn run_remote_command(params: RunRemoteCommandParams) {
+    let RunRemoteCommandParams {
+        outgoing,
+        request_id,
+        process_id,
+        remote_process_id,
+        client,
+        control_rx,
+        stream_stdin,
+        stream_stdout_stderr,
+        expiration,
+        output_bytes_cap,
+        started_network_proxy,
+    } = params;
+    let _started_network_proxy = started_network_proxy;
+    let mut control_rx = control_rx;
+    let mut control_open = true;
+    let mut events_rx = client.event_receiver();
+    let expiration = async {
+        match expiration {
+            ExecExpiration::Timeout(duration) => tokio::time::sleep(duration).await,
+            ExecExpiration::DefaultTimeout => {
+                tokio::time::sleep(Duration::from_millis(DEFAULT_EXEC_COMMAND_TIMEOUT_MS)).await;
+            }
+            ExecExpiration::Cancellation(cancel) => {
+                cancel.cancelled().await;
+            }
+        }
+    };
+    tokio::pin!(expiration);
+    let mut timed_out = false;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut stdout_bytes = 0usize;
+    let mut stderr_bytes = 0usize;
+    let exit_code = loop {
+        tokio::select! {
+            control = control_rx.recv(), if control_open => {
+                match control {
+                    Some(CommandControlRequest { control, response_tx }) => {
+                        let result = match control {
+                            CommandControl::Write { delta, close_stdin } => {
+                                handle_remote_process_write(
+                                    &client,
+                                    &remote_process_id,
+                                    stream_stdin,
+                                    delta,
+                                    close_stdin,
+                                ).await
+                            }
+                            CommandControl::Resize { .. } => Err(invalid_request(
+                                "remote command/exec does not support resize".to_string(),
+                            )),
+                            CommandControl::Terminate => {
+                                client
+                                    .terminate(&remote_process_id)
+                                    .await
+                                    .map(|_| ())
+                                    .map_err(|err| internal_error(format!("failed to terminate remote command: {err}")))
+                            }
+                        };
+                        if let Some(response_tx) = response_tx {
+                            let _ = response_tx.send(result);
+                        }
+                    }
+                    None => {
+                        control_open = false;
+                        let _ = client.terminate(&remote_process_id).await;
+                    }
+                }
+            }
+            _ = &mut expiration, if !timed_out => {
+                timed_out = true;
+                let _ = client.terminate(&remote_process_id).await;
+            }
+            event = events_rx.recv() => {
+                match event {
+                    Ok(ExecServerEvent::OutputDelta(notification)) if notification.process_id == remote_process_id => {
+                        handle_remote_output_chunk(
+                            &outgoing,
+                            request_id.connection_id,
+                            process_id.as_ref(),
+                            notification.stream,
+                            notification.chunk.into_inner(),
+                            stream_stdout_stderr,
+                            output_bytes_cap,
+                            &mut stdout,
+                            &mut stdout_bytes,
+                            &mut stderr,
+                            &mut stderr_bytes,
+                        ).await;
+                    }
+                    Ok(ExecServerEvent::Exited(notification)) if notification.process_id == remote_process_id => {
+                        break if timed_out { EXEC_TIMEOUT_EXIT_CODE } else { notification.exit_code };
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        outgoing
+                            .send_error(
+                                request_id,
+                                internal_error(format!("exec-server event stream closed: {err}")),
+                            )
+                            .await;
+                        return;
+                    }
+                }
+            }
+        }
+    };
+
+    outgoing
+        .send_response(
+            request_id,
+            CommandExecResponse {
+                exit_code,
+                stdout: bytes_to_string_smart(&stdout),
+                stderr: bytes_to_string_smart(&stderr),
+            },
+        )
+        .await;
+}
+
 fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHandle<String> {
     let SpawnProcessOutputParams {
         connection_id,
@@ -618,6 +1090,85 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
         }
         bytes_to_string_smart(&buffer)
     })
+}
+
+async fn handle_remote_process_write(
+    client: &ExecServerClient,
+    remote_process_id: &str,
+    stream_stdin: bool,
+    delta: Vec<u8>,
+    close_stdin: bool,
+) -> Result<(), JSONRPCErrorError> {
+    if !stream_stdin {
+        return Err(invalid_request(
+            "stdin streaming is not enabled for this command/exec".to_string(),
+        ));
+    }
+    if close_stdin {
+        return Err(invalid_request(
+            "remote command/exec does not support closeStdin".to_string(),
+        ));
+    }
+    if !delta.is_empty() {
+        client
+            .write(remote_process_id, delta)
+            .await
+            .map_err(|err| internal_error(format!("failed to write remote stdin: {err}")))?;
+    }
+    Ok(())
+}
+
+async fn handle_remote_output_chunk(
+    outgoing: &Arc<OutgoingMessageSender>,
+    connection_id: ConnectionId,
+    process_id: Option<&String>,
+    stream: RemoteExecOutputStream,
+    chunk: Vec<u8>,
+    stream_output: bool,
+    output_bytes_cap: Option<usize>,
+    stdout: &mut Vec<u8>,
+    stdout_bytes: &mut usize,
+    stderr: &mut Vec<u8>,
+    stderr_bytes: &mut usize,
+) {
+    let (stream, buffer, observed_num_bytes) = match stream {
+        RemoteExecOutputStream::Stdout | RemoteExecOutputStream::Pty => (
+            CommandExecOutputStream::Stdout,
+            stdout,
+            stdout_bytes,
+        ),
+        RemoteExecOutputStream::Stderr => (
+            CommandExecOutputStream::Stderr,
+            stderr,
+            stderr_bytes,
+        ),
+    };
+    let capped_chunk = match output_bytes_cap {
+        Some(output_bytes_cap) => {
+            let capped_chunk_len = output_bytes_cap
+                .saturating_sub(*observed_num_bytes)
+                .min(chunk.len());
+            *observed_num_bytes += capped_chunk_len;
+            &chunk[0..capped_chunk_len]
+        }
+        None => chunk.as_slice(),
+    };
+    let cap_reached = Some(*observed_num_bytes) == output_bytes_cap;
+    if let (true, Some(process_id)) = (stream_output, process_id) {
+        outgoing
+            .send_server_notification_to_connections(
+                &[connection_id],
+                ServerNotification::CommandExecOutputDelta(CommandExecOutputDeltaNotification {
+                    process_id: process_id.clone(),
+                    stream,
+                    delta_base64: STANDARD.encode(capped_chunk),
+                    cap_reached,
+                }),
+            )
+            .await;
+    } else if !stream_output {
+        buffer.extend_from_slice(capped_chunk);
+    }
 }
 
 async fn handle_process_write(

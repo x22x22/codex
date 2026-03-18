@@ -7,6 +7,9 @@ use std::sync::atomic::Ordering;
 
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_message_processor::CodexMessageProcessorArgs;
+use crate::command_exec::CommandExecBackend;
+use crate::command_exec::CommandExecManager;
+use crate::command_exec::RemoteCommandExecBackend;
 use crate::config_api::ConfigApi;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::external_agent_config_api::ExternalAgentConfigApi;
@@ -62,7 +65,7 @@ use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
-use codex_core::executor_environment_for_config;
+use codex_core::executor_backends_for_config;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
@@ -234,6 +237,29 @@ impl MessageProcessor {
             .plugins_manager()
             .maybe_start_curated_repo_sync_for_config(&config);
         let cloud_requirements = Arc::new(RwLock::new(cloud_requirements));
+        let executor_backends = executor_backends_for_config(config.as_ref(), None).await?;
+        let codex_core::ExecutorBackends {
+            environment,
+            exec_server_client,
+        } = executor_backends;
+        let local_workspace_root = config
+            .cwd
+            .clone()
+            .try_into()
+            .expect("config cwd should be absolute");
+        let command_exec_manager = match exec_server_client {
+            Some(client) => CommandExecManager::new(CommandExecBackend::ExecServer(
+                RemoteCommandExecBackend::new(
+                    client,
+                    local_workspace_root,
+                    config
+                        .experimental_unified_exec_exec_server_workspace_root
+                        .clone()
+                        .map(Into::into),
+                ),
+            )),
+            None => CommandExecManager::default(),
+        };
         let codex_message_processor = CodexMessageProcessor::new(CodexMessageProcessorArgs {
             auth_manager: auth_manager.clone(),
             thread_manager: Arc::clone(&thread_manager),
@@ -242,6 +268,7 @@ impl MessageProcessor {
             config: Arc::clone(&config),
             cli_overrides: cli_overrides.clone(),
             cloud_requirements: cloud_requirements.clone(),
+            command_exec_manager,
             feedback,
             log_db,
         });
@@ -254,7 +281,6 @@ impl MessageProcessor {
             analytics_events_client,
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
-        let environment = executor_environment_for_config(config.as_ref(), None).await?;
         let fs_api = FsApi::new(environment.get_filesystem());
 
         Ok(Self {
