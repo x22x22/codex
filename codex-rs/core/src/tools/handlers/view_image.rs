@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use codex_environment::ExecutorFileSystem;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputContentItem;
 use codex_protocol::models::ImageDetail;
@@ -13,6 +12,7 @@ use crate::function_tool::FunctionCallError;
 use crate::original_image_detail::can_request_original_image_detail;
 use crate::protocol::EventMsg;
 use crate::protocol::ViewImageToolCallEvent;
+use crate::sandboxed_fs;
 use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolPayload;
@@ -92,36 +92,6 @@ impl ToolHandler for ViewImageHandler {
             AbsolutePathBuf::try_from(turn.resolve_path(Some(args.path))).map_err(|error| {
                 FunctionCallError::RespondToModel(format!("unable to resolve image path: {error}"))
             })?;
-
-        let metadata = turn
-            .environment
-            .get_filesystem()
-            .get_metadata(&abs_path)
-            .await
-            .map_err(|error| {
-                FunctionCallError::RespondToModel(format!(
-                    "unable to locate image at `{}`: {error}",
-                    abs_path.display()
-                ))
-            })?;
-
-        if !metadata.is_file {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "image path `{}` is not a file",
-                abs_path.display()
-            )));
-        }
-        let file_bytes = turn
-            .environment
-            .get_filesystem()
-            .read_file(&abs_path)
-            .await
-            .map_err(|error| {
-                FunctionCallError::RespondToModel(format!(
-                    "unable to read image at `{}`: {error}",
-                    abs_path.display()
-                ))
-            })?;
         let event_path = abs_path.to_path_buf();
 
         let can_request_original_detail =
@@ -134,10 +104,18 @@ impl ToolHandler for ViewImageHandler {
             PromptImageMode::ResizeToFit
         };
         let image_detail = use_original_detail.then_some(ImageDetail::Original);
+        let image_bytes = sandboxed_fs::read_bytes(&session, &turn, abs_path.as_path())
+            .await
+            .map_err(|error| {
+                FunctionCallError::RespondToModel(render_view_image_read_error(
+                    abs_path.as_path(),
+                    &error,
+                ))
+            })?;
 
         let content = local_image_content_items_with_label_number(
             abs_path.as_path(),
-            file_bytes,
+            image_bytes,
             /*label_number*/ None,
             image_mode,
         )
@@ -163,5 +141,32 @@ impl ToolHandler for ViewImageHandler {
             .await;
 
         Ok(FunctionToolOutput::from_content(content, Some(true)))
+    }
+}
+
+fn render_view_image_read_error(
+    path: &std::path::Path,
+    error: &sandboxed_fs::SandboxedFsError,
+) -> String {
+    let operation_message = error
+        .operation_error_message()
+        .map(str::to_owned)
+        .unwrap_or_else(|| error.to_string());
+    match error.operation_error_kind() {
+        Some(codex_fs_ops::FsErrorKind::IsADirectory) => {
+            format!("image path `{}` is not a file", path.display())
+        }
+        Some(codex_fs_ops::FsErrorKind::NotFound) => {
+            format!(
+                "unable to locate image at `{}`: {operation_message}",
+                path.display()
+            )
+        }
+        Some(_) | None => {
+            format!(
+                "unable to read image at `{}`: {operation_message}",
+                path.display()
+            )
+        }
     }
 }
