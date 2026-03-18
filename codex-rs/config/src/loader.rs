@@ -13,6 +13,7 @@ use std::path::Path;
 #[cfg(windows)]
 use std::path::PathBuf;
 
+#[cfg(unix)]
 pub const SYSTEM_CONFIG_TOML_FILE_UNIX: &str = "/etc/codex/config.toml";
 
 #[cfg(windows)]
