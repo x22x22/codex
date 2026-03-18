@@ -62,6 +62,7 @@ use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
+use codex_core::executor_environment_for_config;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_feedback::CodexFeedback;
 use codex_protocol::ThreadId;
@@ -181,7 +182,7 @@ pub(crate) struct MessageProcessorArgs {
 impl MessageProcessor {
     /// Create a new `MessageProcessor`, retaining a handle to the outgoing
     /// `Sender` so handlers can enqueue messages to be written to stdout.
-    pub(crate) fn new(args: MessageProcessorArgs) -> Self {
+    pub(crate) async fn new(args: MessageProcessorArgs) -> std::io::Result<Self> {
         let MessageProcessorArgs {
             outgoing,
             arg0_paths,
@@ -253,9 +254,10 @@ impl MessageProcessor {
             analytics_events_client,
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
-        let fs_api = FsApi::default();
+        let environment = executor_environment_for_config(config.as_ref(), None).await?;
+        let fs_api = FsApi::new(environment.get_filesystem());
 
-        Self {
+        Ok(Self {
             outgoing,
             codex_message_processor,
             config_api,
@@ -264,7 +266,7 @@ impl MessageProcessor {
             auth_manager,
             config,
             config_warnings: Arc::new(config_warnings),
-        }
+        })
     }
 
     pub(crate) fn clear_runtime_references(&self) {

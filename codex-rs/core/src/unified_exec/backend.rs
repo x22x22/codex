@@ -1,3 +1,4 @@
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -179,15 +180,26 @@ pub(crate) async fn session_execution_backends_for_config(
             spawn_local_exec_server(command, ExecServerClientConnectOptions::default())
                 .await
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        return Ok(exec_server_backends_from_spawned_server(Arc::new(
-            spawned_server,
-        ), path_mapper));
+        return Ok(exec_server_backends_from_spawned_server(
+            Arc::new(spawned_server),
+            path_mapper,
+        ));
     }
 
     let client = ExecServerClient::connect_in_process(ExecServerClientConnectOptions::default())
         .await
         .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
     Ok(exec_server_backends_from_client(client, path_mapper))
+}
+
+pub async fn executor_environment_for_config(
+    config: &Config,
+    local_exec_server_command: Option<ExecServerLaunchCommand>,
+) -> io::Result<Arc<Environment>> {
+    session_execution_backends_for_config(config, local_exec_server_command)
+        .await
+        .map(|backends| backends.environment)
+        .map_err(|err| io::Error::other(err.to_string()))
 }
 
 fn default_local_exec_server_command() -> ExecServerLaunchCommand {

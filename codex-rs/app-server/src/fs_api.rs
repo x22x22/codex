@@ -31,11 +31,15 @@ pub(crate) struct FsApi {
     file_system: Arc<dyn ExecutorFileSystem>,
 }
 
+impl FsApi {
+    pub(crate) fn new(file_system: Arc<dyn ExecutorFileSystem>) -> Self {
+        Self { file_system }
+    }
+}
+
 impl Default for FsApi {
     fn default() -> Self {
-        Self {
-            file_system: Environment::default().get_filesystem(),
-        }
+        Self::new(Environment::default().get_filesystem())
     }
 }
 
