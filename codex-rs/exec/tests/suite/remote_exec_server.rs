@@ -2,6 +2,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -30,6 +31,10 @@ async fn exec_cli_can_route_remote_exec_and_read_file_through_exec_server() -> a
     let external_websocket_url = std::env::var("CODEX_EXEC_SERVER_TEST_WS_URL")
         .ok()
         .filter(|value| !value.trim().is_empty());
+    let external_remote_root = std::env::var("CODEX_EXEC_SERVER_TEST_REMOTE_ROOT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
     let websocket_url = if let Some(websocket_url) = external_websocket_url {
         websocket_url
     } else {
@@ -53,8 +58,14 @@ async fn exec_cli_can_route_remote_exec_and_read_file_through_exec_server() -> a
         Some(child)
     };
 
-    let seed_path = test.cwd_path().join("remote_exec_seed.txt");
-    std::fs::write(&seed_path, "remote-fs-seed\n")?;
+    let local_workspace_root = test.cwd_path().to_path_buf();
+    let remote_workspace_root = external_remote_root
+        .clone()
+        .unwrap_or_else(|| local_workspace_root.clone());
+    let seed_path = local_workspace_root.join("remote_exec_seed.txt");
+    if external_remote_root.is_none() {
+        std::fs::write(&seed_path, "remote-fs-seed\n")?;
+    }
 
     let server = responses::start_mock_server().await;
     let response_mock = responses::mount_sse_sequence(
@@ -66,7 +77,11 @@ async fn exec_cli_can_route_remote_exec_and_read_file_through_exec_server() -> a
                     "call-exec",
                     "exec_command",
                     &serde_json::to_string(&json!({
-                        "cmd": "printf from-remote > remote_exec_generated.txt",
+                        "cmd": if external_remote_root.is_some() {
+                            "printf remote-fs-seed > remote_exec_seed.txt && printf from-remote > remote_exec_generated.txt"
+                        } else {
+                            "printf from-remote > remote_exec_generated.txt"
+                        },
                         "yield_time_ms": 500,
                     }))?,
                 ),
@@ -89,7 +104,7 @@ async fn exec_cli_can_route_remote_exec_and_read_file_through_exec_server() -> a
                     "call-list",
                     "list_dir",
                     &serde_json::to_string(&json!({
-                        "dir_path": test.cwd_path(),
+                        "dir_path": local_workspace_root,
                         "offset": 1,
                         "limit": 20,
                         "depth": 1,
@@ -122,17 +137,24 @@ async fn exec_cli_can_route_remote_exec_and_read_file_through_exec_server() -> a
             serde_json::to_string(&websocket_url)?
         ))
         .arg("-c")
+        .arg(format!(
+            "experimental_unified_exec_exec_server_workspace_root={}",
+            serde_json::to_string(&remote_workspace_root)?
+        ))
+        .arg("-c")
         .arg("experimental_supported_tools=[\"read_file\",\"list_dir\"]")
         .arg("run remote exec-server tools")
         .assert()
         .success();
 
-    let generated_path = test.cwd_path().join("remote_exec_generated.txt");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while tokio::time::Instant::now() < deadline && !generated_path.exists() {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    if external_remote_root.is_none() {
+        let generated_path = test.cwd_path().join("remote_exec_generated.txt");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while tokio::time::Instant::now() < deadline && !generated_path.exists() {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(std::fs::read_to_string(&generated_path)?, "from-remote");
     }
-    assert_eq!(std::fs::read_to_string(&generated_path)?, "from-remote");
 
     let requests = response_mock.requests();
     let read_output = extract_output_text(&requests[2].function_call_output("call-read"));

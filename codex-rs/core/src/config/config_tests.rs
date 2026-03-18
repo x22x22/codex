@@ -1716,6 +1716,9 @@ fn unified_exec_exec_server_flags_load_from_config() -> std::io::Result<()> {
         experimental_unified_exec_exec_server_websocket_url: Some(
             "ws://127.0.0.1:8765".to_string(),
         ),
+        experimental_unified_exec_exec_server_workspace_root: Some(
+            AbsolutePathBuf::try_from("/home/dev-user/codex").unwrap(),
+        ),
         ..Default::default()
     };
 
@@ -1730,6 +1733,10 @@ fn unified_exec_exec_server_flags_load_from_config() -> std::io::Result<()> {
     assert_eq!(
         config.experimental_unified_exec_exec_server_websocket_url,
         Some("ws://127.0.0.1:8765".to_string())
+    );
+    assert_eq!(
+        config.experimental_unified_exec_exec_server_workspace_root,
+        Some(AbsolutePathBuf::try_from("/home/dev-user/codex").unwrap())
     );
 
     Ok(())

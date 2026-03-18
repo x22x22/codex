@@ -14,6 +14,7 @@ use tracing::debug;
 use crate::config::Config;
 use crate::exec::SandboxType;
 use crate::exec_server_filesystem::ExecServerFileSystem;
+use crate::exec_server_path_mapper::RemoteWorkspacePathMapper;
 use crate::sandboxing::ExecRequest;
 use crate::unified_exec::SpawnLifecycleHandle;
 use crate::unified_exec::UnifiedExecError;
@@ -60,6 +61,7 @@ impl UnifiedExecSessionFactory for LocalUnifiedExecSessionFactory {
 pub(crate) struct ExecServerUnifiedExecSessionFactory {
     client: ExecServerClient,
     _spawned_server: Option<Arc<SpawnedExecServer>>,
+    path_mapper: Option<RemoteWorkspacePathMapper>,
 }
 
 impl std::fmt::Debug for ExecServerUnifiedExecSessionFactory {
@@ -71,19 +73,25 @@ impl std::fmt::Debug for ExecServerUnifiedExecSessionFactory {
 }
 
 impl ExecServerUnifiedExecSessionFactory {
-    pub(crate) fn from_client(client: ExecServerClient) -> UnifiedExecSessionFactoryHandle {
+    pub(crate) fn from_client(
+        client: ExecServerClient,
+        path_mapper: Option<RemoteWorkspacePathMapper>,
+    ) -> UnifiedExecSessionFactoryHandle {
         Arc::new(Self {
             client,
             _spawned_server: None,
+            path_mapper,
         })
     }
 
     pub(crate) fn from_spawned_server(
         spawned_server: Arc<SpawnedExecServer>,
+        path_mapper: Option<RemoteWorkspacePathMapper>,
     ) -> UnifiedExecSessionFactoryHandle {
         Arc::new(Self {
             client: spawned_server.client().clone(),
             _spawned_server: Some(spawned_server),
+            path_mapper,
         })
     }
 }
@@ -122,6 +130,7 @@ impl UnifiedExecSessionFactory for ExecServerUnifiedExecSessionFactory {
             env,
             tty,
             spawn_lifecycle,
+            self.path_mapper.as_ref(),
         )
         .await
     }
@@ -131,6 +140,19 @@ pub(crate) async fn session_execution_backends_for_config(
     config: &Config,
     local_exec_server_command: Option<ExecServerLaunchCommand>,
 ) -> Result<SessionExecutionBackends, UnifiedExecError> {
+    let path_mapper = config
+        .experimental_unified_exec_exec_server_workspace_root
+        .clone()
+        .map(|remote_root| {
+            RemoteWorkspacePathMapper::new(
+                config
+                    .cwd
+                    .clone()
+                    .try_into()
+                    .expect("config cwd should be absolute"),
+                remote_root,
+            )
+        });
     if !config.experimental_unified_exec_use_exec_server {
         return Ok(SessionExecutionBackends {
             unified_exec_session_factory: local_unified_exec_session_factory(),
@@ -148,7 +170,7 @@ pub(crate) async fn session_execution_backends_for_config(
         ))
         .await
         .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        return Ok(exec_server_backends_from_client(client));
+        return Ok(exec_server_backends_from_client(client, path_mapper));
     }
 
     if config.experimental_unified_exec_spawn_local_exec_server {
@@ -159,13 +181,13 @@ pub(crate) async fn session_execution_backends_for_config(
                 .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
         return Ok(exec_server_backends_from_spawned_server(Arc::new(
             spawned_server,
-        )));
+        ), path_mapper));
     }
 
     let client = ExecServerClient::connect_in_process(ExecServerClientConnectOptions::default())
         .await
         .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-    Ok(exec_server_backends_from_client(client))
+    Ok(exec_server_backends_from_client(client, path_mapper))
 }
 
 fn default_local_exec_server_command() -> ExecServerLaunchCommand {
@@ -185,26 +207,34 @@ fn default_local_exec_server_command() -> ExecServerLaunchCommand {
     }
 }
 
-fn exec_server_backends_from_client(client: ExecServerClient) -> SessionExecutionBackends {
+fn exec_server_backends_from_client(
+    client: ExecServerClient,
+    path_mapper: Option<RemoteWorkspacePathMapper>,
+) -> SessionExecutionBackends {
     SessionExecutionBackends {
         unified_exec_session_factory: ExecServerUnifiedExecSessionFactory::from_client(
             client.clone(),
+            path_mapper.clone(),
         ),
         environment: Arc::new(Environment::new(Arc::new(ExecServerFileSystem::new(
             client,
+            path_mapper,
         )))),
     }
 }
 
 fn exec_server_backends_from_spawned_server(
     spawned_server: Arc<SpawnedExecServer>,
+    path_mapper: Option<RemoteWorkspacePathMapper>,
 ) -> SessionExecutionBackends {
     SessionExecutionBackends {
         unified_exec_session_factory: ExecServerUnifiedExecSessionFactory::from_spawned_server(
             Arc::clone(&spawned_server),
+            path_mapper.clone(),
         ),
         environment: Arc::new(Environment::new(Arc::new(ExecServerFileSystem::new(
             spawned_server.client().clone(),
+            path_mapper,
         )))),
     }
 }

@@ -546,6 +546,10 @@ pub struct Config {
     /// spawned-local variants.
     pub experimental_unified_exec_exec_server_websocket_url: Option<String>,
 
+    /// When set, remap remote exec-server cwd and filesystem paths from the
+    /// local session cwd root into this executor-visible workspace root.
+    pub experimental_unified_exec_exec_server_workspace_root: Option<AbsolutePathBuf>,
+
     /// Additional experimental tools to expose regardless of the model catalog's
     /// advertised tool support.
     pub experimental_supported_tools: Vec<String>,
@@ -1343,6 +1347,10 @@ pub struct ConfigToml {
 
     /// Optional websocket URL for connecting to an existing `codex-exec-server`.
     pub experimental_unified_exec_exec_server_websocket_url: Option<String>,
+
+    /// Optional absolute path to the executor-visible workspace root that
+    /// corresponds to the local session cwd.
+    pub experimental_unified_exec_exec_server_workspace_root: Option<AbsolutePathBuf>,
 
     /// Additional experimental tools to expose regardless of the selected
     /// model's advertised tool support.
@@ -2493,6 +2501,10 @@ impl Config {
                     Some(trimmed.to_string())
                 }
             });
+        let experimental_unified_exec_exec_server_workspace_root = config_profile
+            .experimental_unified_exec_exec_server_workspace_root
+            .clone()
+            .or(cfg.experimental_unified_exec_exec_server_workspace_root.clone());
         let experimental_supported_tools = config_profile
             .experimental_supported_tools
             .clone()
@@ -2792,6 +2804,7 @@ impl Config {
             experimental_unified_exec_use_exec_server,
             experimental_unified_exec_spawn_local_exec_server,
             experimental_unified_exec_exec_server_websocket_url,
+            experimental_unified_exec_exec_server_workspace_root,
             experimental_supported_tools,
             background_terminal_max_timeout,
             ghost_snapshot,

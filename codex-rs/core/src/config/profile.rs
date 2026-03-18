@@ -52,6 +52,7 @@ pub struct ConfigProfile {
     pub experimental_unified_exec_use_exec_server: Option<bool>,
     pub experimental_unified_exec_spawn_local_exec_server: Option<bool>,
     pub experimental_unified_exec_exec_server_websocket_url: Option<String>,
+    pub experimental_unified_exec_exec_server_workspace_root: Option<AbsolutePathBuf>,
     pub experimental_supported_tools: Option<Vec<String>>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     pub tools_view_image: Option<bool>,

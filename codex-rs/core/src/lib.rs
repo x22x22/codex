@@ -39,6 +39,7 @@ pub mod exec;
 pub mod exec_env;
 mod exec_policy;
 mod exec_server_filesystem;
+mod exec_server_path_mapper;
 pub mod external_agent_config;
 pub mod features;
 mod file_watcher;

@@ -19,20 +19,36 @@ use codex_exec_server::ExecServerClient;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::io;
 
+use crate::exec_server_path_mapper::RemoteWorkspacePathMapper;
+
 #[derive(Clone)]
 pub(crate) struct ExecServerFileSystem {
     client: ExecServerClient,
+    path_mapper: Option<RemoteWorkspacePathMapper>,
 }
 
 impl ExecServerFileSystem {
-    pub(crate) fn new(client: ExecServerClient) -> Self {
-        Self { client }
+    pub(crate) fn new(
+        client: ExecServerClient,
+        path_mapper: Option<RemoteWorkspacePathMapper>,
+    ) -> Self {
+        Self {
+            client,
+            path_mapper,
+        }
+    }
+
+    fn map_path(&self, path: &AbsolutePathBuf) -> AbsolutePathBuf {
+        self.path_mapper
+            .as_ref()
+            .map_or_else(|| path.clone(), |mapper| mapper.map_path(path))
     }
 }
 
 #[async_trait]
 impl ExecutorFileSystem for ExecServerFileSystem {
     async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>> {
+        let path = self.map_path(path);
         let response = self
             .client
             .fs_read_file(FsReadFileParams { path: path.clone() })
@@ -44,6 +60,7 @@ impl ExecutorFileSystem for ExecServerFileSystem {
     }
 
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()> {
+        let path = self.map_path(path);
         self.client
             .fs_write_file(FsWriteFileParams {
                 path: path.clone(),
@@ -59,6 +76,7 @@ impl ExecutorFileSystem for ExecServerFileSystem {
         path: &AbsolutePathBuf,
         options: CreateDirectoryOptions,
     ) -> FileSystemResult<()> {
+        let path = self.map_path(path);
         self.client
             .fs_create_directory(FsCreateDirectoryParams {
                 path: path.clone(),
@@ -70,6 +88,7 @@ impl ExecutorFileSystem for ExecServerFileSystem {
     }
 
     async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
+        let path = self.map_path(path);
         let response = self
             .client
             .fs_get_metadata(FsGetMetadataParams { path: path.clone() })
@@ -87,6 +106,7 @@ impl ExecutorFileSystem for ExecServerFileSystem {
         &self,
         path: &AbsolutePathBuf,
     ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+        let path = self.map_path(path);
         let response = self
             .client
             .fs_read_directory(FsReadDirectoryParams { path: path.clone() })
@@ -105,6 +125,7 @@ impl ExecutorFileSystem for ExecServerFileSystem {
     }
 
     async fn remove(&self, path: &AbsolutePathBuf, options: RemoveOptions) -> FileSystemResult<()> {
+        let path = self.map_path(path);
         self.client
             .fs_remove(FsRemoveParams {
                 path: path.clone(),
@@ -122,6 +143,8 @@ impl ExecutorFileSystem for ExecServerFileSystem {
         destination_path: &AbsolutePathBuf,
         options: CopyOptions,
     ) -> FileSystemResult<()> {
+        let source_path = self.map_path(source_path);
+        let destination_path = self.map_path(destination_path);
         self.client
             .fs_copy(FsCopyParams {
                 source_path: source_path.clone(),

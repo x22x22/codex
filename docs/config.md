@@ -89,6 +89,11 @@ connects to that existing websocket endpoint and uses it for both unified-exec
 processes and remote filesystem operations such as `read_file`, `list_dir`, and
 `view_image`.
 
+When `experimental_unified_exec_exec_server_workspace_root` is also set, Codex
+remaps remote exec `cwd` values and remote filesystem tool paths from the local
+session `cwd` root into that executor-visible workspace root. Use this when the
+executor is running on another host and cannot see the laptop's absolute paths.
+
 When `experimental_unified_exec_spawn_local_exec_server` is also enabled, Codex
 starts a session-scoped local `codex-exec-server` subprocess on startup and
 uses that connection for the same process and filesystem calls.

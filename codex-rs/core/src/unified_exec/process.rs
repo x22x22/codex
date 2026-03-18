@@ -17,12 +17,14 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
+use crate::exec_server_path_mapper::RemoteWorkspacePathMapper;
 use crate::sandboxing::ExecRequest;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::formatted_truncate_text;
 use codex_exec_server::ExecParams;
 use codex_exec_server::ExecServerClient;
 use codex_exec_server::ExecServerEvent;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::SpawnedPty;
 
@@ -338,14 +340,22 @@ impl UnifiedExecProcess {
         env: &ExecRequest,
         tty: bool,
         spawn_lifecycle: SpawnLifecycleHandle,
+        path_mapper: Option<&RemoteWorkspacePathMapper>,
     ) -> Result<Self, UnifiedExecError> {
         let process_key = process_id.to_string();
         let mut events_rx = client.event_receiver();
+        let cwd = path_mapper.map_or_else(
+            || env.cwd.clone(),
+            |mapper| match AbsolutePathBuf::try_from(env.cwd.clone()) {
+                Ok(cwd) => mapper.map_path(&cwd).into(),
+                Err(_) => env.cwd.clone(),
+            },
+        );
         let response = client
             .exec(ExecParams {
                 process_id: process_key.clone(),
                 argv: env.command.clone(),
-                cwd: env.cwd.clone(),
+                cwd,
                 env: env.env.clone(),
                 tty,
                 arg0: env.arg0.clone(),
