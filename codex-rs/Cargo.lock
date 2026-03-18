@@ -1861,6 +1861,7 @@ dependencies = [
  "codex-client",
  "codex-config",
  "codex-connectors",
+ "codex-core-auth",
  "codex-environment",
  "codex-execpolicy",
  "codex-file-search",
@@ -1951,6 +1952,28 @@ dependencies = [
  "wiremock",
  "zip",
  "zstd",
+]
+
+[[package]]
+name = "codex-core-auth"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "codex-app-server-protocol",
+ "codex-auth",
+ "codex-keyring-store",
+ "keyring",
+ "once_cell",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

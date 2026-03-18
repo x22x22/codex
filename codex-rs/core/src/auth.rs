@@ -1,5 +1,3 @@
-mod storage;
-
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::StatusCode;
@@ -19,13 +17,15 @@ use codex_app_server_protocol::AuthMode as ApiAuthMode;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 
+use codex_core_auth::AuthStorageBackend;
+use codex_core_auth::create_auth_storage;
+
+pub use codex_core_auth::AuthCredentialsStoreMode;
+pub use codex_core_auth::AuthDotJson;
+
 use crate::KnownPlan as InternalKnownPlan;
 use crate::PlanType as InternalPlanType;
 use crate::TokenData;
-pub use crate::auth::storage::AuthCredentialsStoreMode;
-pub use crate::auth::storage::AuthDotJson;
-use crate::auth::storage::AuthStorageBackend;
-use crate::auth::storage::create_auth_storage;
 use crate::config::Config;
 use crate::error::RefreshTokenFailedError;
 use crate::error::RefreshTokenFailedReason;
@@ -752,67 +752,6 @@ fn refresh_token_endpoint() -> String {
         .unwrap_or_else(|_| REFRESH_TOKEN_URL.to_string())
 }
 
-impl AuthDotJson {
-    fn from_external_tokens(external: &ExternalAuthTokens) -> std::io::Result<Self> {
-        let mut token_info =
-            parse_chatgpt_jwt_claims(&external.access_token).map_err(std::io::Error::other)?;
-        token_info.chatgpt_account_id = Some(external.chatgpt_account_id.clone());
-        token_info.chatgpt_plan_type = external
-            .chatgpt_plan_type
-            .as_deref()
-            .map(InternalPlanType::from_raw_value)
-            .or(token_info.chatgpt_plan_type)
-            .or(Some(InternalPlanType::Unknown("unknown".to_string())));
-        let tokens = TokenData {
-            id_token: token_info,
-            access_token: external.access_token.clone(),
-            refresh_token: String::new(),
-            account_id: Some(external.chatgpt_account_id.clone()),
-        };
-
-        Ok(Self {
-            auth_mode: Some(ApiAuthMode::ChatgptAuthTokens),
-            openai_api_key: None,
-            tokens: Some(tokens),
-            last_refresh: Some(Utc::now()),
-        })
-    }
-
-    fn from_external_access_token(
-        access_token: &str,
-        chatgpt_account_id: &str,
-        chatgpt_plan_type: Option<&str>,
-    ) -> std::io::Result<Self> {
-        let external = ExternalAuthTokens {
-            access_token: access_token.to_string(),
-            chatgpt_account_id: chatgpt_account_id.to_string(),
-            chatgpt_plan_type: chatgpt_plan_type.map(str::to_string),
-        };
-        Self::from_external_tokens(&external)
-    }
-
-    fn resolved_mode(&self) -> ApiAuthMode {
-        if let Some(mode) = self.auth_mode {
-            return mode;
-        }
-        if self.openai_api_key.is_some() {
-            return ApiAuthMode::ApiKey;
-        }
-        ApiAuthMode::Chatgpt
-    }
-
-    fn storage_mode(
-        &self,
-        auth_credentials_store_mode: AuthCredentialsStoreMode,
-    ) -> AuthCredentialsStoreMode {
-        if self.resolved_mode() == ApiAuthMode::ChatgptAuthTokens {
-            AuthCredentialsStoreMode::Ephemeral
-        } else {
-            auth_credentials_store_mode
-        }
-    }
-}
-
 /// Internal cached auth state.
 #[derive(Clone)]
 struct CachedAuth {
@@ -1412,8 +1351,12 @@ impl AuthManager {
                 ),
             )));
         }
-        let auth_dot_json =
-            AuthDotJson::from_external_tokens(&refreshed).map_err(RefreshTokenError::Transient)?;
+        let auth_dot_json = AuthDotJson::from_external_access_token(
+            &refreshed.access_token,
+            &refreshed.chatgpt_account_id,
+            refreshed.chatgpt_plan_type.as_deref(),
+        )
+        .map_err(RefreshTokenError::Transient)?;
         save_auth(
             &self.codex_home,
             &auth_dot_json,

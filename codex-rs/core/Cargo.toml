@@ -35,6 +35,7 @@ codex-async-utils = { workspace = true }
 codex-client = { workspace = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
+codex-core-auth = { workspace = true }
 codex-environment = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }

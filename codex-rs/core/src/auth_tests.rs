@@ -3,10 +3,10 @@ use crate::IdTokenInfo;
 use crate::KnownPlan as InternalKnownPlan;
 use crate::PlanType as InternalPlanType;
 use crate::TokenData;
-use crate::auth::storage::FileAuthStorage;
-use crate::auth::storage::get_auth_file;
 use crate::config::Config;
 use crate::config::ConfigBuilder;
+use codex_core_auth::FileAuthStorage;
+use codex_core_auth::get_auth_file;
 use codex_protocol::account::PlanType as AccountPlanType;
 
 use base64::Engine;
