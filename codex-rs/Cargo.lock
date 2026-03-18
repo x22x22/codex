@@ -2175,7 +2175,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-channel",
- "codex-app-server-protocol",
  "codex-async-utils",
  "codex-config",
  "codex-otel",

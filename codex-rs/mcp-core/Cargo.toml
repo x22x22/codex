@@ -14,7 +14,6 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 async-channel = { workspace = true }
-codex-app-server-protocol = { workspace = true }
 codex-async-utils = { workspace = true }
 codex-config = { workspace = true }
 codex-otel = { workspace = true }
