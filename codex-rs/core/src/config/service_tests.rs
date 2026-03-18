@@ -7,7 +7,17 @@ use codex_app_server_protocol::AskForApproval;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use tempfile::tempdir;
+
+fn test_loader_overrides(managed_config_path: Option<PathBuf>) -> LoaderOverrides {
+    LoaderOverrides {
+        managed_config_path,
+        #[cfg(target_os = "macos")]
+        managed_preferences_base64: Some(String::new()),
+        macos_managed_config_requirements_base64: Some(String::new()),
+    }
+}
 
 #[test]
 fn toml_value_to_item_handles_nested_config_tables() {
@@ -178,12 +188,7 @@ async fn read_includes_origins_and_layers() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: Some(managed_path.clone()),
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        test_loader_overrides(Some(managed_path.clone())),
         CloudRequirementsLoader::default(),
     );
 
@@ -253,12 +258,7 @@ async fn write_value_reports_override() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: Some(managed_path.clone()),
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        test_loader_overrides(Some(managed_path.clone())),
         CloudRequirementsLoader::default(),
     );
 
@@ -357,12 +357,7 @@ async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: Some(managed_path.clone()),
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        test_loader_overrides(Some(managed_path.clone())),
         CloudRequirementsLoader::default(),
     );
 
@@ -422,12 +417,7 @@ async fn write_value_rejects_feature_requirement_conflict() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: None,
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        test_loader_overrides(None),
         CloudRequirementsLoader::new(async {
             Ok(Some(ConfigRequirementsToml {
                 feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
@@ -473,12 +463,7 @@ async fn write_value_rejects_profile_feature_requirement_conflict() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: None,
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        test_loader_overrides(None),
         CloudRequirementsLoader::new(async {
             Ok(Some(ConfigRequirementsToml {
                 feature_requirements: Some(crate::config_loader::FeatureRequirementsToml {
@@ -535,12 +520,7 @@ async fn read_reports_managed_overrides_user_and_session_flags() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         cli_overrides,
-        LoaderOverrides {
-            managed_config_path: Some(managed_path.clone()),
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        test_loader_overrides(Some(managed_path.clone())),
         CloudRequirementsLoader::default(),
     );
 
@@ -593,12 +573,7 @@ async fn write_value_reports_managed_override() {
     let service = ConfigService::new(
         tmp.path().to_path_buf(),
         vec![],
-        LoaderOverrides {
-            managed_config_path: Some(managed_path.clone()),
-            #[cfg(target_os = "macos")]
-            managed_preferences_base64: None,
-            macos_managed_config_requirements_base64: None,
-        },
+        test_loader_overrides(Some(managed_path.clone())),
         CloudRequirementsLoader::default(),
     );
 

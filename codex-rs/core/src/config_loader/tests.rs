@@ -492,28 +492,46 @@ async fn managed_preferences_ignore_invalid_payload() -> anyhow::Result<()> {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
-async fn managed_preferences_ignore_invalid_requirements_payload() -> anyhow::Result<()> {
+async fn managed_preferences_invalid_requirements_fail_closed() -> anyhow::Result<()> {
     use base64::Engine;
 
-    let tmp = tempdir()?;
+    for (payload, expected_fragment) in [
+        (
+            "allowed_approval_policies = [\"bogus\"]",
+            "allowed_approval_policies",
+        ),
+        (
+            "allowed_sandbox_modes = [\"bogus\"]",
+            "allowed_sandbox_modes",
+        ),
+        (
+            "allowed_web_search_modes = [\"bogus\"]",
+            "allowed_web_search_modes",
+        ),
+    ] {
+        let tmp = tempdir()?;
+        let err = load_config_layers_state(
+            tmp.path(),
+            Some(AbsolutePathBuf::try_from(tmp.path())?),
+            &[] as &[(String, TomlValue)],
+            LoaderOverrides {
+                managed_config_path: Some(tmp.path().join("managed_config.toml")),
+                managed_preferences_base64: Some(String::new()),
+                macos_managed_config_requirements_base64: Some(
+                    base64::prelude::BASE64_STANDARD.encode(payload.as_bytes()),
+                ),
+            },
+            CloudRequirementsLoader::default(),
+        )
+        .await
+        .expect_err("invalid managed requirements should fail closed");
 
-    let state = load_config_layers_state(
-        tmp.path(),
-        Some(AbsolutePathBuf::try_from(tmp.path())?),
-        &[] as &[(String, TomlValue)],
-        LoaderOverrides {
-            managed_config_path: Some(tmp.path().join("managed_config.toml")),
-            managed_preferences_base64: Some(String::new()),
-            macos_managed_config_requirements_base64: Some(
-                base64::prelude::BASE64_STANDARD
-                    .encode("allowed_sandbox_modes = [\"bogus\"]".as_bytes()),
-            ),
-        },
-        CloudRequirementsLoader::default(),
-    )
-    .await?;
-
-    assert_eq!(state.requirements_toml().allowed_sandbox_modes, None);
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let message = err.to_string();
+        assert!(message.contains("Error parsing managed requirements from MDM"));
+        assert!(message.contains(expected_fragment), "{message}");
+        assert!(message.contains("bogus"), "{message}");
+    }
 
     Ok(())
 }

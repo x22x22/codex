@@ -74,9 +74,10 @@ pub(crate) async fn load_managed_admin_requirements_toml(
             return Ok(());
         }
 
-        if let Some(requirements) = parse_managed_requirements_base64(trimmed)? {
-            target.merge_unset_fields(managed_preferences_requirements_source(), requirements);
-        }
+        target.merge_unset_fields(
+            managed_preferences_requirements_source(),
+            parse_managed_requirements_base64(trimmed)?,
+        );
         return Ok(());
     }
 
@@ -104,7 +105,6 @@ fn load_managed_admin_requirements() -> io::Result<Option<ConfigRequirementsToml
         .map(str::trim)
         .map(parse_managed_requirements_base64)
         .transpose()
-        .map(Option::flatten)
 }
 
 fn load_managed_preference(key_name: &str) -> io::Result<Option<String>> {
@@ -182,55 +182,21 @@ fn parse_managed_config_base64(encoded: &str) -> io::Result<Option<ManagedAdminC
     }
 }
 
-fn parse_managed_requirements_base64(encoded: &str) -> io::Result<Option<ConfigRequirementsToml>> {
-    let raw_toml = match decode_managed_preferences_base64(encoded) {
-        Ok(raw_toml) => raw_toml,
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                "Ignoring invalid MDM managed requirements payload",
-            );
-            return Ok(None);
-        }
-    };
-    let parsed = match toml::from_str::<TomlValue>(&raw_toml) {
-        Ok(TomlValue::Table(parsed)) => TomlValue::Table(parsed),
-        Ok(other) => {
-            tracing::warn!(
-                managed_value = ?other,
-                "Ignoring invalid MDM managed requirements payload: root must be a table",
-            );
-            return Ok(None);
-        }
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                "Ignoring invalid MDM managed requirements payload",
-            );
-            return Ok(None);
-        }
-    };
-    let sanitized = match sanitize_toml_value::<ConfigRequirementsToml>(parsed) {
-        Ok(sanitized) => sanitized,
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                "Ignoring invalid MDM managed requirements payload",
-            );
-            return Ok(None);
-        }
-    };
-    for dropped_entry in &sanitized.dropped_entries {
-        tracing::warn!(
-            dropped_entry = %dropped_entry,
-            "Ignoring invalid MDM managed requirements entry",
-        );
-    }
-    let requirements = sanitized
-        .value
-        .try_into()
-        .map_err(|err: toml::de::Error| io::Error::new(io::ErrorKind::InvalidData, err))?;
-    Ok(Some(requirements))
+fn parse_managed_requirements_base64(encoded: &str) -> io::Result<ConfigRequirementsToml> {
+    let source = managed_preferences_requirements_source();
+    let raw_toml = decode_managed_preferences_base64(encoded).map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("Error parsing managed requirements from {source}: {err}"),
+        )
+    })?;
+
+    toml::from_str::<ConfigRequirementsToml>(&raw_toml).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Error parsing managed requirements from {source}: {err}"),
+        )
+    })
 }
 
 fn decode_managed_preferences_base64(encoded: &str) -> io::Result<String> {
