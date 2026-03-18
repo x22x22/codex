@@ -261,6 +261,8 @@ mod tests {
     use crate::protocol::ExecExitedNotification;
     use crate::protocol::ExecParams;
     use crate::protocol::ExecResponse;
+    use crate::protocol::ExecSandboxConfig;
+    use crate::protocol::ExecSandboxMode;
     use crate::protocol::INITIALIZE_METHOD;
     use crate::protocol::INITIALIZED_METHOD;
     use crate::protocol::InitializeParams;
@@ -407,6 +409,51 @@ mod tests {
                 env: std::collections::HashMap::new(),
                 tty: true,
                 arg0: None,
+                sandbox: None,
+            }
+        );
+    }
+
+    #[test]
+    fn routes_exec_requests_with_optional_sandbox_config() {
+        let cwd = std::env::current_dir().expect("cwd");
+        let routed = route_jsonrpc_message(JSONRPCMessage::Request(JSONRPCRequest {
+            id: RequestId::Integer(4),
+            method: EXEC_METHOD.to_string(),
+            params: Some(json!({
+                "processId": "proc-1",
+                "argv": ["bash", "-lc", "true"],
+                "cwd": cwd,
+                "env": {},
+                "tty": true,
+                "arg0": null,
+                "sandbox": {
+                    "mode": "none",
+                },
+            })),
+            trace: None,
+        }))
+        .expect("exec request with sandbox should route");
+
+        let RoutedExecServerMessage::Inbound(ExecServerInboundMessage::Request(
+            ExecServerRequest::Exec { request_id, params },
+        )) = routed
+        else {
+            panic!("expected typed exec request");
+        };
+        assert_eq!(request_id, RequestId::Integer(4));
+        assert_eq!(
+            params,
+            ExecParams {
+                process_id: "proc-1".to_string(),
+                argv: vec!["bash".to_string(), "-lc".to_string(), "true".to_string()],
+                cwd: std::env::current_dir().expect("cwd"),
+                env: std::collections::HashMap::new(),
+                tty: true,
+                arg0: None,
+                sandbox: Some(ExecSandboxConfig {
+                    mode: ExecSandboxMode::None,
+                }),
             }
         );
     }

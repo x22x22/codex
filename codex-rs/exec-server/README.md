@@ -121,7 +121,8 @@ Request params:
     "PATH": "/usr/bin:/bin"
   },
   "tty": true,
-  "arg0": null
+  "arg0": null,
+  "sandbox": null
 }
 ```
 
@@ -133,6 +134,9 @@ Field definitions:
 - `tty`: when `true`, spawn a PTY-backed interactive process; when `false`,
   spawn a pipe-backed process with closed stdin.
 - `arg0`: optional argv0 override forwarded to `codex-utils-pty`.
+- `sandbox`: optional sandbox config. Omit it for the current direct-spawn
+  behavior. Explicit `{"mode":"none"}` is accepted; `{"mode":"hostDefault"}`
+  is currently rejected until host-local sandbox materialization is wired up.
 
 Response:
 

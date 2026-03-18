@@ -16,7 +16,7 @@ use crate::server::routing::encode_outbound_message;
 use crate::server::routing::route_jsonrpc_message;
 
 pub(crate) async fn run_connection(connection: JsonRpcConnection) {
-    let (json_outgoing_tx, mut incoming_rx) = connection.into_parts();
+    let (json_outgoing_tx, mut incoming_rx, _connection_tasks) = connection.into_parts();
     let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<ExecServerOutboundMessage>(CHANNEL_CAPACITY);
     let mut handler = ExecServerHandler::new(outgoing_tx.clone());
