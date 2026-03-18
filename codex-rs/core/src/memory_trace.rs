@@ -1,6 +1,8 @@
+use std::io;
 use std::path::PathBuf;
 
 use crate::ModelClient;
+use crate::error::CodexErr;
 use crate::error::Result;
 pub use codex_memories::memory_trace::BuiltMemory;
 use codex_otel::SessionTelemetry;
@@ -27,11 +29,18 @@ pub async fn build_memories_from_trace_files(
 
     let prepared = codex_memories::memory_trace::load_trace_requests(trace_paths)
         .await
-        .map_err(|err| crate::error::CodexErr::InvalidRequest(err.to_string()))?;
+        .map_err(map_trace_load_error)?;
     let raw_memories = prepared.iter().map(|trace| trace.payload.clone()).collect();
     let output = client
         .summarize_memories(raw_memories, model_info, effort, session_telemetry)
         .await?;
     codex_memories::memory_trace::build_memories_from_output(prepared, output)
-        .map_err(|err| crate::error::CodexErr::InvalidRequest(err.to_string()))
+        .map_err(|err| CodexErr::InvalidRequest(err.to_string()))
+}
+
+fn map_trace_load_error(err: anyhow::Error) -> CodexErr {
+    match err.downcast::<io::Error>() {
+        Ok(err) => CodexErr::Io(err),
+        Err(err) => CodexErr::InvalidRequest(err.to_string()),
+    }
 }
