@@ -76,6 +76,125 @@ async fn exec_server_accepts_initialize_over_stdio() -> anyhow::Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_accepts_explicit_none_sandbox_over_stdio() -> anyhow::Result<()> {
+    let binary = cargo_bin("codex-exec-server")?;
+    let mut child = Command::new(binary);
+    child.stdin(Stdio::piped());
+    child.stdout(Stdio::piped());
+    child.stderr(Stdio::inherit());
+    let mut child = child.spawn()?;
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut stdout = BufReader::new(stdout).lines();
+
+    send_initialize_over_stdio(&mut stdin, &mut stdout).await?;
+
+    let exec = JSONRPCMessage::Request(JSONRPCRequest {
+        id: RequestId::Integer(2),
+        method: "process/start".to_string(),
+        params: Some(serde_json::json!({
+            "processId": "proc-1",
+            "argv": ["printf", "sandbox-none"],
+            "cwd": std::env::current_dir()?,
+            "env": {},
+            "tty": false,
+            "arg0": null,
+            "sandbox": {
+                "mode": "none"
+            }
+        })),
+        trace: None,
+    });
+    stdin
+        .write_all(format!("{}\n", serde_json::to_string(&exec)?).as_bytes())
+        .await?;
+
+    let response_line = timeout(Duration::from_secs(5), stdout.next_line()).await??;
+    let response_line = response_line.expect("exec response line");
+    let response: JSONRPCMessage = serde_json::from_str(&response_line)?;
+    let JSONRPCMessage::Response(JSONRPCResponse { id, result }) = response else {
+        panic!("expected process/start response");
+    };
+    assert_eq!(id, RequestId::Integer(2));
+    assert_eq!(result, serde_json::json!({ "processId": "proc-1" }));
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut saw_output = false;
+    while !saw_output {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let line = timeout(remaining, stdout.next_line()).await??;
+        let line = line.context("missing process notification")?;
+        let message: JSONRPCMessage = serde_json::from_str(&line)?;
+        if let JSONRPCMessage::Notification(JSONRPCNotification { method, params }) = message
+            && method == "process/output"
+        {
+            let params = params.context("missing process/output params")?;
+            assert_eq!(params["processId"], "proc-1");
+            assert_eq!(params["stream"], "stdout");
+            assert_eq!(params["chunk"], "c2FuZGJveC1ub25l");
+            saw_output = true;
+        }
+    }
+
+    child.start_kill()?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn exec_server_rejects_host_default_sandbox_over_stdio() -> anyhow::Result<()> {
+    let binary = cargo_bin("codex-exec-server")?;
+    let mut child = Command::new(binary);
+    child.stdin(Stdio::piped());
+    child.stdout(Stdio::piped());
+    child.stderr(Stdio::inherit());
+    let mut child = child.spawn()?;
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut stdout = BufReader::new(stdout).lines();
+
+    send_initialize_over_stdio(&mut stdin, &mut stdout).await?;
+
+    let exec = JSONRPCMessage::Request(JSONRPCRequest {
+        id: RequestId::Integer(2),
+        method: "process/start".to_string(),
+        params: Some(serde_json::json!({
+            "processId": "proc-1",
+            "argv": ["bash", "-lc", "true"],
+            "cwd": std::env::current_dir()?,
+            "env": {},
+            "tty": false,
+            "arg0": null,
+            "sandbox": {
+                "mode": "hostDefault"
+            }
+        })),
+        trace: None,
+    });
+    stdin
+        .write_all(format!("{}\n", serde_json::to_string(&exec)?).as_bytes())
+        .await?;
+
+    let response_line = timeout(Duration::from_secs(5), stdout.next_line()).await??;
+    let response_line = response_line.expect("exec error line");
+    let response: JSONRPCMessage = serde_json::from_str(&response_line)?;
+    let JSONRPCMessage::Error(codex_app_server_protocol::JSONRPCError { id, error }) = response
+    else {
+        panic!("expected process/start error");
+    };
+    assert_eq!(id, RequestId::Integer(2));
+    assert_eq!(error.code, -32600);
+    assert_eq!(
+        error.message,
+        "sandbox mode `hostDefault` is not supported by exec-server yet"
+    );
+
+    child.start_kill()?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exec_server_client_streams_output_and_accepts_writes() -> anyhow::Result<()> {
     let mut env = std::collections::HashMap::new();
     if let Some(path) = std::env::var_os("PATH") {
@@ -277,6 +396,48 @@ where
         .find(|part| part.starts_with("ws://"))
         .context("missing websocket URL in startup banner")?;
     Ok(websocket_url.to_string())
+}
+
+async fn send_initialize_over_stdio<W, R>(
+    stdin: &mut W,
+    stdout: &mut tokio::io::Lines<BufReader<R>>,
+) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    R: tokio::io::AsyncRead + Unpin,
+{
+    let initialize = JSONRPCMessage::Request(JSONRPCRequest {
+        id: RequestId::Integer(1),
+        method: "initialize".to_string(),
+        params: Some(serde_json::to_value(InitializeParams {
+            client_name: "exec-server-test".to_string(),
+        })?),
+        trace: None,
+    });
+    stdin
+        .write_all(format!("{}\n", serde_json::to_string(&initialize)?).as_bytes())
+        .await?;
+
+    let response_line = timeout(Duration::from_secs(5), stdout.next_line()).await??;
+    let response_line = response_line
+        .ok_or_else(|| anyhow::anyhow!("missing initialize response line from stdio server"))?;
+    let response: JSONRPCMessage = serde_json::from_str(&response_line)?;
+    let JSONRPCMessage::Response(JSONRPCResponse { id, result }) = response else {
+        panic!("expected initialize response");
+    };
+    assert_eq!(id, RequestId::Integer(1));
+    let initialize_response: InitializeResponse = serde_json::from_value(result)?;
+    assert_eq!(initialize_response.protocol_version, "exec-server.v0");
+
+    let initialized = JSONRPCMessage::Notification(JSONRPCNotification {
+        method: "initialized".to_string(),
+        params: Some(serde_json::json!({})),
+    });
+    stdin
+        .write_all(format!("{}\n", serde_json::to_string(&initialized)?).as_bytes())
+        .await?;
+
+    Ok(())
 }
 
 async fn recv_until_contains(

@@ -1,13 +1,13 @@
 use std::collections::VecDeque;
 use std::ffi::OsStr;
-use std::fs::FileType;
 use std::path::Path;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use codex_environment::ExecutorFileSystem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
-use tokio::fs;
 
 use crate::function_tool::FunctionCallError;
 use crate::tools::context::FunctionToolOutput;
@@ -54,7 +54,7 @@ impl ToolHandler for ListDirHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -98,23 +98,29 @@ impl ToolHandler for ListDirHandler {
                 "dir_path must be an absolute path".to_string(),
             ));
         }
+        let abs_path = AbsolutePathBuf::try_from(path).map_err(|error| {
+            FunctionCallError::RespondToModel(format!("unable to access directory: {error}"))
+        })?;
 
-        let entries = list_dir_slice(&path, offset, limit, depth).await?;
+        let file_system = turn.environment.get_filesystem();
+        verify_directory_exists(file_system.as_ref(), &abs_path).await?;
+        let entries = list_dir_slice(file_system.as_ref(), &abs_path, offset, limit, depth).await?;
         let mut output = Vec::with_capacity(entries.len() + 1);
-        output.push(format!("Absolute path: {}", path.display()));
+        output.push(format!("Absolute path: {}", abs_path.display()));
         output.extend(entries);
         Ok(FunctionToolOutput::from_text(output.join("\n"), Some(true)))
     }
 }
 
 async fn list_dir_slice(
-    path: &Path,
+    file_system: &dyn ExecutorFileSystem,
+    path: &AbsolutePathBuf,
     offset: usize,
     limit: usize,
     depth: usize,
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
-    collect_entries(path, Path::new(""), depth, &mut entries).await?;
+    collect_entries(file_system, path, Path::new(""), depth, &mut entries).await?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -147,41 +153,43 @@ async fn list_dir_slice(
 }
 
 async fn collect_entries(
-    dir_path: &Path,
+    file_system: &dyn ExecutorFileSystem,
+    dir_path: &AbsolutePathBuf,
     relative_prefix: &Path,
     depth: usize,
     entries: &mut Vec<DirEntry>,
 ) -> Result<(), FunctionCallError> {
     let mut queue = VecDeque::new();
-    queue.push_back((dir_path.to_path_buf(), relative_prefix.to_path_buf(), depth));
+    queue.push_back((dir_path.clone(), relative_prefix.to_path_buf(), depth));
 
     while let Some((current_dir, prefix, remaining_depth)) = queue.pop_front() {
-        let mut read_dir = fs::read_dir(&current_dir).await.map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
-        })?;
-
         let mut dir_entries = Vec::new();
-
-        while let Some(entry) = read_dir.next_entry().await.map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
-        })? {
-            let file_type = entry.file_type().await.map_err(|err| {
-                FunctionCallError::RespondToModel(format!("failed to inspect entry: {err}"))
+        let read_dir = file_system
+            .read_directory(&current_dir)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
             })?;
 
-            let file_name = entry.file_name();
+        for entry in read_dir {
+            let file_name = entry.file_name;
             let relative_path = if prefix.as_os_str().is_empty() {
                 PathBuf::from(&file_name)
             } else {
                 prefix.join(&file_name)
             };
 
-            let display_name = format_entry_component(&file_name);
+            let display_name = format_entry_component(OsStr::new(&file_name));
             let display_depth = prefix.components().count();
             let sort_key = format_entry_name(&relative_path);
-            let kind = DirEntryKind::from(&file_type);
+            let kind =
+                DirEntryKind::from_flags(entry.is_directory, entry.is_file, entry.is_symlink);
             dir_entries.push((
-                entry.path(),
+                current_dir.join(&file_name).map_err(|error| {
+                    FunctionCallError::RespondToModel(format!(
+                        "failed to resolve directory entry path: {error}",
+                    ))
+                })?,
                 relative_path,
                 kind,
                 DirEntry {
@@ -203,6 +211,22 @@ async fn collect_entries(
         }
     }
 
+    Ok(())
+}
+
+async fn verify_directory_exists(
+    file_system: &dyn ExecutorFileSystem,
+    path: &AbsolutePathBuf,
+) -> Result<(), FunctionCallError> {
+    let metadata = file_system.get_metadata(path).await.map_err(|err| {
+        FunctionCallError::RespondToModel(format!("unable to access `{}`: {err}", path.display()))
+    })?;
+    if !metadata.is_directory {
+        return Err(FunctionCallError::RespondToModel(format!(
+            "`{}` is not a directory",
+            path.display()
+        )));
+    }
     Ok(())
 }
 
@@ -252,13 +276,13 @@ enum DirEntryKind {
     Other,
 }
 
-impl From<&FileType> for DirEntryKind {
-    fn from(file_type: &FileType) -> Self {
-        if file_type.is_symlink() {
+impl DirEntryKind {
+    fn from_flags(is_directory: bool, is_file: bool, is_symlink: bool) -> Self {
+        if is_symlink {
             DirEntryKind::Symlink
-        } else if file_type.is_dir() {
+        } else if is_directory {
             DirEntryKind::Directory
-        } else if file_type.is_file() {
+        } else if is_file {
             DirEntryKind::File
         } else {
             DirEntryKind::Other

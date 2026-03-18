@@ -38,6 +38,7 @@ pub struct ReadDirectoryEntry {
     pub file_name: String,
     pub is_directory: bool,
     pub is_file: bool,
+    pub is_symlink: bool,
 }
 
 pub type FileSystemResult<T> = io::Result<T>;
@@ -72,7 +73,7 @@ pub trait ExecutorFileSystem: Send + Sync {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct LocalFileSystem;
+pub struct LocalFileSystem;
 
 #[async_trait]
 impl ExecutorFileSystem for LocalFileSystem {
@@ -121,11 +122,13 @@ impl ExecutorFileSystem for LocalFileSystem {
         let mut entries = Vec::new();
         let mut read_dir = tokio::fs::read_dir(path.as_path()).await?;
         while let Some(entry) = read_dir.next_entry().await? {
-            let metadata = tokio::fs::metadata(entry.path()).await?;
+            let metadata = tokio::fs::symlink_metadata(entry.path()).await?;
+            let file_type = metadata.file_type();
             entries.push(ReadDirectoryEntry {
                 file_name: entry.file_name().to_string_lossy().into_owned(),
                 is_directory: metadata.is_dir(),
                 is_file: metadata.is_file(),
+                is_symlink: file_type.is_symlink(),
             });
         }
         Ok(entries)

@@ -8,6 +8,20 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+use codex_app_server_protocol::FsCopyParams;
+use codex_app_server_protocol::FsCopyResponse;
+use codex_app_server_protocol::FsCreateDirectoryParams;
+use codex_app_server_protocol::FsCreateDirectoryResponse;
+use codex_app_server_protocol::FsGetMetadataParams;
+use codex_app_server_protocol::FsGetMetadataResponse;
+use codex_app_server_protocol::FsReadDirectoryParams;
+use codex_app_server_protocol::FsReadDirectoryResponse;
+use codex_app_server_protocol::FsReadFileParams;
+use codex_app_server_protocol::FsReadFileResponse;
+use codex_app_server_protocol::FsRemoveParams;
+use codex_app_server_protocol::FsRemoveResponse;
+use codex_app_server_protocol::FsWriteFileParams;
+use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCError;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::JSONRPCMessage;
@@ -44,6 +58,13 @@ use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
 use crate::protocol::ExecResponse;
+use crate::protocol::FS_COPY_METHOD;
+use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
+use crate::protocol::FS_GET_METADATA_METHOD;
+use crate::protocol::FS_READ_DIRECTORY_METHOD;
+use crate::protocol::FS_READ_FILE_METHOD;
+use crate::protocol::FS_REMOVE_METHOD;
+use crate::protocol::FS_WRITE_FILE_METHOD;
 use crate::protocol::INITIALIZE_METHOD;
 use crate::protocol::INITIALIZED_METHOD;
 use crate::protocol::InitializeParams;
@@ -165,6 +186,13 @@ enum PendingRequest {
     Read(oneshot::Sender<Result<ReadResponse, JSONRPCErrorError>>),
     Write(oneshot::Sender<Result<WriteResponse, JSONRPCErrorError>>),
     Terminate(oneshot::Sender<Result<TerminateResponse, JSONRPCErrorError>>),
+    FsReadFile(oneshot::Sender<Result<FsReadFileResponse, JSONRPCErrorError>>),
+    FsWriteFile(oneshot::Sender<Result<FsWriteFileResponse, JSONRPCErrorError>>),
+    FsCreateDirectory(oneshot::Sender<Result<FsCreateDirectoryResponse, JSONRPCErrorError>>),
+    FsGetMetadata(oneshot::Sender<Result<FsGetMetadataResponse, JSONRPCErrorError>>),
+    FsReadDirectory(oneshot::Sender<Result<FsReadDirectoryResponse, JSONRPCErrorError>>),
+    FsRemove(oneshot::Sender<Result<FsRemoveResponse, JSONRPCErrorError>>),
+    FsCopy(oneshot::Sender<Result<FsCopyResponse, JSONRPCErrorError>>),
 }
 
 impl PendingRequest {
@@ -183,6 +211,27 @@ impl PendingRequest {
                 let _ = tx.send(Ok(serde_json::from_value(result)?));
             }
             PendingRequest::Terminate(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsReadFile(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsWriteFile(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsCreateDirectory(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsGetMetadata(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsReadDirectory(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsRemove(tx) => {
+                let _ = tx.send(Ok(serde_json::from_value(result)?));
+            }
+            PendingRequest::FsCopy(tx) => {
                 let _ = tx.send(Ok(serde_json::from_value(result)?));
             }
         }
@@ -204,6 +253,27 @@ impl PendingRequest {
                 let _ = tx.send(Err(error));
             }
             PendingRequest::Terminate(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsReadFile(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsWriteFile(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsCreateDirectory(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsGetMetadata(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsReadDirectory(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsRemove(tx) => {
+                let _ = tx.send(Err(error));
+            }
+            PendingRequest::FsCopy(tx) => {
                 let _ = tx.send(Err(error));
             }
         }
@@ -479,6 +549,99 @@ impl ExecServerClient {
         self.terminate_session(process_id).await
     }
 
+    pub async fn fs_read_file(
+        &self,
+        params: FsReadFileParams,
+    ) -> Result<FsReadFileResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_read_file(params).await);
+        }
+
+        self.send_pending_request(FS_READ_FILE_METHOD, &params, PendingRequest::FsReadFile)
+            .await
+    }
+
+    pub async fn fs_write_file(
+        &self,
+        params: FsWriteFileParams,
+    ) -> Result<FsWriteFileResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_write_file(params).await);
+        }
+
+        self.send_pending_request(FS_WRITE_FILE_METHOD, &params, PendingRequest::FsWriteFile)
+            .await
+    }
+
+    pub async fn fs_create_directory(
+        &self,
+        params: FsCreateDirectoryParams,
+    ) -> Result<FsCreateDirectoryResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_create_directory(params).await);
+        }
+
+        self.send_pending_request(
+            FS_CREATE_DIRECTORY_METHOD,
+            &params,
+            PendingRequest::FsCreateDirectory,
+        )
+        .await
+    }
+
+    pub async fn fs_get_metadata(
+        &self,
+        params: FsGetMetadataParams,
+    ) -> Result<FsGetMetadataResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_get_metadata(params).await);
+        }
+
+        self.send_pending_request(
+            FS_GET_METADATA_METHOD,
+            &params,
+            PendingRequest::FsGetMetadata,
+        )
+        .await
+    }
+
+    pub async fn fs_read_directory(
+        &self,
+        params: FsReadDirectoryParams,
+    ) -> Result<FsReadDirectoryResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_read_directory(params).await);
+        }
+
+        self.send_pending_request(
+            FS_READ_DIRECTORY_METHOD,
+            &params,
+            PendingRequest::FsReadDirectory,
+        )
+        .await
+    }
+
+    pub async fn fs_remove(
+        &self,
+        params: FsRemoveParams,
+    ) -> Result<FsRemoveResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_remove(params).await);
+        }
+
+        self.send_pending_request(FS_REMOVE_METHOD, &params, PendingRequest::FsRemove)
+            .await
+    }
+
+    pub async fn fs_copy(&self, params: FsCopyParams) -> Result<FsCopyResponse, ExecServerError> {
+        if let ClientBackend::InProcess { handler } = &self.inner.backend {
+            return server_result_to_client(handler.lock().await.fs_copy(params).await);
+        }
+
+        self.send_pending_request(FS_COPY_METHOD, &params, PendingRequest::FsCopy)
+            .await
+    }
+
     async fn initialize(
         &self,
         options: ExecServerClientConnectOptions,
@@ -505,19 +668,7 @@ impl ExecServerClient {
             return server_result_to_client(handler.lock().await.exec(params).await);
         }
 
-        let request_id = self.next_request_id();
-        let (response_tx, response_rx) = oneshot::channel();
-        self.inner
-            .pending
-            .lock()
-            .await
-            .insert(request_id.clone(), PendingRequest::Exec(response_tx));
-        let ClientBackend::JsonRpc { write_tx } = &self.inner.backend else {
-            unreachable!("in-process exec requests return before JSON-RPC setup");
-        };
-        let send_result =
-            send_jsonrpc_request(write_tx, request_id.clone(), EXEC_METHOD, &params).await;
-        self.finish_request(request_id, send_result, response_rx)
+        self.send_pending_request(EXEC_METHOD, &params, PendingRequest::Exec)
             .await
     }
 
@@ -526,19 +677,7 @@ impl ExecServerClient {
             return server_result_to_client(handler.lock().await.write(params).await);
         }
 
-        let request_id = self.next_request_id();
-        let (response_tx, response_rx) = oneshot::channel();
-        self.inner
-            .pending
-            .lock()
-            .await
-            .insert(request_id.clone(), PendingRequest::Write(response_tx));
-        let ClientBackend::JsonRpc { write_tx } = &self.inner.backend else {
-            unreachable!("in-process write requests return before JSON-RPC setup");
-        };
-        let send_result =
-            send_jsonrpc_request(write_tx, request_id.clone(), EXEC_WRITE_METHOD, &params).await;
-        self.finish_request(request_id, send_result, response_rx)
+        self.send_pending_request(EXEC_WRITE_METHOD, &params, PendingRequest::Write)
             .await
     }
 
@@ -547,19 +686,7 @@ impl ExecServerClient {
             return server_result_to_client(handler.lock().await.read(params).await);
         }
 
-        let request_id = self.next_request_id();
-        let (response_tx, response_rx) = oneshot::channel();
-        self.inner
-            .pending
-            .lock()
-            .await
-            .insert(request_id.clone(), PendingRequest::Read(response_tx));
-        let ClientBackend::JsonRpc { write_tx } = &self.inner.backend else {
-            unreachable!("in-process read requests return before JSON-RPC setup");
-        };
-        let send_result =
-            send_jsonrpc_request(write_tx, request_id.clone(), EXEC_READ_METHOD, &params).await;
-        self.finish_request(request_id, send_result, response_rx)
+        self.send_pending_request(EXEC_READ_METHOD, &params, PendingRequest::Read)
             .await
     }
 
@@ -574,20 +701,7 @@ impl ExecServerClient {
             return server_result_to_client(handler.lock().await.terminate(params).await);
         }
 
-        let request_id = self.next_request_id();
-        let (response_tx, response_rx) = oneshot::channel();
-        self.inner
-            .pending
-            .lock()
-            .await
-            .insert(request_id.clone(), PendingRequest::Terminate(response_tx));
-        let ClientBackend::JsonRpc { write_tx } = &self.inner.backend else {
-            unreachable!("in-process terminate requests return before JSON-RPC setup");
-        };
-        let send_result =
-            send_jsonrpc_request(write_tx, request_id.clone(), EXEC_TERMINATE_METHOD, &params)
-                .await;
-        self.finish_request(request_id, send_result, response_rx)
+        self.send_pending_request(EXEC_TERMINATE_METHOD, &params, PendingRequest::Terminate)
             .await
     }
 
@@ -624,24 +738,36 @@ impl ExecServerClient {
             return server_result_to_client(handler.lock().await.initialize());
         }
 
+        self.send_pending_request(INITIALIZE_METHOD, &params, PendingRequest::Initialize)
+            .await
+    }
+
+    fn next_request_id(&self) -> RequestId {
+        RequestId::Integer(self.inner.next_request_id.fetch_add(1, Ordering::SeqCst))
+    }
+
+    async fn send_pending_request<P, T>(
+        &self,
+        method: &str,
+        params: &P,
+        build_pending: impl FnOnce(oneshot::Sender<Result<T, JSONRPCErrorError>>) -> PendingRequest,
+    ) -> Result<T, ExecServerError>
+    where
+        P: Serialize,
+    {
         let request_id = self.next_request_id();
         let (response_tx, response_rx) = oneshot::channel();
         self.inner
             .pending
             .lock()
             .await
-            .insert(request_id.clone(), PendingRequest::Initialize(response_tx));
+            .insert(request_id.clone(), build_pending(response_tx));
         let ClientBackend::JsonRpc { write_tx } = &self.inner.backend else {
-            unreachable!("in-process initialize requests return before JSON-RPC setup");
+            unreachable!("in-process requests return before JSON-RPC setup");
         };
-        let send_result =
-            send_jsonrpc_request(write_tx, request_id.clone(), INITIALIZE_METHOD, &params).await;
+        let send_result = send_jsonrpc_request(write_tx, request_id.clone(), method, params).await;
         self.finish_request(request_id, send_result, response_rx)
             .await
-    }
-
-    fn next_request_id(&self) -> RequestId {
-        RequestId::Integer(self.inner.next_request_id.fetch_add(1, Ordering::SeqCst))
     }
 
     async fn finish_request<T>(

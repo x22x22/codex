@@ -1,6 +1,12 @@
 use super::*;
+use codex_environment::LocalFileSystem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use pretty_assertions::assert_eq;
 use tempfile::tempdir;
+
+fn abs(path: &std::path::Path) -> AbsolutePathBuf {
+    AbsolutePathBuf::try_from(path.to_path_buf()).expect("absolute tempdir path")
+}
 
 #[tokio::test]
 async fn lists_directory_entries() {
@@ -34,7 +40,7 @@ async fn lists_directory_entries() {
         symlink(dir_path.join("entry.txt"), &link_path).expect("create symlink");
     }
 
-    let entries = list_dir_slice(dir_path, 1, 20, 3)
+    let entries = list_dir_slice(&LocalFileSystem, &abs(dir_path), 1, 20, 3)
         .await
         .expect("list directory");
 
@@ -68,7 +74,7 @@ async fn errors_when_offset_exceeds_entries() {
         .await
         .expect("create sub dir");
 
-    let err = list_dir_slice(dir_path, 10, 1, 2)
+    let err = list_dir_slice(&LocalFileSystem, &abs(dir_path), 10, 1, 2)
         .await
         .expect_err("offset exceeds entries");
     assert_eq!(
@@ -95,7 +101,7 @@ async fn respects_depth_parameter() {
         .await
         .expect("write deeper");
 
-    let entries_depth_one = list_dir_slice(dir_path, 1, 10, 1)
+    let entries_depth_one = list_dir_slice(&LocalFileSystem, &abs(dir_path), 1, 10, 1)
         .await
         .expect("list depth 1");
     assert_eq!(
@@ -103,7 +109,7 @@ async fn respects_depth_parameter() {
         vec!["nested/".to_string(), "root.txt".to_string(),]
     );
 
-    let entries_depth_two = list_dir_slice(dir_path, 1, 20, 2)
+    let entries_depth_two = list_dir_slice(&LocalFileSystem, &abs(dir_path), 1, 20, 2)
         .await
         .expect("list depth 2");
     assert_eq!(
@@ -116,7 +122,7 @@ async fn respects_depth_parameter() {
         ]
     );
 
-    let entries_depth_three = list_dir_slice(dir_path, 1, 30, 3)
+    let entries_depth_three = list_dir_slice(&LocalFileSystem, &abs(dir_path), 1, 30, 3)
         .await
         .expect("list depth 3");
     assert_eq!(
@@ -148,7 +154,7 @@ async fn paginates_in_sorted_order() {
         .await
         .expect("write b child");
 
-    let first_page = list_dir_slice(dir_path, 1, 2, 2)
+    let first_page = list_dir_slice(&LocalFileSystem, &abs(dir_path), 1, 2, 2)
         .await
         .expect("list page one");
     assert_eq!(
@@ -160,7 +166,7 @@ async fn paginates_in_sorted_order() {
         ]
     );
 
-    let second_page = list_dir_slice(dir_path, 3, 2, 2)
+    let second_page = list_dir_slice(&LocalFileSystem, &abs(dir_path), 3, 2, 2)
         .await
         .expect("list page two");
     assert_eq!(
@@ -183,7 +189,7 @@ async fn handles_large_limit_without_overflow() {
         .await
         .expect("write gamma");
 
-    let entries = list_dir_slice(dir_path, 2, usize::MAX, 1)
+    let entries = list_dir_slice(&LocalFileSystem, &abs(dir_path), 2, usize::MAX, 1)
         .await
         .expect("list without overflow");
     assert_eq!(
@@ -204,7 +210,7 @@ async fn indicates_truncated_results() {
             .expect("write file");
     }
 
-    let entries = list_dir_slice(dir_path, 1, 25, 1)
+    let entries = list_dir_slice(&LocalFileSystem, &abs(dir_path), 1, 25, 1)
         .await
         .expect("list directory");
     assert_eq!(entries.len(), 26);
@@ -226,7 +232,7 @@ async fn truncation_respects_sorted_order() -> anyhow::Result<()> {
     tokio::fs::write(nested.join("child.txt"), b"child").await?;
     tokio::fs::write(deeper.join("grandchild.txt"), b"deep").await?;
 
-    let entries_depth_three = list_dir_slice(dir_path, 1, 3, 3).await?;
+    let entries_depth_three = list_dir_slice(&LocalFileSystem, &abs(dir_path), 1, 3, 3).await?;
     assert_eq!(
         entries_depth_three,
         vec![

@@ -54,6 +54,12 @@ pub(crate) fn with_config_overrides(mut model: ModelInfo, config: &Config) -> Mo
         model.model_messages = None;
     }
 
+    for tool_name in &config.experimental_supported_tools {
+        if !model.experimental_supported_tools.contains(tool_name) {
+            model.experimental_supported_tools.push(tool_name.clone());
+        }
+    }
+
     model
 }
 

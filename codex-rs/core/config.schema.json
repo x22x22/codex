@@ -321,6 +321,21 @@
         "experimental_compact_prompt_file": {
           "$ref": "#/definitions/AbsolutePathBuf"
         },
+        "experimental_supported_tools": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "experimental_unified_exec_exec_server_websocket_url": {
+          "type": "string"
+        },
+        "experimental_unified_exec_spawn_local_exec_server": {
+          "type": "boolean"
+        },
+        "experimental_unified_exec_use_exec_server": {
+          "type": "boolean"
+        },
         "experimental_use_freeform_apply_patch": {
           "type": "boolean"
         },
@@ -1878,6 +1893,25 @@
     "experimental_realtime_ws_startup_context": {
       "description": "Experimental / do not use. Replaces the synthesized realtime startup context appended to websocket session instructions. An empty string disables startup context injection entirely.",
       "type": "string"
+    },
+    "experimental_supported_tools": {
+      "description": "Additional experimental tools to expose regardless of the selected model's advertised tool support.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "experimental_unified_exec_exec_server_websocket_url": {
+      "description": "Optional websocket URL for connecting to an existing `codex-exec-server`.",
+      "type": "string"
+    },
+    "experimental_unified_exec_spawn_local_exec_server": {
+      "description": "When `true`, start a session-scoped local `codex-exec-server` subprocess during session startup and route unified-exec calls through it.",
+      "type": "boolean"
+    },
+    "experimental_unified_exec_use_exec_server": {
+      "description": "When `true`, route unified-exec process launches through `codex-exec-server` instead of spawning them directly in-process.",
+      "type": "boolean"
     },
     "experimental_use_freeform_apply_patch": {
       "type": "boolean"

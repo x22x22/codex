@@ -113,6 +113,55 @@ async fn dispatch_to_handler(
                         .await
                         .map(ExecServerResponseMessage::Terminate),
                 ),
+                ExecServerRequest::FsReadFile { request_id, params } => request_outbound(
+                    request_id,
+                    handler
+                        .fs_read_file(params)
+                        .await
+                        .map(ExecServerResponseMessage::FsReadFile),
+                ),
+                ExecServerRequest::FsWriteFile { request_id, params } => request_outbound(
+                    request_id,
+                    handler
+                        .fs_write_file(params)
+                        .await
+                        .map(ExecServerResponseMessage::FsWriteFile),
+                ),
+                ExecServerRequest::FsCreateDirectory { request_id, params } => request_outbound(
+                    request_id,
+                    handler
+                        .fs_create_directory(params)
+                        .await
+                        .map(ExecServerResponseMessage::FsCreateDirectory),
+                ),
+                ExecServerRequest::FsGetMetadata { request_id, params } => request_outbound(
+                    request_id,
+                    handler
+                        .fs_get_metadata(params)
+                        .await
+                        .map(ExecServerResponseMessage::FsGetMetadata),
+                ),
+                ExecServerRequest::FsReadDirectory { request_id, params } => request_outbound(
+                    request_id,
+                    handler
+                        .fs_read_directory(params)
+                        .await
+                        .map(ExecServerResponseMessage::FsReadDirectory),
+                ),
+                ExecServerRequest::FsRemove { request_id, params } => request_outbound(
+                    request_id,
+                    handler
+                        .fs_remove(params)
+                        .await
+                        .map(ExecServerResponseMessage::FsRemove),
+                ),
+                ExecServerRequest::FsCopy { request_id, params } => request_outbound(
+                    request_id,
+                    handler
+                        .fs_copy(params)
+                        .await
+                        .map(ExecServerResponseMessage::FsCopy),
+                ),
             };
             outgoing_tx
                 .send(outbound)

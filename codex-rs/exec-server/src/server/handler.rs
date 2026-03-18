@@ -3,6 +3,20 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_app_server_protocol::FsCopyParams;
+use codex_app_server_protocol::FsCopyResponse;
+use codex_app_server_protocol::FsCreateDirectoryParams;
+use codex_app_server_protocol::FsCreateDirectoryResponse;
+use codex_app_server_protocol::FsGetMetadataParams;
+use codex_app_server_protocol::FsGetMetadataResponse;
+use codex_app_server_protocol::FsReadDirectoryParams;
+use codex_app_server_protocol::FsReadDirectoryResponse;
+use codex_app_server_protocol::FsReadFileParams;
+use codex_app_server_protocol::FsReadFileResponse;
+use codex_app_server_protocol::FsRemoveParams;
+use codex_app_server_protocol::FsRemoveResponse;
+use codex_app_server_protocol::FsWriteFileParams;
+use codex_app_server_protocol::FsWriteFileResponse;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::TerminalSize;
 use tokio::sync::Mutex;
@@ -21,6 +35,7 @@ use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ReadResponse;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteResponse;
+use crate::server::filesystem::ExecServerFileSystem;
 use crate::server::routing::ExecServerOutboundMessage;
 use crate::server::routing::ExecServerServerNotification;
 use crate::server::routing::internal_error;
@@ -48,6 +63,7 @@ struct RunningProcess {
 
 pub(crate) struct ExecServerHandler {
     outbound_tx: mpsc::Sender<ExecServerOutboundMessage>,
+    file_system: ExecServerFileSystem,
     // Keyed by client-chosen logical `processId` scoped to this connection.
     // This is a protocol handle, not an OS pid.
     processes: Arc<Mutex<HashMap<String, RunningProcess>>>,
@@ -59,6 +75,7 @@ impl ExecServerHandler {
     pub(crate) fn new(outbound_tx: mpsc::Sender<ExecServerOutboundMessage>) -> Self {
         Self {
             outbound_tx,
+            file_system: ExecServerFileSystem::default(),
             processes: Arc::new(Mutex::new(HashMap::new())),
             initialize_requested: false,
             initialized: false,
@@ -218,6 +235,62 @@ impl ExecServerHandler {
         ));
 
         Ok(ExecResponse { process_id })
+    }
+
+    pub(crate) async fn fs_read_file(
+        &self,
+        params: FsReadFileParams,
+    ) -> Result<FsReadFileResponse, codex_app_server_protocol::JSONRPCErrorError> {
+        self.require_initialized()?;
+        self.file_system.read_file(params).await
+    }
+
+    pub(crate) async fn fs_write_file(
+        &self,
+        params: FsWriteFileParams,
+    ) -> Result<FsWriteFileResponse, codex_app_server_protocol::JSONRPCErrorError> {
+        self.require_initialized()?;
+        self.file_system.write_file(params).await
+    }
+
+    pub(crate) async fn fs_create_directory(
+        &self,
+        params: FsCreateDirectoryParams,
+    ) -> Result<FsCreateDirectoryResponse, codex_app_server_protocol::JSONRPCErrorError> {
+        self.require_initialized()?;
+        self.file_system.create_directory(params).await
+    }
+
+    pub(crate) async fn fs_get_metadata(
+        &self,
+        params: FsGetMetadataParams,
+    ) -> Result<FsGetMetadataResponse, codex_app_server_protocol::JSONRPCErrorError> {
+        self.require_initialized()?;
+        self.file_system.get_metadata(params).await
+    }
+
+    pub(crate) async fn fs_read_directory(
+        &self,
+        params: FsReadDirectoryParams,
+    ) -> Result<FsReadDirectoryResponse, codex_app_server_protocol::JSONRPCErrorError> {
+        self.require_initialized()?;
+        self.file_system.read_directory(params).await
+    }
+
+    pub(crate) async fn fs_remove(
+        &self,
+        params: FsRemoveParams,
+    ) -> Result<FsRemoveResponse, codex_app_server_protocol::JSONRPCErrorError> {
+        self.require_initialized()?;
+        self.file_system.remove(params).await
+    }
+
+    pub(crate) async fn fs_copy(
+        &self,
+        params: FsCopyParams,
+    ) -> Result<FsCopyResponse, codex_app_server_protocol::JSONRPCErrorError> {
+        self.require_initialized()?;
+        self.file_system.copy(params).await
     }
 
     pub(crate) async fn read(
@@ -387,6 +460,62 @@ impl ExecServerHandler {
                     self.terminate(params)
                         .await
                         .map(crate::server::routing::ExecServerResponseMessage::Terminate),
+                )
+            }
+            crate::server::routing::ExecServerRequest::FsReadFile { request_id, params } => {
+                Self::request_outbound(
+                    request_id,
+                    self.fs_read_file(params)
+                        .await
+                        .map(crate::server::routing::ExecServerResponseMessage::FsReadFile),
+                )
+            }
+            crate::server::routing::ExecServerRequest::FsWriteFile { request_id, params } => {
+                Self::request_outbound(
+                    request_id,
+                    self.fs_write_file(params)
+                        .await
+                        .map(crate::server::routing::ExecServerResponseMessage::FsWriteFile),
+                )
+            }
+            crate::server::routing::ExecServerRequest::FsCreateDirectory { request_id, params } => {
+                Self::request_outbound(
+                    request_id,
+                    self.fs_create_directory(params)
+                        .await
+                        .map(crate::server::routing::ExecServerResponseMessage::FsCreateDirectory),
+                )
+            }
+            crate::server::routing::ExecServerRequest::FsGetMetadata { request_id, params } => {
+                Self::request_outbound(
+                    request_id,
+                    self.fs_get_metadata(params)
+                        .await
+                        .map(crate::server::routing::ExecServerResponseMessage::FsGetMetadata),
+                )
+            }
+            crate::server::routing::ExecServerRequest::FsReadDirectory { request_id, params } => {
+                Self::request_outbound(
+                    request_id,
+                    self.fs_read_directory(params)
+                        .await
+                        .map(crate::server::routing::ExecServerResponseMessage::FsReadDirectory),
+                )
+            }
+            crate::server::routing::ExecServerRequest::FsRemove { request_id, params } => {
+                Self::request_outbound(
+                    request_id,
+                    self.fs_remove(params)
+                        .await
+                        .map(crate::server::routing::ExecServerResponseMessage::FsRemove),
+                )
+            }
+            crate::server::routing::ExecServerRequest::FsCopy { request_id, params } => {
+                Self::request_outbound(
+                    request_id,
+                    self.fs_copy(params)
+                        .await
+                        .map(crate::server::routing::ExecServerResponseMessage::FsCopy),
                 )
             }
         };

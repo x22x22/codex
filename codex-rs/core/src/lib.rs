@@ -38,6 +38,7 @@ pub mod error;
 pub mod exec;
 pub mod exec_env;
 mod exec_policy;
+mod exec_server_filesystem;
 pub mod external_agent_config;
 pub mod features;
 mod file_watcher;

@@ -175,9 +175,10 @@ async fn connect_in_process_read_returns_retained_output_and_exit_state() {
         Err(err) => panic!("failed to start in-process child: {err}"),
     };
 
+    let process_id = response.process_id.clone();
     let read = match client
         .read(ReadParams {
-            process_id: response.process_id,
+            process_id: process_id.clone(),
             after_seq: None,
             max_bytes: None,
             wait_ms: Some(1000),
@@ -193,6 +194,22 @@ async fn connect_in_process_read_returns_retained_output_and_exit_state() {
     assert_eq!(read.chunks[0].stream, ExecOutputStream::Stdout);
     assert_eq!(read.chunks[0].chunk.clone().into_inner(), b"hello".to_vec());
     assert_eq!(read.next_seq, 2);
+    let read = if read.exited {
+        read
+    } else {
+        match client
+            .read(ReadParams {
+                process_id,
+                after_seq: Some(read.next_seq - 1),
+                max_bytes: None,
+                wait_ms: Some(1000),
+            })
+            .await
+        {
+            Ok(read) => read,
+            Err(err) => panic!("failed to wait for in-process child exit: {err}"),
+        }
+    };
     assert!(read.exited);
     assert_eq!(read.exit_code, Some(0));
 }

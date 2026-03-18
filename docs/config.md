@@ -78,4 +78,24 @@ developer message Codex inserts when realtime becomes active. It only affects
 the realtime start message in prompt history and does not change websocket
 backend prompt settings or the realtime end/inactive message.
 
+## Unified exec over exec-server
+
+`experimental_unified_exec_use_exec_server` routes unified-exec process
+launches and filesystem-backed tools through `codex-exec-server` instead of
+using only the local in-process implementations.
+
+When `experimental_unified_exec_exec_server_websocket_url` is set, Codex
+connects to that existing websocket endpoint and uses it for both unified-exec
+processes and remote filesystem operations such as `read_file`, `list_dir`, and
+`view_image`.
+
+When `experimental_unified_exec_spawn_local_exec_server` is also enabled, Codex
+starts a session-scoped local `codex-exec-server` subprocess on startup and
+uses that connection for the same process and filesystem calls.
+
+`experimental_supported_tools` can be used to opt specific experimental tools
+into the tool list even when the selected model catalog entry does not advertise
+them. This is useful when testing remote filesystem-backed tools such as
+`read_file` and `list_dir` against an exec-server-backed environment.
+
 Ctrl+C/Ctrl+D quitting uses a ~1 second double-press hint (`ctrl + c again to quit`).

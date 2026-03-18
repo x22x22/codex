@@ -37,3 +37,18 @@ fn reasoning_summaries_override_false_is_noop_when_model_is_false() {
 
     assert_eq!(updated, model);
 }
+
+#[test]
+fn experimental_supported_tools_are_merged_from_config() {
+    let mut model = model_info_from_slug("unknown-model");
+    model.experimental_supported_tools = vec!["grep_files".to_string()];
+    let mut config = test_config();
+    config.experimental_supported_tools = vec!["read_file".to_string(), "grep_files".to_string()];
+
+    let updated = with_config_overrides(model, &config);
+
+    assert_eq!(
+        updated.experimental_supported_tools,
+        vec!["grep_files".to_string(), "read_file".to_string()]
+    );
+}
