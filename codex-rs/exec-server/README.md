@@ -49,12 +49,6 @@ Wire framing:
 Like the app-server transport, messages on the wire omit the `"jsonrpc":"2.0"`
 field and use the shared `codex-app-server-protocol` envelope types.
 
-The current protocol version is:
-
-```text
-exec-server.v0
-```
-
 ## Lifecycle
 
 Each connection follows this sequence:
