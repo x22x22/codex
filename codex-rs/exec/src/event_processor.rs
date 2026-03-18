@@ -1,13 +1,13 @@
 use std::path::Path;
 
 use codex_core::config::Config;
-use codex_protocol::protocol::Event;
 use codex_protocol::protocol::SessionConfiguredEvent;
+
+use crate::typed_exec_event::TypedExecEvent;
 
 pub(crate) enum CodexStatus {
     Running,
     InitiateShutdown,
-    Shutdown,
 }
 
 pub(crate) trait EventProcessor {
@@ -20,7 +20,7 @@ pub(crate) trait EventProcessor {
     );
 
     /// Handle a single event emitted by the agent.
-    fn process_event(&mut self, event: Event) -> CodexStatus;
+    fn process_event(&mut self, event: TypedExecEvent) -> CodexStatus;
 
     fn print_final_output(&mut self) {}
 }

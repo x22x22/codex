@@ -140,6 +140,9 @@ pub struct InProcessStartArgs {
     pub initialize: InitializeParams,
     /// Capacity used for all runtime queues (clamped to at least 1).
     pub channel_capacity: usize,
+    /// Whether the embedded connection should receive legacy `codex/event/*`
+    /// notifications in addition to typed app-server notifications.
+    pub allow_legacy_notifications: bool,
 }
 
 /// Event emitted from the app-server to the in-process client.
@@ -390,7 +393,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 Arc::clone(&outbound_initialized),
                 Arc::clone(&outbound_experimental_api_enabled),
                 Arc::clone(&outbound_opted_out_notification_methods),
-                /*allow_legacy_notifications*/ true,
+                args.allow_legacy_notifications,
                 /*disconnect_sender*/ None,
             ),
         );
@@ -765,6 +768,7 @@ mod tests {
             config_warnings: Vec::new(),
             session_source,
             enable_codex_api_key_env: false,
+            allow_legacy_notifications: true,
             initialize: InitializeParams {
                 client_info: ClientInfo {
                     name: "codex-in-process-test".to_string(),
