@@ -50,6 +50,8 @@ use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
+use codex_exec_server::ExecServerClient;
+use codex_exec_server::ExecServerClientConnectOptions;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -543,6 +545,23 @@ impl UnifiedExecProcessManager {
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
+        // Exec-server does not yet model inherited-FD/lifecycle setup needed by
+        // zsh-fork, so keep those specialized spawns local for now.
+        if spawn_lifecycle.inherited_fds().is_empty() {
+            let client =
+                ExecServerClient::connect_in_process(ExecServerClientConnectOptions::default())
+                    .await
+                    .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+            return UnifiedExecProcess::from_exec_server(
+                client,
+                uuid::Uuid::new_v4().to_string(),
+                env,
+                tty,
+                spawn_lifecycle,
+            )
+            .await;
+        }
+
         let (program, args) = env
             .command
             .split_first()
