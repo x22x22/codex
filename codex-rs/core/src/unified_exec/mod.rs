@@ -43,6 +43,7 @@ mod errors;
 mod head_tail_buffer;
 mod process;
 mod process_manager;
+mod remote_filesystem;
 
 pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
     process_manager::set_deterministic_process_ids_for_tests(enabled);
@@ -55,6 +56,7 @@ pub(crate) use process::NoopSpawnLifecycle;
 pub(crate) use process::SpawnLifecycle;
 pub(crate) use process::SpawnLifecycleHandle;
 pub(crate) use process::UnifiedExecProcess;
+pub(crate) use remote_filesystem::RemoteExecServerFileSystem;
 
 pub(crate) const MIN_YIELD_TIME_MS: u64 = 250;
 // Minimum yield time for an empty `write_stdin`.

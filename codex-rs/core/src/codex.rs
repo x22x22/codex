@@ -1773,6 +1773,13 @@ impl Session {
             });
         }
 
+        let remote_exec_server =
+            RemoteExecServerBackend::connect_for_config(config.as_ref()).await?;
+        let environment = remote_exec_server
+            .as_ref()
+            .map(|backend| Environment::with_file_system(Arc::new(backend.file_system())))
+            .unwrap_or_default();
+
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via
@@ -1787,7 +1794,7 @@ impl Session {
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
             unified_exec_manager: UnifiedExecProcessManager::with_remote_exec_server(
                 config.background_terminal_max_timeout,
-                RemoteExecServerBackend::connect_for_config(config.as_ref()).await?,
+                remote_exec_server,
             ),
             shell_zsh_path: config.zsh_path.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),
@@ -1827,7 +1834,7 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: Arc::new(Environment),
+            environment: Arc::new(environment),
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),

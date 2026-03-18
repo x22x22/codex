@@ -6,6 +6,7 @@ use codex_exec_server::RemoteExecServerConnectArgs;
 use crate::config::Config;
 use crate::exec::SandboxType;
 use crate::sandboxing::ExecRequest;
+use crate::unified_exec::RemoteExecServerFileSystem;
 use crate::unified_exec::SpawnLifecycleHandle;
 use crate::unified_exec::UnifiedExecError;
 use crate::unified_exec::UnifiedExecProcess;
@@ -84,6 +85,10 @@ impl RemoteExecServerBackend {
             spawn_lifecycle,
         )
         .await
+    }
+
+    pub(crate) fn file_system(&self) -> RemoteExecServerFileSystem {
+        RemoteExecServerFileSystem::new(self.client.clone())
     }
 
     fn map_remote_cwd(&self, local_cwd: &std::path::Path) -> Result<PathBuf, UnifiedExecError> {

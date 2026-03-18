@@ -8,11 +8,37 @@ pub use fs::FileSystemResult;
 pub use fs::ReadDirectoryEntry;
 pub use fs::RemoveOptions;
 
-#[derive(Clone, Debug, Default)]
-pub struct Environment;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct Environment {
+    file_system: Arc<dyn ExecutorFileSystem>,
+}
 
 impl Environment {
-    pub fn get_filesystem(&self) -> impl ExecutorFileSystem + use<> {
-        fs::LocalFileSystem
+    pub fn local() -> Self {
+        Self {
+            file_system: Arc::new(fs::LocalFileSystem),
+        }
+    }
+
+    pub fn with_file_system(file_system: Arc<dyn ExecutorFileSystem>) -> Self {
+        Self { file_system }
+    }
+
+    pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
+        Arc::clone(&self.file_system)
+    }
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Self::local()
+    }
+}
+
+impl std::fmt::Debug for Environment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Environment").finish_non_exhaustive()
     }
 }
