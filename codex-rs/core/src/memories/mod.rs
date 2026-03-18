@@ -95,21 +95,27 @@ mod metrics {
     pub(super) const MEMORY_PHASE_TWO_TOKEN_USAGE: &str = "codex.memory.phase2.token_usage";
 }
 
+#[cfg(test)]
 use std::path::Path;
+#[cfg(test)]
 use std::path::PathBuf;
 
+#[cfg(test)]
 pub(crate) async fn clear_memory_root_contents(memory_root: &Path) -> std::io::Result<()> {
     codex_memories::memories::control::clear_memory_root_contents(memory_root).await
 }
 
+#[cfg(test)]
 pub(crate) fn rollout_summaries_dir(root: &Path) -> PathBuf {
     codex_memories::memories::rollout_summaries_dir(root)
 }
 
+#[cfg(test)]
 pub(crate) fn raw_memories_file(root: &Path) -> PathBuf {
     codex_memories::memories::raw_memories_file(root)
 }
 
+#[cfg(test)]
 pub(crate) async fn ensure_layout(root: &Path) -> std::io::Result<()> {
     codex_memories::memories::ensure_layout(root).await
 }
