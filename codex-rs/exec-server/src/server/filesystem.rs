@@ -25,8 +25,8 @@ use codex_environment::Environment;
 use codex_environment::ExecutorFileSystem;
 use codex_environment::RemoveOptions;
 
-use crate::server::routing::internal_error;
-use crate::server::routing::invalid_request;
+use crate::server::internal_error;
+use crate::server::invalid_request;
 
 #[derive(Clone)]
 pub(crate) struct ExecServerFileSystem {

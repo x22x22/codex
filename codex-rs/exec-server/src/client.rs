@@ -31,8 +31,6 @@ use codex_app_server_protocol::JSONRPCResponse;
 use codex_app_server_protocol::RequestId;
 use serde::Serialize;
 use serde_json::Value;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
@@ -76,13 +74,13 @@ use crate::protocol::TerminateResponse;
 use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::server::ExecServerHandler;
-use crate::server::ExecServerOutboundMessage;
 use crate::server::ExecServerServerNotification;
 
 impl Default for ExecServerClientConnectOptions {
     fn default() -> Self {
         Self {
             client_name: "codex-core".to_string(),
+            auth_token: None,
             initialize_timeout: INITIALIZE_TIMEOUT,
         }
     }
@@ -92,6 +90,7 @@ impl From<RemoteExecServerConnectArgs> for ExecServerClientConnectOptions {
     fn from(value: RemoteExecServerConnectArgs) -> Self {
         Self {
             client_name: value.client_name,
+            auth_token: value.auth_token,
             initialize_timeout: value.initialize_timeout,
         }
     }
@@ -105,6 +104,7 @@ impl RemoteExecServerConnectArgs {
         Self {
             websocket_url,
             client_name,
+            auth_token: None,
             connect_timeout: CONNECT_TIMEOUT,
             initialize_timeout: INITIALIZE_TIMEOUT,
         }
@@ -123,7 +123,6 @@ struct ExecServerProcess {
     process_id: String,
     output_rx: broadcast::Receiver<ExecServerOutput>,
     status: Arc<RemoteProcessStatus>,
-    client: ExecServerClient,
 }
 
 #[cfg(test)]
@@ -134,18 +133,6 @@ impl ExecServerProcess {
 
     fn has_exited(&self) -> bool {
         self.status.has_exited()
-    }
-
-    fn exit_code(&self) -> Option<i32> {
-        self.status.exit_code()
-    }
-
-    fn terminate(&self) {
-        let client = self.client.clone();
-        let process_id = self.process_id.clone();
-        tokio::spawn(async move {
-            let _ = client.terminate_session(&process_id).await;
-        });
     }
 }
 
@@ -166,10 +153,6 @@ impl RemoteProcessStatus {
 
     fn has_exited(&self) -> bool {
         self.exited.load(Ordering::SeqCst)
-    }
-
-    fn exit_code(&self) -> Option<i32> {
-        self.exit_code.lock().ok().and_then(|guard| *guard)
     }
 
     fn mark_exited(&self, exit_code: Option<i32>) {
@@ -348,21 +331,16 @@ impl ExecServerClient {
     pub async fn connect_in_process(
         options: ExecServerClientConnectOptions,
     ) -> Result<Self, ExecServerError> {
-        let (outbound_tx, mut outgoing_rx) = mpsc::channel::<ExecServerOutboundMessage>(256);
-        let handler = Arc::new(Mutex::new(ExecServerHandler::new(outbound_tx)));
+        let (notification_tx, mut notification_rx) =
+            mpsc::channel::<ExecServerServerNotification>(256);
+        let handler = Arc::new(Mutex::new(ExecServerHandler::new(notification_tx, None)));
 
         let inner = Arc::new_cyclic(|weak| {
             let weak = weak.clone();
             let reader_task = tokio::spawn(async move {
-                while let Some(message) = outgoing_rx.recv().await {
-                    if let Some(inner) = weak.upgrade()
-                        && let Err(err) = handle_in_process_outbound_message(&inner, message).await
-                    {
-                        warn!(
-                            "in-process exec-server client closing after unexpected response: {err}"
-                        );
-                        handle_transport_shutdown(&inner).await;
-                        return;
+                while let Some(notification) = notification_rx.recv().await {
+                    if let Some(inner) = weak.upgrade() {
+                        handle_in_process_notification(&inner, notification).await;
                     }
                 }
 
@@ -384,22 +362,6 @@ impl ExecServerClient {
         let client = Self { inner };
         client.initialize(options).await?;
         Ok(client)
-    }
-
-    pub async fn connect_stdio<R, W>(
-        stdin: W,
-        stdout: R,
-        options: ExecServerClientConnectOptions,
-    ) -> Result<Self, ExecServerError>
-    where
-        R: AsyncRead + Unpin + Send + 'static,
-        W: AsyncWrite + Unpin + Send + 'static,
-    {
-        Self::connect(
-            JsonRpcConnection::from_stdio(stdout, stdin, "exec-server stdio".to_string()),
-            options,
-        )
-        .await
     }
 
     pub async fn connect_websocket(
@@ -521,7 +483,6 @@ impl ExecServerClient {
             process_id,
             output_rx,
             status,
-            client: self.clone(),
         })
     }
 
@@ -648,11 +609,15 @@ impl ExecServerClient {
     ) -> Result<(), ExecServerError> {
         let ExecServerClientConnectOptions {
             client_name,
+            auth_token,
             initialize_timeout,
         } = options;
         timeout(initialize_timeout, async {
             let _: InitializeResponse = self
-                .request_initialize(InitializeParams { client_name })
+                .request_initialize(InitializeParams {
+                    client_name,
+                    auth_token,
+                })
                 .await?;
             self.notify(INITIALIZED_METHOD, &serde_json::json!({}))
                 .await
@@ -735,7 +700,7 @@ impl ExecServerClient {
         params: InitializeParams,
     ) -> Result<InitializeResponse, ExecServerError> {
         if let ClientBackend::InProcess { handler } = &self.inner.backend {
-            return server_result_to_client(handler.lock().await.initialize());
+            return server_result_to_client(handler.lock().await.initialize(params));
         }
 
         self.send_pending_request(INITIALIZE_METHOD, &params, PendingRequest::Initialize)
@@ -823,24 +788,6 @@ async fn send_jsonrpc_request<P: Serialize>(
         }))
         .await
         .map_err(|_| ExecServerError::Closed)
-}
-
-async fn handle_in_process_outbound_message(
-    inner: &Arc<Inner>,
-    message: ExecServerOutboundMessage,
-) -> Result<(), ExecServerError> {
-    match message {
-        ExecServerOutboundMessage::Response { .. } | ExecServerOutboundMessage::Error { .. } => {
-            return Err(ExecServerError::Protocol(
-                "unexpected in-process RPC response".to_string(),
-            ));
-        }
-        ExecServerOutboundMessage::Notification(notification) => {
-            handle_in_process_notification(inner, notification).await;
-        }
-    }
-
-    Ok(())
 }
 
 async fn handle_in_process_notification(

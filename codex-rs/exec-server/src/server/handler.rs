@@ -36,13 +36,18 @@ use crate::protocol::ReadResponse;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteResponse;
 use crate::server::filesystem::ExecServerFileSystem;
-use crate::server::routing::ExecServerOutboundMessage;
-use crate::server::routing::ExecServerServerNotification;
-use crate::server::routing::internal_error;
-use crate::server::routing::invalid_params;
-use crate::server::routing::invalid_request;
+use crate::server::internal_error;
+use crate::server::invalid_params;
+use crate::server::invalid_request;
+use crate::server::unauthorized;
 
 const RETAINED_OUTPUT_BYTES_PER_PROCESS: usize = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExecServerServerNotification {
+    OutputDelta(ExecOutputDeltaNotification),
+    Exited(ExecExitedNotification),
+}
 
 #[derive(Clone)]
 struct RetainedOutputChunk {
@@ -62,8 +67,9 @@ struct RunningProcess {
 }
 
 pub(crate) struct ExecServerHandler {
-    outbound_tx: mpsc::Sender<ExecServerOutboundMessage>,
+    notification_tx: mpsc::Sender<ExecServerServerNotification>,
     file_system: ExecServerFileSystem,
+    required_auth_token: Option<String>,
     // Keyed by client-chosen logical `processId` scoped to this connection.
     // This is a protocol handle, not an OS pid.
     processes: Arc<Mutex<HashMap<String, RunningProcess>>>,
@@ -72,10 +78,14 @@ pub(crate) struct ExecServerHandler {
 }
 
 impl ExecServerHandler {
-    pub(crate) fn new(outbound_tx: mpsc::Sender<ExecServerOutboundMessage>) -> Self {
+    pub(crate) fn new(
+        notification_tx: mpsc::Sender<ExecServerServerNotification>,
+        required_auth_token: Option<String>,
+    ) -> Self {
         Self {
-            outbound_tx,
+            notification_tx,
             file_system: ExecServerFileSystem::default(),
+            required_auth_token,
             processes: Arc::new(Mutex::new(HashMap::new())),
             initialize_requested: false,
             initialized: false,
@@ -105,11 +115,17 @@ impl ExecServerHandler {
 
     pub(crate) fn initialize(
         &mut self,
+        params: crate::protocol::InitializeParams,
     ) -> Result<InitializeResponse, codex_app_server_protocol::JSONRPCErrorError> {
         if self.initialize_requested {
             return Err(invalid_request(
                 "initialize may only be sent once per connection".to_string(),
             ));
+        }
+        if let Some(required_auth_token) = &self.required_auth_token
+            && params.auth_token.as_deref() != Some(required_auth_token.as_str())
+        {
+            return Err(unauthorized("invalid exec-server auth token".to_string()));
         }
         self.initialize_requested = true;
         Ok(InitializeResponse {
@@ -210,7 +226,7 @@ impl ExecServerHandler {
                 ExecOutputStream::Stdout
             },
             spawned.stdout_rx,
-            self.outbound_tx.clone(),
+            self.notification_tx.clone(),
             Arc::clone(&self.processes),
             Arc::clone(&output_notify),
         ));
@@ -222,14 +238,14 @@ impl ExecServerHandler {
                 ExecOutputStream::Stderr
             },
             spawned.stderr_rx,
-            self.outbound_tx.clone(),
+            self.notification_tx.clone(),
             Arc::clone(&self.processes),
             Arc::clone(&output_notify),
         ));
         tokio::spawn(watch_exit(
             process_id.clone(),
             spawned.exit_rx,
-            self.outbound_tx.clone(),
+            self.notification_tx.clone(),
             Arc::clone(&self.processes),
             output_notify,
         ));
@@ -402,153 +418,11 @@ impl ExecServerHandler {
     }
 }
 
-#[cfg(test)]
-impl ExecServerHandler {
-    async fn handle_message(
-        &mut self,
-        message: crate::server::routing::ExecServerInboundMessage,
-    ) -> Result<(), String> {
-        match message {
-            crate::server::routing::ExecServerInboundMessage::Request(request) => {
-                self.handle_request(request).await
-            }
-            crate::server::routing::ExecServerInboundMessage::Notification(
-                crate::server::routing::ExecServerClientNotification::Initialized,
-            ) => self.initialized(),
-        }
-    }
-
-    async fn handle_request(
-        &mut self,
-        request: crate::server::routing::ExecServerRequest,
-    ) -> Result<(), String> {
-        let outbound = match request {
-            crate::server::routing::ExecServerRequest::Initialize { request_id, .. } => {
-                Self::request_outbound(
-                    request_id,
-                    self.initialize()
-                        .map(crate::server::routing::ExecServerResponseMessage::Initialize),
-                )
-            }
-            crate::server::routing::ExecServerRequest::Exec { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.exec(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::Exec),
-                )
-            }
-            crate::server::routing::ExecServerRequest::Read { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.read(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::Read),
-                )
-            }
-            crate::server::routing::ExecServerRequest::Write { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.write(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::Write),
-                )
-            }
-            crate::server::routing::ExecServerRequest::Terminate { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.terminate(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::Terminate),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsReadFile { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_read_file(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsReadFile),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsWriteFile { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_write_file(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsWriteFile),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsCreateDirectory { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_create_directory(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsCreateDirectory),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsGetMetadata { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_get_metadata(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsGetMetadata),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsReadDirectory { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_read_directory(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsReadDirectory),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsRemove { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_remove(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsRemove),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsCopy { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_copy(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsCopy),
-                )
-            }
-        };
-        self.outbound_tx
-            .send(outbound)
-            .await
-            .map_err(|_| "outbound channel closed".to_string())
-    }
-
-    fn request_outbound(
-        request_id: codex_app_server_protocol::RequestId,
-        result: Result<
-            crate::server::routing::ExecServerResponseMessage,
-            codex_app_server_protocol::JSONRPCErrorError,
-        >,
-    ) -> crate::server::routing::ExecServerOutboundMessage {
-        match result {
-            Ok(response) => crate::server::routing::ExecServerOutboundMessage::Response {
-                request_id,
-                response,
-            },
-            Err(error) => {
-                crate::server::routing::ExecServerOutboundMessage::Error { request_id, error }
-            }
-        }
-    }
-}
-
 async fn stream_output(
     process_id: String,
     stream: ExecOutputStream,
     mut receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
-    outbound_tx: mpsc::Sender<ExecServerOutboundMessage>,
+    notification_tx: mpsc::Sender<ExecServerServerNotification>,
     processes: Arc<Mutex<HashMap<String, RunningProcess>>>,
     output_notify: Arc<Notify>,
 ) {
@@ -583,10 +457,8 @@ async fn stream_output(
         };
         output_notify.notify_waiters();
 
-        if outbound_tx
-            .send(ExecServerOutboundMessage::Notification(
-                ExecServerServerNotification::OutputDelta(notification),
-            ))
+        if notification_tx
+            .send(ExecServerServerNotification::OutputDelta(notification))
             .await
             .is_err()
         {
@@ -598,7 +470,7 @@ async fn stream_output(
 async fn watch_exit(
     process_id: String,
     exit_rx: tokio::sync::oneshot::Receiver<i32>,
-    outbound_tx: mpsc::Sender<ExecServerOutboundMessage>,
+    notification_tx: mpsc::Sender<ExecServerServerNotification>,
     processes: Arc<Mutex<HashMap<String, RunningProcess>>>,
     output_notify: Arc<Notify>,
 ) {
@@ -610,12 +482,12 @@ async fn watch_exit(
         }
     }
     output_notify.notify_waiters();
-    let _ = outbound_tx
-        .send(ExecServerOutboundMessage::Notification(
-            ExecServerServerNotification::Exited(ExecExitedNotification {
+    let _ = notification_tx
+        .send(ExecServerServerNotification::Exited(
+            ExecExitedNotification {
                 process_id,
                 exit_code,
-            }),
+            },
         ))
         .await;
 }
