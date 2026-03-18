@@ -1597,6 +1597,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-auth"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "codex-api",
+ "codex-app-server-protocol",
+ "http 1.4.0",
+ "maplit",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "toml 0.9.11+spec-1.1.0",
+]
+
+[[package]]
 name = "codex-backend-client"
 version = "0.0.0"
 dependencies = [
@@ -1840,6 +1858,7 @@ dependencies = [
  "codex-arg0",
  "codex-artifacts",
  "codex-async-utils",
+ "codex-auth",
  "codex-client",
  "codex-config",
  "codex-connectors",

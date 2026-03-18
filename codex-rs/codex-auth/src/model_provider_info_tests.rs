@@ -1,4 +1,4 @@
-use super::*;
+use super::provider::*;
 use pretty_assertions::assert_eq;
 
 #[test]

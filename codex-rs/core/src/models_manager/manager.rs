@@ -433,7 +433,9 @@ impl ModelsManager {
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth = self.auth_manager.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
-        let api_provider = self.provider.to_api_provider(auth_mode)?;
+        let api_provider = self
+            .provider
+            .to_api_provider(auth.as_ref().map(CodexAuth::api_auth_mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let auth_env = collect_auth_env_telemetry(
             &self.provider,

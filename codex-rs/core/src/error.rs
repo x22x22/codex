@@ -9,6 +9,7 @@ use chrono::Datelike;
 use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
+use codex_auth::EnvVarError;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
@@ -188,6 +189,12 @@ pub enum CodexErr {
 impl From<CancelErr> for CodexErr {
     fn from(_: CancelErr) -> Self {
         CodexErr::TurnAborted
+    }
+}
+
+impl From<EnvVarError> for CodexErr {
+    fn from(error: EnvVarError) -> Self {
+        Self::EnvVar(error)
     }
 }
 
@@ -549,26 +556,6 @@ fn now_for_retry() -> DateTime<Utc> {
         }
     }
     Utc::now()
-}
-
-#[derive(Debug)]
-pub struct EnvVarError {
-    /// Name of the environment variable that is missing.
-    pub var: String,
-
-    /// Optional instructions to help the user get a valid value for the
-    /// variable and set it.
-    pub instructions: Option<String>,
-}
-
-impl std::fmt::Display for EnvVarError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Missing environment variable: `{}`.", self.var)?;
-        if let Some(instructions) = &self.instructions {
-            write!(f, " {instructions}")?;
-        }
-        Ok(())
-    }
 }
 
 impl CodexErr {

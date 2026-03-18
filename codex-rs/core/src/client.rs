@@ -528,7 +528,7 @@ impl ModelClient {
         let api_provider = self
             .state
             .provider
-            .to_api_provider(auth.as_ref().map(CodexAuth::auth_mode))?;
+            .to_api_provider(auth.as_ref().map(CodexAuth::api_auth_mode))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.state.provider)?;
         Ok(CurrentClientSetup {
             auth,
