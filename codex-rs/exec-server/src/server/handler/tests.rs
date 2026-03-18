@@ -699,7 +699,7 @@ async fn read_paginates_retained_output_without_skipping_omitted_chunks() {
     }
 
     let first = handler
-        .read(ReadParams {
+        .exec_read(ReadParams {
             process_id: "proc-1".to_string(),
             after_seq: Some(0),
             max_bytes: Some(3),
@@ -715,7 +715,7 @@ async fn read_paginates_retained_output_without_skipping_omitted_chunks() {
     assert_eq!(first.next_seq, 2);
 
     let second = handler
-        .read(ReadParams {
+        .exec_read(ReadParams {
             process_id: "proc-1".to_string(),
             after_seq: Some(first.next_seq - 1),
             max_bytes: Some(3),

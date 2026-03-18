@@ -36,7 +36,11 @@ use crate::protocol::ReadResponse;
 use crate::protocol::TerminateResponse;
 use crate::protocol::WriteResponse;
 use crate::server::filesystem::ExecServerFileSystem;
+use crate::server::routing::ExecServerClientNotification;
+use crate::server::routing::ExecServerInboundMessage;
 use crate::server::routing::ExecServerOutboundMessage;
+use crate::server::routing::ExecServerRequest;
+use crate::server::routing::ExecServerResponseMessage;
 use crate::server::routing::ExecServerServerNotification;
 use crate::server::routing::internal_error;
 use crate::server::routing::invalid_params;
@@ -297,7 +301,7 @@ impl ExecServerHandler {
         self.file_system.copy(params).await
     }
 
-    pub(crate) async fn read(
+    pub(crate) async fn exec_read(
         &self,
         params: crate::protocol::ReadParams,
     ) -> Result<ReadResponse, codex_app_server_protocol::JSONRPCErrorError> {
@@ -360,7 +364,7 @@ impl ExecServerHandler {
         }
     }
 
-    pub(crate) async fn write(
+    pub(crate) async fn exec_write(
         &self,
         params: crate::protocol::WriteParams,
     ) -> Result<WriteResponse, codex_app_server_protocol::JSONRPCErrorError> {
@@ -404,124 +408,89 @@ impl ExecServerHandler {
 
         Ok(TerminateResponse { running })
     }
-}
 
-#[cfg(test)]
-impl ExecServerHandler {
-    async fn handle_message(
+    pub(crate) async fn handle_message(
         &mut self,
-        message: crate::server::routing::ExecServerInboundMessage,
+        message: ExecServerInboundMessage,
     ) -> Result<(), String> {
         match message {
-            crate::server::routing::ExecServerInboundMessage::Request(request) => {
-                self.handle_request(request).await
+            ExecServerInboundMessage::Request(request) => self.handle_request(request).await,
+            ExecServerInboundMessage::Notification(ExecServerClientNotification::Initialized) => {
+                self.initialized()
             }
-            crate::server::routing::ExecServerInboundMessage::Notification(
-                crate::server::routing::ExecServerClientNotification::Initialized,
-            ) => self.initialized(),
         }
     }
 
-    async fn handle_request(
-        &mut self,
-        request: crate::server::routing::ExecServerRequest,
-    ) -> Result<(), String> {
+    async fn handle_request(&mut self, request: ExecServerRequest) -> Result<(), String> {
         let outbound = match request {
-            crate::server::routing::ExecServerRequest::Initialize { request_id, .. } => {
-                Self::request_outbound(
-                    request_id,
-                    self.initialize()
-                        .map(crate::server::routing::ExecServerResponseMessage::Initialize),
-                )
-            }
-            crate::server::routing::ExecServerRequest::Exec { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.exec(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::Exec),
-                )
-            }
-            crate::server::routing::ExecServerRequest::Read { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.read(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::Read),
-                )
-            }
-            crate::server::routing::ExecServerRequest::Write { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.write(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::Write),
-                )
-            }
-            crate::server::routing::ExecServerRequest::Terminate { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.terminate(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::Terminate),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsReadFile { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_read_file(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsReadFile),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsWriteFile { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_write_file(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsWriteFile),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsCreateDirectory { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_create_directory(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsCreateDirectory),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsGetMetadata { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_get_metadata(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsGetMetadata),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsReadDirectory { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_read_directory(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsReadDirectory),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsRemove { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_remove(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsRemove),
-                )
-            }
-            crate::server::routing::ExecServerRequest::FsCopy { request_id, params } => {
-                Self::request_outbound(
-                    request_id,
-                    self.fs_copy(params)
-                        .await
-                        .map(crate::server::routing::ExecServerResponseMessage::FsCopy),
-                )
-            }
+            ExecServerRequest::Initialize { request_id, .. } => Self::request_outbound(
+                request_id,
+                self.initialize().map(ExecServerResponseMessage::Initialize),
+            ),
+            ExecServerRequest::Exec { request_id, params } => Self::request_outbound(
+                request_id,
+                self.exec(params).await.map(ExecServerResponseMessage::Exec),
+            ),
+            ExecServerRequest::Read { request_id, params } => Self::request_outbound(
+                request_id,
+                self.exec_read(params)
+                    .await
+                    .map(ExecServerResponseMessage::Read),
+            ),
+            ExecServerRequest::Write { request_id, params } => Self::request_outbound(
+                request_id,
+                self.exec_write(params)
+                    .await
+                    .map(ExecServerResponseMessage::Write),
+            ),
+            ExecServerRequest::Terminate { request_id, params } => Self::request_outbound(
+                request_id,
+                self.terminate(params)
+                    .await
+                    .map(ExecServerResponseMessage::Terminate),
+            ),
+            ExecServerRequest::FsReadFile { request_id, params } => Self::request_outbound(
+                request_id,
+                self.fs_read_file(params)
+                    .await
+                    .map(ExecServerResponseMessage::FsReadFile),
+            ),
+            ExecServerRequest::FsWriteFile { request_id, params } => Self::request_outbound(
+                request_id,
+                self.fs_write_file(params)
+                    .await
+                    .map(ExecServerResponseMessage::FsWriteFile),
+            ),
+            ExecServerRequest::FsCreateDirectory { request_id, params } => Self::request_outbound(
+                request_id,
+                self.fs_create_directory(params)
+                    .await
+                    .map(ExecServerResponseMessage::FsCreateDirectory),
+            ),
+            ExecServerRequest::FsGetMetadata { request_id, params } => Self::request_outbound(
+                request_id,
+                self.fs_get_metadata(params)
+                    .await
+                    .map(ExecServerResponseMessage::FsGetMetadata),
+            ),
+            ExecServerRequest::FsReadDirectory { request_id, params } => Self::request_outbound(
+                request_id,
+                self.fs_read_directory(params)
+                    .await
+                    .map(ExecServerResponseMessage::FsReadDirectory),
+            ),
+            ExecServerRequest::FsRemove { request_id, params } => Self::request_outbound(
+                request_id,
+                self.fs_remove(params)
+                    .await
+                    .map(ExecServerResponseMessage::FsRemove),
+            ),
+            ExecServerRequest::FsCopy { request_id, params } => Self::request_outbound(
+                request_id,
+                self.fs_copy(params)
+                    .await
+                    .map(ExecServerResponseMessage::FsCopy),
+            ),
         };
         self.outbound_tx
             .send(outbound)
@@ -531,19 +500,14 @@ impl ExecServerHandler {
 
     fn request_outbound(
         request_id: codex_app_server_protocol::RequestId,
-        result: Result<
-            crate::server::routing::ExecServerResponseMessage,
-            codex_app_server_protocol::JSONRPCErrorError,
-        >,
-    ) -> crate::server::routing::ExecServerOutboundMessage {
+        result: Result<ExecServerResponseMessage, codex_app_server_protocol::JSONRPCErrorError>,
+    ) -> ExecServerOutboundMessage {
         match result {
-            Ok(response) => crate::server::routing::ExecServerOutboundMessage::Response {
+            Ok(response) => ExecServerOutboundMessage::Response {
                 request_id,
                 response,
             },
-            Err(error) => {
-                crate::server::routing::ExecServerOutboundMessage::Error { request_id, error }
-            }
+            Err(error) => ExecServerOutboundMessage::Error { request_id, error },
         }
     }
 }

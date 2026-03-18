@@ -250,12 +250,7 @@ async fn connect_in_process_rejects_writes_to_unknown_processes() {
         Err(err) => panic!("failed to connect in-process client: {err}"),
     };
 
-    let result = client
-        .write_process(crate::protocol::WriteParams {
-            process_id: "missing".to_string(),
-            chunk: b"input".to_vec().into(),
-        })
-        .await;
+    let result = client.write("missing", b"input".to_vec()).await;
 
     match result {
         Err(ExecServerError::Server { code, message }) => {
@@ -290,7 +285,7 @@ async fn connect_in_process_terminate_marks_process_exited() {
         Err(err) => panic!("failed to start in-process child: {err}"),
     };
 
-    if let Err(err) = client.terminate_session(&process.process_id).await {
+    if let Err(err) = client.terminate(&process.process_id).await {
         panic!("failed to terminate in-process child: {err}");
     }
 
