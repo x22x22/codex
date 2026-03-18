@@ -6253,7 +6253,7 @@ impl ChatWidget {
         self.on_guardian_assessment(GuardianAssessmentEvent {
             id,
             turn_id,
-            review_thread_id: None,
+            guardian_thread_id: None,
             status: match review.status {
                 codex_app_server_protocol::GuardianApprovalReviewStatus::InProgress => {
                     GuardianAssessmentStatus::InProgress

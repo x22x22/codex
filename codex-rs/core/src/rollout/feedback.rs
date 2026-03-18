@@ -31,7 +31,7 @@ pub fn feedback_rollout_attachment_paths(
         rollout_path.to_path_buf(),
     );
 
-    let guardian_thread_ids = match guardian_review_thread_ids(rollout_path) {
+    let guardian_thread_ids = match guardian_thread_ids_from_rollout(rollout_path) {
         Ok(thread_ids) => thread_ids,
         Err(err) => {
             warn!(
@@ -59,7 +59,7 @@ pub fn feedback_rollout_attachment_paths(
     attachment_paths
 }
 
-fn guardian_review_thread_ids(rollout_path: &Path) -> io::Result<Vec<ThreadId>> {
+fn guardian_thread_ids_from_rollout(rollout_path: &Path) -> io::Result<Vec<ThreadId>> {
     let file = fs::File::open(rollout_path)?;
     let reader = BufReader::new(file);
     let mut thread_ids = Vec::new();
@@ -79,10 +79,10 @@ fn guardian_review_thread_ids(rollout_path: &Path) -> io::Result<Vec<ThreadId>> 
             }
         };
         if let RolloutItem::EventMsg(EventMsg::GuardianAssessment(assessment)) = rollout_line.item
-            && let Some(review_thread_id) = assessment.review_thread_id
-            && seen_thread_ids.insert(review_thread_id)
+            && let Some(guardian_thread_id) = assessment.guardian_thread_id
+            && seen_thread_ids.insert(guardian_thread_id)
         {
-            thread_ids.push(review_thread_id);
+            thread_ids.push(guardian_thread_id);
         }
     }
 
@@ -207,7 +207,7 @@ mod tests {
                 GuardianAssessmentEvent {
                     id: "assessment-1".to_string(),
                     turn_id: "turn-1".to_string(),
-                    review_thread_id: Some(guardian_thread_id),
+                    guardian_thread_id: Some(guardian_thread_id),
                     status: GuardianAssessmentStatus::Denied,
                     risk_score: Some(100),
                     risk_level: None,
@@ -217,7 +217,7 @@ mod tests {
                 GuardianAssessmentEvent {
                     id: "assessment-2".to_string(),
                     turn_id: "turn-2".to_string(),
-                    review_thread_id: Some(guardian_thread_id),
+                    guardian_thread_id: Some(guardian_thread_id),
                     status: GuardianAssessmentStatus::Approved,
                     risk_score: Some(0),
                     risk_level: None,
@@ -256,7 +256,7 @@ mod tests {
             &[GuardianAssessmentEvent {
                 id: "assessment-1".to_string(),
                 turn_id: "turn-1".to_string(),
-                review_thread_id: Some(missing_guardian_thread_id),
+                guardian_thread_id: Some(missing_guardian_thread_id),
                 status: GuardianAssessmentStatus::Denied,
                 risk_score: Some(100),
                 risk_level: None,

@@ -10113,7 +10113,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".into(),
             turn_id: "turn-1".into(),
-            review_thread_id: None,
+            guardian_thread_id: None,
             status: GuardianAssessmentStatus::InProgress,
             risk_score: None,
             risk_level: None,
@@ -10132,7 +10132,7 @@ async fn guardian_denied_exec_renders_warning_and_denied_request() {
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".into(),
             turn_id: "turn-1".into(),
-            review_thread_id: None,
+            guardian_thread_id: None,
             status: GuardianAssessmentStatus::Denied,
             risk_score: Some(96),
             risk_level: Some(GuardianRiskLevel::High),
@@ -10176,7 +10176,7 @@ async fn guardian_approved_exec_renders_approved_request() {
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "thread:child-thread:guardian-1".into(),
             turn_id: "turn-1".into(),
-            review_thread_id: None,
+            guardian_thread_id: None,
             status: GuardianAssessmentStatus::Approved,
             risk_score: Some(14),
             risk_level: Some(GuardianRiskLevel::Low),
@@ -10431,7 +10431,7 @@ async fn guardian_parallel_reviews_render_aggregate_status_snapshot() {
             msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: id.to_string(),
                 turn_id: "turn-1".to_string(),
-                review_thread_id: None,
+                guardian_thread_id: None,
                 status: GuardianAssessmentStatus::InProgress,
                 risk_score: None,
                 risk_level: None,
@@ -10461,7 +10461,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".to_string(),
             turn_id: "turn-1".to_string(),
-            review_thread_id: None,
+            guardian_thread_id: None,
             status: GuardianAssessmentStatus::InProgress,
             risk_score: None,
             risk_level: None,
@@ -10477,7 +10477,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-2".to_string(),
             turn_id: "turn-1".to_string(),
-            review_thread_id: None,
+            guardian_thread_id: None,
             status: GuardianAssessmentStatus::InProgress,
             risk_score: None,
             risk_level: None,
@@ -10493,7 +10493,7 @@ async fn guardian_parallel_reviews_keep_remaining_review_visible_after_denial() 
         msg: EventMsg::GuardianAssessment(GuardianAssessmentEvent {
             id: "guardian-1".to_string(),
             turn_id: "turn-1".to_string(),
-            review_thread_id: None,
+            guardian_thread_id: None,
             status: GuardianAssessmentStatus::Denied,
             risk_score: Some(92),
             risk_level: Some(GuardianRiskLevel::High),

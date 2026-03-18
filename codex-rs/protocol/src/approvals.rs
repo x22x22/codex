@@ -124,9 +124,15 @@ pub struct GuardianAssessmentEvent {
     #[serde(default)]
     pub turn_id: String,
     /// Hidden guardian review thread that evaluated this request, when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "guardian_thread_id",
+        alias = "review_thread_id",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(rename = "guardian_thread_id")]
     #[ts(optional)]
-    pub review_thread_id: Option<ThreadId>,
+    pub guardian_thread_id: Option<ThreadId>,
     pub status: GuardianAssessmentStatus,
     /// Numeric risk score from 0-100. Omitted while the assessment is in progress.
     #[serde(default, skip_serializing_if = "Option::is_none")]

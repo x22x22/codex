@@ -314,7 +314,7 @@ async fn handle_exec_approval_uses_call_id_for_guardian_review_and_approval_id_f
         GuardianAssessmentEvent {
             id: "command-item-1".to_string(),
             turn_id: parent_ctx.sub_id.clone(),
-            review_thread_id: None,
+            guardian_thread_id: None,
             status: GuardianAssessmentStatus::InProgress,
             risk_score: None,
             risk_level: None,

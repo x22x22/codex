@@ -50,7 +50,7 @@ pub(crate) enum GuardianReviewSessionOutcome {
 }
 
 pub(crate) struct GuardianReviewSessionRunResult {
-    pub(crate) review_thread_id: Option<ThreadId>,
+    pub(crate) guardian_thread_id: Option<ThreadId>,
     pub(crate) outcome: GuardianReviewSessionOutcome,
 }
 
@@ -280,13 +280,13 @@ impl GuardianReviewSessionManager {
                         Ok(Ok(review_session)) => Arc::new(review_session),
                         Ok(Err(err)) => {
                             return GuardianReviewSessionRunResult {
-                                review_thread_id: None,
+                                guardian_thread_id: None,
                                 outcome: GuardianReviewSessionOutcome::Completed(Err(err)),
                             };
                         }
                         Err(outcome) => {
                             return GuardianReviewSessionRunResult {
-                                review_thread_id: None,
+                                guardian_thread_id: None,
                                 outcome,
                             };
                         }
@@ -298,7 +298,7 @@ impl GuardianReviewSessionManager {
             }
             Err(outcome) => {
                 return GuardianReviewSessionRunResult {
-                    review_thread_id: None,
+                    guardian_thread_id: None,
                     outcome,
                 };
             }
@@ -310,7 +310,7 @@ impl GuardianReviewSessionManager {
 
         let Some(trunk) = trunk_candidate else {
             return GuardianReviewSessionRunResult {
-                review_thread_id: None,
+                guardian_thread_id: None,
                 outcome: GuardianReviewSessionOutcome::Completed(Err(anyhow!(
                     "guardian review session was not available after spawn"
                 ))),
@@ -340,7 +340,7 @@ impl GuardianReviewSessionManager {
 
         let (outcome, keep_review_session) =
             run_review_on_session(trunk.as_ref(), &params, deadline).await;
-        let review_thread_id = Some(trunk.codex.session.conversation_id);
+        let guardian_thread_id = Some(trunk.codex.session.conversation_id);
         if keep_review_session && matches!(outcome, GuardianReviewSessionOutcome::Completed(_)) {
             trunk.refresh_last_committed_rollout_items().await;
         }
@@ -348,7 +348,7 @@ impl GuardianReviewSessionManager {
 
         if keep_review_session {
             GuardianReviewSessionRunResult {
-                review_thread_id,
+                guardian_thread_id,
                 outcome,
             }
         } else {
@@ -356,7 +356,7 @@ impl GuardianReviewSessionManager {
                 review_session.shutdown_in_background();
             }
             GuardianReviewSessionRunResult {
-                review_thread_id,
+                guardian_thread_id,
                 outcome,
             }
         }
@@ -457,13 +457,13 @@ impl GuardianReviewSessionManager {
             Ok(Ok(review_session)) => Arc::new(review_session),
             Ok(Err(err)) => {
                 return GuardianReviewSessionRunResult {
-                    review_thread_id: None,
+                    guardian_thread_id: None,
                     outcome: GuardianReviewSessionOutcome::Completed(Err(err)),
                 };
             }
             Err(outcome) => {
                 return GuardianReviewSessionRunResult {
-                    review_thread_id: None,
+                    guardian_thread_id: None,
                     outcome,
                 };
             }
@@ -474,13 +474,13 @@ impl GuardianReviewSessionManager {
             EphemeralReviewCleanup::new(Arc::clone(&self.state), Arc::clone(&review_session));
 
         let (outcome, _) = run_review_on_session(review_session.as_ref(), &params, deadline).await;
-        let review_thread_id = Some(review_session.codex.session.conversation_id);
+        let guardian_thread_id = Some(review_session.codex.session.conversation_id);
         if let Some(review_session) = self.take_active_ephemeral(&review_session).await {
             cleanup.disarm();
             review_session.shutdown_in_background();
         }
         GuardianReviewSessionRunResult {
-            review_thread_id,
+            guardian_thread_id,
             outcome,
         }
     }

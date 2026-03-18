@@ -2803,7 +2803,7 @@ mod tests {
             &GuardianAssessmentEvent {
                 id: "item-1".to_string(),
                 turn_id: String::new(),
-                review_thread_id: None,
+                guardian_thread_id: None,
                 status: codex_protocol::protocol::GuardianAssessmentStatus::InProgress,
                 risk_score: None,
                 risk_level: None,
@@ -2843,7 +2843,7 @@ mod tests {
             &GuardianAssessmentEvent {
                 id: "item-2".to_string(),
                 turn_id: "turn-from-assessment".to_string(),
-                review_thread_id: None,
+                guardian_thread_id: None,
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Denied,
                 risk_score: Some(91),
                 risk_level: Some(codex_protocol::protocol::GuardianRiskLevel::High),
@@ -2883,7 +2883,7 @@ mod tests {
             &GuardianAssessmentEvent {
                 id: "item-3".to_string(),
                 turn_id: "turn-from-assessment".to_string(),
-                review_thread_id: None,
+                guardian_thread_id: None,
                 status: codex_protocol::protocol::GuardianAssessmentStatus::Aborted,
                 risk_score: None,
                 risk_level: None,

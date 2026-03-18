@@ -42,13 +42,13 @@ pub(crate) const GUARDIAN_REJECTION_MESSAGE: &str = concat!(
 pub(super) enum GuardianReviewOutcome {
     Completed {
         result: anyhow::Result<GuardianAssessment>,
-        review_thread_id: Option<codex_protocol::ThreadId>,
+        guardian_thread_id: Option<codex_protocol::ThreadId>,
     },
     TimedOut {
-        review_thread_id: Option<codex_protocol::ThreadId>,
+        guardian_thread_id: Option<codex_protocol::ThreadId>,
     },
     Aborted {
-        review_thread_id: Option<codex_protocol::ThreadId>,
+        guardian_thread_id: Option<codex_protocol::ThreadId>,
     },
 }
 
@@ -96,7 +96,7 @@ async fn run_guardian_review(
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id.clone(),
                 turn_id: assessment_turn_id.clone(),
-                review_thread_id: None,
+                guardian_thread_id: None,
                 status: GuardianAssessmentStatus::InProgress,
                 risk_score: None,
                 risk_level: None,
@@ -116,7 +116,7 @@ async fn run_guardian_review(
                 EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                     id: assessment_id,
                     turn_id: assessment_turn_id,
-                    review_thread_id: None,
+                    guardian_thread_id: None,
                     status: GuardianAssessmentStatus::Aborted,
                     risk_score: None,
                     risk_level: None,
@@ -143,18 +143,18 @@ async fn run_guardian_review(
         }
         Err(err) => GuardianReviewOutcome::Completed {
             result: Err(err.into()),
-            review_thread_id: None,
+            guardian_thread_id: None,
         },
     };
 
-    let (assessment, review_thread_id) = match outcome {
+    let (assessment, guardian_thread_id) = match outcome {
         GuardianReviewOutcome::Completed {
             result: Ok(assessment),
-            review_thread_id,
-        } => (assessment, review_thread_id),
+            guardian_thread_id,
+        } => (assessment, guardian_thread_id),
         GuardianReviewOutcome::Completed {
             result: Err(err),
-            review_thread_id,
+            guardian_thread_id,
         } => (
             GuardianAssessment {
                 risk_level: GuardianRiskLevel::High,
@@ -162,9 +162,9 @@ async fn run_guardian_review(
                 rationale: format!("Automatic approval review failed: {err}"),
                 evidence: vec![],
             },
-            review_thread_id,
+            guardian_thread_id,
         ),
-        GuardianReviewOutcome::TimedOut { review_thread_id } => (
+        GuardianReviewOutcome::TimedOut { guardian_thread_id } => (
             GuardianAssessment {
                 risk_level: GuardianRiskLevel::High,
                 risk_score: 100,
@@ -173,16 +173,16 @@ async fn run_guardian_review(
                         .to_string(),
                 evidence: vec![],
             },
-            review_thread_id,
+            guardian_thread_id,
         ),
-        GuardianReviewOutcome::Aborted { review_thread_id } => {
+        GuardianReviewOutcome::Aborted { guardian_thread_id } => {
             session
                 .send_event(
                     turn.as_ref(),
                     EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                         id: assessment_id,
                         turn_id: assessment_turn_id,
-                        review_thread_id,
+                        guardian_thread_id,
                         status: GuardianAssessmentStatus::Aborted,
                         risk_score: None,
                         risk_level: None,
@@ -219,7 +219,7 @@ async fn run_guardian_review(
             EventMsg::GuardianAssessment(GuardianAssessmentEvent {
                 id: assessment_id,
                 turn_id: assessment_turn_id,
-                review_thread_id,
+                guardian_thread_id,
                 status,
                 risk_score: Some(assessment.risk_score),
                 risk_level: Some(assessment.risk_level),
@@ -297,7 +297,7 @@ pub(super) async fn run_guardian_review_session(
             Err(err) => {
                 return GuardianReviewOutcome::Completed {
                     result: Err(err),
-                    review_thread_id: None,
+                    guardian_thread_id: None,
                 };
             }
         },
@@ -352,7 +352,7 @@ pub(super) async fn run_guardian_review_session(
         Err(err) => {
             return GuardianReviewOutcome::Completed {
                 result: Err(err),
-                review_thread_id: None,
+                guardian_thread_id: None,
             };
         }
     };
@@ -374,26 +374,26 @@ pub(super) async fn run_guardian_review_session(
         .await
     {
         GuardianReviewSessionRunResult {
-            review_thread_id,
+            guardian_thread_id,
             outcome: GuardianReviewSessionOutcome::Completed(Ok(last_agent_message)),
         } => GuardianReviewOutcome::Completed {
             result: parse_guardian_assessment(last_agent_message.as_deref()),
-            review_thread_id,
+            guardian_thread_id,
         },
         GuardianReviewSessionRunResult {
-            review_thread_id,
+            guardian_thread_id,
             outcome: GuardianReviewSessionOutcome::Completed(Err(err)),
         } => GuardianReviewOutcome::Completed {
             result: Err(err),
-            review_thread_id,
+            guardian_thread_id,
         },
         GuardianReviewSessionRunResult {
-            review_thread_id,
+            guardian_thread_id,
             outcome: GuardianReviewSessionOutcome::TimedOut,
-        } => GuardianReviewOutcome::TimedOut { review_thread_id },
+        } => GuardianReviewOutcome::TimedOut { guardian_thread_id },
         GuardianReviewSessionRunResult {
-            review_thread_id,
+            guardian_thread_id,
             outcome: GuardianReviewSessionOutcome::Aborted,
-        } => GuardianReviewOutcome::Aborted { review_thread_id },
+        } => GuardianReviewOutcome::Aborted { guardian_thread_id },
     }
 }
