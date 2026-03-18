@@ -225,7 +225,7 @@ use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
-use crate::project_doc::get_user_instructions;
+use crate::project_doc::get_user_instructions_with_environment;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
@@ -475,7 +475,7 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let user_instructions = get_user_instructions(&config).await;
+        let user_instructions = config.user_instructions.clone();
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -1764,6 +1764,9 @@ impl Session {
 
         let session_execution_backends =
             session_execution_backends_for_config(config.as_ref(), None).await?;
+        session_configuration.user_instructions =
+            get_user_instructions_with_environment(config.as_ref(), &session_execution_backends.environment)
+                .await;
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
             // instance. It will be replaced with one created via

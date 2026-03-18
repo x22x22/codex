@@ -22,6 +22,8 @@ use crate::config_loader::merge_toml_values;
 use crate::config_loader::project_root_markers_from_config;
 use crate::features::Feature;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_environment::Environment;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
@@ -78,7 +80,21 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
 /// string of instructions.
 pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
     let project_docs = read_project_docs(config).await;
+    build_user_instructions(config, project_docs)
+}
 
+pub(crate) async fn get_user_instructions_with_environment(
+    config: &Config,
+    environment: &Environment,
+) -> Option<String> {
+    let project_docs = read_project_docs_with_environment(config, environment).await;
+    build_user_instructions(config, project_docs)
+}
+
+fn build_user_instructions(
+    config: &Config,
+    project_docs: std::io::Result<Option<String>>,
+) -> Option<String> {
     let mut output = String::new();
 
     if let Some(instructions) = config.user_instructions.clone() {
@@ -116,6 +132,69 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
         Some(output)
     } else {
         None
+    }
+}
+
+pub async fn read_project_docs_with_environment(
+    config: &Config,
+    environment: &Environment,
+) -> std::io::Result<Option<String>> {
+    let max_total = config.project_doc_max_bytes;
+
+    if max_total == 0 {
+        return Ok(None);
+    }
+
+    let paths = discover_project_doc_paths_with_environment(config, environment).await?;
+    if paths.is_empty() {
+        return Ok(None);
+    }
+
+    let file_system = environment.get_filesystem();
+    let mut remaining: u64 = max_total as u64;
+    let mut parts: Vec<String> = Vec::new();
+
+    for p in paths {
+        if remaining == 0 {
+            break;
+        }
+
+        let metadata = match file_system.get_metadata(&p).await {
+            Ok(metadata) => metadata,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+
+        let data = match file_system.read_file(&p).await {
+            Ok(data) => data,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+
+        if (data.len() as u64) > remaining {
+            tracing::warn!(
+                "Project doc `{}` exceeds remaining budget ({} bytes) - truncating.",
+                p.display(),
+                remaining,
+            );
+        }
+
+        let allowed = remaining.min(data.len() as u64) as usize;
+        let data = &data[..allowed];
+
+        if metadata.is_file {
+            let text = String::from_utf8_lossy(data).to_string();
+            if !text.trim().is_empty() {
+                parts.push(text);
+                remaining = remaining.saturating_sub(data.len() as u64);
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(parts.join("\n\n")))
     }
 }
 
@@ -261,6 +340,119 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
                         break;
                     }
                 }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    Ok(found)
+}
+
+pub async fn discover_project_doc_paths_with_environment(
+    config: &Config,
+    environment: &Environment,
+) -> std::io::Result<Vec<AbsolutePathBuf>> {
+    let dir = AbsolutePathBuf::try_from(config.cwd.clone()).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("cwd must be absolute for project-doc discovery: {err}"),
+        )
+    })?;
+    let file_system = environment.get_filesystem();
+
+    let mut merged = TomlValue::Table(toml::map::Map::new());
+    for layer in config.config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
+        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
+            continue;
+        }
+        merge_toml_values(&mut merged, &layer.config);
+    }
+    let project_root_markers = match project_root_markers_from_config(&merged) {
+        Ok(Some(markers)) => markers,
+        Ok(None) => default_project_root_markers(),
+        Err(err) => {
+            tracing::warn!("invalid project_root_markers: {err}");
+            default_project_root_markers()
+        }
+    };
+
+    let mut project_root = None;
+    if !project_root_markers.is_empty() {
+        for ancestor in dir.as_path().ancestors() {
+            let ancestor = AbsolutePathBuf::try_from(ancestor.to_path_buf()).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("ancestor must stay absolute for project-doc discovery: {err}"),
+                )
+            })?;
+            for marker in &project_root_markers {
+                let marker_path = AbsolutePathBuf::try_from(ancestor.as_path().join(marker))
+                    .map_err(|err| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!("marker path must stay absolute for project-doc discovery: {err}"),
+                        )
+                    })?;
+                let marker_exists = match file_system.get_metadata(&marker_path).await {
+                    Ok(_) => true,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(e) => return Err(e),
+                };
+                if marker_exists {
+                    project_root = Some(ancestor);
+                    break;
+                }
+            }
+            if project_root.is_some() {
+                break;
+            }
+        }
+    }
+
+    let search_dirs: Vec<AbsolutePathBuf> = if let Some(root) = project_root {
+        let mut dirs = Vec::new();
+        let mut cursor = dir.as_path();
+        loop {
+            dirs.push(AbsolutePathBuf::try_from(cursor.to_path_buf()).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("search dir must stay absolute for project-doc discovery: {err}"),
+                )
+            })?);
+            if cursor == root.as_path() {
+                break;
+            }
+            let Some(parent) = cursor.parent() else {
+                break;
+            };
+            cursor = parent;
+        }
+        dirs.reverse();
+        dirs
+    } else {
+        vec![dir]
+    };
+
+    let mut found: Vec<AbsolutePathBuf> = Vec::new();
+    let candidate_filenames = candidate_filenames(config);
+    for d in search_dirs {
+        for name in &candidate_filenames {
+            let candidate = AbsolutePathBuf::try_from(d.as_path().join(name)).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("candidate path must stay absolute for project-doc discovery: {err}"),
+                )
+            })?;
+            match file_system.get_metadata(&candidate).await {
+                Ok(metadata) if metadata.is_file => {
+                    found.push(candidate);
+                    break;
+                }
+                Ok(_) => continue,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(e),
             }

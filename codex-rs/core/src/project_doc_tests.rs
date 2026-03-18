@@ -1,8 +1,19 @@
 use super::*;
 use crate::config::ConfigBuilder;
 use crate::features::Feature;
+use async_trait::async_trait;
+use codex_environment::CopyOptions;
+use codex_environment::CreateDirectoryOptions;
+use codex_environment::Environment;
+use codex_environment::ExecutorFileSystem;
+use codex_environment::FileMetadata;
+use codex_environment::FileSystemResult;
+use codex_environment::ReadDirectoryEntry;
+use codex_environment::RemoveOptions;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 /// Helper that returns a `Config` pointing at `root` and using `limit` as
@@ -66,6 +77,117 @@ async fn make_config_with_project_root_markers(
     config.project_doc_max_bytes = limit;
     config.user_instructions = instructions.map(ToOwned::to_owned);
     config
+}
+
+#[derive(Clone)]
+struct RemappedFileSystem {
+    local_root: AbsolutePathBuf,
+    remote_root: AbsolutePathBuf,
+}
+
+impl RemappedFileSystem {
+    fn new(local_root: &std::path::Path, remote_root: &std::path::Path) -> Self {
+        Self {
+            local_root: AbsolutePathBuf::try_from(local_root.to_path_buf()).unwrap(),
+            remote_root: AbsolutePathBuf::try_from(remote_root.to_path_buf()).unwrap(),
+        }
+    }
+
+    fn remap(&self, path: &AbsolutePathBuf) -> AbsolutePathBuf {
+        let relative = path
+            .as_path()
+            .strip_prefix(self.local_root.as_path())
+            .expect("path should remain within local root during test");
+        AbsolutePathBuf::try_from(self.remote_root.as_path().join(relative)).unwrap()
+    }
+}
+
+#[async_trait]
+impl ExecutorFileSystem for RemappedFileSystem {
+    async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>> {
+        tokio::fs::read(self.remap(path).as_path()).await
+    }
+
+    async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()> {
+        tokio::fs::write(self.remap(path).as_path(), contents).await
+    }
+
+    async fn create_directory(
+        &self,
+        path: &AbsolutePathBuf,
+        options: CreateDirectoryOptions,
+    ) -> FileSystemResult<()> {
+        if options.recursive {
+            tokio::fs::create_dir_all(self.remap(path).as_path()).await
+        } else {
+            tokio::fs::create_dir(self.remap(path).as_path()).await
+        }
+    }
+
+    async fn get_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
+        let metadata = tokio::fs::metadata(self.remap(path).as_path()).await?;
+        Ok(FileMetadata {
+            is_directory: metadata.is_dir(),
+            is_file: metadata.is_file(),
+            created_at_ms: 0,
+            modified_at_ms: 0,
+        })
+    }
+
+    async fn read_directory(
+        &self,
+        path: &AbsolutePathBuf,
+    ) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+        let mut entries = Vec::new();
+        let mut read_dir = tokio::fs::read_dir(self.remap(path).as_path()).await?;
+        while let Some(entry) = read_dir.next_entry().await? {
+            let metadata = tokio::fs::symlink_metadata(entry.path()).await?;
+            entries.push(ReadDirectoryEntry {
+                file_name: entry.file_name().to_string_lossy().into_owned(),
+                is_directory: metadata.is_dir(),
+                is_file: metadata.is_file(),
+                is_symlink: metadata.file_type().is_symlink(),
+            });
+        }
+        Ok(entries)
+    }
+
+    async fn remove(
+        &self,
+        path: &AbsolutePathBuf,
+        options: RemoveOptions,
+    ) -> FileSystemResult<()> {
+        let remapped = self.remap(path);
+        match tokio::fs::symlink_metadata(remapped.as_path()).await {
+            Ok(metadata) => {
+                if metadata.is_dir() {
+                    if options.recursive {
+                        tokio::fs::remove_dir_all(remapped.as_path()).await
+                    } else {
+                        tokio::fs::remove_dir(remapped.as_path()).await
+                    }
+                } else {
+                    tokio::fs::remove_file(remapped.as_path()).await
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound && options.force => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn copy(
+        &self,
+        source_path: &AbsolutePathBuf,
+        destination_path: &AbsolutePathBuf,
+        _options: CopyOptions,
+    ) -> FileSystemResult<()> {
+        tokio::fs::copy(
+            self.remap(source_path).as_path(),
+            self.remap(destination_path).as_path(),
+        )
+        .await
+        .map(|_| ())
+    }
 }
 
 /// AGENTS.md missing – should yield `None`.
@@ -237,6 +359,55 @@ async fn keeps_existing_instructions_when_doc_missing() {
     let res = get_user_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS)).await).await;
 
     assert_eq!(res, Some(INSTRUCTIONS.to_string()));
+}
+
+#[tokio::test]
+async fn environment_backed_project_doc_prefers_remote_workspace_contents() {
+    let local = tempfile::tempdir().expect("local tempdir");
+    let remote = tempfile::tempdir().expect("remote tempdir");
+    fs::write(local.path().join("AGENTS.md"), "local doc").unwrap();
+    fs::write(remote.path().join("AGENTS.md"), "remote doc").unwrap();
+
+    let cfg = make_config(&local, 4096, None).await;
+    let environment = Environment::new(Arc::new(RemappedFileSystem::new(
+        local.path(),
+        remote.path(),
+    )));
+
+    let res = get_user_instructions_with_environment(&cfg, &environment)
+        .await
+        .expect("remote doc expected");
+
+    assert_eq!(res, "remote doc");
+}
+
+#[tokio::test]
+async fn environment_backed_project_doc_discovers_remote_hierarchy() {
+    let local = tempfile::tempdir().expect("local tempdir");
+    let remote = tempfile::tempdir().expect("remote tempdir");
+    fs::write(local.path().join(".git"), "gitdir: /tmp/local\n").unwrap();
+    fs::create_dir_all(local.path().join("workspace/crate_a")).unwrap();
+    fs::write(remote.path().join(".git"), "gitdir: /tmp/remote\n").unwrap();
+    fs::write(remote.path().join("AGENTS.md"), "remote root").unwrap();
+    fs::create_dir_all(remote.path().join("workspace/crate_a")).unwrap();
+    fs::write(
+        remote.path().join("workspace/crate_a/AGENTS.md"),
+        "remote nested",
+    )
+    .unwrap();
+
+    let mut cfg = make_config(&local, 4096, None).await;
+    cfg.cwd = local.path().join("workspace/crate_a");
+    let environment = Environment::new(Arc::new(RemappedFileSystem::new(
+        local.path(),
+        remote.path(),
+    )));
+
+    let res = get_user_instructions_with_environment(&cfg, &environment)
+        .await
+        .expect("remote docs expected");
+
+    assert_eq!(res, "remote root\n\nremote nested");
 }
 
 /// When both the repository root and the working directory contain
