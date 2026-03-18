@@ -551,6 +551,7 @@ async fn maybe_request_mcp_tool_approval(
     );
     let question_id = format!("{MCP_TOOL_APPROVAL_QUESTION_ID_PREFIX}_{call_id}");
     let rendered_template = render_mcp_tool_approval_template(
+        &turn_context.config.locale,
         &invocation.server,
         metadata.and_then(|metadata| metadata.connector_id.as_deref()),
         metadata.and_then(|metadata| metadata.connector_name.as_deref()),
