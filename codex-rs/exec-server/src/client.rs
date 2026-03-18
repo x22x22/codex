@@ -807,7 +807,6 @@ mod tests {
     use crate::protocol::ExecParams;
     use crate::protocol::INITIALIZE_METHOD;
     use crate::protocol::INITIALIZED_METHOD;
-    use crate::protocol::PROTOCOL_VERSION;
     use crate::protocol::ReadParams;
     use codex_app_server_protocol::JSONRPCError;
     use codex_app_server_protocol::JSONRPCErrorError;
@@ -880,7 +879,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
+                    result: serde_json::json!({}),
                 }),
             )
             .await;
@@ -1132,7 +1131,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
+                    result: serde_json::json!({}),
                 }),
             )
             .await;
@@ -1245,7 +1244,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
+                    result: serde_json::json!({}),
                 }),
             )
             .await;
@@ -1336,7 +1335,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
+                    result: serde_json::json!({}),
                 }),
             )
             .await;
@@ -1426,7 +1425,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
+                    result: serde_json::json!({}),
                 }),
             )
             .await;
@@ -1497,7 +1496,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
+                    result: serde_json::json!({}),
                 }),
             )
             .await;
@@ -1587,7 +1586,7 @@ mod tests {
                 &mut server_writer,
                 JSONRPCMessage::Response(JSONRPCResponse {
                     id: initialize_request.id,
-                    result: serde_json::json!({ "protocolVersion": PROTOCOL_VERSION }),
+                    result: serde_json::json!({}),
                 }),
             )
             .await;

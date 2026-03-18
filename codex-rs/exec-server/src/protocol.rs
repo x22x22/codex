@@ -13,7 +13,6 @@ pub const EXEC_WRITE_METHOD: &str = "process/write";
 pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
 pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
-pub const PROTOCOL_VERSION: &str = "exec-server.v0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -39,9 +38,7 @@ pub struct InitializeParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InitializeResponse {
-    pub protocol_version: String,
-}
+pub struct InitializeResponse {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

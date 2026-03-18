@@ -1841,7 +1841,6 @@ dependencies = [
  "codex-client",
  "codex-config",
  "codex-connectors",
- "codex-environment",
  "codex-exec-server",
  "codex-execpolicy",
  "codex-file-search",

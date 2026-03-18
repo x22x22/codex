@@ -93,9 +93,7 @@ Request params:
 Response:
 
 ```json
-{
-  "protocolVersion": "exec-server.v0"
-}
+{}
 ```
 
 ### `initialized`
@@ -363,7 +361,7 @@ Initialize:
 
 ```json
 {"id":1,"method":"initialize","params":{"clientName":"example-client"}}
-{"id":1,"result":{"protocolVersion":"exec-server.v0"}}
+{"id":1,"result":{}}
 {"method":"initialized","params":{}}
 ```
 
