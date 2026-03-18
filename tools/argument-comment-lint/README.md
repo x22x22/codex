@@ -68,6 +68,20 @@ cd tools/argument-comment-lint
 cargo test
 ```
 
+Stable GitHub releases also publish a DotSlash file named
+`argument-comment-lint` for macOS arm64, Linux arm64, Linux x64, and Windows
+x64. The published package contains a small runner executable, a bundled
+`cargo-dylint`, and the prebuilt lint library.
+
+`run.sh` prefers that packaged runner when `dotslash` is installed, and falls
+back to the local `cargo dylint --path ...` flow when the release asset is not
+available yet or `CODEX_ARGUMENT_COMMENT_LINT_USE_LOCAL=1` is set. To refresh
+the cached DotSlash manifest after a new stable release:
+
+```bash
+CODEX_ARGUMENT_COMMENT_LINT_REFRESH=1 ./tools/argument-comment-lint/run.sh -p codex-core
+```
+
 Run the lint against `codex-rs` from the repo root:
 
 ```bash
