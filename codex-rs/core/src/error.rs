@@ -191,6 +191,15 @@ impl From<CancelErr> for CodexErr {
     }
 }
 
+impl From<codex_models::EnvVarError> for CodexErr {
+    fn from(error: codex_models::EnvVarError) -> Self {
+        Self::EnvVar(EnvVarError {
+            var: error.var,
+            instructions: error.instructions,
+        })
+    }
+}
+
 impl CodexErr {
     pub fn is_retryable(&self) -> bool {
         match self {

@@ -1849,6 +1849,7 @@ dependencies = [
  "codex-git",
  "codex-hooks",
  "codex-keyring-store",
+ "codex-models",
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
@@ -2191,6 +2192,29 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
+]
+
+[[package]]
+name = "codex-models"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "codex-api",
+ "codex-protocol",
+ "http 1.4.0",
+ "maplit",
+ "pretty_assertions",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 0.9.11+spec-1.1.0",
+ "tracing",
  "wiremock",
 ]
 

@@ -1,4 +1,3 @@
-use super::cache::ModelsCacheManager;
 use crate::api_bridge::auth_provider_from_auth;
 use crate::api_bridge::map_api_error;
 use crate::auth::AuthManager;
@@ -10,18 +9,19 @@ use crate::config::Config;
 use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result as CoreResult;
-use crate::model_provider_info::ModelProviderInfo;
-use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
-use crate::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
 use crate::models_manager::model_info;
-use crate::response_debug_context::extract_response_debug_context;
-use crate::response_debug_context::telemetry_transport_error_message;
 use crate::util::FeedbackRequestTags;
 use crate::util::emit_feedback_request_tags_with_auth_env;
 use codex_api::ModelsClient;
 use codex_api::RequestTelemetry;
 use codex_api::ReqwestTransport;
 use codex_api::TransportError;
+use codex_models::ModelProviderInfo;
+use codex_models::models_manager::cache::ModelsCacheManager;
+use codex_models::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_models::models_manager::collaboration_mode_presets::builtin_collaboration_mode_presets;
+use codex_models::response_debug_context::extract_response_debug_context;
+use codex_models::response_debug_context::telemetry_transport_error_message;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelInfo;
@@ -433,7 +433,9 @@ impl ModelsManager {
             codex_otel::start_global_timer("codex.remote_models.fetch_update.duration_ms", &[]);
         let auth = self.auth_manager.auth().await;
         let auth_mode = auth.as_ref().map(CodexAuth::auth_mode);
-        let api_provider = self.provider.to_api_provider(auth_mode)?;
+        let api_provider = self
+            .provider
+            .to_api_provider(matches!(auth_mode, Some(AuthMode::Chatgpt)))?;
         let api_auth = auth_provider_from_auth(auth.clone(), &self.provider)?;
         let auth_env = collect_auth_env_telemetry(
             &self.provider,

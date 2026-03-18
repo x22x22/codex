@@ -10,18 +10,12 @@ const KNOWN_MODE_NAMES_PLACEHOLDER: &str = "{{KNOWN_MODE_NAMES}}";
 const REQUEST_USER_INPUT_AVAILABILITY_PLACEHOLDER: &str = "{{REQUEST_USER_INPUT_AVAILABILITY}}";
 const ASKING_QUESTIONS_GUIDANCE_PLACEHOLDER: &str = "{{ASKING_QUESTIONS_GUIDANCE}}";
 
-/// Stores feature flags that control collaboration-mode behavior.
-///
-/// Keep mode-related flags here so new collaboration-mode capabilities can be
-/// added without large cross-cutting diffs to constructor and call-site
-/// signatures.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CollaborationModesConfig {
-    /// Enables `request_user_input` availability in Default mode.
     pub default_mode_request_user_input: bool,
 }
 
-pub(crate) fn builtin_collaboration_mode_presets(
+pub fn builtin_collaboration_mode_presets(
     collaboration_modes_config: CollaborationModesConfig,
 ) -> Vec<CollaborationModeMask> {
     vec![plan_preset(), default_preset(collaboration_modes_config)]
