@@ -1,0 +1,25 @@
+mod manifest;
+mod render;
+mod store;
+mod types;
+
+pub use manifest::PLUGIN_MANIFEST_PATH;
+pub use manifest::PluginManifest;
+pub use manifest::PluginManifestInterfaceSummary;
+pub use manifest::PluginManifestPaths;
+pub use manifest::load_plugin_manifest;
+pub use manifest::plugin_manifest_interface;
+pub use manifest::plugin_manifest_name;
+pub use manifest::plugin_manifest_paths;
+pub use render::render_explicit_plugin_instructions;
+pub use render::render_plugins_section;
+pub use store::DEFAULT_PLUGIN_VERSION;
+pub use store::PLUGINS_CACHE_DIR;
+pub use store::PluginId;
+pub use store::PluginIdError;
+pub use store::PluginInstallResult;
+pub use store::PluginStore;
+pub use store::PluginStoreError;
+pub use types::AppConnectorId;
+pub use types::PluginCapabilitySummary;
+pub use types::PluginTelemetryMetadata;

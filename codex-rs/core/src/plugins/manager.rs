@@ -46,6 +46,9 @@ use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
+use codex_extensions::plugins::AppConnectorId;
+use codex_extensions::plugins::PluginCapabilitySummary;
+use codex_extensions::plugins::PluginTelemetryMetadata;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
@@ -70,10 +73,6 @@ const DEFAULT_MCP_CONFIG_FILE: &str = ".mcp.json";
 const DEFAULT_APP_CONFIG_FILE: &str = ".app.json";
 pub const OPENAI_CURATED_MARKETPLACE_NAME: &str = "openai-curated";
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
-const MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN: usize = 1024;
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct AppConnectorId(pub String);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginInstallRequest {
@@ -157,98 +156,6 @@ impl LoadedPlugin {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct PluginCapabilitySummary {
-    pub config_name: String,
-    pub display_name: String,
-    pub description: Option<String>,
-    pub has_skills: bool,
-    pub mcp_server_names: Vec<String>,
-    pub app_connector_ids: Vec<AppConnectorId>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginTelemetryMetadata {
-    pub plugin_id: PluginId,
-    pub capability_summary: Option<PluginCapabilitySummary>,
-}
-
-impl PluginTelemetryMetadata {
-    pub fn from_plugin_id(plugin_id: &PluginId) -> Self {
-        Self {
-            plugin_id: plugin_id.clone(),
-            capability_summary: None,
-        }
-    }
-}
-
-impl PluginCapabilitySummary {
-    fn from_plugin(plugin: &LoadedPlugin) -> Option<Self> {
-        if !plugin.is_active() {
-            return None;
-        }
-
-        let mut mcp_server_names: Vec<String> = plugin.mcp_servers.keys().cloned().collect();
-        mcp_server_names.sort_unstable();
-
-        let summary = Self {
-            config_name: plugin.config_name.clone(),
-            display_name: plugin
-                .manifest_name
-                .clone()
-                .unwrap_or_else(|| plugin.config_name.clone()),
-            description: prompt_safe_plugin_description(plugin.manifest_description.as_deref()),
-            has_skills: !plugin.skill_roots.is_empty(),
-            mcp_server_names,
-            app_connector_ids: plugin.apps.clone(),
-        };
-
-        (summary.has_skills
-            || !summary.mcp_server_names.is_empty()
-            || !summary.app_connector_ids.is_empty())
-        .then_some(summary)
-    }
-
-    pub fn telemetry_metadata(&self) -> Option<PluginTelemetryMetadata> {
-        PluginId::parse(&self.config_name)
-            .ok()
-            .map(|plugin_id| PluginTelemetryMetadata {
-                plugin_id,
-                capability_summary: Some(self.clone()),
-            })
-    }
-}
-
-impl From<PluginDetailSummary> for PluginCapabilitySummary {
-    fn from(value: PluginDetailSummary) -> Self {
-        Self {
-            config_name: value.id,
-            display_name: value.name,
-            description: prompt_safe_plugin_description(value.description.as_deref()),
-            has_skills: !value.skills.is_empty(),
-            mcp_server_names: value.mcp_server_names,
-            app_connector_ids: value.apps,
-        }
-    }
-}
-
-fn prompt_safe_plugin_description(description: Option<&str>) -> Option<String> {
-    let description = description?
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if description.is_empty() {
-        return None;
-    }
-
-    Some(
-        description
-            .chars()
-            .take(MAX_CAPABILITY_SUMMARY_DESCRIPTION_LEN)
-            .collect(),
-    )
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginLoadOutcome {
     plugins: Vec<LoadedPlugin>,
@@ -265,7 +172,7 @@ impl PluginLoadOutcome {
     fn from_plugins(plugins: Vec<LoadedPlugin>) -> Self {
         let capability_summaries = plugins
             .iter()
-            .filter_map(PluginCapabilitySummary::from_plugin)
+            .filter_map(plugin_capability_summary_from_loaded_plugin)
             .collect::<Vec<_>>();
         Self {
             plugins,
