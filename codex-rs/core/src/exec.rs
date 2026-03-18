@@ -189,6 +189,29 @@ pub async fn process_exec_tool_call(
     use_legacy_landlock: bool,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
+    let exec_req = build_process_exec_tool_request(
+        params,
+        sandbox_policy,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        sandbox_cwd,
+        codex_linux_sandbox_exe,
+        use_legacy_landlock,
+    )?;
+
+    // Route through the sandboxing module for a single, unified execution path.
+    crate::sandboxing::execute_env(exec_req, stdout_stream).await
+}
+
+fn build_process_exec_tool_request(
+    params: ExecParams,
+    sandbox_policy: &SandboxPolicy,
+    file_system_sandbox_policy: &FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+    sandbox_cwd: &Path,
+    codex_linux_sandbox_exe: &Option<PathBuf>,
+    use_legacy_landlock: bool,
+) -> Result<ExecRequest> {
     let mut exec_req = build_exec_request(
         params,
         sandbox_policy,
@@ -199,9 +222,7 @@ pub async fn process_exec_tool_call(
         use_legacy_landlock,
     )?;
     exec_req.allow_detached_children_in_linux_sandbox();
-
-    // Route through the sandboxing module for a single, unified execution path.
-    crate::sandboxing::execute_env(exec_req, stdout_stream).await
+    Ok(exec_req)
 }
 
 /// Transform a portable exec request into the concrete argv/env that should be
