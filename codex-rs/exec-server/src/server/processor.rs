@@ -20,8 +20,8 @@ pub(crate) async fn run_connection(connection: JsonRpcConnection) {
     let (json_outgoing_tx, mut incoming_rx, _connection_tasks) = connection.into_parts();
     let (outgoing_tx, mut outgoing_rx) =
         mpsc::channel::<RpcServerOutboundMessage>(CHANNEL_CAPACITY);
-    let handler = Arc::new(Mutex::new(ExecServerHandler::new()));
-    let _notifications = RpcNotificationSender::new(outgoing_tx.clone());
+    let notifications = RpcNotificationSender::new(outgoing_tx.clone());
+    let handler = Arc::new(Mutex::new(ExecServerHandler::new(notifications)));
 
     let outbound_task = tokio::spawn(async move {
         while let Some(message) = outgoing_rx.recv().await {

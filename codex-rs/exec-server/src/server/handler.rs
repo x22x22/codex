@@ -2,15 +2,18 @@ use codex_app_server_protocol::JSONRPCErrorError;
 
 use crate::protocol::InitializeResponse;
 use crate::protocol::PROTOCOL_VERSION;
+use crate::rpc::RpcNotificationSender;
 
 pub(crate) struct ExecServerHandler {
+    _notifications: RpcNotificationSender,
     initialize_requested: bool,
     initialized: bool,
 }
 
 impl ExecServerHandler {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
         Self {
+            _notifications: notifications,
             initialize_requested: false,
             initialized: false,
         }
