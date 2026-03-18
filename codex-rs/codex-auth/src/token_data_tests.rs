@@ -1,5 +1,5 @@
-use base64::Engine;
 use super::token_data::*;
+use base64::Engine;
 use pretty_assertions::assert_eq;
 use serde::Serialize;
 
