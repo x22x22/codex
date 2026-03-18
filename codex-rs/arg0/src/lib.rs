@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_apply_patch::CODEX_CORE_APPLY_PATCH_ARG1;
+use codex_fs_ops::CODEX_CORE_FS_OPS_ARG1;
 use codex_utils_home_dir::find_codex_home;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
@@ -102,6 +103,15 @@ pub fn arg0_dispatch() -> Option<Arg0PathEntryGuard> {
                 eprintln!("Error: {CODEX_CORE_APPLY_PATCH_ARG1} requires a UTF-8 PATCH argument.");
                 1
             }
+        };
+        std::process::exit(exit_code);
+    }
+    if argv1 == CODEX_CORE_FS_OPS_ARG1 {
+        let mut stdout = std::io::stdout();
+        let mut stderr = std::io::stderr();
+        let exit_code = match codex_fs_ops::run_from_args(args, &mut stdout, &mut stderr) {
+            Ok(()) => 0,
+            Err(_) => 1,
         };
         std::process::exit(exit_code);
     }
