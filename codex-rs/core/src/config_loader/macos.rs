@@ -154,6 +154,16 @@ fn parse_managed_config_base64(encoded: &str) -> io::Result<Option<ManagedAdminC
                     return Ok(None);
                 }
             };
+            if let Some(dropped_entry) = sanitized
+                .dropped_entries
+                .iter()
+                .find(|entry| is_invalid_security_managed_config_entry(entry))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Error parsing managed config from MDM: {dropped_entry}"),
+                ));
+            }
             for dropped_entry in &sanitized.dropped_entries {
                 tracing::warn!(
                     dropped_entry = %dropped_entry,
@@ -180,6 +190,15 @@ fn parse_managed_config_base64(encoded: &str) -> io::Result<Option<ManagedAdminC
             Ok(None)
         }
     }
+}
+
+fn is_invalid_security_managed_config_entry(dropped_entry: &str) -> bool {
+    let path = dropped_entry
+        .split_once(':')
+        .map_or(dropped_entry, |(path, _)| path)
+        .trim();
+    let top_level = path.split(['.', '[']).next().unwrap_or(path);
+    matches!(top_level, "approval_policy" | "sandbox_mode")
 }
 
 fn parse_managed_requirements_base64(encoded: &str) -> io::Result<ConfigRequirementsToml> {

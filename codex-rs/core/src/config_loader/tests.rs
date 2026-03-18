@@ -470,6 +470,48 @@ writable_roots = ["relative/path"]
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+async fn managed_preferences_invalid_security_config_entry_fails_closed() -> anyhow::Result<()> {
+    use base64::Engine;
+
+    for (payload, expected_fragment) in [
+        (
+            "approval_policy = \"bogus\"\nmodel = \"managed\"\n",
+            "approval_policy",
+        ),
+        (
+            "sandbox_mode = \"bogus\"\nmodel = \"managed\"\n",
+            "sandbox_mode",
+        ),
+    ] {
+        let tmp = tempdir()?;
+        let err = load_config_layers_state(
+            tmp.path(),
+            Some(AbsolutePathBuf::try_from(tmp.path())?),
+            &[] as &[(String, TomlValue)],
+            LoaderOverrides {
+                managed_config_path: Some(tmp.path().join("managed_config.toml")),
+                managed_preferences_base64: Some(
+                    base64::prelude::BASE64_STANDARD.encode(payload.as_bytes()),
+                ),
+                macos_managed_config_requirements_base64: None,
+            },
+            CloudRequirementsLoader::default(),
+        )
+        .await
+        .expect_err("invalid managed security config should fail closed");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let message = err.to_string();
+        assert!(message.contains("Error parsing managed config from MDM"));
+        assert!(message.contains(expected_fragment), "{message}");
+        assert!(message.contains("bogus"), "{message}");
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 async fn managed_preferences_ignore_invalid_payload() -> anyhow::Result<()> {
     let tmp = tempdir()?;
     std::fs::write(tmp.path().join(CONFIG_TOML_FILE), "model = \"user\"\n")?;
