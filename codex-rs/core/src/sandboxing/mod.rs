@@ -9,10 +9,13 @@ ready‑to‑spawn environment.
 pub(crate) mod macos_permissions;
 
 use crate::exec::ExecExpiration;
+use crate::exec::ExecStdin;
 use crate::exec::ExecToolCallOutput;
+use crate::exec::ExecToolCallOutputBytes;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::execute_exec_request;
+use crate::exec::execute_exec_request_bytes;
 use crate::landlock::allow_network_for_proxy;
 use crate::landlock::create_linux_sandbox_command_args_for_policies;
 use crate::protocol::SandboxPolicy;
@@ -66,6 +69,7 @@ pub struct ExecRequest {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
+    pub stdin: ExecStdin,
     pub expiration: ExecExpiration,
     pub sandbox: SandboxType,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -706,6 +710,7 @@ impl SandboxManager {
             cwd: spec.cwd,
             env,
             network: network.cloned(),
+            stdin: ExecStdin::Closed,
             expiration: spec.expiration,
             sandbox,
             windows_sandbox_level,
@@ -730,6 +735,20 @@ pub async fn execute_env(
 ) -> crate::error::Result<ExecToolCallOutput> {
     let effective_policy = exec_request.sandbox_policy.clone();
     execute_exec_request(
+        exec_request,
+        &effective_policy,
+        stdout_stream,
+        /*after_spawn*/ None,
+    )
+    .await
+}
+
+pub(crate) async fn execute_env_bytes(
+    exec_request: ExecRequest,
+    stdout_stream: Option<StdoutStream>,
+) -> crate::error::Result<ExecToolCallOutputBytes> {
+    let effective_policy = exec_request.sandbox_policy.clone();
+    execute_exec_request_bytes(
         exec_request,
         &effective_policy,
         stdout_stream,

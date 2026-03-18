@@ -12,6 +12,7 @@ use std::time::Instant;
 use async_channel::Sender;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
@@ -80,11 +81,19 @@ pub struct ExecParams {
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
+    pub stdin: ExecStdin,
     pub sandbox_permissions: SandboxPermissions,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
     pub justification: Option<String>,
     pub arg0: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum ExecStdin {
+    #[default]
+    Closed,
+    Bytes(Vec<u8>),
 }
 
 fn select_process_exec_tool_sandbox_type(
@@ -231,6 +240,7 @@ pub fn build_exec_request(
         mut env,
         expiration,
         network,
+        stdin: _stdin,
         sandbox_permissions,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -291,6 +301,7 @@ pub(crate) async fn execute_exec_request(
         cwd,
         env,
         network,
+        stdin,
         expiration,
         sandbox,
         windows_sandbox_level,
@@ -310,6 +321,7 @@ pub(crate) async fn execute_exec_request(
         expiration,
         env,
         network: network.clone(),
+        stdin,
         sandbox_permissions,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -330,6 +342,60 @@ pub(crate) async fn execute_exec_request(
     .await;
     let duration = start.elapsed();
     finalize_exec_result(raw_output_result, sandbox, duration)
+}
+
+pub(crate) async fn execute_exec_request_bytes(
+    exec_request: ExecRequest,
+    sandbox_policy: &SandboxPolicy,
+    stdout_stream: Option<StdoutStream>,
+    after_spawn: Option<Box<dyn FnOnce() + Send>>,
+) -> Result<ExecToolCallOutputBytes> {
+    let ExecRequest {
+        command,
+        cwd,
+        env,
+        network,
+        stdin,
+        expiration,
+        sandbox,
+        windows_sandbox_level,
+        windows_sandbox_private_desktop,
+        sandbox_permissions,
+        sandbox_policy: _sandbox_policy_from_env,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        justification,
+        arg0,
+    } = exec_request;
+    let _ = _sandbox_policy_from_env;
+
+    let params = ExecParams {
+        command,
+        cwd,
+        expiration,
+        env,
+        network: network.clone(),
+        stdin,
+        sandbox_permissions,
+        windows_sandbox_level,
+        windows_sandbox_private_desktop,
+        justification,
+        arg0,
+    };
+
+    let start = Instant::now();
+    let raw_output_result = exec(
+        params,
+        sandbox,
+        sandbox_policy,
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+        stdout_stream,
+        after_spawn,
+    )
+    .await;
+    let duration = start.elapsed();
+    finalize_exec_result_bytes(raw_output_result, sandbox, duration)
 }
 
 #[cfg(target_os = "windows")]
@@ -413,6 +479,7 @@ async fn exec_windows_sandbox(
         cwd,
         mut env,
         network,
+        stdin,
         expiration,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -449,6 +516,10 @@ async fn exec_windows_sandbox(
                 command,
                 &cwd,
                 env,
+                match stdin {
+                    ExecStdin::Closed => None,
+                    ExecStdin::Bytes(bytes) => Some(bytes),
+                },
                 timeout_ms,
                 windows_sandbox_private_desktop,
             )
@@ -460,6 +531,10 @@ async fn exec_windows_sandbox(
                 command,
                 &cwd,
                 env,
+                match stdin {
+                    ExecStdin::Closed => None,
+                    ExecStdin::Bytes(bytes) => Some(bytes),
+                },
                 timeout_ms,
                 windows_sandbox_private_desktop,
             )
@@ -561,6 +636,64 @@ fn finalize_exec_result(
             if is_likely_sandbox_denied(sandbox_type, &exec_output) {
                 return Err(CodexErr::Sandbox(SandboxErr::Denied {
                     output: Box::new(exec_output),
+                    network_policy_decision: None,
+                }));
+            }
+
+            Ok(exec_output)
+        }
+        Err(err) => {
+            tracing::error!("exec error: {err}");
+            Err(err)
+        }
+    }
+}
+
+fn finalize_exec_result_bytes(
+    raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr>,
+    sandbox_type: SandboxType,
+    duration: Duration,
+) -> Result<ExecToolCallOutputBytes> {
+    match raw_output_result {
+        Ok(raw_output) => {
+            #[allow(unused_mut)]
+            let mut timed_out = raw_output.timed_out;
+
+            #[cfg(target_family = "unix")]
+            {
+                if let Some(signal) = raw_output.exit_status.signal() {
+                    if signal == TIMEOUT_CODE {
+                        timed_out = true;
+                    } else {
+                        return Err(CodexErr::Sandbox(SandboxErr::Signal(signal)));
+                    }
+                }
+            }
+
+            let mut exit_code = raw_output.exit_status.code().unwrap_or(-1);
+            if timed_out {
+                exit_code = EXEC_TIMEOUT_EXIT_CODE;
+            }
+
+            let exec_output = ExecToolCallOutputBytes {
+                exit_code,
+                stdout: raw_output.stdout,
+                stderr: raw_output.stderr,
+                aggregated_output: raw_output.aggregated_output,
+                duration,
+                timed_out,
+            };
+
+            if timed_out {
+                return Err(CodexErr::Sandbox(SandboxErr::Timeout {
+                    output: Box::new(exec_output.to_utf8_lossy_output()),
+                }));
+            }
+
+            let string_output = exec_output.to_utf8_lossy_output();
+            if is_likely_sandbox_denied(sandbox_type, &string_output) {
+                return Err(CodexErr::Sandbox(SandboxErr::Denied {
+                    output: Box::new(string_output),
                     network_policy_decision: None,
                 }));
             }
@@ -741,6 +874,16 @@ pub struct ExecToolCallOutput {
     pub timed_out: bool,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ExecToolCallOutputBytes {
+    pub exit_code: i32,
+    pub stdout: StreamOutput<Vec<u8>>,
+    pub stderr: StreamOutput<Vec<u8>>,
+    pub aggregated_output: StreamOutput<Vec<u8>>,
+    pub duration: Duration,
+    pub timed_out: bool,
+}
+
 impl Default for ExecToolCallOutput {
     fn default() -> Self {
         Self {
@@ -750,6 +893,19 @@ impl Default for ExecToolCallOutput {
             aggregated_output: StreamOutput::new(String::new()),
             duration: Duration::ZERO,
             timed_out: false,
+        }
+    }
+}
+
+impl ExecToolCallOutputBytes {
+    fn to_utf8_lossy_output(&self) -> ExecToolCallOutput {
+        ExecToolCallOutput {
+            exit_code: self.exit_code,
+            stdout: self.stdout.from_utf8_lossy(),
+            stderr: self.stderr.from_utf8_lossy(),
+            aggregated_output: self.aggregated_output.from_utf8_lossy(),
+            duration: self.duration,
+            timed_out: self.timed_out,
         }
     }
 }
@@ -784,6 +940,7 @@ async fn exec(
         mut env,
         network,
         arg0,
+        stdin,
         expiration,
         windows_sandbox_level: _,
         ..
@@ -811,12 +968,13 @@ async fn exec(
         network: None,
         stdio_policy: StdioPolicy::RedirectForShellTool,
         env,
+        stdin_open: matches!(stdin, ExecStdin::Bytes(_)),
     })
     .await?;
     if let Some(after_spawn) = after_spawn {
         after_spawn();
     }
-    consume_truncated_output(child, expiration, stdout_stream).await
+    consume_truncated_output(child, stdin, expiration, stdout_stream).await
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -874,9 +1032,18 @@ fn windows_restricted_token_sandbox_support(
 /// use as the output of a `shell` tool call. Also enforces specified timeout.
 async fn consume_truncated_output(
     mut child: Child,
+    stdin: ExecStdin,
     expiration: ExecExpiration,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
+    let stdin_task = match (child.stdin.take(), stdin) {
+        (Some(mut child_stdin), ExecStdin::Bytes(bytes)) => Some(tokio::spawn(async move {
+            child_stdin.write_all(&bytes).await?;
+            child_stdin.shutdown().await
+        })),
+        _ => None,
+    };
+
     // Both stdout and stderr were configured with `Stdio::piped()`
     // above, therefore `take()` should normally return `Some`.  If it doesn't
     // we treat it as an exceptional I/O error
@@ -956,6 +1123,13 @@ async fn consume_truncated_output(
         Duration::from_millis(IO_DRAIN_TIMEOUT_MS),
     )
     .await?;
+    if let Some(stdin_task) = stdin_task {
+        match stdin_task.await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => return Err(CodexErr::Io(err)),
+            Err(join_err) => return Err(CodexErr::Io(io::Error::other(join_err))),
+        }
+    }
     let aggregated_output = aggregate_output(&stdout, &stderr);
 
     Ok(RawExecToolCallOutput {
