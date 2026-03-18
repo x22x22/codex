@@ -4861,7 +4861,7 @@ impl CodexMessageProcessor {
         // Any pending app-server -> client requests for this thread can no longer be
         // answered; cancel their callbacks before shutdown/unload.
         self.outgoing
-            .cancel_requests_for_thread(thread_id, None)
+            .cancel_requests_for_thread(thread_id, /*error*/ None)
             .await;
         self.thread_state_manager
             .remove_thread_state(thread_id)
