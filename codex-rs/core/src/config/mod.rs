@@ -539,6 +539,14 @@ pub struct Config {
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
+    /// When set, connect unified-exec process launches to an existing remote
+    /// `codex-exec-server` websocket endpoint.
+    pub experimental_unified_exec_exec_server_websocket_url: Option<String>,
+
+    /// When set, map local session cwd to this executor-visible workspace root
+    /// for remote unified-exec process launches.
+    pub experimental_unified_exec_exec_server_workspace_root: Option<AbsolutePathBuf>,
+
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: u64,
@@ -1324,6 +1332,13 @@ pub struct ConfigToml {
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: Option<u64>,
+
+    /// Optional websocket URL for connecting to an existing `codex-exec-server`.
+    pub experimental_unified_exec_exec_server_websocket_url: Option<String>,
+
+    /// Optional absolute path to the executor-visible workspace root that
+    /// corresponds to the local session cwd.
+    pub experimental_unified_exec_exec_server_workspace_root: Option<AbsolutePathBuf>,
 
     /// Optional absolute path to the Node runtime used by `js_repl`.
     pub js_repl_node_path: Option<AbsolutePathBuf>,
@@ -2474,6 +2489,20 @@ impl Config {
 
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
+        let experimental_unified_exec_exec_server_websocket_url = cfg
+            .experimental_unified_exec_exec_server_websocket_url
+            .clone()
+            .and_then(|value: String| {
+                let trimmed = value.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            });
+        let experimental_unified_exec_exec_server_workspace_root = cfg
+            .experimental_unified_exec_exec_server_workspace_root
+            .clone();
 
         let forced_chatgpt_workspace_id =
             cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
@@ -2768,6 +2797,8 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
             use_experimental_unified_exec_tool,
+            experimental_unified_exec_exec_server_websocket_url,
+            experimental_unified_exec_exec_server_workspace_root,
             background_terminal_max_timeout,
             ghost_snapshot,
             features,

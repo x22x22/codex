@@ -539,10 +539,17 @@ impl UnifiedExecProcessManager {
 
     pub(crate) async fn open_session_with_exec_env(
         &self,
+        process_id: i32,
         env: &ExecRequest,
         tty: bool,
         mut spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
+        if let Some(remote_exec_server) = self.remote_exec_server.as_ref() {
+            return remote_exec_server
+                .open_session(process_id, env, tty, spawn_lifecycle)
+                .await;
+        }
+
         let (program, args) = env
             .command
             .split_first()
@@ -610,6 +617,7 @@ impl UnifiedExecProcessManager {
             })
             .await;
         let req = UnifiedExecToolRequest {
+            process_id: request.process_id,
             command: request.command.clone(),
             cwd,
             env,

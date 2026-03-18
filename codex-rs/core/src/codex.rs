@@ -312,6 +312,7 @@ use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::turn_timing::TurnTimingState;
 use crate::turn_timing::record_turn_ttfm_metric;
 use crate::turn_timing::record_turn_ttft_metric;
+use crate::unified_exec::RemoteExecServerBackend;
 use crate::unified_exec::UnifiedExecProcessManager;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
@@ -1784,8 +1785,9 @@ impl Session {
                 &config.permissions.approval_policy,
             ))),
             mcp_startup_cancellation_token: Mutex::new(CancellationToken::new()),
-            unified_exec_manager: UnifiedExecProcessManager::new(
+            unified_exec_manager: UnifiedExecProcessManager::with_remote_exec_server(
                 config.background_terminal_max_timeout,
+                RemoteExecServerBackend::connect_for_config(config.as_ref()).await?,
             ),
             shell_zsh_path: config.zsh_path.clone(),
             main_execve_wrapper_exe: config.main_execve_wrapper_exe.clone(),

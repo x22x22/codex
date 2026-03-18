@@ -38,6 +38,7 @@ use crate::codex::TurnContext;
 use crate::sandboxing::SandboxPermissions;
 
 mod async_watcher;
+mod backend;
 mod errors;
 mod head_tail_buffer;
 mod process;
@@ -47,6 +48,7 @@ pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
     process_manager::set_deterministic_process_ids_for_tests(enabled);
 }
 
+pub(crate) use backend::RemoteExecServerBackend;
 pub(crate) use errors::UnifiedExecError;
 pub(crate) use process::NoopSpawnLifecycle;
 #[cfg(unix)]
@@ -123,6 +125,7 @@ impl ProcessStore {
 pub(crate) struct UnifiedExecProcessManager {
     process_store: Mutex<ProcessStore>,
     max_write_stdin_yield_time_ms: u64,
+    remote_exec_server: Option<RemoteExecServerBackend>,
 }
 
 impl UnifiedExecProcessManager {
@@ -131,6 +134,19 @@ impl UnifiedExecProcessManager {
             process_store: Mutex::new(ProcessStore::default()),
             max_write_stdin_yield_time_ms: max_write_stdin_yield_time_ms
                 .max(MIN_EMPTY_YIELD_TIME_MS),
+            remote_exec_server: None,
+        }
+    }
+
+    pub(crate) fn with_remote_exec_server(
+        max_write_stdin_yield_time_ms: u64,
+        remote_exec_server: Option<RemoteExecServerBackend>,
+    ) -> Self {
+        Self {
+            process_store: Mutex::new(ProcessStore::default()),
+            max_write_stdin_yield_time_ms: max_write_stdin_yield_time_ms
+                .max(MIN_EMPTY_YIELD_TIME_MS),
+            remote_exec_server,
         }
     }
 }
