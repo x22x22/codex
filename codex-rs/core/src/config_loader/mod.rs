@@ -11,6 +11,7 @@ use crate::git_info::resolve_root_git_project_for_trust;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
+use codex_config::sanitize_toml_value;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
@@ -149,20 +150,10 @@ pub async fn load_config_layers_state(
 
     let mut layers = Vec::<ConfigLayerEntry>::new();
 
-    let cli_overrides_layer = if cli_overrides.is_empty() {
-        None
-    } else {
-        let cli_overrides_layer = build_cli_overrides_layer(cli_overrides);
-        let base_dir = cwd
-            .as_ref()
-            .map(AbsolutePathBuf::as_path)
-            .unwrap_or(codex_home);
-        Some(resolve_relative_paths_in_config_toml(
-            cli_overrides_layer,
-            base_dir,
-        )?)
-    };
-
+    let session_flags_base_dir = cwd
+        .as_ref()
+        .map(|cwd| cwd.as_path().to_path_buf())
+        .unwrap_or_else(|| codex_home.to_path_buf());
     // Include an entry for the "system" config folder, loading its config.toml,
     // if it exists.
     let system_config_toml_file = system_config_toml_file()?;
@@ -193,12 +184,27 @@ pub async fn load_config_layers_state(
     .await?;
     layers.push(user_layer);
 
+    let cli_overrides_for_project_trust = if cli_overrides.is_empty() {
+        None
+    } else {
+        let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
+        for layer in &layers {
+            merge_toml_values(&mut merged_so_far, &layer.config);
+        }
+        Some(build_validated_session_flags_layer(
+            &trust_related_cli_overrides(cli_overrides),
+            &merged_so_far,
+            &session_flags_base_dir,
+            "session flags",
+        )?)
+    };
+
     if let Some(cwd) = cwd {
         let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
         for layer in &layers {
             merge_toml_values(&mut merged_so_far, &layer.config);
         }
-        if let Some(cli_overrides_layer) = cli_overrides_layer.as_ref() {
+        if let Some(cli_overrides_layer) = cli_overrides_for_project_trust.as_ref() {
             merge_toml_values(&mut merged_so_far, cli_overrides_layer);
         }
 
@@ -251,6 +257,21 @@ pub async fn load_config_layers_state(
     }
 
     // Add a layer for runtime overrides from the CLI or UI, if any exist.
+    let cli_overrides_layer = if cli_overrides.is_empty() {
+        None
+    } else {
+        let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
+        for layer in &layers {
+            merge_toml_values(&mut merged_so_far, &layer.config);
+        }
+        Some(build_validated_session_flags_layer(
+            cli_overrides,
+            &merged_so_far,
+            &session_flags_base_dir,
+            "session flags",
+        )?)
+    };
+
     if let Some(cli_overrides_layer) = cli_overrides_layer {
         layers.push(ConfigLayerEntry::new(
             ConfigLayerSource::SessionFlags,
@@ -341,6 +362,128 @@ async fn load_config_toml_for_required_layer(
     }?;
 
     Ok(create_entry(toml_value))
+}
+
+fn sanitize_config_layer_entries(
+    config: TomlValue,
+    base_dir: &Path,
+    source: impl Into<String>,
+) -> io::Result<TomlValue> {
+    let source = source.into();
+    let _guard = AbsolutePathBufGuard::new(base_dir);
+    let sanitized = sanitize_toml_value::<ConfigToml>(config).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Error parsing {source}: {err}"),
+        )
+    })?;
+    drop(_guard);
+
+    if let Some(dropped_entry) = sanitized
+        .dropped_entries
+        .iter()
+        .find(|entry| is_invalid_security_config_entry(entry))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Error parsing security controls in {source}: {dropped_entry}"),
+        ));
+    }
+    for dropped_entry in &sanitized.dropped_entries {
+        tracing::warn!(
+            source = %source,
+            dropped_entry = %dropped_entry,
+            "Ignoring invalid config entry",
+        );
+    }
+
+    resolve_relative_paths_in_config_toml(sanitized.value, base_dir)
+}
+
+fn build_validated_session_flags_layer(
+    cli_overrides: &[(String, TomlValue)],
+    base_config: &TomlValue,
+    base_dir: &Path,
+    source: &str,
+) -> io::Result<TomlValue> {
+    if cli_overrides.is_empty() {
+        return Ok(TomlValue::Table(toml::map::Map::new()));
+    }
+
+    let cli_overrides_layer = build_cli_overrides_layer(&cli_overrides);
+    let mut candidate = base_config.clone();
+    merge_toml_values(&mut candidate, &cli_overrides_layer);
+
+    let _guard = AbsolutePathBufGuard::new(base_dir);
+    let sanitized = sanitize_toml_value::<ConfigToml>(candidate).map_err(|err| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Error parsing {source}: {err}"),
+        )
+    })?;
+    drop(_guard);
+
+    let dropped_overrides: Vec<_> = cli_overrides
+        .iter()
+        .filter_map(|(path, _)| {
+            matching_dropped_entry(path, &sanitized.dropped_entries).map(|entry| (path, entry))
+        })
+        .collect();
+
+    if let Some((_, dropped_entry)) = dropped_overrides
+        .iter()
+        .find(|(path, _)| is_invalid_security_config_entry(path))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Error parsing security controls in {source}: {dropped_entry}"),
+        ));
+    }
+
+    for (path, dropped_entry) in &dropped_overrides {
+        tracing::warn!(
+            source = %source,
+            override_path = %path,
+            dropped_entry = %dropped_entry,
+            "Ignoring invalid config entry",
+        );
+    }
+
+    let kept_overrides: Vec<_> = cli_overrides
+        .into_iter()
+        .filter(|(path, _)| matching_dropped_entry(path, &sanitized.dropped_entries).is_none())
+        .cloned()
+        .collect();
+    resolve_relative_paths_in_config_toml(build_cli_overrides_layer(&kept_overrides), base_dir)
+}
+
+fn trust_related_cli_overrides(cli_overrides: &[(String, TomlValue)]) -> Vec<(String, TomlValue)> {
+    cli_overrides
+        .iter()
+        .filter(|(path, _)| path == "project_root_markers" || path.starts_with("projects."))
+        .cloned()
+        .collect()
+}
+
+fn matching_dropped_entry<'a>(
+    override_path: &str,
+    dropped_entries: &'a [String],
+) -> Option<&'a str> {
+    dropped_entries
+        .iter()
+        .find(|entry| config_paths_overlap(override_path, config_entry_path(entry)))
+        .map(String::as_str)
+}
+
+fn config_paths_overlap(path: &str, other: &str) -> bool {
+    config_path_contains(path, other) || config_path_contains(other, path)
+}
+
+fn config_path_contains(path: &str, prefix: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('.') || rest.starts_with('['))
 }
 
 /// If available, apply requirements from the platform system
@@ -736,6 +879,26 @@ pub(crate) fn resolve_relative_paths_in_config_toml(
     ))
 }
 
+fn is_invalid_security_config_entry(dropped_entry: &str) -> bool {
+    matches!(
+        config_entry_leaf_key(dropped_entry),
+        "approval_policy" | "sandbox_mode"
+    )
+}
+
+fn config_entry_leaf_key(dropped_entry: &str) -> &str {
+    let path = config_entry_path(dropped_entry);
+    let leaf = path.rsplit('.').next().unwrap_or(path);
+    leaf.split('[').next().unwrap_or(leaf)
+}
+
+fn config_entry_path(dropped_entry: &str) -> &str {
+    dropped_entry
+        .split_once(':')
+        .map_or(dropped_entry, |(path, _)| path)
+        .trim()
+}
+
 /// Ensure that every field in `original` is present in the returned
 /// `toml::Value`, taking the value from `resolved` where possible. This ensures
 /// the fields that we "removed" during the serialize/deserialize round-trip in
@@ -858,8 +1021,24 @@ async fn load_project_layers(
                         continue;
                     }
                 };
-                let config =
-                    resolve_relative_paths_in_config_toml(config, dot_codex_abs.as_path())?;
+                let source = format!("project config file {}", config_file.as_path().display());
+                let config = if decision.is_trusted() {
+                    sanitize_config_layer_entries(config, dot_codex_abs.as_path(), source)?
+                } else {
+                    match sanitize_config_layer_entries(config, dot_codex_abs.as_path(), source) {
+                        Ok(config) => config,
+                        Err(_) => {
+                            layers.push(project_layer_entry(
+                                trust_context,
+                                &dot_codex_abs,
+                                &layer_dir,
+                                TomlValue::Table(toml::map::Map::new()),
+                                /*config_toml_exists*/ true,
+                            ));
+                            continue;
+                        }
+                    }
+                };
                 let entry = project_layer_entry(
                     trust_context,
                     &dot_codex_abs,

@@ -1202,6 +1202,128 @@ async fn cli_override_model_instructions_file_sets_base_instructions() -> std::i
 }
 
 #[tokio::test]
+async fn session_flags_ignore_invalid_non_security_entries() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+    let cli_overrides = vec![
+        (
+            "model".to_string(),
+            TomlValue::String("override".to_string()),
+        ),
+        (
+            "model_context_window".to_string(),
+            TomlValue::String("bogus".to_string()),
+        ),
+    ];
+
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &cli_overrides,
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let session_layer = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
+        .into_iter()
+        .find(|layer| layer.name == super::ConfigLayerSource::SessionFlags)
+        .expect("session flags layer");
+    assert_eq!(
+        session_layer.config.get("model"),
+        Some(&TomlValue::String("override".to_string()))
+    );
+    assert_eq!(session_layer.config.get("model_context_window"), None);
+    assert_eq!(
+        layers.effective_config().get("model"),
+        Some(&TomlValue::String("override".to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_flags_invalid_security_entries_fail_closed() -> anyhow::Result<()> {
+    let tmp = tempdir()?;
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(tmp.path())?;
+
+    for (cli_overrides, expected_fragment) in [
+        (
+            vec![(
+                "approval_policy".to_string(),
+                TomlValue::String("bogus".to_string()),
+            )],
+            "approval_policy",
+        ),
+        (
+            vec![(
+                "profiles.team.sandbox_mode".to_string(),
+                TomlValue::String("bogus".to_string()),
+            )],
+            "profiles.team.sandbox_mode",
+        ),
+    ] {
+        let err = load_config_layers_state(
+            &codex_home,
+            Some(cwd.clone()),
+            &cli_overrides,
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+        )
+        .await
+        .expect_err("invalid session security config should fail closed");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let message = err.to_string();
+        assert!(message.contains("Error parsing security controls in session flags"));
+        assert!(message.contains(expected_fragment), "{message}");
+        assert!(message.contains("bogus"), "{message}");
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_flags_ignore_invalid_project_root_markers_entry() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        "model = \"project\"\n",
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home)
+        .cli_overrides(vec![(
+            "project_root_markers".to_string(),
+            TomlValue::String("bogus".to_string()),
+        )])
+        .fallback_cwd(Some(nested))
+        .build()
+        .await?;
+
+    assert_eq!(config.model.as_deref(), Some("project"));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");
@@ -1240,6 +1362,95 @@ async fn project_layer_is_added_when_dot_codex_exists_without_config_toml() -> s
         }],
         project_layers
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn trusted_project_config_ignores_invalid_non_security_entries() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    tokio::fs::create_dir_all(nested.join(".codex")).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        nested.join(".codex").join(CONFIG_TOML_FILE),
+        "model = \"project\"\nmodel_context_window = \"bogus\"\n",
+    )
+    .await?;
+
+    let codex_home = tmp.path().join("home");
+    tokio::fs::create_dir_all(&codex_home).await?;
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let project_layer = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
+        .into_iter()
+        .find(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .expect("project layer");
+    assert_eq!(
+        project_layer.config.get("model"),
+        Some(&TomlValue::String("project".to_string()))
+    );
+    assert_eq!(project_layer.config.get("model_context_window"), None);
+    assert_eq!(
+        layers.effective_config().get("model"),
+        Some(&TomlValue::String("project".to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn trusted_project_config_invalid_security_entries_fail_closed() -> anyhow::Result<()> {
+    for (payload, expected_fragment) in [
+        ("approval_policy = \"bogus\"\n", "approval_policy"),
+        (
+            "[profiles.team]\nsandbox_mode = \"bogus\"\n",
+            "profiles.team.sandbox_mode",
+        ),
+    ] {
+        let tmp = tempdir()?;
+        let project_root = tmp.path().join("project");
+        let nested = project_root.join("child");
+        tokio::fs::create_dir_all(nested.join(".codex")).await?;
+        tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+        tokio::fs::write(nested.join(".codex").join(CONFIG_TOML_FILE), payload).await?;
+
+        let codex_home = tmp.path().join("home");
+        tokio::fs::create_dir_all(&codex_home).await?;
+        make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+        let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+
+        let err = load_config_layers_state(
+            &codex_home,
+            Some(cwd),
+            &[] as &[(String, TomlValue)],
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+        )
+        .await
+        .expect_err("invalid project security config should fail closed");
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        let message = err.to_string();
+        assert!(message.contains("Error parsing security controls in project config file"));
+        assert!(message.contains(expected_fragment), "{message}");
+        assert!(message.contains("bogus"), "{message}");
+    }
 
     Ok(())
 }
