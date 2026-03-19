@@ -11,10 +11,12 @@ use reqwest::header::HeaderValue;
 use reqwest::header::USER_AGENT;
 use serde::Deserialize;
 use serde::Serialize;
+use std::future::Future;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::io::AsyncWriteExt;
+use tokio::time::Duration;
 use tokio_util::io::ReaderStream;
 
 pub const CODEX_CORE_FILE_TRANSFER_ARG1: &str = "--codex-run-as-file-transfer";
@@ -22,6 +24,8 @@ pub const FILE_TRANSFER_BASE_URL_ENV: &str = "CODEX_FILE_TRANSFER_BASE_URL";
 pub const FILE_TRANSFER_BEARER_TOKEN_ENV: &str = "CODEX_FILE_TRANSFER_BEARER_TOKEN";
 pub const FILE_TRANSFER_ACCOUNT_ID_ENV: &str = "CODEX_FILE_TRANSFER_ACCOUNT_ID";
 pub const FILE_TRANSFER_USER_AGENT_ENV: &str = "CODEX_FILE_TRANSFER_USER_AGENT";
+const NETWORK_RETRY_ATTEMPTS: u32 = 3;
+const NETWORK_RETRY_DELAYS_MS: [u64; 2] = [250, 750];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "operation", rename_all = "snake_case")]
@@ -243,13 +247,33 @@ async fn upload_file(config: &FileTransferConfig, path: &Path) -> Result<UploadF
         file_size,
         use_case: "codex",
     };
-    let create_response = client
-        .post(&create_url)
-        .headers(config.headers()?)
-        .json(&create_request)
-        .send()
-        .await
-        .context("failed to create file upload")?;
+    let create_headers = config.headers()?;
+    let create_response = match send_with_retries(|| {
+        client
+            .post(&create_url)
+            .headers(create_headers.clone())
+            .json(&create_request)
+            .send()
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return Ok(UploadFileToolResult {
+                ok: false,
+                file_id: None,
+                uri: None,
+                file_name: Some(file_name.clone()),
+                file_size_bytes: Some(file_size),
+                mime_type: None,
+                error_code: Some("backend_request_failed".to_string()),
+                message: Some(format!("file create request failed after retries: {err}")),
+                retryable: Some(is_retryable_request_error(&err)),
+                http_status_code: None,
+                path: Some(path.display().to_string()),
+            });
+        }
+    };
     if !create_response.status().is_success() {
         let status = create_response.status().as_u16();
         let body = create_response.text().await.unwrap_or_default();
@@ -264,7 +288,7 @@ async fn upload_file(config: &FileTransferConfig, path: &Path) -> Result<UploadF
             message: Some(format!(
                 "file create request failed with status {status}: {body}"
             )),
-            retryable: Some(status >= 500),
+            retryable: Some(is_retryable_http_status(status)),
             http_status_code: Some(status),
             path: Some(path.display().to_string()),
         });
@@ -277,18 +301,54 @@ async fn upload_file(config: &FileTransferConfig, path: &Path) -> Result<UploadF
     let mime_type = MimeGuess::from_path(path)
         .first_or_octet_stream()
         .to_string();
-    let upload_file = match tokio::fs::File::open(path).await {
-        Ok(file) => file,
-        Err(err) => return Ok(upload_path_error(path, err)),
+    let upload_url = create_payload.upload_url.clone();
+    let upload_response = {
+        let mut attempt = 1;
+        loop {
+            let upload_file = match tokio::fs::File::open(path).await {
+                Ok(file) => file,
+                Err(err) => return Ok(upload_path_error(path, err)),
+            };
+            match client
+                .put(&upload_url)
+                .header("x-ms-blob-type", "BlockBlob")
+                .header(CONTENT_TYPE, mime_type.as_str())
+                .body(reqwest::Body::wrap_stream(ReaderStream::new(upload_file)))
+                .send()
+                .await
+            {
+                Ok(response)
+                    if attempt < NETWORK_RETRY_ATTEMPTS
+                        && is_retryable_http_status(response.status().as_u16()) =>
+                {
+                    sleep_before_retry(attempt).await;
+                    attempt += 1;
+                }
+                Ok(response) => break response,
+                Err(err)
+                    if attempt < NETWORK_RETRY_ATTEMPTS && is_retryable_request_error(&err) =>
+                {
+                    sleep_before_retry(attempt).await;
+                    attempt += 1;
+                }
+                Err(err) => {
+                    return Ok(UploadFileToolResult {
+                        ok: false,
+                        file_id: Some(create_payload.file_id.clone()),
+                        uri: Some(openai_file_uri(&create_payload.file_id)),
+                        file_name: Some(file_name),
+                        file_size_bytes: Some(file_size),
+                        mime_type: Some(mime_type),
+                        error_code: Some("upload_failed".to_string()),
+                        message: Some(format!("byte upload failed after retries: {err}")),
+                        retryable: Some(is_retryable_request_error(&err)),
+                        http_status_code: None,
+                        path: Some(path.display().to_string()),
+                    });
+                }
+            }
+        }
     };
-    let upload_response = client
-        .put(&create_payload.upload_url)
-        .header("x-ms-blob-type", "BlockBlob")
-        .header(CONTENT_TYPE, mime_type.as_str())
-        .body(reqwest::Body::wrap_stream(ReaderStream::new(upload_file)))
-        .send()
-        .await
-        .context("failed to upload file bytes")?;
     if !upload_response.status().is_success() {
         let status = upload_response.status().as_u16();
         let body = upload_response.text().await.unwrap_or_default();
@@ -301,19 +361,39 @@ async fn upload_file(config: &FileTransferConfig, path: &Path) -> Result<UploadF
             mime_type: Some(mime_type),
             error_code: Some("upload_failed".to_string()),
             message: Some(format!("byte upload failed with status {status}: {body}")),
-            retryable: Some(status >= 500),
+            retryable: Some(is_retryable_http_status(status)),
             http_status_code: Some(status),
             path: Some(path.display().to_string()),
         });
     }
 
     let finalize_url = format!("{}/{}/uploaded", create_url, create_payload.file_id);
-    let finalize_response = client
-        .post(&finalize_url)
-        .headers(config.headers()?)
-        .send()
-        .await
-        .context("failed to finalize uploaded file")?;
+    let finalize_headers = config.headers()?;
+    let finalize_response = match send_with_retries(|| {
+        client
+            .post(&finalize_url)
+            .headers(finalize_headers.clone())
+            .send()
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return Ok(UploadFileToolResult {
+                ok: false,
+                file_id: Some(create_payload.file_id.clone()),
+                uri: Some(openai_file_uri(&create_payload.file_id)),
+                file_name: Some(file_name),
+                file_size_bytes: Some(file_size),
+                mime_type: Some(mime_type),
+                error_code: Some("finalize_failed".to_string()),
+                message: Some(format!("finalize request failed after retries: {err}")),
+                retryable: Some(is_retryable_request_error(&err)),
+                http_status_code: None,
+                path: Some(path.display().to_string()),
+            });
+        }
+    };
     if !finalize_response.status().is_success() {
         let status = finalize_response.status().as_u16();
         let body = finalize_response.text().await.unwrap_or_default();
@@ -328,7 +408,7 @@ async fn upload_file(config: &FileTransferConfig, path: &Path) -> Result<UploadF
             message: Some(format!(
                 "finalize request failed with status {status}: {body}"
             )),
-            retryable: Some(status >= 500),
+            retryable: Some(is_retryable_http_status(status)),
             http_status_code: Some(status),
             path: Some(path.display().to_string()),
         });
@@ -363,55 +443,81 @@ async fn download_file(
 ) -> Result<DownloadFileToolResult> {
     let client = build_reqwest_client_with_custom_ca(reqwest::Client::builder())?;
     let url = format!("{}/download/{file_id}", config.files_api_url());
-    let link_response = client
-        .get(&url)
-        .headers(config.headers()?)
-        .send()
-        .await
-        .context("failed to start file download")?;
+    let link_headers = config.headers()?;
+    let mut link_payload = None;
+    for attempt in 1..=NETWORK_RETRY_ATTEMPTS {
+        let link_response =
+            match send_with_retries(|| client.get(&url).headers(link_headers.clone()).send()).await
+            {
+                Ok(response) => response,
+                Err(err) => {
+                    return Ok(DownloadFileToolResult {
+                        ok: false,
+                        file_id: Some(file_id.to_string()),
+                        uri: Some(openai_file_uri(file_id)),
+                        file_name: None,
+                        mime_type: None,
+                        destination_path: Some(path.display().to_string()),
+                        bytes_written: None,
+                        error_code: Some("download_failed".to_string()),
+                        message: Some(format!("download request failed after retries: {err}")),
+                        retryable: Some(is_retryable_request_error(&err)),
+                        http_status_code: None,
+                    });
+                }
+            };
 
-    if !link_response.status().is_success() {
-        let status = link_response.status().as_u16();
-        let body = link_response.text().await.unwrap_or_default();
+        if !link_response.status().is_success() {
+            let status = link_response.status().as_u16();
+            let body = link_response.text().await.unwrap_or_default();
+            return Ok(DownloadFileToolResult {
+                ok: false,
+                file_id: Some(file_id.to_string()),
+                uri: Some(openai_file_uri(file_id)),
+                file_name: None,
+                mime_type: None,
+                destination_path: Some(path.display().to_string()),
+                bytes_written: None,
+                error_code: Some("download_failed".to_string()),
+                message: Some(format!(
+                    "download request failed with status {status}: {body}"
+                )),
+                retryable: Some(is_retryable_http_status(status)),
+                http_status_code: Some(status),
+            });
+        }
+
+        let current_payload: DownloadLinkResponseBody = link_response
+            .json()
+            .await
+            .context("failed to decode download link response")?;
+        if current_payload.status == "success" {
+            link_payload = Some(current_payload);
+            break;
+        }
+        if current_payload.status == "retry" && attempt < NETWORK_RETRY_ATTEMPTS {
+            sleep_before_retry(attempt).await;
+            continue;
+        }
         return Ok(DownloadFileToolResult {
             ok: false,
             file_id: Some(file_id.to_string()),
             uri: Some(openai_file_uri(file_id)),
-            file_name: None,
-            mime_type: None,
-            destination_path: Some(path.display().to_string()),
-            bytes_written: None,
-            error_code: Some("download_failed".to_string()),
-            message: Some(format!(
-                "download request failed with status {status}: {body}"
-            )),
-            retryable: Some(status >= 500),
-            http_status_code: Some(status),
-        });
-    }
-
-    let link_payload: DownloadLinkResponseBody = link_response
-        .json()
-        .await
-        .context("failed to decode download link response")?;
-    if link_payload.status != "success" {
-        return Ok(DownloadFileToolResult {
-            ok: false,
-            file_id: Some(file_id.to_string()),
-            uri: Some(openai_file_uri(file_id)),
-            file_name: link_payload.file_name,
-            mime_type: link_payload.mime_type,
+            file_name: current_payload.file_name,
+            mime_type: current_payload.mime_type,
             destination_path: Some(path.display().to_string()),
             bytes_written: None,
             error_code: Some("download_failed".to_string()),
             message: Some(format!(
                 "download link response reported status `{}`",
-                link_payload.status
+                current_payload.status
             )),
-            retryable: Some(link_payload.status == "retry"),
+            retryable: Some(current_payload.status == "retry"),
             http_status_code: None,
         });
     }
+    let link_payload =
+        link_payload.context("download link retry loop did not produce a payload")?;
     let Some(download_url) = link_payload.download_url else {
         return Ok(DownloadFileToolResult {
             ok: false,
@@ -427,12 +533,34 @@ async fn download_file(
             http_status_code: None,
         });
     };
-    let response = client
-        .get(download_url)
-        .headers(config.download_headers()?)
-        .send()
-        .await
-        .context("failed to fetch downloaded file bytes")?;
+    let download_headers = config.download_headers()?;
+    let response = match send_with_retries(|| {
+        client
+            .get(download_url.as_str())
+            .headers(download_headers.clone())
+            .send()
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            return Ok(DownloadFileToolResult {
+                ok: false,
+                file_id: Some(file_id.to_string()),
+                uri: Some(openai_file_uri(file_id)),
+                file_name: link_payload.file_name,
+                mime_type: link_payload.mime_type,
+                destination_path: Some(path.display().to_string()),
+                bytes_written: None,
+                error_code: Some("download_failed".to_string()),
+                message: Some(format!(
+                    "download bytes request failed after retries: {err}"
+                )),
+                retryable: Some(is_retryable_request_error(&err)),
+                http_status_code: None,
+            });
+        }
+    };
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let body = response.text().await.unwrap_or_default();
@@ -448,7 +576,7 @@ async fn download_file(
             message: Some(format!(
                 "download bytes request failed with status {status}: {body}"
             )),
-            retryable: Some(status >= 500),
+            retryable: Some(is_retryable_http_status(status)),
             http_status_code: Some(status),
         });
     }
@@ -523,6 +651,52 @@ fn normalize_base_url(base_url: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+async fn send_with_retries<F, Fut>(mut send: F) -> Result<reqwest::Response, reqwest::Error>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<reqwest::Response, reqwest::Error>>,
+{
+    let mut attempt = 1;
+    loop {
+        match send().await {
+            Ok(response) => {
+                if attempt < NETWORK_RETRY_ATTEMPTS
+                    && is_retryable_http_status(response.status().as_u16())
+                {
+                    sleep_before_retry(attempt).await;
+                    attempt += 1;
+                    continue;
+                }
+                return Ok(response);
+            }
+            Err(err) => {
+                if attempt < NETWORK_RETRY_ATTEMPTS && is_retryable_request_error(&err) {
+                    sleep_before_retry(attempt).await;
+                    attempt += 1;
+                    continue;
+                }
+                return Err(err);
+            }
+        }
+    }
+}
+
+fn is_retryable_http_status(status: u16) -> bool {
+    matches!(status, 408 | 409 | 425 | 429) || status >= 500
+}
+
+fn is_retryable_request_error(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect() || err.is_request()
+}
+
+async fn sleep_before_retry(attempt: u32) {
+    let delay_ms = NETWORK_RETRY_DELAYS_MS
+        .get((attempt - 1) as usize)
+        .copied()
+        .unwrap_or(*NETWORK_RETRY_DELAYS_MS.last().unwrap_or(&750));
+    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 }
 
 fn openai_file_uri(file_id: &str) -> String {
@@ -719,6 +893,57 @@ mod tests {
                 path: Some(path.display().to_string()),
             }
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upload_retries_create_request_after_transient_server_error() -> Result<()> {
+        let server = MockServer::start().await;
+        let file_id = "file-retry";
+        let upload_url = format!("{}/upload-target", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("temporary failure"))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "file_id": file_id,
+                "upload_url": upload_url
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload-target"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/backend-api/files/{file_id}/uploaded")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/blob/{file_id}", server.uri()),
+                "file_name": "retry.txt",
+                "file_size_bytes": 5,
+                "mime_type": "text/plain"
+            })))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir()?;
+        let path = dir.path().join("retry.txt");
+        tokio::fs::write(&path, b"hello").await?;
+
+        let output = upload_file(&test_config(&server), &path).await?;
+        assert_eq!(output.ok, true);
+        let requests = server.received_requests().await.unwrap_or_default();
+        let create_requests = requests
+            .iter()
+            .filter(|request| request.url.path() == "/backend-api/files")
+            .count();
+        assert_eq!(create_requests, 2);
         Ok(())
     }
 
@@ -940,6 +1165,46 @@ mod tests {
         let expected_path = dir.path().join("café.txt");
         assert_eq!(tokio::fs::read_to_string(expected_path).await?, "bonjour");
         assert_eq!(output.file_name, Some("café.txt".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn download_retries_when_link_payload_requests_retry() -> Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/files/download/file-retry"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "retry"
+            })))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/files/download/file-retry"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/content/file-retry", server.uri()),
+                "file_name": "retried.txt",
+                "mime_type": "text/plain"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/content/file-retry"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"retried bytes".to_vec()))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir()?;
+        let output = download_file(&test_config(&server), "file-retry", dir.path(), true).await?;
+        assert_eq!(output.ok, true);
+        assert_eq!(output.file_name, Some("retried.txt".to_string()));
+        let requests = server.received_requests().await.unwrap_or_default();
+        let link_requests = requests
+            .iter()
+            .filter(|request| request.url.path() == "/backend-api/files/download/file-retry")
+            .count();
+        assert_eq!(link_requests, 2);
         Ok(())
     }
 
