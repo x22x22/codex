@@ -1916,6 +1916,7 @@ impl Session {
             *cancel_guard = CancellationToken::new();
         }
         let (mcp_connection_manager, cancel_token) = McpConnectionManager::new(
+            INITIAL_SUBMIT_ID.to_owned(),
             &mcp_servers,
             config.mcp_oauth_credentials_store_mode,
             auth_statuses.clone(),
@@ -4051,6 +4052,7 @@ impl Session {
             *guard = CancellationToken::new();
         }
         let (refreshed_manager, cancel_token) = McpConnectionManager::new(
+            INITIAL_SUBMIT_ID.to_owned(),
             &mcp_servers,
             store_mode,
             auth_statuses,

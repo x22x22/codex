@@ -40,7 +40,6 @@ use codex_protocol::protocol::McpStartupCompleteEvent;
 use codex_protocol::protocol::McpStartupFailure;
 use codex_protocol::protocol::McpStartupStatus;
 use codex_protocol::protocol::McpStartupUpdateEvent;
-use codex_protocol::protocol::SandboxPolicy;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
 use codex_rmcp_client::RmcpClient;
@@ -78,11 +77,11 @@ use tracing::instrument;
 use tracing::warn;
 use url::Url;
 
-use crate::codex::INITIAL_SUBMIT_ID;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::connectors::is_connector_id_allowed;
 use crate::connectors::sanitize_name;
+use crate::mcp::types::SandboxState;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -581,18 +580,8 @@ impl AsyncManagedClient {
 pub const MCP_SANDBOX_STATE_CAPABILITY: &str = "codex/sandbox-state";
 
 /// Custom MCP request to push sandbox state updates.
-/// When used, the `params` field of the notification is [`SandboxState`].
+/// When used, the `params` field of the notification is [`crate::SandboxState`].
 pub const MCP_SANDBOX_STATE_METHOD: &str = "codex/sandbox-state/update";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SandboxState {
-    pub sandbox_policy: SandboxPolicy,
-    pub codex_linux_sandbox_exe: Option<PathBuf>,
-    pub sandbox_cwd: PathBuf,
-    #[serde(default)]
-    pub use_legacy_landlock: bool,
-}
 
 /// A thin wrapper around a set of running [`RmcpClient`] instances.
 pub(crate) struct McpConnectionManager {
@@ -633,6 +622,7 @@ impl McpConnectionManager {
 
     #[allow(clippy::new_ret_no_self, clippy::too_many_arguments)]
     pub async fn new(
+        submit_id: String,
         mcp_servers: &HashMap<String, McpServerConfig>,
         store_mode: OAuthCredentialsStoreMode,
         auth_entries: HashMap<String, McpAuthStatusEntry>,
@@ -657,6 +647,7 @@ impl McpConnectionManager {
             let cancel_token = cancel_token.child_token();
             let _ = emit_update(
                 &tx_event,
+                submit_id.as_str(),
                 McpStartupUpdateEvent {
                     server: server_name.clone(),
                     status: McpStartupStatus::Starting,
@@ -683,6 +674,7 @@ impl McpConnectionManager {
             );
             clients.insert(server_name.clone(), async_managed_client.clone());
             let tx_event = tx_event.clone();
+            let submit_id = submit_id.clone();
             let auth_entry = auth_entries.get(&server_name).cloned();
             let sandbox_state = initial_sandbox_state.clone();
             join_set.spawn(async move {
@@ -715,6 +707,7 @@ impl McpConnectionManager {
 
                 let _ = emit_update(
                     &tx_event,
+                    submit_id.as_str(),
                     McpStartupUpdateEvent {
                         server: server_name.clone(),
                         status,
@@ -730,6 +723,7 @@ impl McpConnectionManager {
             server_origins,
             elicitation_requests: elicitation_requests.clone(),
         };
+        let submit_id_for_task = submit_id.clone();
         tokio::spawn(async move {
             let outcomes = join_set.join_all().await;
             let mut summary = McpStartupCompleteEvent::default();
@@ -747,7 +741,7 @@ impl McpConnectionManager {
             }
             let _ = tx_event
                 .send(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    id: submit_id_for_task,
                     msg: EventMsg::McpStartupComplete(summary),
                 })
                 .await;
@@ -1133,11 +1127,12 @@ impl McpConnectionManager {
 
 async fn emit_update(
     tx_event: &Sender<Event>,
+    submit_id: &str,
     update: McpStartupUpdateEvent,
 ) -> Result<(), async_channel::SendError<Event>> {
     tx_event
         .send(Event {
-            id: INITIAL_SUBMIT_ID.to_owned(),
+            id: submit_id.to_owned(),
             msg: EventMsg::McpStartupUpdate(update),
         })
         .await
