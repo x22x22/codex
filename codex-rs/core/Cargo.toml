@@ -93,7 +93,6 @@ sha2 = { workspace = true }
 shlex = { workspace = true }
 similar = { workspace = true }
 tempfile = { workspace = true }
-test-log = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true, features = [
     "formatting",
@@ -167,6 +166,7 @@ opentelemetry = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }
 test-case = "3.3.1"
+test-log = { workspace = true }
 opentelemetry_sdk = { workspace = true, features = [
     "experimental_metrics_custom_reader",
     "metrics",
