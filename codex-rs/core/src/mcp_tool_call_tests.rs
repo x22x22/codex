@@ -441,7 +441,14 @@ fn sanitize_mcp_tool_result_for_model_preserves_image_when_supported() {
 
 #[tokio::test]
 async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
-    let (_session, turn_context) = make_session_and_context().await;
+    let (_, turn_context) = make_session_and_context().await;
+    let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
+        &turn_context
+            .turn_metadata_state
+            .current_header_value()
+            .expect("turn metadata header"),
+    )
+    .expect("turn metadata json");
 
     let meta =
         build_mcp_tool_call_request_meta(&turn_context, "custom_server", /*metadata*/ None)
@@ -450,17 +457,21 @@ async fn mcp_tool_call_request_meta_includes_turn_metadata_for_custom_server() {
     assert_eq!(
         meta,
         serde_json::json!({
-            crate::X_CODEX_TURN_METADATA_HEADER: {
-                "turn_id": turn_context.sub_id,
-                "sandbox": "workspace-write",
-            },
+            crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
         })
     );
 }
 
 #[tokio::test]
 async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps_meta() {
-    let (_session, turn_context) = make_session_and_context().await;
+    let (_, turn_context) = make_session_and_context().await;
+    let expected_turn_metadata = serde_json::from_str::<serde_json::Value>(
+        &turn_context
+            .turn_metadata_state
+            .current_header_value()
+            .expect("turn metadata header"),
+    )
+    .expect("turn metadata json");
     let metadata = McpToolApprovalMetadata {
         annotations: None,
         connector_id: Some("calendar".to_string()),
@@ -487,10 +498,7 @@ async fn codex_apps_tool_call_request_meta_includes_turn_metadata_and_codex_apps
             Some(&metadata),
         ),
         Some(serde_json::json!({
-            crate::X_CODEX_TURN_METADATA_HEADER: {
-                "turn_id": turn_context.sub_id,
-                "sandbox": "workspace-write",
-            },
+            crate::X_CODEX_TURN_METADATA_HEADER: expected_turn_metadata,
             MCP_TOOL_CODEX_APPS_META_KEY: {
                 "resource_uri": "connector://calendar/tools/calendar_create_event",
                 "contains_mcp_source": true,
