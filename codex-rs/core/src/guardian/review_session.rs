@@ -421,6 +421,10 @@ impl GuardianReviewSessionManager {
             }
         };
 
+        let trunk_guard = match trunk.review_lock.try_lock() {
+            Ok(trunk_guard) => trunk_guard,
+            Err(_) => return,
+        };
         if guardian_request_keeps_prompt_cache_warm(
             *trunk.last_guardian_request_at.lock().await,
             tokio::time::Instant::now(),
@@ -443,6 +447,7 @@ impl GuardianReviewSessionManager {
         if prewarm_result.is_ok() {
             trunk.record_guardian_request(request_at).await;
         }
+        drop(trunk_guard);
         trunk
             .prompt_prewarm_in_flight
             .store(false, Ordering::Relaxed);
