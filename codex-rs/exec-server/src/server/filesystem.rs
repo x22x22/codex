@@ -1,6 +1,7 @@
-use crate::error_code::INTERNAL_ERROR_CODE;
-use crate::error_code::INVALID_REQUEST_ERROR_CODE;
-use base64::Engine;
+use std::io;
+use std::sync::Arc;
+
+use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsCopyResponse;
@@ -18,28 +19,29 @@ use codex_app_server_protocol::FsRemoveResponse;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_exec_server::CopyOptions;
-use codex_exec_server::CreateDirectoryOptions;
-use codex_exec_server::Environment;
-use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::RemoveOptions;
-use std::io;
-use std::sync::Arc;
+
+use crate::CopyOptions;
+use crate::CreateDirectoryOptions;
+use crate::Environment;
+use crate::ExecutorFileSystem;
+use crate::RemoveOptions;
+use crate::rpc::internal_error;
+use crate::rpc::invalid_request;
 
 #[derive(Clone)]
-pub(crate) struct FsApi {
+pub(crate) struct ExecServerFileSystem {
     file_system: Arc<dyn ExecutorFileSystem>,
 }
 
-impl Default for FsApi {
+impl Default for ExecServerFileSystem {
     fn default() -> Self {
         Self {
-            file_system: Arc::new(Environment::default().get_filesystem()),
+            file_system: Arc::new(Environment.get_filesystem()),
         }
     }
 }
 
-impl FsApi {
+impl ExecServerFileSystem {
     pub(crate) async fn read_file(
         &self,
         params: FsReadFileParams,
@@ -159,22 +161,10 @@ impl FsApi {
     }
 }
 
-fn invalid_request(message: impl Into<String>) -> JSONRPCErrorError {
-    JSONRPCErrorError {
-        code: INVALID_REQUEST_ERROR_CODE,
-        message: message.into(),
-        data: None,
-    }
-}
-
 fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
     if err.kind() == io::ErrorKind::InvalidInput {
         invalid_request(err.to_string())
     } else {
-        JSONRPCErrorError {
-            code: INTERNAL_ERROR_CODE,
-            message: err.to_string(),
-            data: None,
-        }
+        internal_error(err.to_string())
     }
 }
