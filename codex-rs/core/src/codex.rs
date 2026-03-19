@@ -3947,14 +3947,7 @@ impl Session {
         }
     }
 
-    pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
-        self.prepend_pending_input_with_metadata(
-            input.into_iter().map(|item| (item, None)).collect(),
-        )
-        .await
-    }
-
-    async fn prepend_pending_input_with_metadata(
+    pub(crate) async fn prepend_pending_input_with_metadata(
         &self,
         input: Vec<(ResponseInputItem, Option<UserMessageType>)>,
     ) -> Result<(), ()> {
@@ -3965,26 +3958,17 @@ impl Session {
                 ts.prepend_pending_input(
                     input
                         .into_iter()
-                        .map(|(input, user_message_type)| crate::state::PendingInputItem {
-                            input,
-                            user_message_type,
-                        })
+                        .map(
+                            |(input, user_message_type)| crate::state::PendingInputItem {
+                                input,
+                                user_message_type,
+                            },
+                        )
                         .collect(),
                 );
                 Ok(())
             }
             None => Err(()),
-        }
-    }
-
-    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                let mut ts = at.turn_state.lock().await;
-                ts.take_pending_input()
-            }
-            None => Vec::with_capacity(0),
         }
     }
 

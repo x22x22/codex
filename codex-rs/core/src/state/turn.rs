@@ -212,13 +212,6 @@ impl TurnState {
         self.pending_input = input;
     }
 
-    pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
-        self.take_pending_input_with_metadata()
-            .into_iter()
-            .map(|item| item.input)
-            .collect()
-    }
-
     pub(crate) fn has_pending_input(&self) -> bool {
         !self.pending_input.is_empty()
     }

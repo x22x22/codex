@@ -4514,8 +4514,8 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
         .await
         .expect("inject initial pending input into active turn");
 
-    let drained = sess.get_pending_input().await;
-    assert_eq!(drained, vec![blocked, later.clone()]);
+    let drained = sess.get_pending_input_with_metadata().await;
+    assert_eq!(drained, vec![(blocked, None), (later.clone(), None)]);
 
     sess.inject_response_items(vec![newer.clone()])
         .await
@@ -4523,11 +4523,14 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
 
     let mut drained_iter = drained.into_iter();
     let _blocked = drained_iter.next().expect("blocked prompt should exist");
-    sess.prepend_pending_input(drained_iter.collect())
+    sess.prepend_pending_input_with_metadata(drained_iter.collect())
         .await
         .expect("requeue later pending input at the front of the queue");
 
-    assert_eq!(sess.get_pending_input().await, vec![later, newer]);
+    assert_eq!(
+        sess.get_pending_input_with_metadata().await,
+        vec![(later, None), (newer, None)]
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
