@@ -49,6 +49,7 @@ use super::prompt::guardian_output_schema;
 use super::prompt::guardian_policy_prompt;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+const GUARDIAN_PROMPT_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug)]
 pub(crate) enum GuardianReviewSessionOutcome {
@@ -93,7 +94,8 @@ struct GuardianReviewSession {
     reuse_key: GuardianReviewSessionReuseKey,
     review_lock: Mutex<()>,
     last_committed_rollout_items: Mutex<Option<Vec<RolloutItem>>>,
-    prompt_prewarmed: AtomicBool,
+    prompt_prewarm_in_flight: AtomicBool,
+    last_guardian_request_at: Mutex<Option<tokio::time::Instant>>,
 }
 
 struct EphemeralReviewCleanup {
@@ -159,6 +161,16 @@ impl GuardianReviewSessionReuseKey {
     }
 }
 
+fn guardian_request_keeps_prompt_cache_warm(
+    last_guardian_request_at: Option<tokio::time::Instant>,
+    now: tokio::time::Instant,
+) -> bool {
+    last_guardian_request_at.is_some_and(|last_request_at| {
+        now.checked_duration_since(last_request_at)
+            .is_some_and(|age| age < GUARDIAN_PROMPT_CACHE_TTL)
+    })
+}
+
 impl GuardianReviewSession {
     async fn shutdown(&self) {
         self.cancel_token.cancel();
@@ -193,14 +205,20 @@ impl GuardianReviewSession {
         }
     }
 
-    fn mark_prompt_prewarmed(&self) {
-        self.prompt_prewarmed.store(true, Ordering::Relaxed);
-    }
-
     fn try_start_prompt_prewarm(&self) -> bool {
-        self.prompt_prewarmed
+        self.prompt_prewarm_in_flight
             .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
+    }
+
+    async fn record_guardian_request(&self, request_at: tokio::time::Instant) {
+        let mut last_guardian_request_at = self.last_guardian_request_at.lock().await;
+        if last_guardian_request_at
+            .as_ref()
+            .is_none_or(|last_request_at| request_at > *last_request_at)
+        {
+            *last_guardian_request_at = Some(request_at);
+        }
     }
 }
 
@@ -403,19 +421,33 @@ impl GuardianReviewSessionManager {
             }
         };
 
+        if guardian_request_keeps_prompt_cache_warm(
+            *trunk.last_guardian_request_at.lock().await,
+            tokio::time::Instant::now(),
+        ) {
+            return;
+        }
         if !trunk.try_start_prompt_prewarm() {
             return;
         }
 
-        if let Err(err) = prewarm_guardian_review_prompt(
+        let request_at = tokio::time::Instant::now();
+        let prewarm_result = prewarm_guardian_review_prompt(
             trunk.as_ref(),
             resolved.model.as_str(),
             resolved.reasoning_effort,
             parent_turn.reasoning_summary,
             parent_turn.personality,
         )
-        .await
-        {
+        .await;
+        if prewarm_result.is_ok() {
+            trunk.record_guardian_request(request_at).await;
+        }
+        trunk
+            .prompt_prewarm_in_flight
+            .store(false, Ordering::Relaxed);
+
+        if let Err(err) = prewarm_result {
             warn!("guardian prompt prewarm failed: {err}");
         }
     }
@@ -431,7 +463,8 @@ impl GuardianReviewSessionManager {
             cancel_token: CancellationToken::new(),
             review_lock: Mutex::new(()),
             last_committed_rollout_items: Mutex::new(None),
-            prompt_prewarmed: AtomicBool::new(false),
+            prompt_prewarm_in_flight: AtomicBool::new(false),
+            last_guardian_request_at: Mutex::new(None),
         }));
     }
 
@@ -450,7 +483,8 @@ impl GuardianReviewSessionManager {
                 cancel_token: CancellationToken::new(),
                 review_lock: Mutex::new(()),
                 last_committed_rollout_items: Mutex::new(None),
-                prompt_prewarmed: AtomicBool::new(false),
+                prompt_prewarm_in_flight: AtomicBool::new(false),
+                last_guardian_request_at: Mutex::new(None),
             }));
     }
 
@@ -621,7 +655,8 @@ async fn spawn_guardian_review_session(
         reuse_key,
         review_lock: Mutex::new(()),
         last_committed_rollout_items: Mutex::new(None),
-        prompt_prewarmed: AtomicBool::new(false),
+        prompt_prewarm_in_flight: AtomicBool::new(false),
+        last_guardian_request_at: Mutex::new(None),
     })
 }
 
@@ -672,7 +707,9 @@ async fn run_review_on_session(
             false,
         );
     }
-    review_session.mark_prompt_prewarmed();
+    review_session
+        .record_guardian_request(tokio::time::Instant::now())
+        .await;
 
     wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await
 }
@@ -994,6 +1031,21 @@ mod tests {
             cached_reuse_key,
             GuardianReviewSessionReuseKey::from_spawn_config(&cached_spawn_config)
         );
+    }
+
+    #[test]
+    fn guardian_request_within_cache_ttl_keeps_prompt_cache_warm() {
+        let now = tokio::time::Instant::now();
+
+        assert!(guardian_request_keeps_prompt_cache_warm(
+            Some(now - Duration::from_secs(60)),
+            now,
+        ));
+        assert!(!guardian_request_keeps_prompt_cache_warm(
+            Some(now - GUARDIAN_PROMPT_CACHE_TTL),
+            now,
+        ));
+        assert!(!guardian_request_keeps_prompt_cache_warm(None, now));
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -72,6 +72,8 @@ use prompt::GuardianTranscriptEntryKind;
 #[cfg(test)]
 use prompt::build_guardian_prewarm_prompt_items;
 #[cfg(test)]
+use prompt::build_guardian_prompt_cacheable_prefix_items;
+#[cfg(test)]
 use prompt::build_guardian_prompt_items;
 #[cfg(test)]
 use prompt::collect_guardian_transcript_entries;
