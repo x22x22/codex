@@ -110,6 +110,30 @@ impl std::fmt::Debug for RemoteExecSession {
     }
 }
 
+impl RemoteExecSession {
+    fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
+        self.writer_tx.clone()
+    }
+
+    fn has_exited(&self) -> bool {
+        self.exited.load(Ordering::SeqCst)
+    }
+
+    fn exit_code(&self) -> Option<i32> {
+        self.exit_code.lock().ok().and_then(|guard| *guard)
+    }
+
+    fn terminate(&self) {
+        let client = self.client.clone();
+        let process_key = self.process_key.clone();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = client.terminate(&process_key).await;
+            });
+        }
+    }
+}
+
 impl UnifiedExecProcess {
     fn new(
         process_handle: ProcessBackend,
@@ -166,7 +190,7 @@ impl UnifiedExecProcess {
     pub(super) fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
         match &self.process_handle {
             ProcessBackend::Local(process_handle) => process_handle.writer_sender(),
-            ProcessBackend::Remote(process_handle) => process_handle.writer_tx.clone(),
+            ProcessBackend::Remote(process_handle) => process_handle.writer_sender(),
         }
     }
 
@@ -195,18 +219,14 @@ impl UnifiedExecProcess {
     pub(super) fn has_exited(&self) -> bool {
         match &self.process_handle {
             ProcessBackend::Local(process_handle) => process_handle.has_exited(),
-            ProcessBackend::Remote(process_handle) => process_handle.exited.load(Ordering::SeqCst),
+            ProcessBackend::Remote(process_handle) => process_handle.has_exited(),
         }
     }
 
     pub(super) fn exit_code(&self) -> Option<i32> {
         match &self.process_handle {
             ProcessBackend::Local(process_handle) => process_handle.exit_code(),
-            ProcessBackend::Remote(process_handle) => process_handle
-                .exit_code
-                .lock()
-                .ok()
-                .and_then(|guard| *guard),
+            ProcessBackend::Remote(process_handle) => process_handle.exit_code(),
         }
     }
 
@@ -215,15 +235,7 @@ impl UnifiedExecProcess {
         self.output_closed_notify.notify_waiters();
         match &self.process_handle {
             ProcessBackend::Local(process_handle) => process_handle.terminate(),
-            ProcessBackend::Remote(process_handle) => {
-                let client = process_handle.client.clone();
-                let process_key = process_handle.process_key.clone();
-                if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                    handle.spawn(async move {
-                        let _ = client.terminate(&process_key).await;
-                    });
-                }
-            }
+            ProcessBackend::Remote(process_handle) => process_handle.terminate(),
         }
         self.cancellation_token.cancel();
         self.output_task.abort();
@@ -413,7 +425,6 @@ impl UnifiedExecProcess {
 
         Ok(managed)
     }
-
     fn signal_exit(&self) {
         self.cancellation_token.cancel();
     }

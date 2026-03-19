@@ -96,7 +96,7 @@ impl ToolHandler for ViewImageHandler {
 
         let metadata = turn
             .environment
-            .get_filesystem()
+            .filesystem()
             .get_metadata(&abs_path)
             .await
             .map_err(|error| {
@@ -114,7 +114,7 @@ impl ToolHandler for ViewImageHandler {
         }
         let file_bytes = turn
             .environment
-            .get_filesystem()
+            .filesystem()
             .read_file(&abs_path)
             .await
             .map_err(|error| {

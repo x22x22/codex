@@ -1,15 +1,16 @@
-use crate::ExecServerClient;
-use crate::ExecServerError;
-use crate::RemoteExecServerConnectArgs;
+use std::sync::Arc;
+
+use crate::executor::{Executor, LocalExecutor, RemoteExecutor};
 use crate::fs;
 use crate::fs::ExecutorFileSystem;
-use std::sync::Arc;
+use crate::{ExecServerClient, ExecServerError, RemoteExecServerConnectArgs};
 
 #[derive(Clone)]
 pub struct Environment {
     experimental_exec_server_url: Option<String>,
     exec_server_client: Option<ExecServerClient>,
     file_system: Arc<dyn ExecutorFileSystem>,
+    executor: Arc<dyn Executor>,
 }
 
 impl std::fmt::Debug for Environment {
@@ -30,6 +31,7 @@ impl Environment {
             experimental_exec_server_url: None,
             exec_server_client: None,
             file_system: Arc::new(fs::LocalFileSystem),
+            executor: Arc::new(LocalExecutor::new()),
         }
     }
 
@@ -55,18 +57,27 @@ impl Environment {
             Arc::new(fs::LocalFileSystem)
         };
 
+        let executor: Arc<dyn Executor> = if let Some(client) = &exec_server_client {
+            Arc::new(RemoteExecutor::from_client(Arc::new(client.clone())))
+        } else {
+            Arc::new(LocalExecutor::new())
+        };
+
         Ok(Self {
             experimental_exec_server_url,
             exec_server_client,
             file_system,
+            executor,
         })
     }
 
     pub fn from_exec_server_client(client: ExecServerClient) -> Self {
+        let client = Arc::new(client);
         Self {
             experimental_exec_server_url: None,
-            exec_server_client: Some(client.clone()),
-            file_system: Arc::new(fs::RemoteFileSystem::new(client)),
+            exec_server_client: Some((*client).clone()),
+            file_system: Arc::new(fs::RemoteFileSystem::new((*client).clone())),
+            executor: Arc::new(RemoteExecutor::from_client(Arc::clone(&client))),
         }
     }
 
@@ -74,12 +85,20 @@ impl Environment {
         self.experimental_exec_server_url.as_deref()
     }
 
+    pub fn filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
+        Arc::clone(&self.file_system)
+    }
+
+    pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
+        self.filesystem()
+    }
+
     pub fn exec_server_client(&self) -> Option<ExecServerClient> {
         self.exec_server_client.clone()
     }
 
-    pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
-        Arc::clone(&self.file_system)
+    pub fn executor(&self) -> Arc<dyn Executor> {
+        Arc::clone(&self.executor)
     }
 }
 
@@ -117,13 +136,13 @@ mod tests {
         let path = AbsolutePathBuf::try_from(tempdir.path().join("marker.txt")).expect("path");
 
         environment
-            .get_filesystem()
+            .filesystem()
             .write_file(&path, b"hello".to_vec())
             .await
             .expect("write file through environment abstraction");
 
         let bytes = environment
-            .get_filesystem()
+            .filesystem()
             .read_file(&path)
             .await
             .expect("read file through environment abstraction");

@@ -36,7 +36,7 @@ pub(crate) struct ExecServerFileSystem {
 impl Default for ExecServerFileSystem {
     fn default() -> Self {
         Self {
-            file_system: Environment::default().get_filesystem(),
+            file_system: Environment::default().filesystem(),
         }
     }
 }
