@@ -7,6 +7,7 @@ use crate::agent::AgentControl;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::client::ModelClient;
 use crate::config::StartedNetworkProxy;
+use crate::environment_handles::EnvironmentHandles;
 use crate::exec_policy::ExecPolicyManager;
 use crate::file_watcher::FileWatcher;
 use crate::mcp::McpManager;
@@ -63,4 +64,10 @@ pub(crate) struct SessionServices {
     pub(crate) model_client: ModelClient,
     pub(crate) code_mode_service: CodeModeService,
     pub(crate) environment: Arc<Environment>,
+}
+
+impl SessionServices {
+    pub(crate) fn environment_handles(&self) -> EnvironmentHandles<'_> {
+        EnvironmentHandles::new(self.environment.as_ref(), &self.unified_exec_manager)
+    }
 }

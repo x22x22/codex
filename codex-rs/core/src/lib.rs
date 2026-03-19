@@ -34,6 +34,7 @@ mod contextual_user_message;
 pub mod custom_prompts;
 pub mod env;
 mod environment_context;
+mod environment_handles;
 pub mod error;
 pub mod exec;
 pub mod exec_env;

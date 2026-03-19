@@ -24,6 +24,7 @@ pub enum ExecutorError {
     ExecServer(#[from] ExecServerError),
 }
 
+/// Request to spawn a new backend-managed process session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecRequest {
     pub process_id: String,
@@ -47,6 +48,7 @@ impl From<ExecRequest> for ExecParams {
     }
 }
 
+/// Request for incremental reads from a spawned process session.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExecReadRequest {
     pub after_seq: Option<u64>,
@@ -54,6 +56,7 @@ pub struct ExecReadRequest {
     pub wait_ms: Option<u64>,
 }
 
+/// Output chunk returned by `ExecSession::read`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecOutputChunk {
     pub seq: u64,
@@ -61,6 +64,7 @@ pub struct ExecOutputChunk {
     pub chunk: Vec<u8>,
 }
 
+/// Incremental read response for a spawned process session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecReadResponse {
     pub chunks: Vec<ExecOutputChunk>,
@@ -79,6 +83,10 @@ pub struct ExecTerminateResponse {
     pub running: bool,
 }
 
+/// A backend-managed process session.
+///
+/// This is intentionally lower-level than core's unified-exec process model so
+/// tools and skills can adopt Environment-backed execution incrementally.
 #[async_trait]
 pub trait ExecSession: Send + Sync {
     fn process_id(&self) -> &str;
@@ -90,6 +98,7 @@ pub trait ExecSession: Send + Sync {
     async fn terminate(&self) -> Result<ExecTerminateResponse, ExecutorError>;
 }
 
+/// Execution backend exposed through `Environment`.
 #[async_trait]
 pub trait Executor: Send + Sync {
     async fn spawn(&self, request: ExecRequest) -> Result<Box<dyn ExecSession>, ExecutorError>;

@@ -26,6 +26,7 @@ impl std::fmt::Debug for Environment {
 }
 
 impl Environment {
+    /// Create a purely local environment.
     pub fn local() -> Self {
         Self {
             experimental_exec_server_url: None,
@@ -85,18 +86,22 @@ impl Environment {
         self.experimental_exec_server_url.as_deref()
     }
 
+    /// Preferred filesystem accessor for new callers.
     pub fn filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         Arc::clone(&self.file_system)
     }
 
+    /// Compatibility accessor for existing callers.
     pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         self.filesystem()
     }
 
+    /// Compatibility accessor for existing core unified-exec wiring.
     pub fn exec_server_client(&self) -> Option<ExecServerClient> {
         self.exec_server_client.clone()
     }
 
+    /// Preferred execution accessor for new callers.
     pub fn executor(&self) -> Arc<dyn Executor> {
         Arc::clone(&self.executor)
     }
