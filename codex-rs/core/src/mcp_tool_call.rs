@@ -33,6 +33,7 @@ use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
 use crate::state_db;
+use crate::turn_metadata::extend_known_request_headers;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;
@@ -389,7 +390,6 @@ pub(crate) struct McpToolApprovalMetadata {
 }
 
 const MCP_TOOL_CODEX_APPS_META_KEY: &str = "_codex_apps";
-
 fn build_mcp_tool_call_request_meta(
     turn_context: &TurnContext,
     server: &str,

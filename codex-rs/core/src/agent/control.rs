@@ -424,6 +424,7 @@ impl AgentControl {
                 Op::UserInput {
                     items,
                     final_output_json_schema: None,
+                    metadata: None,
                 },
             )
             .await;

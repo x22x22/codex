@@ -1660,6 +1660,7 @@ async fn set_rate_limits_retains_previous_credits() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -1758,6 +1759,7 @@ async fn set_rate_limits_updates_plan_type_when_present() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     };
 
     let mut state = SessionState::new(session_configuration);
@@ -2102,6 +2104,7 @@ pub(crate) async fn make_session_configuration_for_tests() -> SessionConfigurati
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     }
 }
 
@@ -2333,6 +2336,7 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     };
 
     let (tx_event, _rx_event) = async_channel::unbounded();
@@ -2428,6 +2432,7 @@ pub(crate) async fn make_session_and_context() -> (Session, TurnContext) {
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     };
     let per_turn_config = Session::build_per_turn_config(&session_configuration);
     let model_info = ModelsManager::construct_model_info_offline_for_tests(
@@ -2865,6 +2870,7 @@ fn op_kind_distinguishes_turn_ops() {
         Op::UserInput {
             items: vec![],
             final_output_json_schema: None,
+            metadata: None,
         }
         .kind(),
         "user_input"
@@ -3223,6 +3229,7 @@ pub(crate) async fn make_session_and_context_with_dynamic_tools_and_rx(
         persist_extended_history: false,
         inherited_shell_snapshot: None,
         user_shell_override: None,
+        next_turn_metadata: std::collections::BTreeMap::new(),
     };
     let per_turn_config = Session::build_per_turn_config(&session_configuration);
     let model_info = ModelsManager::construct_model_info_offline_for_tests(

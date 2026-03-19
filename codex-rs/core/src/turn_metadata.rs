@@ -5,6 +5,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
+use http::HeaderMap;
+use http::HeaderValue;
+use serde::Deserialize;
 use serde::Serialize;
 use tokio::task::JoinHandle;
 
@@ -15,6 +18,14 @@ use crate::git_info::get_head_commit_hash;
 use crate::sandbox_tags::sandbox_tag;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
+
+pub(crate) const PARENT_CONVERSATION_ID_METADATA_KEY: &str = "parentConversationId";
+pub(crate) const PARENT_MESSAGE_ID_METADATA_KEY: &str = "parentMessageId";
+pub(crate) const PARENT_TURN_ID_METADATA_KEY: &str = "parentTurnId";
+
+const X_OPENAI_PARENT_CONVERSATION_ID_HEADER: &str = "x-openai-parent-conversation-id";
+const X_OPENAI_PARENT_MESSAGE_ID_HEADER: &str = "x-openai-parent-message-id";
+const X_OPENAI_PARENT_TURN_ID_HEADER: &str = "x-openai-parent-turn-id";
 
 #[derive(Clone, Debug, Default)]
 struct WorkspaceGitMetadata {
@@ -31,7 +42,7 @@ impl WorkspaceGitMetadata {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 struct TurnMetadataWorkspace {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     associated_remote_urls: Option<BTreeMap<String, String>>,
@@ -51,7 +62,7 @@ impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Default)]
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
 pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
@@ -61,6 +72,8 @@ pub(crate) struct TurnMetadataBag {
     workspaces: BTreeMap<String, TurnMetadataWorkspace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sandbox: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    metadata: BTreeMap<String, String>,
 }
 
 impl TurnMetadataBag {
@@ -75,6 +88,7 @@ fn build_turn_metadata_bag(
     sandbox: Option<String>,
     repo_root: Option<String>,
     workspace_git_metadata: Option<WorkspaceGitMetadata>,
+    metadata: BTreeMap<String, String>,
 ) -> TurnMetadataBag {
     let mut workspaces = BTreeMap::new();
     if let (Some(repo_root), Some(workspace_git_metadata)) = (repo_root, workspace_git_metadata)
@@ -88,6 +102,7 @@ fn build_turn_metadata_bag(
         turn_id,
         workspaces,
         sandbox,
+        metadata,
     }
 }
 
@@ -117,6 +132,7 @@ pub async fn build_turn_metadata_header(cwd: &Path, sandbox: Option<&str>) -> Op
             latest_git_commit_hash,
             has_changes,
         }),
+        BTreeMap::new(),
     )
     .to_header_value()
 }
@@ -138,6 +154,7 @@ impl TurnMetadataState {
         cwd: PathBuf,
         sandbox_policy: &SandboxPolicy,
         windows_sandbox_level: WindowsSandboxLevel,
+        metadata: BTreeMap<String, String>,
     ) -> Self {
         let repo_root = get_git_repo_root(&cwd).map(|root| root.to_string_lossy().into_owned());
         let sandbox = Some(sandbox_tag(sandbox_policy, windows_sandbox_level).to_string());
@@ -147,6 +164,7 @@ impl TurnMetadataState {
             sandbox,
             /*repo_root*/ None,
             /*workspace_git_metadata*/ None,
+            metadata,
         );
         let base_header = base_metadata
             .to_header_value()
@@ -180,6 +198,10 @@ impl TurnMetadataState {
             .and_then(|header| serde_json::from_str(&header).ok())
     }
 
+    pub(crate) fn metadata(&self) -> &BTreeMap<String, String> {
+        &self.base_metadata.metadata
+    }
+
     pub(crate) fn spawn_git_enrichment_task(&self) {
         if self.repo_root.is_none() {
             return;
@@ -206,6 +228,7 @@ impl TurnMetadataState {
                 state.base_metadata.sandbox.clone(),
                 Some(repo_root),
                 Some(workspace_git_metadata),
+                state.base_metadata.metadata.clone(),
             );
             if enriched_metadata.workspaces.is_empty() {
                 return;
@@ -242,6 +265,51 @@ impl TurnMetadataState {
             latest_git_commit_hash,
             has_changes,
         }
+    }
+}
+
+pub(crate) fn extend_known_request_headers(
+    headers: &mut HeaderMap,
+    turn_metadata_header: Option<&str>,
+) {
+    let Some(turn_metadata_header) = turn_metadata_header else {
+        return;
+    };
+    let Ok(turn_metadata) = serde_json::from_str::<TurnMetadataBag>(turn_metadata_header) else {
+        return;
+    };
+
+    insert_if_valid(
+        headers,
+        X_OPENAI_PARENT_CONVERSATION_ID_HEADER,
+        turn_metadata
+            .metadata
+            .get(PARENT_CONVERSATION_ID_METADATA_KEY)
+            .map(String::as_str),
+    );
+    insert_if_valid(
+        headers,
+        X_OPENAI_PARENT_MESSAGE_ID_HEADER,
+        turn_metadata
+            .metadata
+            .get(PARENT_MESSAGE_ID_METADATA_KEY)
+            .map(String::as_str),
+    );
+    insert_if_valid(
+        headers,
+        X_OPENAI_PARENT_TURN_ID_HEADER,
+        turn_metadata
+            .metadata
+            .get(PARENT_TURN_ID_METADATA_KEY)
+            .map(String::as_str),
+    );
+}
+
+fn insert_if_valid(headers: &mut HeaderMap, name: &'static str, value: Option<&str>) {
+    if let Some(value) = value
+        && let Ok(header_value) = HeaderValue::from_str(value)
+    {
+        headers.insert(name, header_value);
     }
 }
 

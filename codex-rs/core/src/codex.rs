@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -590,6 +591,7 @@ impl Codex {
             persist_extended_history,
             inherited_shell_snapshot,
             user_shell_override,
+            next_turn_metadata: BTreeMap::new(),
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
@@ -1055,6 +1057,8 @@ pub(crate) struct SessionConfiguration {
     persist_extended_history: bool,
     inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
     user_shell_override: Option<shell::Shell>,
+    /// One-shot metadata consumed by the next turn created from this session.
+    next_turn_metadata: BTreeMap<String, String>,
 }
 
 impl SessionConfiguration {
@@ -1096,6 +1100,9 @@ impl SessionConfiguration {
         }
         if let Some(personality) = updates.personality {
             next_configuration.personality = Some(personality);
+        }
+        if let Some(next_turn_metadata) = updates.next_turn_metadata.clone() {
+            next_configuration.next_turn_metadata = next_turn_metadata;
         }
         if let Some(approval_policy) = updates.approval_policy {
             next_configuration.approval_policy.set(approval_policy)?;
@@ -1147,6 +1154,8 @@ pub(crate) struct SessionSettingsUpdate {
     pub(crate) final_output_json_schema: Option<Option<Value>>,
     pub(crate) personality: Option<Personality>,
     pub(crate) app_server_client_name: Option<String>,
+    /// One-shot metadata for the next turn created from this update.
+    pub(crate) next_turn_metadata: Option<BTreeMap<String, String>>,
 }
 
 impl Session {
@@ -1341,6 +1350,7 @@ impl Session {
             cwd.clone(),
             session_configuration.sandbox_policy.get(),
             session_configuration.windows_sandbox_level,
+            session_configuration.next_turn_metadata.clone(),
         ));
         let (current_date, timezone) = local_time_context();
         TurnContext {
@@ -2036,6 +2046,7 @@ impl Session {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
+                metadata: None,
             },
         )
         .await;
@@ -2305,7 +2316,9 @@ impl Session {
                         state.session_configuration.sandbox_policy != next.sandbox_policy;
                     let codex_home = next.codex_home.clone();
                     let session_source = next.session_source.clone();
-                    state.session_configuration = next.clone();
+                    let mut persisted_configuration = next.clone();
+                    persisted_configuration.next_turn_metadata.clear();
+                    state.session_configuration = persisted_configuration;
                     (
                         next,
                         sandbox_policy_changed,
@@ -4491,6 +4504,7 @@ mod handlers {
                         reasoning_summary: summary,
                         service_tier,
                         final_output_json_schema: Some(final_output_json_schema),
+                        next_turn_metadata: None,
                         personality,
                         app_server_client_name: None,
                     },
@@ -4499,10 +4513,12 @@ mod handlers {
             Op::UserInput {
                 items,
                 final_output_json_schema,
+                metadata,
             } => (
                 items,
                 SessionSettingsUpdate {
                     final_output_json_schema: Some(final_output_json_schema),
+                    next_turn_metadata: Some(metadata.unwrap_or_default()),
                     ..Default::default()
                 },
             ),
@@ -5225,6 +5241,7 @@ async fn spawn_review_thread(
         parent_turn_context.cwd.clone(),
         parent_turn_context.sandbox_policy.get(),
         parent_turn_context.windows_sandbox_level,
+        parent_turn_context.turn_metadata_state.metadata().clone(),
     ));
 
     let review_turn_context = TurnContext {

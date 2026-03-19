@@ -1,5 +1,7 @@
 use super::*;
 
+use std::collections::BTreeMap;
+
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::process::Command;
@@ -72,6 +74,7 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
         cwd,
         &sandbox_policy,
         WindowsSandboxLevel::Disabled,
+        BTreeMap::new(),
     );
 
     let header = state.current_header_value().expect("header");
@@ -82,4 +85,39 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
     let expected_sandbox = sandbox_tag(&sandbox_policy, WindowsSandboxLevel::Disabled);
     assert_eq!(sandbox_name, Some(expected_sandbox));
     assert_eq!(session_id, Some("session-a"));
+}
+
+#[test]
+fn extend_known_request_headers_reads_parent_ids_from_turn_metadata() {
+    let mut headers = http::HeaderMap::new();
+    let turn_metadata = serde_json::json!({
+        "turn_id": "turn-a",
+        "metadata": {
+            PARENT_CONVERSATION_ID_METADATA_KEY: "conv-123",
+            PARENT_MESSAGE_ID_METADATA_KEY: "msg-123",
+            PARENT_TURN_ID_METADATA_KEY: "turn-123",
+        },
+    });
+    let turn_metadata = serde_json::to_string(&turn_metadata).expect("turn metadata json");
+
+    extend_known_request_headers(&mut headers, Some(turn_metadata.as_str()));
+
+    assert_eq!(
+        headers
+            .get("x-openai-parent-conversation-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("conv-123")
+    );
+    assert_eq!(
+        headers
+            .get("x-openai-parent-message-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("msg-123")
+    );
+    assert_eq!(
+        headers
+            .get("x-openai-parent-turn-id")
+            .and_then(|value| value.to_str().ok()),
+        Some("turn-123")
+    );
 }

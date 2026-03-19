@@ -108,6 +108,7 @@ use crate::response_debug_context::extract_response_debug_context_from_api_error
 use crate::response_debug_context::telemetry_api_error_message;
 use crate::response_debug_context::telemetry_transport_error_message;
 use crate::tools::spec::create_tools_json_for_responses_api;
+use crate::turn_metadata::extend_known_request_headers;
 use crate::util::FeedbackRequestTags;
 use crate::util::emit_feedback_auth_recovery_tags;
 use crate::util::emit_feedback_request_tags_with_auth_env;
@@ -469,6 +470,9 @@ impl ModelClient {
         extra_headers
     }
 
+    fn build_session_request_headers(&self) -> ApiHeaderMap {
+        self.build_subagent_headers()
+    }
     /// Builds request telemetry for unary API calls (e.g., Compact endpoint).
     fn build_request_telemetry(
         session_telemetry: &SessionTelemetry,
@@ -1384,6 +1388,10 @@ fn build_responses_headers(
     turn_metadata_header: Option<&HeaderValue>,
 ) -> ApiHeaderMap {
     let mut headers = ApiHeaderMap::new();
+    extend_known_request_headers(
+        &mut headers,
+        turn_metadata_header.and_then(|value| value.to_str().ok()),
+    );
     if let Some(value) = beta_features_header
         && !value.is_empty()
         && let Ok(header_value) = HeaderValue::from_str(value)

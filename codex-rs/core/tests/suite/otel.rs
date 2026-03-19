@@ -107,6 +107,8 @@ async fn responses_api_emits_api_request_event() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -150,6 +152,8 @@ async fn process_sse_emits_tracing_for_output_item() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -193,6 +197,8 @@ async fn process_sse_emits_failed_event_on_parse_error() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -237,6 +243,8 @@ async fn process_sse_records_failed_event_when_stream_closes_without_completed()
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -301,6 +309,8 @@ async fn process_sse_failed_event_records_response_error_message() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -363,6 +373,8 @@ async fn process_sse_failed_event_logs_parse_error() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -412,6 +424,8 @@ async fn process_sse_failed_event_logs_missing_error() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -470,6 +484,8 @@ async fn process_sse_failed_event_logs_response_completed_parse_error() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -522,6 +538,8 @@ async fn process_sse_emits_completed_telemetry() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -594,6 +612,8 @@ async fn handle_responses_span_records_response_kind_and_tool_name() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -678,6 +698,8 @@ async fn record_responses_sets_span_fields_for_response_events() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -762,6 +784,8 @@ async fn handle_response_item_records_tool_result_for_custom_tool_call() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -835,6 +859,8 @@ async fn handle_response_item_records_tool_result_for_function_call() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -918,6 +944,8 @@ async fn handle_response_item_records_tool_result_for_local_shell_missing_ids() 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -985,6 +1013,8 @@ async fn handle_response_item_records_tool_result_for_local_shell_call() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -1093,6 +1123,8 @@ async fn handle_container_exec_autoapprove_from_config_records_tool_decision() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -1144,6 +1176,8 @@ async fn handle_container_exec_user_approved_records_tool_decision() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -1210,6 +1244,8 @@ async fn handle_container_exec_user_approved_for_session_records_tool_decision()
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -1276,6 +1312,8 @@ async fn handle_sandbox_error_user_approves_retry_records_tool_decision() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -1342,6 +1380,8 @@ async fn handle_container_exec_user_denies_records_tool_decision() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -1408,6 +1448,8 @@ async fn handle_sandbox_error_user_approves_for_session_records_tool_decision() 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
@@ -1475,6 +1517,8 @@ async fn handle_sandbox_error_user_denies_records_tool_decision() {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
+
+            metadata: None,
         })
         .await
         .unwrap();
