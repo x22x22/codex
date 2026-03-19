@@ -13,17 +13,13 @@ import org.junit.Test
 
 class GenieLocalCodexProxyTest {
     @Test
-    fun forwardsLoopbackHttpRequestsToAgentBridge() {
-        val forwardedRequest = AtomicReference<Triple<String, String, String?>>()
+    fun forwardsLoopbackResponsesRequestsToAgentBridge() {
+        val forwardedRequestBody = AtomicReference<String?>()
         val proxy = GenieLocalCodexProxy(
             sessionId = "session-1",
-            requestForwarder = object : CodexHttpRequestForwarder {
-                override fun sendHttpRequest(
-                    method: String,
-                    path: String,
-                    body: String?,
-                ): CodexAgentBridge.HttpResponse {
-                    forwardedRequest.set(Triple(method, path, body))
+            requestForwarder = object : CodexResponsesRequestForwarder {
+                override fun sendResponsesRequest(body: String): CodexAgentBridge.HttpResponse {
+                    forwardedRequestBody.set(body)
                     return CodexAgentBridge.HttpResponse(
                         statusCode = 200,
                         body = """{"ok":true}""",
@@ -55,9 +51,6 @@ class GenieLocalCodexProxyTest {
             }
         }
 
-        assertEquals(
-            Triple("POST", "/v1/responses", """{"model":"gpt-5.3-codex"}"""),
-            forwardedRequest.get(),
-        )
+        assertEquals("""{"model":"gpt-5.3-codex"}""", forwardedRequestBody.get())
     }
 }

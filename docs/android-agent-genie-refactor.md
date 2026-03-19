@@ -33,6 +33,9 @@ The current repo now contains these implementation slices:
   HTTP proxy** inside the Genie app. That proxy forwards HTTP traffic to the
   Agent over Binder/AIDL, keeping network/auth Agent-owned without assuming the
   Genie child process can reach the Agent's abstract socket directly.
+- The Binder bridge now exposes a **narrow Responses transport** owned by the
+  Agent app itself, so Genie model traffic no longer depends on the legacy
+  `codexd` socket service.
 - The Genie runtime exposes reusable Android capabilities to Codex as
   **dynamic tools**, not via a custom `TOOL:` text protocol.
 - Non-bridge Genie questions surface through AgentSDK question flow by mapping
@@ -44,8 +47,8 @@ The current repo now contains these implementation slices:
   direct cross-app access to the Agent-owned abstract socket is not a valid
   assumption.
 
-The Rust `codexd` service/client split remains in place as the temporary
-HTTP/network bridge for Genie model traffic while this refactor proceeds.
+The Rust `codexd` service/client split remains in place only for the legacy
+foreground-service auth/status surface while this refactor proceeds.
 
 ## Fixed Architecture Decisions
 
@@ -76,6 +79,8 @@ HTTP/network bridge for Genie model traffic while this refactor proceeds.
 - hosted `codex app-server` inside Genie for the actual Codex execution loop
 - Genie-local transport termination between the hosted `codex` child process
   and the Binder control plane
+- Agent-owned Responses transport termination between the Binder control plane
+  and the upstream model backend
 
 ## Runtime Model
 
@@ -131,6 +136,8 @@ HTTP/network bridge for Genie model traffic while this refactor proceeds.
   sandbox, with that context included in the delegated Codex prompt
 - Hosted `codex app-server` inside Genie, with model traffic routed through a
   Genie-local proxy backed by the Agent Binder bridge
+- Agent-owned `/v1/responses` proxying in
+  `android/app/src/main/java/com/openai/codexd/AgentResponsesProxy.kt`
 - Android dynamic tools registered on the Genie Codex thread with:
   - `android.package.inspect`
   - `android.intent.launch`
@@ -149,12 +156,11 @@ HTTP/network bridge for Genie model traffic while this refactor proceeds.
 
 ### Not done yet
 
-- Moving network/auth mediation from `codexd` into the Agent runtime
 - Expanding the Binder control plane beyond the current fixed-form runtime
   bootstrap/status calls
 - Making the Agent the default product surface instead of the legacy service app
-- Removing the remaining use of `codexd` as the Genie HTTP bridge by moving
-  proxied model traffic into the Agent-hosted runtime
+- Consolidating the remaining auth/status responsibilities out of the legacy
+  `codexd` foreground service
 - Adding more Android-native tool surfaces and richer observation types to the
   hosted Genie runtime
 
@@ -180,12 +186,14 @@ HTTP/network bridge for Genie model traffic while this refactor proceeds.
     the Agent Binder bridge
 - `android/app/src/main/java/com/openai/codexd/CodexAgentBridgeService.kt`
   - exported Binder/AIDL bridge for Genie control-plane calls
+- `android/app/src/main/java/com/openai/codexd/AgentResponsesProxy.kt`
+  - Agent-owned Responses transport used by Genie model traffic
 - `android/genie/src/main/java/com/openai/codex/genie/AgentBridgeClient.kt`
   - Genie-side Binder client for the Agent bridge service
 - `android/app/src/main/java/com/openai/codexd/AgentCodexAppServerClient.kt`
   - hosted Agent `codex app-server` client for planning, auto-answering, and runtime metadata
 - `android/app/src/main/java/com/openai/codexd/CodexdLocalClient.kt`
-  - Agent-local client for the temporary `codexd` HTTP bridge used by Genie traffic
+  - Agent-local client for the legacy `codexd` foreground-service surface
 
 ## Build
 
@@ -217,7 +225,6 @@ binaries. The Genie app depends on `just android-build` for the packaged
 ## Next Implementation Steps
 
 1. Expand the Binder control plane into a fuller Agent<->Genie runtime API.
-2. Split the legacy `codexd` concerns out of the Agent UI once the Agent owns
-   auth and transport directly.
+2. Split the remaining legacy `codexd` auth/status concerns out of the Agent UI.
 3. Add more Android-native tool surfaces and richer observation types to the
    hosted Genie runtime.

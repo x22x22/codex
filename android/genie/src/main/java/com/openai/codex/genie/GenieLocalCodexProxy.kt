@@ -15,7 +15,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class GenieLocalCodexProxy(
     private val sessionId: String,
-    private val requestForwarder: CodexHttpRequestForwarder,
+    private val requestForwarder: CodexResponsesRequestForwarder,
 ) : Closeable {
     companion object {
         private const val TAG = "GenieLocalProxy"
@@ -69,11 +69,7 @@ class GenieLocalCodexProxy(
             try {
                 val request = readRequest(client)
                 logInfo("Forwarding ${request.method} ${request.forwardPath} for $sessionId")
-                val response = requestForwarder.sendHttpRequest(
-                    request.method,
-                    request.forwardPath,
-                    request.body,
-                )
+                val response = forwardResponsesRequest(request)
                 writeResponse(
                     socket = client,
                     statusCode = response.statusCode,
@@ -96,6 +92,22 @@ class GenieLocalCodexProxy(
                 clientSockets -= client
             }
         }
+    }
+
+    private fun forwardResponsesRequest(request: ParsedRequest): CodexAgentBridge.HttpResponse {
+        if (request.method != "POST") {
+            return CodexAgentBridge.HttpResponse(
+                statusCode = 405,
+                body = "Unsupported local proxy method: ${request.method}",
+            )
+        }
+        if (request.forwardPath != "/v1/responses") {
+            return CodexAgentBridge.HttpResponse(
+                statusCode = 404,
+                body = "Unsupported local proxy path: ${request.forwardPath}",
+            )
+        }
+        return requestForwarder.sendResponsesRequest(request.body.orEmpty())
     }
 
     private fun readRequest(socket: Socket): ParsedRequest {

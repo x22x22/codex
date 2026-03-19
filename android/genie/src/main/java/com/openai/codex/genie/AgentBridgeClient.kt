@@ -6,20 +6,19 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import android.os.SystemClock
-import com.openai.codex.bridge.BridgeHttpRequest
 import com.openai.codex.bridge.ICodexAgentBridgeService
 import java.io.Closeable
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-interface CodexHttpRequestForwarder {
-    fun sendHttpRequest(method: String, path: String, body: String?): CodexAgentBridge.HttpResponse
+interface CodexResponsesRequestForwarder {
+    fun sendResponsesRequest(body: String): CodexAgentBridge.HttpResponse
 }
 
 class AgentBridgeClient(
     private val context: Context,
-) : Closeable, CodexHttpRequestForwarder {
+) : Closeable, CodexResponsesRequestForwarder {
     companion object {
         private const val AGENT_PACKAGE = "com.openai.codexd"
         private const val AGENT_BRIDGE_SERVICE = "com.openai.codexd.CodexAgentBridgeService"
@@ -73,13 +72,9 @@ class AgentBridgeClient(
         )
     }
 
-    override fun sendHttpRequest(
-        method: String,
-        path: String,
-        body: String?,
-    ): CodexAgentBridge.HttpResponse {
+    override fun sendResponsesRequest(body: String): CodexAgentBridge.HttpResponse {
         val service = requireService()
-        val response = service.sendHttpRequest(BridgeHttpRequest(method, path, body))
+        val response = service.sendResponsesRequest(body)
         return CodexAgentBridge.HttpResponse(
             statusCode = response.statusCode,
             body = response.body ?: "",

@@ -4,11 +4,9 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
-import com.openai.codex.bridge.BridgeHttpRequest
 import com.openai.codex.bridge.BridgeHttpResponse
 import com.openai.codex.bridge.BridgeRuntimeStatus
 import com.openai.codex.bridge.ICodexAgentBridgeService
-import java.io.IOException
 
 class CodexAgentBridgeService : Service() {
     companion object {
@@ -35,18 +33,16 @@ class CodexAgentBridgeService : Service() {
             )
         }
 
-        override fun sendHttpRequest(request: BridgeHttpRequest): BridgeHttpResponse {
+        override fun sendResponsesRequest(requestBody: String?): BridgeHttpResponse {
             val response = runCatching {
-                CodexdLocalClient.waitForResponse(
+                AgentResponsesProxy.sendResponsesRequest(
                     this@CodexAgentBridgeService,
-                    request.method,
-                    request.path,
-                    request.body,
+                    requestBody.orEmpty(),
                 )
             }.getOrElse { err ->
-                throw err.asBinderError("sendHttpRequest")
+                throw err.asBinderError("sendResponsesRequest")
             }
-            Log.i(TAG, "Proxied ${request.method} ${request.path}")
+            Log.i(TAG, "Proxied /v1/responses")
             return BridgeHttpResponse(response.statusCode, response.body)
         }
     }

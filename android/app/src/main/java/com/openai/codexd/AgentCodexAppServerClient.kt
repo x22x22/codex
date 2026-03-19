@@ -55,13 +55,16 @@ object AgentCodexAppServerClient {
         }
     }
 
-    fun readRuntimeStatus(context: Context): RuntimeStatus = synchronized(lifecycleLock) {
+    fun readRuntimeStatus(
+        context: Context,
+        refreshToken: Boolean = false,
+    ): RuntimeStatus = synchronized(lifecycleLock) {
         ensureStarted(context.applicationContext)
         activeRequests.incrementAndGet()
         try {
             val accountResponse = request(
                 method = "account/read",
-                params = JSONObject().put("refreshToken", false),
+                params = JSONObject().put("refreshToken", refreshToken),
             )
             val configResponse = request(
                 method = "config/read",
@@ -346,7 +349,11 @@ object AgentCodexAppServerClient {
             modelProviderId = configuredProvider ?: inferModelProviderId(accountType),
             configuredModel = configuredModel,
             effectiveModel = configuredModel,
-            upstreamBaseUrl = config.optString("chatgpt_base_url").ifBlank { "provider-default" },
+            upstreamBaseUrl = resolveUpstreamBaseUrl(
+                config = config,
+                accountType = accountType,
+                configuredProvider = configuredProvider,
+            ),
         )
     }
 
@@ -355,6 +362,34 @@ object AgentCodexAppServerClient {
             "chatgpt" -> "chatgpt"
             "apiKey" -> "openai"
             else -> "unknown"
+        }
+    }
+
+    private fun resolveUpstreamBaseUrl(
+        config: JSONObject,
+        accountType: String,
+        configuredProvider: String?,
+    ): String {
+        val modelProviders = config.optJSONObject("model_providers")
+        val configuredProviderBaseUrl = configuredProvider?.let { providerId ->
+            modelProviders
+                ?.optJSONObject(providerId)
+                ?.optString("base_url")
+                ?.ifBlank { null }
+        }
+        if (configuredProviderBaseUrl != null) {
+            return configuredProviderBaseUrl
+        }
+        return when (accountType) {
+            "chatgpt" -> config.optString("chatgpt_base_url")
+                .ifBlank { "https://chatgpt.com/backend-api/codex" }
+            "apiKey" -> config.optString("openai_base_url")
+                .ifBlank { "https://api.openai.com/v1" }
+            else -> config.optString("openai_base_url")
+                .ifBlank {
+                    config.optString("chatgpt_base_url")
+                        .ifBlank { "provider-default" }
+                }
         }
     }
 }
