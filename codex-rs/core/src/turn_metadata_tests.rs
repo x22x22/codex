@@ -88,36 +88,27 @@ fn turn_metadata_state_uses_platform_sandbox_tag() {
 }
 
 #[test]
-fn extend_known_request_headers_reads_parent_ids_from_turn_metadata() {
-    let mut headers = http::HeaderMap::new();
-    let turn_metadata = serde_json::json!({
-        "turn_id": "turn-a",
-        "metadata": {
-            PARENT_CONVERSATION_ID_METADATA_KEY: "conv-123",
-            PARENT_MESSAGE_ID_METADATA_KEY: "msg-123",
-            PARENT_TURN_ID_METADATA_KEY: "turn-123",
-        },
-    });
-    let turn_metadata = serde_json::to_string(&turn_metadata).expect("turn metadata json");
+fn turn_metadata_state_serializes_custom_metadata() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let cwd = temp_dir.path().to_path_buf();
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let metadata = BTreeMap::from([
+        ("parentConversationId".to_string(), "conv-123".to_string()),
+        ("parentMessageId".to_string(), "msg-123".to_string()),
+        ("parentTurnId".to_string(), "turn-123".to_string()),
+    ]);
 
-    extend_known_request_headers(&mut headers, Some(turn_metadata.as_str()));
+    let state = TurnMetadataState::new(
+        "session-a".to_string(),
+        "turn-a".to_string(),
+        cwd,
+        &sandbox_policy,
+        WindowsSandboxLevel::Disabled,
+        metadata.clone(),
+    );
 
-    assert_eq!(
-        headers
-            .get("x-openai-parent-conversation-id")
-            .and_then(|value| value.to_str().ok()),
-        Some("conv-123")
-    );
-    assert_eq!(
-        headers
-            .get("x-openai-parent-message-id")
-            .and_then(|value| value.to_str().ok()),
-        Some("msg-123")
-    );
-    assert_eq!(
-        headers
-            .get("x-openai-parent-turn-id")
-            .and_then(|value| value.to_str().ok()),
-        Some("turn-123")
-    );
+    let header = state.current_header_value().expect("header");
+    let json: Value = serde_json::from_str(&header).expect("json");
+
+    assert_eq!(json.get("metadata"), Some(&serde_json::json!(metadata)));
 }

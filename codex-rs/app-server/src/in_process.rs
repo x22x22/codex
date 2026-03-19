@@ -863,7 +863,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn in_process_start_forwards_turn_metadata_headers_on_turn_requests() {
+    async fn in_process_start_forwards_turn_metadata_on_turn_requests() {
         let server = create_mock_responses_server_repeating_assistant("Done").await;
         let codex_home = TempDir::new().expect("tempdir should create");
         let mut client = start(InProcessStartArgs {
@@ -1004,26 +1004,25 @@ mod tests {
         .expect("timed out waiting for outbound requests");
         assert!(!requests.is_empty());
         for request in requests {
+            let turn_metadata_header = request
+                .headers
+                .get("x-codex-turn-metadata")
+                .and_then(|value| value.to_str().ok())
+                .expect("turn metadata header should be present");
+            let turn_metadata: serde_json::Value =
+                serde_json::from_str(turn_metadata_header).expect("turn metadata should be JSON");
+
             assert_eq!(
-                request
-                    .headers
-                    .get("x-openai-parent-conversation-id")
-                    .and_then(|value| value.to_str().ok()),
-                Some("parent-conversation-123")
+                turn_metadata.pointer("/metadata/parentConversationId"),
+                Some(&serde_json::json!("parent-conversation-123"))
             );
             assert_eq!(
-                request
-                    .headers
-                    .get("x-openai-parent-message-id")
-                    .and_then(|value| value.to_str().ok()),
-                Some("parent-message-123")
+                turn_metadata.pointer("/metadata/parentMessageId"),
+                Some(&serde_json::json!("parent-message-123"))
             );
             assert_eq!(
-                request
-                    .headers
-                    .get("x-openai-parent-turn-id")
-                    .and_then(|value| value.to_str().ok()),
-                Some("parent-turn-123")
+                turn_metadata.pointer("/metadata/parentTurnId"),
+                Some(&serde_json::json!("parent-turn-123"))
             );
         }
 

@@ -5,9 +5,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 
-use http::HeaderMap;
-use http::HeaderValue;
-use serde::Deserialize;
 use serde::Serialize;
 use tokio::task::JoinHandle;
 
@@ -18,14 +15,6 @@ use crate::git_info::get_head_commit_hash;
 use crate::sandbox_tags::sandbox_tag;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::SandboxPolicy;
-
-pub(crate) const PARENT_CONVERSATION_ID_METADATA_KEY: &str = "parentConversationId";
-pub(crate) const PARENT_MESSAGE_ID_METADATA_KEY: &str = "parentMessageId";
-pub(crate) const PARENT_TURN_ID_METADATA_KEY: &str = "parentTurnId";
-
-const X_OPENAI_PARENT_CONVERSATION_ID_HEADER: &str = "x-openai-parent-conversation-id";
-const X_OPENAI_PARENT_MESSAGE_ID_HEADER: &str = "x-openai-parent-message-id";
-const X_OPENAI_PARENT_TURN_ID_HEADER: &str = "x-openai-parent-turn-id";
 
 #[derive(Clone, Debug, Default)]
 struct WorkspaceGitMetadata {
@@ -42,7 +31,7 @@ impl WorkspaceGitMetadata {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[derive(Clone, Debug, Serialize, Default)]
 struct TurnMetadataWorkspace {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     associated_remote_urls: Option<BTreeMap<String, String>>,
@@ -62,7 +51,7 @@ impl From<WorkspaceGitMetadata> for TurnMetadataWorkspace {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[derive(Clone, Debug, Serialize, Default)]
 pub(crate) struct TurnMetadataBag {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
@@ -267,52 +256,6 @@ impl TurnMetadataState {
         }
     }
 }
-
-pub(crate) fn extend_known_request_headers(
-    headers: &mut HeaderMap,
-    turn_metadata_header: Option<&str>,
-) {
-    let Some(turn_metadata_header) = turn_metadata_header else {
-        return;
-    };
-    let Ok(turn_metadata) = serde_json::from_str::<TurnMetadataBag>(turn_metadata_header) else {
-        return;
-    };
-
-    insert_if_valid(
-        headers,
-        X_OPENAI_PARENT_CONVERSATION_ID_HEADER,
-        turn_metadata
-            .metadata
-            .get(PARENT_CONVERSATION_ID_METADATA_KEY)
-            .map(String::as_str),
-    );
-    insert_if_valid(
-        headers,
-        X_OPENAI_PARENT_MESSAGE_ID_HEADER,
-        turn_metadata
-            .metadata
-            .get(PARENT_MESSAGE_ID_METADATA_KEY)
-            .map(String::as_str),
-    );
-    insert_if_valid(
-        headers,
-        X_OPENAI_PARENT_TURN_ID_HEADER,
-        turn_metadata
-            .metadata
-            .get(PARENT_TURN_ID_METADATA_KEY)
-            .map(String::as_str),
-    );
-}
-
-fn insert_if_valid(headers: &mut HeaderMap, name: &'static str, value: Option<&str>) {
-    if let Some(value) = value
-        && let Ok(header_value) = HeaderValue::from_str(value)
-    {
-        headers.insert(name, header_value);
-    }
-}
-
 #[cfg(test)]
 #[path = "turn_metadata_tests.rs"]
 mod tests;

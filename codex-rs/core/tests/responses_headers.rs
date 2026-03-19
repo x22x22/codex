@@ -549,7 +549,7 @@ async fn responses_stream_includes_turn_metadata_header_for_git_workspace_e2e() 
 }
 
 #[tokio::test]
-async fn responses_stream_includes_parent_headers_from_turn_metadata() {
+async fn responses_stream_includes_parent_metadata_in_turn_metadata_header() {
     core_test_support::skip_if_no_network!();
 
     let server = responses::start_mock_server().await;
@@ -659,16 +659,22 @@ async fn responses_stream_includes_parent_headers_from_turn_metadata() {
     }
 
     let request = request_recorder.single_request();
+    let turn_metadata_header = request
+        .header("x-codex-turn-metadata")
+        .expect("request should include turn metadata");
+    let turn_metadata: serde_json::Value =
+        serde_json::from_str(&turn_metadata_header).expect("turn metadata should be valid JSON");
+
     assert_eq!(
-        request.header("x-openai-parent-conversation-id").as_deref(),
-        Some("conv-123")
+        turn_metadata.pointer("/metadata/parentConversationId"),
+        Some(&json!("conv-123"))
     );
     assert_eq!(
-        request.header("x-openai-parent-message-id").as_deref(),
-        Some("msg-123")
+        turn_metadata.pointer("/metadata/parentMessageId"),
+        Some(&json!("msg-123"))
     );
     assert_eq!(
-        request.header("x-openai-parent-turn-id").as_deref(),
-        Some("turn-123")
+        turn_metadata.pointer("/metadata/parentTurnId"),
+        Some(&json!("turn-123"))
     );
 }
