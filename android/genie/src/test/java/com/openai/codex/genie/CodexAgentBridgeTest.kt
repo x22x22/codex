@@ -1,51 +1,87 @@
 package com.openai.codex.genie
 
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class CodexAgentBridgeTest {
     @Test
-    fun runtimeStatusRequestUsesInternalRuntimeStatusEndpoint() {
-        val request = CodexAgentBridge.buildRuntimeStatusRequest("req-1")
-
-        assertTrue(request.startsWith("__codex_bridge__ "))
-        assertTrue(request.contains("\"requestId\":\"req-1\""))
-        assertTrue(request.contains("\"method\":\"http_request\""))
-        assertTrue(request.contains("\"httpMethod\":\"GET\""))
-        assertTrue(request.contains("\"path\":\"/internal/runtime/status\""))
-    }
-
-    @Test
-    fun parseRuntimeStatusResponseExtractsModelFields() {
-        val response = """
-            __codex_bridge_result__ {"requestId":"req-1","ok":true,"statusCode":200,"body":"{\"authenticated\":true,\"accountEmail\":\"user@example.com\",\"clientCount\":2,\"modelProviderId\":\"openai\",\"configuredModel\":\"gpt-5.1-codex\",\"effectiveModel\":\"gpt-5.1-codex\",\"upstreamBaseUrl\":\"https://api.openai.com/v1\"}"}
-        """.trimIndent()
-
-        val status = CodexAgentBridge.parseRuntimeStatusResponse(response, "req-1")
-
-        assertEquals(
-            CodexAgentBridge.RuntimeStatus(
-                authenticated = true,
-                accountEmail = "user@example.com",
-                clientCount = 2,
-                modelProviderId = "openai",
-                configuredModel = "gpt-5.1-codex",
-                effectiveModel = "gpt-5.1-codex",
-                upstreamBaseUrl = "https://api.openai.com/v1",
-            ),
-            status,
+    fun buildResponsesRequestUsesListInputPayload() {
+        val request = CodexAgentBridge.buildResponsesRequest(
+            model = "gpt-5.1-codex",
+            instructions = "reply",
+            prompt = "inspect the target app",
         )
+
+        assertEquals("gpt-5.1-codex", request.getString("model"))
+        assertFalse(request.getBoolean("store"))
+        assertEquals(true, request.getBoolean("stream"))
+        val input = request.getJSONArray("input")
+        assertEquals(1, input.length())
+        val message = input.getJSONObject(0)
+        assertEquals("user", message.getString("role"))
+        val content = message.getJSONArray("content")
+        assertEquals(1, content.length())
+        assertEquals("input_text", content.getJSONObject(0).getString("type"))
+        assertEquals("inspect the target app", content.getJSONObject(0).getString("text"))
     }
 
     @Test
     fun parseResponsesOutputTextCombinesOutputItems() {
-        val response = """
-            __codex_bridge_result__ {"requestId":"req-1","ok":true,"statusCode":200,"body":"{\"id\":\"resp-1\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Open the clock app. \"},{\"type\":\"output_text\",\"text\":\"Set the requested timer.\"}]}]}"}
-        """.trimIndent()
+        val response = CodexAgentBridge.HttpResponse(
+            statusCode = 200,
+            body = JSONObject()
+                .put(
+                    "output",
+                    org.json.JSONArray().put(
+                        JSONObject()
+                            .put("type", "message")
+                            .put("role", "assistant")
+                            .put(
+                                "content",
+                                org.json.JSONArray()
+                                    .put(
+                                        JSONObject()
+                                            .put("type", "output_text")
+                                            .put("text", "Open the clock app. "),
+                                    )
+                                    .put(
+                                        JSONObject()
+                                            .put("type", "output_text")
+                                            .put("text", "Set the requested timer."),
+                                    ),
+                            ),
+                    ),
+                )
+                .toString(),
+        )
 
-        val outputText = CodexAgentBridge.parseResponsesOutputText(response, "req-1")
+        val outputText = CodexAgentBridge.parseResponsesOutputText(response)
 
         assertEquals("Open the clock app. Set the requested timer.", outputText)
+    }
+
+    @Test
+    fun parseResponsesOutputTextReadsSseDeltaPayloads() {
+        val response = CodexAgentBridge.HttpResponse(
+            statusCode = 200,
+            body = """
+                event: response.output_text.delta
+                data: {"type":"response.output_text.delta","delta":"Open Clock. "}
+
+                event: response.output_text.delta
+                data: {"type":"response.output_text.delta","delta":"Start the timer."}
+
+                event: response.completed
+                data: {"type":"response.completed","response":{"id":"resp-1"}}
+
+                data: [DONE]
+            """.trimIndent(),
+        )
+
+        val outputText = CodexAgentBridge.parseResponsesOutputText(response)
+
+        assertEquals("Open Clock. Start the timer.", outputText)
     }
 }

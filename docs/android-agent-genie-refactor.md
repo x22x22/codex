@@ -19,26 +19,25 @@ The current repo now contains the first implementation slice:
   - attach detached targets
 - The Genie app currently validates framework lifecycle, detached-target
   requests, question flow, and result publication with a placeholder executor.
-- The first Agent<->Genie bridge now uses **framework question/answer events**
-  for internal machine-to-machine RPC.
-- The current bridge shape carries small request/response envelopes, and the
-  Genie runtime already uses it to fetch Agent-owned runtime metadata from the
+- The first internal Agent<->Genie control plane now uses an exported
+  **Binder/AIDL service** in the Agent app, not framework question/answer
+  events.
+- The current Binder bridge exposes small fixed-form calls, and the Genie
+  runtime already uses it to fetch Agent-owned runtime metadata from the
   embedded `codexd`, including auth status and the effective model/provider.
 - The Genie runtime now also inspects the paired target package from inside the
   target-app sandbox and feeds package metadata plus launcher intent details
   into the bridged model prompt.
-- The Genie scaffold now issues one real **non-streaming `/v1/responses`**
-  request through that bridge after the user answer, proving that model traffic
-  can stay Agent-owned even while the Genie runs inside the target-app sandbox.
+- The Genie scaffold now issues one real **streaming `/v1/responses`** request
+  through that bridge after the user answer, proving that model traffic can
+  stay Agent-owned even while the Genie runs inside the target-app sandbox.
 - Non-bridge Genie questions now surface through an Agent-owned notification,
   which gives the Agent a concrete user-escalation path without making the
   Genie the user-facing surface.
 - The Agent now also attempts to answer non-bridge Genie questions through the
   embedded `codexd` runtime before falling back to that notification path.
-- This is intentional: runtime testing on the emulator showed that a Genie
-  execution runs inside the paired target app's sandbox/UID, so ordinary
-  cross-app Android service/provider IPC to the Agent app is not a reliable
-  transport.
+- Runtime testing on the emulator now shows that the exported Agent Binder
+  service is reachable from Genie execution for the current control-plane calls.
 
 The Rust `codexd` service/client split remains in place and is still the
 existing network/auth bridge while this refactor proceeds.
@@ -63,10 +62,9 @@ existing network/auth bridge while this refactor proceeds.
   - orchestration of parent + child sessions
 - The first milestone keeps the current local CLI/socket bridge internally so
   the Rust runtime can migrate incrementally.
-- Internal Agent<->Genie coordination must use a transport that survives the
-  target-app sandbox boundary. The current working bootstrap path is
-  AgentSDK-mediated internal request/response exchange over question/answer
-  events.
+- Internal Agent<->Genie coordination now splits into:
+  - Binder/AIDL for fixed-form control/data RPC
+  - AgentSDK session events for free-form product dialogue
 
 ## Runtime Model
 
@@ -97,7 +95,7 @@ existing network/auth bridge while this refactor proceeds.
   - question/answer flow
   - detached-target requests
   - result publication
-  - Agent-mediated internal bridge requests over framework session events
+  - Agent-mediated Binder bridge requests across the Agent/Genie boundary
 
 ## First Milestone Scope
 
@@ -110,9 +108,9 @@ existing network/auth bridge while this refactor proceeds.
 - Direct session launcher in the Agent UI
 - Framework session inspection UI in the Agent app
 - Question answering and detached-target attach controls
-- Framework-mediated internal bridge request handling in `CodexAgentService`
-- Framework-mediated internal bridge request issuance in `CodexGenieService`
-- Generic small HTTP request/response envelopes over the internal bridge, with
+- Exported Binder bridge request handling in `CodexAgentBridgeService`
+- Binder bridge request issuance in `CodexGenieService`
+- Generic small HTTP request/response envelopes over the Binder bridge, with
   the Genie using the real `codexd` HTTP response bodies
 - Agent-owned `/internal/runtime/status` metadata for Genie bootstrap
 - Target-app package metadata and launcher-intent inspection from the Genie
@@ -130,9 +128,8 @@ existing network/auth bridge while this refactor proceeds.
 
 - Replacing the placeholder Genie executor with a real Codex runtime
 - Moving network/auth mediation from `codexd` into the Agent runtime
-- Replacing the temporary internal bridge with a transport that supports richer
-  request/response and eventually streaming semantics without surfacing as
-  framework question events
+- Expanding the Binder control plane beyond the current fixed-form runtime-status
+  and proxied-HTTP calls
 - Wiring Android-native target-driving tools into the Genie runtime
 - Making the Agent the default product surface instead of the legacy service app
 
@@ -150,8 +147,12 @@ existing network/auth bridge while this refactor proceeds.
   - Agent session UI plus existing `codexd` bridge controls
 - `android/genie/src/main/java/com/openai/codex/genie/CodexGenieService.kt`
   - placeholder Genie executor
+- `android/app/src/main/java/com/openai/codexd/CodexAgentBridgeService.kt`
+  - exported Binder/AIDL bridge for Genie control-plane calls
+- `android/genie/src/main/java/com/openai/codex/genie/AgentBridgeClient.kt`
+  - Genie-side Binder client for the Agent bridge service
 - `android/genie/src/main/java/com/openai/codex/genie/CodexAgentBridge.kt`
-  - internal framework bridge protocol helpers
+  - Genie-side request/response helpers for bridged model traffic
 - `android/app/src/main/java/com/openai/codexd/CodexdLocalClient.kt`
   - Agent-local client for the embedded `codexd` bridge
 
@@ -176,8 +177,7 @@ The Agent app still depends on `just android-service-build` for the packaged
 ## Next Implementation Steps
 
 1. Move the placeholder Genie session executor to a real Codex runtime role.
-2. Generalize the current framework question/answer bridge into a transport the
-   Genie runtime can use for more than auth/status probes.
+2. Expand the Binder control plane into a fuller Agent<->Genie runtime API.
 3. Split the legacy `codexd` concerns out of the Agent UI once the Agent owns
    auth and transport directly.
 4. Add Android-native tool surfaces to Genie for target inspection and control.

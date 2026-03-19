@@ -2,11 +2,12 @@ package com.openai.codexd
 
 import android.content.Context
 import android.net.LocalSocket
-import org.json.JSONObject
+import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
-import java.io.BufferedInputStream
 import java.nio.charset.StandardCharsets
+import org.json.JSONObject
 
 object CodexdLocalClient {
     data class HttpResponse(
@@ -110,21 +111,89 @@ object CodexdLocalClient {
         val responseBytes = BufferedInputStream(socket.inputStream).use { it.readBytes() }
         socket.close()
 
-        val responseText = responseBytes.toString(StandardCharsets.UTF_8)
-        val splitIndex = responseText.indexOf("\r\n\r\n")
+        val splitIndex = responseBytes.indexOfHeaderBodySeparator()
         if (splitIndex == -1) {
             throw IOException("Invalid HTTP response")
         }
-        val statusLine = responseText.substring(0, splitIndex)
+        val headerText = responseBytes
+            .copyOfRange(0, splitIndex)
+            .toString(StandardCharsets.UTF_8)
+        val statusLine = headerText
             .lineSequence()
             .firstOrNull()
             .orEmpty()
         val statusCode = statusLine.split(" ").getOrNull(1)?.toIntOrNull()
             ?: throw IOException("Missing status code")
+        val bodyBytes = responseBytes.copyOfRange(splitIndex + 4, responseBytes.size)
+        val decodedBodyBytes = if (headerText.contains("Transfer-Encoding: chunked", ignoreCase = true)) {
+            decodeChunkedBody(bodyBytes)
+        } else {
+            bodyBytes
+        }
         return HttpResponse(
             statusCode = statusCode,
-            body = responseText.substring(splitIndex + 4),
+            body = decodedBodyBytes.toString(StandardCharsets.UTF_8),
         )
+    }
+
+    private fun ByteArray.indexOfHeaderBodySeparator(): Int {
+        for (index in 0 until size - 3) {
+            if (
+                this[index] == '\r'.code.toByte() &&
+                this[index + 1] == '\n'.code.toByte() &&
+                this[index + 2] == '\r'.code.toByte() &&
+                this[index + 3] == '\n'.code.toByte()
+            ) {
+                return index
+            }
+        }
+        return -1
+    }
+
+    private fun decodeChunkedBody(bodyBytes: ByteArray): ByteArray {
+        val output = ByteArrayOutputStream(bodyBytes.size)
+        var cursor = 0
+        while (cursor < bodyBytes.size) {
+            val lineEnd = bodyBytes.indexOfCrlf(cursor)
+            if (lineEnd == -1) {
+                throw IOException("Invalid chunked response")
+            }
+            val sizeLine = bodyBytes
+                .copyOfRange(cursor, lineEnd)
+                .toString(StandardCharsets.US_ASCII)
+                .substringBefore(';')
+                .trim()
+            val chunkSize = sizeLine.toIntOrNull(radix = 16)
+                ?: throw IOException("Invalid chunk size: $sizeLine")
+            cursor = lineEnd + 2
+            if (chunkSize == 0) {
+                break
+            }
+            val nextCursor = cursor + chunkSize
+            if (nextCursor > bodyBytes.size) {
+                throw IOException("Chunk exceeds body length")
+            }
+            output.write(bodyBytes, cursor, chunkSize)
+            cursor = nextCursor
+            if (
+                cursor + 1 >= bodyBytes.size ||
+                bodyBytes[cursor] != '\r'.code.toByte() ||
+                bodyBytes[cursor + 1] != '\n'.code.toByte()
+            ) {
+                throw IOException("Invalid chunk terminator")
+            }
+            cursor += 2
+        }
+        return output.toByteArray()
+    }
+
+    private fun ByteArray.indexOfCrlf(startIndex: Int): Int {
+        for (index in startIndex until size - 1) {
+            if (this[index] == '\r'.code.toByte() && this[index + 1] == '\n'.code.toByte()) {
+                return index
+            }
+        }
+        return -1
     }
 
     private fun parseAuthStatus(body: String): AuthStatus {

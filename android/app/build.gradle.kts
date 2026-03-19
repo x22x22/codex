@@ -108,5 +108,6 @@ tasks.named("preBuild").configure {
 }
 
 dependencies {
+    implementation(project(":bridge"))
     compileOnly(files(extractedAgentPlatformJar))
 }
