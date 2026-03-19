@@ -72,7 +72,7 @@ pub trait ExecutorFileSystem: Send + Sync {
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct LocalFileSystem;
+pub struct LocalFileSystem;
 
 #[async_trait]
 impl ExecutorFileSystem for LocalFileSystem {

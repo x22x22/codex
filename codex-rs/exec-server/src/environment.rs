@@ -60,10 +60,6 @@ impl Environment {
     pub fn get_filesystem(&self) -> impl ExecutorFileSystem + use<> {
         fs::LocalFileSystem
     }
-
-    pub fn local_filesystem() -> impl ExecutorFileSystem + use<> {
-        fs::LocalFileSystem
-    }
 }
 
 impl ExecutorEnvironment for Environment {

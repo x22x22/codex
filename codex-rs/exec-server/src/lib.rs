@@ -35,6 +35,7 @@ pub use fs::CreateDirectoryOptions;
 pub use fs::ExecutorFileSystem;
 pub use fs::FileMetadata;
 pub use fs::FileSystemResult;
+pub use fs::LocalFileSystem;
 pub use fs::ReadDirectoryEntry;
 pub use fs::RemoveOptions;
 pub use protocol::ExecExitedNotification;
