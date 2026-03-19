@@ -11,6 +11,8 @@ import java.util.concurrent.Executor
 class AgentSessionController(context: Context) {
     companion object {
         private const val PREFERRED_GENIE_PACKAGE = "com.openai.codex.genie"
+        private const val BRIDGE_REQUEST_PREFIX = "__codex_bridge__ "
+        private const val BRIDGE_RESPONSE_PREFIX = "__codex_bridge_result__ "
     }
 
     private val agentManager = context.getSystemService(AgentManager::class.java)
@@ -195,7 +197,7 @@ class AgentSessionController(context: Context) {
     private fun findLastEventMessage(events: List<AgentSessionEvent>, type: Int): String? {
         for (index in events.indices.reversed()) {
             val event = events[index]
-            if (event.type == type && event.message != null) {
+            if (event.type == type && event.message != null && !isInternalBridgeEvent(event)) {
                 return event.message
             }
         }
@@ -203,11 +205,21 @@ class AgentSessionController(context: Context) {
     }
 
     private fun renderTimeline(events: List<AgentSessionEvent>): String {
-        if (events.isEmpty()) {
+        val visibleEvents = events.filterNot(::isInternalBridgeEvent)
+        if (visibleEvents.isEmpty()) {
             return "No framework events yet."
         }
-        return events.joinToString("\n") { event ->
+        return visibleEvents.joinToString("\n") { event ->
             "${eventTypeToString(event.type)}: ${event.message ?: ""}"
+        }
+    }
+
+    private fun isInternalBridgeEvent(event: AgentSessionEvent): Boolean {
+        val message = event.message ?: return false
+        return when (event.type) {
+            AgentSessionEvent.TYPE_QUESTION -> message.startsWith(BRIDGE_REQUEST_PREFIX)
+            AgentSessionEvent.TYPE_ANSWER -> message.startsWith(BRIDGE_RESPONSE_PREFIX)
+            else -> false
         }
     }
 

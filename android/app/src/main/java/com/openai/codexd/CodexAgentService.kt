@@ -7,6 +7,7 @@ import android.app.agent.AgentSessionInfo
 import android.util.Log
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.concurrent.thread
 
 class CodexAgentService : AgentService() {
     companion object {
@@ -53,35 +54,37 @@ class CodexAgentService : AgentService() {
             return
         }
 
-        val response = when (method) {
-            METHOD_GET_AUTH_STATUS -> runCatching { CodexdLocalClient.waitForAuthStatus(this) }
-                .fold(
-                    onSuccess = { status ->
-                        JSONObject()
-                            .put("requestId", requestId)
-                            .put("ok", true)
-                            .put("authenticated", status.authenticated)
-                            .put("accountEmail", status.accountEmail)
-                            .put("clientCount", status.clientCount)
-                    },
-                    onFailure = { err ->
-                        JSONObject()
-                            .put("requestId", requestId)
-                            .put("ok", false)
-                            .put("error", err.message ?: err::class.java.simpleName)
-                    },
-                )
-            else -> JSONObject()
-                .put("requestId", requestId)
-                .put("ok", false)
-                .put("error", "Unknown bridge method: $method")
-        }
+        thread(name = "CodexAgentBridge-$requestId") {
+            val response = when (method) {
+                METHOD_GET_AUTH_STATUS -> runCatching { CodexdLocalClient.waitForAuthStatus(this) }
+                    .fold(
+                        onSuccess = { status ->
+                            JSONObject()
+                                .put("requestId", requestId)
+                                .put("ok", true)
+                                .put("authenticated", status.authenticated)
+                                .put("accountEmail", status.accountEmail)
+                                .put("clientCount", status.clientCount)
+                        },
+                        onFailure = { err ->
+                            JSONObject()
+                                .put("requestId", requestId)
+                                .put("ok", false)
+                                .put("error", err.message ?: err::class.java.simpleName)
+                        },
+                    )
+                else -> JSONObject()
+                    .put("requestId", requestId)
+                    .put("ok", false)
+                    .put("error", "Unknown bridge method: $method")
+            }
 
-        runCatching {
-            manager.answerQuestion(sessionId, "$BRIDGE_RESPONSE_PREFIX$response")
-        }.onFailure { err ->
-            handledBridgeRequests.remove(requestKey)
-            Log.w(TAG, "Failed to answer bridge question for $sessionId", err)
+            runCatching {
+                manager.answerQuestion(sessionId, "$BRIDGE_RESPONSE_PREFIX$response")
+            }.onFailure { err ->
+                handledBridgeRequests.remove(requestKey)
+                Log.w(TAG, "Failed to answer bridge question for $sessionId", err)
+            }
         }
     }
 
