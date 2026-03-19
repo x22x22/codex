@@ -31,11 +31,11 @@ codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
-codex-auth = { workspace = true }
 codex-client = { workspace = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
 codex-exec-server = { workspace = true }
+codex-login = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-skills = { workspace = true }
 codex-execpolicy = { workspace = true }

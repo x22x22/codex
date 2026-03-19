@@ -1,6 +1,6 @@
 use super::*;
-use crate::storage::FileAuthStorage;
-use crate::storage::get_auth_file;
+use crate::auth::storage::FileAuthStorage;
+use crate::auth::storage::get_auth_file;
 use crate::token_data::IdTokenInfo;
 use crate::token_data::KnownPlan as InternalKnownPlan;
 use crate::token_data::PlanType as InternalPlanType;
