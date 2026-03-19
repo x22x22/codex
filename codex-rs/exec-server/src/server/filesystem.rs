@@ -1,4 +1,3 @@
-use std::io;
 use std::sync::Arc;
 
 use base64::Engine as _;
@@ -24,6 +23,7 @@ use crate::environment::Environment;
 use crate::fs::CopyOptions;
 use crate::fs::CreateDirectoryOptions;
 use crate::fs::ExecutorFileSystem;
+use crate::fs::FsError;
 use crate::fs::RemoveOptions;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
@@ -161,10 +161,10 @@ impl ExecServerFileSystem {
     }
 }
 
-fn map_fs_error(err: io::Error) -> JSONRPCErrorError {
-    if err.kind() == io::ErrorKind::InvalidInput {
-        invalid_request(err.to_string())
+fn map_fs_error(err: FsError) -> JSONRPCErrorError {
+    if err.0.kind() == std::io::ErrorKind::InvalidInput {
+        invalid_request(err.0.to_string())
     } else {
-        internal_error(err.to_string())
+        internal_error(err.0.to_string())
     }
 }

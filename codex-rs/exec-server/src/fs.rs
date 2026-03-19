@@ -9,6 +9,7 @@ use codex_app_server_protocol::FsReadFileParams;
 use codex_app_server_protocol::FsRemoveParams;
 use codex_app_server_protocol::FsWriteFileParams;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use std::fmt;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
@@ -20,6 +21,18 @@ use crate::ExecServerClient;
 use crate::ExecServerError;
 
 const MAX_READ_FILE_BYTES: u64 = 512 * 1024 * 1024;
+
+#[derive(Debug, thiserror::Error)]
+#[error("filesystem operation failed: {0}")]
+pub struct FsError(#[source] pub io::Error);
+
+impl From<io::Error> for FsError {
+    fn from(err: io::Error) -> Self {
+        Self(err)
+    }
+}
+
+pub type FileSystemResult<T> = Result<T, FsError>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CreateDirectoryOptions {
@@ -52,10 +65,8 @@ pub struct ReadDirectoryEntry {
     pub is_file: bool,
 }
 
-pub type FileSystemResult<T> = io::Result<T>;
-
 #[async_trait]
-pub trait ExecutorFileSystem: Send + Sync {
+pub trait ExecutorFileSystem: std::fmt::Debug + Send + Sync {
     async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>>;
 
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()>;
@@ -81,26 +92,79 @@ pub trait ExecutorFileSystem: Send + Sync {
         destination_path: &AbsolutePathBuf,
         options: CopyOptions,
     ) -> FileSystemResult<()>;
+
+    async fn file_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
+        self.get_metadata(path).await
+    }
+
+    async fn create_dir_all(&self, path: &AbsolutePathBuf) -> FileSystemResult<()> {
+        self.create_directory(path, CreateDirectoryOptions { recursive: true })
+            .await
+    }
+
+    async fn remove_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<()> {
+        self.remove(
+            path,
+            RemoveOptions {
+                recursive: false,
+                force: false,
+            },
+        )
+        .await
+    }
+
+    async fn remove_dir_all(&self, path: &AbsolutePathBuf) -> FileSystemResult<()> {
+        self.remove(
+            path,
+            RemoveOptions {
+                recursive: true,
+                force: false,
+            },
+        )
+        .await
+    }
+
+    async fn read_dir(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<ReadDirectoryEntry>> {
+        self.read_directory(path).await
+    }
+
+    async fn symlink_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
+        self.file_metadata(path).await
+    }
+
+    async fn rename(&self, _from: &AbsolutePathBuf, _to: &AbsolutePathBuf) -> FileSystemResult<()> {
+        Err(FsError(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "rename is not supported by this filesystem backend",
+        )))
+    }
+
+    async fn read_link(&self, _path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
+        Err(FsError(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "read_link is not supported by this filesystem backend",
+        )))
+    }
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct LocalFileSystem;
+#[derive(Clone, Debug, Default)]
+pub struct LocalFileSystem;
 
 #[async_trait]
 impl ExecutorFileSystem for LocalFileSystem {
     async fn read_file(&self, path: &AbsolutePathBuf) -> FileSystemResult<Vec<u8>> {
         let metadata = tokio::fs::metadata(path.as_path()).await?;
         if metadata.len() > MAX_READ_FILE_BYTES {
-            return Err(io::Error::new(
+            return Err(FsError(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("file is too large to read: limit is {MAX_READ_FILE_BYTES} bytes"),
-            ));
+            )));
         }
-        tokio::fs::read(path.as_path()).await
+        Ok(tokio::fs::read(path.as_path()).await?)
     }
 
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()> {
-        tokio::fs::write(path.as_path(), contents).await
+        Ok(tokio::fs::write(path.as_path(), contents).await?)
     }
 
     async fn create_directory(
@@ -159,7 +223,7 @@ impl ExecutorFileSystem for LocalFileSystem {
                 Ok(())
             }
             Err(err) if err.kind() == io::ErrorKind::NotFound && options.force => Ok(()),
-            Err(err) => Err(err),
+            Err(err) => Err(FsError(err)),
         }
     }
 
@@ -177,19 +241,19 @@ impl ExecutorFileSystem for LocalFileSystem {
 
             if file_type.is_dir() {
                 if !options.recursive {
-                    return Err(io::Error::new(
+                    return Err(FsError(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "fs/copy requires recursive: true when sourcePath is a directory",
-                    ));
+                    )));
                 }
                 if destination_is_same_or_descendant_of_source(
                     source_path.as_path(),
                     destination_path.as_path(),
                 )? {
-                    return Err(io::Error::new(
+                    return Err(FsError(io::Error::new(
                         io::ErrorKind::InvalidInput,
                         "fs/copy cannot copy a directory to itself or one of its descendants",
-                    ));
+                    )));
                 }
                 copy_dir_recursive(source_path.as_path(), destination_path.as_path())?;
                 return Ok(());
@@ -205,19 +269,53 @@ impl ExecutorFileSystem for LocalFileSystem {
                 return Ok(());
             }
 
-            Err(io::Error::new(
+            Err(FsError(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "fs/copy only supports regular files, directories, and symlinks",
-            ))
+            )))
         })
         .await
-        .map_err(|err| io::Error::other(format!("filesystem task failed: {err}")))?
+        .map_err(|err| FsError(io::Error::other(format!("filesystem task failed: {err}"))))?
+    }
+
+    async fn file_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
+        let metadata = tokio::fs::symlink_metadata(path.as_path()).await?;
+        Ok(FileMetadata {
+            is_directory: metadata.is_dir(),
+            is_file: metadata.is_file(),
+            created_at_ms: metadata.created().ok().map_or(0, system_time_to_unix_ms),
+            modified_at_ms: metadata.modified().ok().map_or(0, system_time_to_unix_ms),
+        })
+    }
+
+    async fn symlink_metadata(&self, path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
+        self.file_metadata(path).await
+    }
+
+    async fn read_link(&self, path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
+        let target = tokio::fs::read_link(path.as_path()).await?;
+        AbsolutePathBuf::try_from(target)
+            .map_err(io::Error::other)
+            .map_err(Into::into)
+    }
+
+    async fn rename(&self, from: &AbsolutePathBuf, to: &AbsolutePathBuf) -> FileSystemResult<()> {
+        tokio::fs::rename(from.as_path(), to.as_path()).await?;
+        Ok(())
     }
 }
 
 #[derive(Clone)]
-pub(crate) struct RemoteFileSystem {
+pub struct RemoteFileSystem {
     client: ExecServerClient,
+}
+
+impl fmt::Debug for RemoteFileSystem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RemoteFileSystem")
+            .field("client", &"redacted")
+            .finish()
+    }
 }
 
 impl RemoteFileSystem {
@@ -236,7 +334,7 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .map_err(map_exec_server_error)?;
         STANDARD
             .decode(response.data_base64)
-            .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
+            .map_err(|err| FsError(io::Error::new(io::ErrorKind::InvalidData, err)))
     }
 
     async fn write_file(&self, path: &AbsolutePathBuf, contents: Vec<u8>) -> FileSystemResult<()> {
@@ -327,14 +425,36 @@ impl ExecutorFileSystem for RemoteFileSystem {
             .map_err(map_exec_server_error)?;
         Ok(())
     }
+
+    async fn read_link(&self, _path: &AbsolutePathBuf) -> FileSystemResult<AbsolutePathBuf> {
+        Err(FsError(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "read_link is not supported by remote exec-server filesystem",
+        )))
+    }
+
+    async fn symlink_metadata(&self, _path: &AbsolutePathBuf) -> FileSystemResult<FileMetadata> {
+        Err(FsError(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "symlink_metadata is not supported by remote exec-server filesystem",
+        )))
+    }
+
+    async fn rename(&self, _from: &AbsolutePathBuf, _to: &AbsolutePathBuf) -> FileSystemResult<()> {
+        Err(FsError(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "rename is not supported by remote exec-server filesystem",
+        )))
+    }
 }
 
-fn map_exec_server_error(err: ExecServerError) -> io::Error {
+fn map_exec_server_error(err: ExecServerError) -> FsError {
     match err {
-        ExecServerError::Server { code, message } if matches!(code, -32600 | -32602) => {
-            io::Error::new(io::ErrorKind::InvalidInput, message)
-        }
-        other => io::Error::other(other.to_string()),
+        ExecServerError::Server {
+            code: -32600 | -32602,
+            message,
+        } => io::Error::new(io::ErrorKind::InvalidInput, message).into(),
+        other => io::Error::other(other.to_string()).into(),
     }
 }
 

@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::io::ErrorKind;
+use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::analytics_client::InvocationType;
@@ -10,10 +13,35 @@ use crate::instructions::SkillInstructions;
 use crate::mention_syntax::TOOL_MENTION_SIGIL;
 use crate::mentions::build_skill_name_counts;
 use crate::skills::SkillMetadata;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LocalFileSystem;
 use codex_otel::SessionTelemetry;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
-use tokio::fs;
+use codex_utils_absolute_path::AbsolutePathBuf;
+
+fn absolute_path(path: &Path) -> Result<AbsolutePathBuf, std::io::Error> {
+    AbsolutePathBuf::try_from(path).map_err(|error| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("invalid skill path: {error}"),
+        )
+    })
+}
+
+async fn read_skill_contents(
+    path: &Path,
+    filesystem: &Arc<dyn ExecutorFileSystem>,
+) -> Result<String, std::io::Error> {
+    let abs_path = absolute_path(path)?;
+    let contents = filesystem.read_file(&abs_path).await.map_err(|err| err.0)?;
+    String::from_utf8(contents).map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("failed to decode skill file {}: {error}", path.display()),
+        )
+    })
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct SkillInjections {
@@ -27,6 +55,23 @@ pub(crate) async fn build_skill_injections(
     analytics_client: &AnalyticsEventsClient,
     tracking: TrackEventsContext,
 ) -> SkillInjections {
+    build_skill_injections_with_filesystem(
+        mentioned_skills,
+        otel,
+        analytics_client,
+        tracking,
+        Arc::new(LocalFileSystem),
+    )
+    .await
+}
+
+pub(crate) async fn build_skill_injections_with_filesystem(
+    mentioned_skills: &[SkillMetadata],
+    otel: Option<&SessionTelemetry>,
+    analytics_client: &AnalyticsEventsClient,
+    tracking: TrackEventsContext,
+    filesystem: Arc<dyn ExecutorFileSystem>,
+) -> SkillInjections {
     if mentioned_skills.is_empty() {
         return SkillInjections::default();
     }
@@ -38,7 +83,7 @@ pub(crate) async fn build_skill_injections(
     let mut invocations = Vec::new();
 
     for skill in mentioned_skills {
-        match fs::read_to_string(&skill.path_to_skills_md).await {
+        match read_skill_contents(&skill.path_to_skills_md, &filesystem).await {
             Ok(contents) => {
                 emit_skill_injected_metric(otel, skill, "ok");
                 invocations.push(SkillInvocation {

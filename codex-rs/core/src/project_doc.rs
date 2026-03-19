@@ -22,9 +22,13 @@ use crate::config_loader::merge_toml_values;
 use crate::config_loader::project_root_markers_from_config;
 use crate::features::Feature;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_exec_server::Environment;
+use codex_exec_server::ExecutorFileSystem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize as normalize_path;
+use std::io;
 use std::path::PathBuf;
-use tokio::io::AsyncReadExt;
+use std::sync::Arc;
 use toml::Value as TomlValue;
 use tracing::error;
 
@@ -77,7 +81,19 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
 pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
-    let project_docs = read_project_docs(config).await;
+    let file_system = match filesystem_for_config(config).await {
+        Ok(file_system) => Some(file_system),
+        Err(err) => {
+            error!("error creating environment filesystem for project docs: {err}");
+            None
+        }
+    };
+
+    let project_docs = if let Some(file_system) = file_system {
+        read_project_docs_with_filesystem(config, &file_system).await
+    } else {
+        Ok(None)
+    };
 
     let mut output = String::new();
 
@@ -126,6 +142,14 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
 /// function returns `Ok(None)`. Unexpected I/O failures bubble up as `Err` so
 /// callers can decide how to handle them.
 pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String>> {
+    let filesystem = filesystem_for_config(config).await?;
+    read_project_docs_with_filesystem(config, &filesystem).await
+}
+
+async fn read_project_docs_with_filesystem(
+    config: &Config,
+    filesystem: &Arc<dyn ExecutorFileSystem>,
+) -> std::io::Result<Option<String>> {
     let max_total = config.project_doc_max_bytes;
 
     if max_total == 0 {
@@ -145,18 +169,28 @@ pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String
             break;
         }
 
-        let file = match tokio::fs::File::open(&p).await {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e),
+        let path = match AbsolutePathBuf::try_from(p.as_path()) {
+            Ok(path) => path,
+            Err(err) => {
+                error!("skipping non-absolute AGENTS path `{}`: {err}", p.display());
+                continue;
+            }
         };
 
-        let size = file.metadata().await?.len();
-        let mut reader = tokio::io::BufReader::new(file).take(remaining);
-        let mut data: Vec<u8> = Vec::new();
-        reader.read_to_end(&mut data).await?;
+        let data = match filesystem.read_file(&path).await {
+            Ok(data) => data,
+            Err(err) if err.0.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err.0),
+        };
 
-        if size > remaining {
+        let truncated = data.len() > remaining as usize;
+        let truncated_data = if truncated {
+            data[..remaining as usize].to_vec()
+        } else {
+            data
+        };
+
+        if truncated {
             tracing::warn!(
                 "Project doc `{}` exceeds remaining budget ({} bytes) - truncating.",
                 p.display(),
@@ -164,10 +198,10 @@ pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String
             );
         }
 
-        let text = String::from_utf8_lossy(&data).to_string();
+        let text = String::from_utf8_lossy(&truncated_data).to_string();
         if !text.trim().is_empty() {
             parts.push(text);
-            remaining = remaining.saturating_sub(data.len() as u64);
+            remaining = remaining.saturating_sub(truncated_data.len() as u64);
         }
     }
 
@@ -175,6 +209,17 @@ pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String
         Ok(None)
     } else {
         Ok(Some(parts.join("\n\n")))
+    }
+}
+
+async fn filesystem_for_config(config: &Config) -> io::Result<Arc<dyn ExecutorFileSystem>> {
+    if let Some(url) = &config.experimental_exec_server_url {
+        let environment = Environment::create(Some(url.to_string()))
+            .await
+            .map_err(|err| io::Error::other(err.to_string()))?;
+        Ok(environment.get_filesystem())
+    } else {
+        Ok(Environment::local().get_filesystem())
     }
 }
 

@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 
@@ -100,7 +101,7 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -140,11 +141,23 @@ impl ToolHandler for ReadFileHandler {
             ));
         }
 
+        let abs_path = AbsolutePathBuf::try_from(path.clone()).map_err(|error| {
+            FunctionCallError::RespondToModel(format!("invalid absolute file path: {error}"))
+        })?;
+        let contents = turn
+            .environment
+            .get_filesystem()
+            .read_file(&abs_path)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("failed to read file: {err}"))
+            })?;
+
         let collected = match mode {
-            ReadMode::Slice => slice::read(&path, offset, limit).await?,
+            ReadMode::Slice => slice::read(&contents, offset, limit)?,
             ReadMode::Indentation => {
                 let indentation = indentation.unwrap_or_default();
-                indentation::read_block(&path, offset, limit, indentation).await?
+                indentation::read_block(&contents, offset, limit, indentation)?
             }
         };
         Ok(FunctionToolOutput::from_text(
@@ -157,42 +170,21 @@ impl ToolHandler for ReadFileHandler {
 mod slice {
     use crate::function_tool::FunctionCallError;
     use crate::tools::handlers::read_file::format_line;
-    use std::path::Path;
-    use tokio::fs::File;
-    use tokio::io::AsyncBufReadExt;
-    use tokio::io::BufReader;
+    use crate::tools::handlers::read_file::strip_trailing_cr;
 
-    pub async fn read(
-        path: &Path,
+    pub fn read(
+        contents: &[u8],
         offset: usize,
         limit: usize,
     ) -> Result<Vec<String>, FunctionCallError> {
-        let file = File::open(path).await.map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to read file: {err}"))
-        })?;
-
-        let mut reader = BufReader::new(file);
+        if contents.is_empty() {
+            return Err(FunctionCallError::RespondToModel(
+                "offset exceeds file length".to_string(),
+            ));
+        }
         let mut collected = Vec::new();
         let mut seen = 0usize;
-        let mut buffer = Vec::new();
-
-        loop {
-            buffer.clear();
-            let bytes_read = reader.read_until(b'\n', &mut buffer).await.map_err(|err| {
-                FunctionCallError::RespondToModel(format!("failed to read file: {err}"))
-            })?;
-
-            if bytes_read == 0 {
-                break;
-            }
-
-            if buffer.last() == Some(&b'\n') {
-                buffer.pop();
-                if buffer.last() == Some(&b'\r') {
-                    buffer.pop();
-                }
-            }
-
+        for buffer in contents.split(|byte| *byte == b'\n') {
             seen += 1;
 
             if seen < offset {
@@ -203,7 +195,9 @@ mod slice {
                 break;
             }
 
-            let formatted = format_line(&buffer);
+            let line = strip_trailing_cr(buffer);
+
+            let formatted = format_line(line);
             collected.push(format!("L{seen}: {formatted}"));
 
             if collected.len() == limit {
@@ -227,15 +221,12 @@ mod indentation {
     use crate::tools::handlers::read_file::LineRecord;
     use crate::tools::handlers::read_file::TAB_WIDTH;
     use crate::tools::handlers::read_file::format_line;
+    use crate::tools::handlers::read_file::strip_trailing_cr;
     use crate::tools::handlers::read_file::trim_empty_lines;
     use std::collections::VecDeque;
-    use std::path::Path;
-    use tokio::fs::File;
-    use tokio::io::AsyncBufReadExt;
-    use tokio::io::BufReader;
 
-    pub async fn read_block(
-        path: &Path,
+    pub fn read_block(
+        contents: &[u8],
         offset: usize,
         limit: usize,
         options: IndentationArgs,
@@ -254,7 +245,7 @@ mod indentation {
             ));
         }
 
-        let collected = collect_file_lines(path).await?;
+        let collected = collect_file_lines(contents);
         if collected.is_empty() || anchor_line > collected.len() {
             return Err(FunctionCallError::RespondToModel(
                 "anchor_line exceeds file length".to_string(),
@@ -366,37 +357,17 @@ mod indentation {
             .collect())
     }
 
-    async fn collect_file_lines(path: &Path) -> Result<Vec<LineRecord>, FunctionCallError> {
-        let file = File::open(path).await.map_err(|err| {
-            FunctionCallError::RespondToModel(format!("failed to read file: {err}"))
-        })?;
-
-        let mut reader = BufReader::new(file);
-        let mut buffer = Vec::new();
+    fn collect_file_lines(contents: &[u8]) -> Vec<LineRecord> {
+        if contents.is_empty() {
+            return Vec::new();
+        }
         let mut lines = Vec::new();
-        let mut number = 0usize;
-
-        loop {
-            buffer.clear();
-            let bytes_read = reader.read_until(b'\n', &mut buffer).await.map_err(|err| {
-                FunctionCallError::RespondToModel(format!("failed to read file: {err}"))
-            })?;
-
-            if bytes_read == 0 {
-                break;
-            }
-
-            if buffer.last() == Some(&b'\n') {
-                buffer.pop();
-                if buffer.last() == Some(&b'\r') {
-                    buffer.pop();
-                }
-            }
-
-            number += 1;
-            let raw = String::from_utf8_lossy(&buffer).into_owned();
+        for (index, line_bytes) in contents.split(|byte| *byte == b'\n').enumerate() {
+            let number = index + 1;
+            let line_bytes = strip_trailing_cr(line_bytes);
+            let raw = String::from_utf8_lossy(line_bytes).into_owned();
             let indent = measure_indent(&raw);
-            let display = format_line(&buffer);
+            let display = format_line(line_bytes);
             lines.push(LineRecord {
                 number,
                 raw,
@@ -404,8 +375,7 @@ mod indentation {
                 indent,
             });
         }
-
-        Ok(lines)
+        lines
     }
 
     fn compute_effective_indents(records: &[LineRecord]) -> Vec<usize> {
@@ -428,6 +398,10 @@ mod indentation {
             .map(|c| if c == '\t' { TAB_WIDTH } else { 1 })
             .sum()
     }
+}
+
+fn strip_trailing_cr(bytes: &[u8]) -> &[u8] {
+    bytes.strip_suffix(b"\r").unwrap_or(bytes)
 }
 
 fn format_line(bytes: &[u8]) -> String {

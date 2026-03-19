@@ -42,6 +42,7 @@ use crate::realtime_conversation::handle_close as handle_realtime_conversation_c
 use crate::realtime_conversation::handle_start as handle_realtime_conversation_start;
 use crate::realtime_conversation::handle_text as handle_realtime_conversation_text;
 use crate::rollout::session_index;
+use crate::skills::build_skill_injections_with_filesystem;
 use crate::skills::render_skills_section;
 use crate::stream_events_utils::HandleOutputCtx;
 use crate::stream_events_utils::handle_non_tool_response_item;
@@ -282,7 +283,6 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
-use crate::skills::build_skill_injections;
 use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
 use crate::skills::injection::ToolMentionKind;
@@ -1774,8 +1774,11 @@ impl Session {
             });
         }
 
-        let environment =
-            Arc::new(Environment::create(config.experimental_exec_server_url.clone()).await?);
+        let environment = Arc::new(
+            Environment::create(config.experimental_exec_server_url.clone())
+                .await
+                .map_err(|err| CodexErr::Fatal(format!("failed to create environment: {err}")))?,
+        );
         let unified_exec_session_factory =
             unified_exec_session_factory_for_environment(environment.as_ref());
 
@@ -5472,11 +5475,12 @@ pub(crate) async fn run_turn(
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
-    } = build_skill_injections(
+    } = build_skill_injections_with_filesystem(
         &mentioned_skills,
         Some(&session_telemetry),
         &sess.services.analytics_events_client,
         tracking.clone(),
+        turn_context.environment.get_filesystem(),
     )
     .await;
 

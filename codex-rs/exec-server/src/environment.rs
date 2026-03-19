@@ -1,14 +1,19 @@
+use std::sync::Arc;
+
 use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::RemoteExecServerConnectArgs;
+use crate::executor::Executor;
+use crate::executor::LocalExecutor;
+use crate::executor::RemoteExecutor;
 use crate::fs;
 use crate::fs::ExecutorFileSystem;
-use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Environment {
     experimental_exec_server_url: Option<String>,
     exec_server_client: Option<ExecServerClient>,
+    executor: Arc<dyn Executor>,
     file_system: Arc<dyn ExecutorFileSystem>,
 }
 
@@ -20,8 +25,17 @@ impl std::fmt::Debug for Environment {
                 &self.experimental_exec_server_url,
             )
             .field("has_exec_server_client", &self.exec_server_client.is_some())
-            .finish()
+            .finish_non_exhaustive()
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum EnvironmentError {
+    #[error("failed to initialize executor backend: {0}")]
+    InitializeExecutor(String),
+
+    #[error("failed to initialize filesystem backend: {0}")]
+    InitializeFilesystem(String),
 }
 
 impl Environment {
@@ -29,36 +43,30 @@ impl Environment {
         Self {
             experimental_exec_server_url: None,
             exec_server_client: None,
+            executor: Arc::new(LocalExecutor::new()),
             file_system: Arc::new(fs::LocalFileSystem),
         }
     }
 
     pub async fn create(
         experimental_exec_server_url: Option<String>,
-    ) -> Result<Self, ExecServerError> {
-        let exec_server_client =
-            if let Some(websocket_url) = experimental_exec_server_url.as_deref() {
-                Some(
-                    ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
-                        websocket_url.to_string(),
-                        "codex-core".to_string(),
-                    ))
-                    .await?,
-                )
-            } else {
-                None
-            };
-
-        let file_system: Arc<dyn ExecutorFileSystem> = if let Some(client) = &exec_server_client {
-            Arc::new(fs::RemoteFileSystem::new(client.clone()))
-        } else {
-            Arc::new(fs::LocalFileSystem)
+    ) -> Result<Self, EnvironmentError> {
+        let Some(websocket_url) = experimental_exec_server_url else {
+            return Ok(Self::local());
         };
 
+        let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
+            websocket_url.clone(),
+            "codex-core".to_string(),
+        ))
+        .await
+        .map_err(|err| EnvironmentError::InitializeExecutor(err.to_string()))?;
+
         Ok(Self {
-            experimental_exec_server_url,
-            exec_server_client,
-            file_system,
+            experimental_exec_server_url: Some(websocket_url),
+            exec_server_client: Some(client.clone()),
+            executor: Arc::new(RemoteExecutor::new(client.clone())),
+            file_system: Arc::new(fs::RemoteFileSystem::new(client)),
         })
     }
 
@@ -66,6 +74,7 @@ impl Environment {
         Self {
             experimental_exec_server_url: None,
             exec_server_client: Some(client.clone()),
+            executor: Arc::new(RemoteExecutor::new(client.clone())),
             file_system: Arc::new(fs::RemoteFileSystem::new(client)),
         }
     }
@@ -78,14 +87,28 @@ impl Environment {
         self.exec_server_client.clone()
     }
 
-    pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
+    pub fn filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
         Arc::clone(&self.file_system)
+    }
+
+    pub fn get_filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
+        self.filesystem()
+    }
+
+    pub fn executor(&self) -> Arc<dyn Executor> {
+        Arc::clone(&self.executor)
     }
 }
 
 impl Default for Environment {
     fn default() -> Self {
         Self::local()
+    }
+}
+
+impl From<ExecServerError> for EnvironmentError {
+    fn from(err: ExecServerError) -> Self {
+        Self::InitializeExecutor(err.to_string())
     }
 }
 
@@ -117,13 +140,13 @@ mod tests {
         let path = AbsolutePathBuf::try_from(tempdir.path().join("marker.txt")).expect("path");
 
         environment
-            .get_filesystem()
+            .filesystem()
             .write_file(&path, b"hello".to_vec())
             .await
             .expect("write file through environment abstraction");
 
         let bytes = environment
-            .get_filesystem()
+            .filesystem()
             .read_file(&path)
             .await
             .expect("read file through environment abstraction");
