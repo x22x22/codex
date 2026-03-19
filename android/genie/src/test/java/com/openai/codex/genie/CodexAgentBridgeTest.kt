@@ -12,6 +12,7 @@ class CodexAgentBridgeTest {
             model = "gpt-5.1-codex",
             instructions = "reply",
             prompt = "inspect the target app",
+            imageDataUrls = listOf("data:image/jpeg;base64,AAA"),
         )
 
         assertEquals("gpt-5.1-codex", request.getString("model"))
@@ -22,9 +23,11 @@ class CodexAgentBridgeTest {
         val message = input.getJSONObject(0)
         assertEquals("user", message.getString("role"))
         val content = message.getJSONArray("content")
-        assertEquals(1, content.length())
+        assertEquals(2, content.length())
         assertEquals("input_text", content.getJSONObject(0).getString("type"))
         assertEquals("inspect the target app", content.getJSONObject(0).getString("text"))
+        assertEquals("input_image", content.getJSONObject(1).getString("type"))
+        assertEquals("data:image/jpeg;base64,AAA", content.getJSONObject(1).getString("image_url"))
     }
 
     @Test

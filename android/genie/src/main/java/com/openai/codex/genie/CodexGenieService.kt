@@ -5,6 +5,7 @@ import android.app.agent.GenieRequest
 import android.app.agent.GenieService
 import android.util.Log
 import java.io.IOException
+import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -12,10 +13,33 @@ import java.util.concurrent.TimeUnit
 class CodexGenieService : GenieService() {
     companion object {
         private const val TAG = "CodexGenieService"
+        private const val MAX_MODEL_TURNS = 12
         private const val MAX_OBJECTIVE_PROMPT_CHARS = 240
         private const val MAX_AGENT_ANSWER_CHARS = 120
-        private const val GENIE_RESPONSE_INSTRUCTIONS =
-            "You are Codex acting as an Android Genie. Reply with exactly one line that starts with QUESTION: or RESULT:."
+        private const val MAX_TOOL_OBSERVATIONS = 6
+        private val GENIE_RESPONSE_INSTRUCTIONS =
+            """
+            You are Codex acting as an Android Genie.
+            Reply with exactly one line that starts with TOOL:, QUESTION:, or RESULT:.
+            Use TOOL: with a single JSON object on the same line, for example:
+            TOOL: {"name":"android.intent.launch","arguments":{"packageName":"com.android.deskclock"}}
+            Available tools:
+            - android.package.inspect {packageName?}
+            - android.intent.launch {packageName?, action?, component?}
+            - android.target.show {}
+            - android.target.hide {}
+            - android.target.attach {}
+            - android.target.close {}
+            - android.target.capture_frame {}
+            - android.ui.dump {}
+            - android.input.tap {x, y}
+            - android.input.text {text}
+            - android.input.key {key}
+            - android.wait {millis}
+            Use QUESTION: only when you need another free-form answer from the Agent.
+            Use RESULT: when you are ready to report the next concrete step or final outcome.
+            Do not emit markdown or extra lines.
+            """.trimIndent()
     }
 
     private val sessionControls = ConcurrentHashMap<String, SessionControl>()
@@ -47,11 +71,11 @@ class CodexGenieService : GenieService() {
             callback.updateState(sessionId, AgentSessionInfo.STATE_RUNNING)
             callback.publishTrace(
                 sessionId,
-                "Codex Genie scaffold started for target=${request.targetPackage} prompt=${request.prompt}",
+                "Codex Genie started for target=${request.targetPackage} prompt=${request.prompt}",
             )
             callback.publishTrace(
                 sessionId,
-                "Genie is headless and routes control/data traffic through the Agent-owned Binder bridge.",
+                "Genie is headless, routes control/data traffic through the Agent-owned Binder bridge, and uses structured Android tools locally.",
             )
             val targetAppContext = runCatching { TargetAppInspector.inspect(this, request.targetPackage) }
             targetAppContext.onSuccess { targetApp ->
@@ -68,6 +92,12 @@ class CodexGenieService : GenieService() {
             }
 
             AgentBridgeClient(this).use { bridgeClient ->
+                val toolExecutor = AndroidGenieToolExecutor(
+                    context = this,
+                    callback = callback,
+                    sessionId = sessionId,
+                    defaultTargetPackage = request.targetPackage,
+                )
                 val runtimeStatus = runCatching { bridgeClient.getRuntimeStatus() }
                 runtimeStatus.onSuccess { status ->
                     val accountSuffix = status.accountEmail?.let { " (${it})" } ?: ""
@@ -104,6 +134,7 @@ class CodexGenieService : GenieService() {
                 }
 
                 var runtime = runtimeStatus.getOrNull()
+                val toolObservations = ArrayDeque<GenieToolObservation>()
 
                 var answer = waitForAgentAnswer(
                     sessionId = sessionId,
@@ -113,7 +144,10 @@ class CodexGenieService : GenieService() {
                 Log.i(TAG, "Received Agent answer for $sessionId")
                 callback.publishTrace(sessionId, "Received Agent answer: $answer")
 
-                while (!control.cancelled) {
+                repeat(MAX_MODEL_TURNS) {
+                    if (control.cancelled) {
+                        return@repeat
+                    }
                     if (runtime == null || !runtime.authenticated || runtime.effectiveModel.isNullOrBlank()) {
                         runtime = runCatching { bridgeClient.getRuntimeStatus() }
                             .onFailure { err ->
@@ -140,16 +174,18 @@ class CodexGenieService : GenieService() {
                         callback.updateState(sessionId, AgentSessionInfo.STATE_COMPLETED)
                         return
                     }
+                    val activeRuntime = requireNotNull(runtime)
                     callback.publishTrace(
                         sessionId,
-                        "Requesting a streaming /v1/responses call through the Agent using ${runtime.effectiveModel}.",
+                        "Requesting a streaming /v1/responses call through the Agent using ${activeRuntime.effectiveModel}.",
                     )
                     val modelResponse = runCatching {
                         requestModelNextStep(
                             request = request,
                             answer = answer,
-                            runtimeStatus = runtime,
+                            runtimeStatus = activeRuntime,
                             targetAppContext = targetAppContext.getOrNull(),
+                            toolObservations = toolObservations.toList(),
                             bridgeClient = bridgeClient,
                         )
                     }
@@ -166,7 +202,7 @@ class CodexGenieService : GenieService() {
                         return
                     }
 
-                    when (val turn = parseGenieModelTurn(modelResponse.getOrThrow())) {
+                    when (val turn = GenieModelTurnParser.parse(modelResponse.getOrThrow())) {
                         is GenieModelTurn.Result -> {
                             Log.i(TAG, "Publishing Genie result for $sessionId")
                             callback.publishResult(sessionId, turn.text)
@@ -186,11 +222,28 @@ class CodexGenieService : GenieService() {
                             Log.i(TAG, "Received follow-up Agent answer for $sessionId")
                             callback.publishTrace(sessionId, "Received Agent answer: $answer")
                         }
+                        is GenieModelTurn.ToolCall -> {
+                            val observation = runCatching {
+                                toolExecutor.execute(turn)
+                            }.getOrElse { err ->
+                                GenieToolObservation(
+                                    name = turn.name,
+                                    summary = "Tool ${turn.name} failed: ${err.message}",
+                                    promptDetails = "Tool ${turn.name} failed.\nError: ${err.message ?: err::class.java.simpleName}",
+                                )
+                            }
+                            rememberToolObservation(toolObservations, observation)
+                            callback.publishTrace(sessionId, observation.summary)
+                        }
                     }
                 }
 
-                callback.publishError(sessionId, "Cancelled")
-                callback.updateState(sessionId, AgentSessionInfo.STATE_CANCELLED)
+                callback.publishResult(
+                    sessionId,
+                    "Genie stopped after reaching the current tool/model turn limit. Continue the session with more guidance or increase the loop budget in code.",
+                )
+                callback.updateState(sessionId, AgentSessionInfo.STATE_COMPLETED)
+                return
             }
         } catch (err: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -209,9 +262,13 @@ class CodexGenieService : GenieService() {
         answer: String,
         runtimeStatus: CodexAgentBridge.RuntimeStatus,
         targetAppContext: TargetAppContext?,
+        toolObservations: List<GenieToolObservation>,
         bridgeClient: AgentBridgeClient,
     ): String {
         val model = checkNotNull(runtimeStatus.effectiveModel) { "missing effective model" }
+        val recentImageInputs = toolObservations
+            .flatMap(GenieToolObservation::imageDataUrls)
+            .takeLast(1)
         val response = bridgeClient.sendHttpRequest(
             method = "POST",
             path = "/v1/responses",
@@ -222,7 +279,9 @@ class CodexGenieService : GenieService() {
                     request = request,
                     answer = answer,
                     targetAppContext = targetAppContext,
+                    toolObservations = toolObservations,
                 ),
+                imageDataUrls = recentImageInputs,
             ).toString(),
         )
         return CodexAgentBridge.parseResponsesOutputText(response)
@@ -252,11 +311,14 @@ class CodexGenieService : GenieService() {
         request: GenieRequest,
         answer: String,
         targetAppContext: TargetAppContext?,
+        toolObservations: List<GenieToolObservation>,
     ): String {
         val objective = abbreviate(request.prompt, MAX_OBJECTIVE_PROMPT_CHARS)
         val agentAnswer = abbreviate(answer, MAX_AGENT_ANSWER_CHARS)
         val targetSummary = targetAppContext?.renderPromptSection()
             ?: "Target app inspection:\n- unavailable"
+        val toolSummary = toolObservations.joinToString(separator = "\n\n") { it.renderForPrompt() }
+            .ifBlank { "No tool observations yet." }
         return """
             You are Codex acting as an Android Genie for the target package ${request.targetPackage}.
             Original objective: $objective
@@ -264,9 +326,10 @@ class CodexGenieService : GenieService() {
 
             $targetSummary
 
-            Emit exactly one line starting with QUESTION: or RESULT:.
-            Use QUESTION: when you need another free-form answer from the Agent before you can proceed.
-            Use RESULT: when you are ready to report the next concrete step or final outcome.
+            Recent tool observations:
+            $toolSummary
+
+            Emit exactly one line starting with TOOL:, QUESTION:, or RESULT:.
         """.trimIndent()
     }
 
@@ -278,30 +341,6 @@ class CodexGenieService : GenieService() {
         return "Codex Genie is ready to drive $displayName. Reply with any extra constraints or answer 'continue' to let Genie proceed."
     }
 
-    private fun parseGenieModelTurn(message: String): GenieModelTurn {
-        val trimmed = message.trim()
-        val question = stripTurnPrefix(trimmed, "QUESTION:")
-        if (question != null) {
-            return GenieModelTurn.Question(question)
-        }
-        val result = stripTurnPrefix(trimmed, "RESULT:")
-        if (result != null) {
-            return GenieModelTurn.Result(result)
-        }
-        return if (trimmed.endsWith("?")) {
-            GenieModelTurn.Question(trimmed)
-        } else {
-            GenieModelTurn.Result(trimmed)
-        }
-    }
-
-    private fun stripTurnPrefix(message: String, prefix: String): String? {
-        if (!message.startsWith(prefix, ignoreCase = true)) {
-            return null
-        }
-        return message.substring(prefix.length).trim().ifEmpty { "continue" }
-    }
-
     private fun abbreviate(value: String, maxChars: Int): String {
         if (value.length <= maxChars) {
             return value
@@ -309,14 +348,18 @@ class CodexGenieService : GenieService() {
         return value.take(maxChars - 1) + "…"
     }
 
+    private fun rememberToolObservation(
+        toolObservations: ArrayDeque<GenieToolObservation>,
+        observation: GenieToolObservation,
+    ) {
+        toolObservations.addLast(observation)
+        while (toolObservations.size > MAX_TOOL_OBSERVATIONS) {
+            toolObservations.removeFirst()
+        }
+    }
+
     private class SessionControl {
         @Volatile var cancelled = false
         val userResponses = LinkedBlockingQueue<String>()
-    }
-
-    private sealed interface GenieModelTurn {
-        data class Question(val text: String) : GenieModelTurn
-
-        data class Result(val text: String) : GenieModelTurn
     }
 }

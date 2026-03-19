@@ -31,6 +31,8 @@ The current repo now contains the first implementation slice:
 - The Genie scaffold now issues one real **streaming `/v1/responses`** request
   through that bridge after the user answer, proving that model traffic can
   stay Agent-owned even while the Genie runs inside the target-app sandbox.
+- The Genie runtime now supports a first generic structured tool loop with
+  reusable Android capabilities instead of app-specific hardcoded behavior.
 - Non-bridge Genie questions now surface through an Agent-owned notification,
   which gives the Agent a concrete user-escalation path without making the
   Genie the user-facing surface.
@@ -115,8 +117,16 @@ existing network/auth bridge while this refactor proceeds.
 - Agent-owned `/internal/runtime/status` metadata for Genie bootstrap
 - Target-app package metadata and launcher-intent inspection from the Genie
   sandbox, with that context included in the bridged model prompt
-- One real non-streaming proxied `/v1/responses` request from Genie through the
+- One real streaming proxied `/v1/responses` request from Genie through the
   Agent-owned bridge after the user answer
+- A generic structured tool loop inside Genie with:
+  - `android.package.inspect`
+  - `android.intent.launch`
+  - detached target show/hide/attach/close
+  - detached frame capture
+  - UI hierarchy dump
+  - shell-backed input injection helpers (`tap`, `text`, `key`)
+  - bounded waits
 - Agent-owned question notifications for non-bridge Genie questions
 - Agent-mediated free-form answers for non-bridge Genie questions, using the
   current embedded `codexd` runtime as the temporary answer engine

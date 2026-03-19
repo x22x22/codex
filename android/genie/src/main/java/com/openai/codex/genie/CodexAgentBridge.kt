@@ -9,7 +9,20 @@ object CodexAgentBridge {
         model: String,
         instructions: String,
         prompt: String,
+        imageDataUrls: List<String> = emptyList(),
     ): JSONObject {
+        val content = JSONArray().put(
+            JSONObject()
+                .put("type", "input_text")
+                .put("text", prompt),
+        )
+        imageDataUrls.forEach { imageDataUrl ->
+            content.put(
+                JSONObject()
+                    .put("type", "input_image")
+                    .put("image_url", imageDataUrl),
+            )
+        }
         return JSONObject()
             .put("model", model)
             .put("store", false)
@@ -20,14 +33,7 @@ object CodexAgentBridge {
                 JSONArray().put(
                     JSONObject()
                         .put("role", "user")
-                        .put(
-                            "content",
-                            JSONArray().put(
-                                JSONObject()
-                                    .put("type", "input_text")
-                                    .put("text", prompt),
-                            ),
-                        ),
+                        .put("content", content),
                 ),
             )
     }
