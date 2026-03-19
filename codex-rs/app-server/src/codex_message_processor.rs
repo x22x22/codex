@@ -7075,6 +7075,9 @@ impl CodexMessageProcessor {
         };
         let mut attachment_paths = validated_rollout_path.into_iter().collect::<Vec<_>>();
         if include_logs && let Some(conversation_id) = conversation_id {
+            // `codex-feedback` already cascades rollout attachments for ordinary non-ephemeral
+            // ThreadSpawn descendants. Guardian uses a hidden reviewer session instead, so its
+            // persistent trunk rollout is not reachable through that descendant graph.
             match self.thread_manager.get_thread(conversation_id).await {
                 Ok(thread) => {
                     if let Some(path) = thread.guardian_trunk_rollout_path().await
