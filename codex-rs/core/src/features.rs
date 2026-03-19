@@ -172,7 +172,7 @@ pub enum Feature {
     ToolCallMcpElicitation,
     /// Enable personality selection in the TUI.
     Personality,
-    /// Emit item-level metadata on request/response items.
+    /// Emit item-level metadata on request/response items and generated UUIDs.
     ItemMetadata,
     /// Enable native artifact tools.
     Artifact,
