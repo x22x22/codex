@@ -2961,31 +2961,21 @@ pub(crate) fn build_specs_with_discoverable_tools(
         builder.register_handler("read_file", read_file_handler);
     }
 
-    if config
-        .experimental_supported_tools
-        .contains(&"upload_file".to_string())
-    {
-        push_tool_spec(
-            &mut builder,
-            create_upload_file_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("upload_file", file_transfer_handler.clone());
-    }
+    push_tool_spec(
+        &mut builder,
+        create_upload_file_tool(),
+        /*supports_parallel_tool_calls*/ true,
+        config.code_mode_enabled,
+    );
+    builder.register_handler("upload_file", file_transfer_handler.clone());
 
-    if config
-        .experimental_supported_tools
-        .contains(&"download_file".to_string())
-    {
-        push_tool_spec(
-            &mut builder,
-            create_download_file_tool(),
-            /*supports_parallel_tool_calls*/ true,
-            config.code_mode_enabled,
-        );
-        builder.register_handler("download_file", file_transfer_handler);
-    }
+    push_tool_spec(
+        &mut builder,
+        create_download_file_tool(),
+        /*supports_parallel_tool_calls*/ true,
+        config.code_mode_enabled,
+    );
+    builder.register_handler("download_file", file_transfer_handler);
 
     if config
         .experimental_supported_tools

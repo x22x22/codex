@@ -1611,6 +1611,38 @@ fn test_models_json_default_model_includes_file_transfer_tools() {
 }
 
 #[test]
+fn test_file_transfer_tools_are_not_experimentally_gated() {
+    let _config = test_config();
+    let mut model_info = model_info_from_models_json("gpt-5-codex");
+    model_info
+        .experimental_supported_tools
+        .retain(|tool| tool != "upload_file" && tool != "download_file");
+    let features = Features::with_defaults();
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool_name(&tool.spec) == "upload_file")
+    );
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool_name(&tool.spec) == "download_file")
+    );
+}
+
+#[test]
 fn test_build_specs_mcp_tools_converted() {
     let config = test_config();
     let model_info = ModelsManager::construct_model_info_offline_for_tests("o3", &config);
