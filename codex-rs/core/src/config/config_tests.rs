@@ -6178,7 +6178,7 @@ locale = "zh-CN"
         codex_home.path().to_path_buf(),
     )?;
 
-    assert_eq!(config.locale, "zh-CN");
+    assert_eq!(config.locale, "zh");
     Ok(())
 }
 
@@ -6209,7 +6209,7 @@ fn missing_or_unsupported_locale_falls_back_to_default() -> std::io::Result<()> 
     )?;
 
     assert!(!config.locale.trim().is_empty());
-    assert!(config.locale == DEFAULT_LOCALE || config.locale == "zh-CN");
+    assert!(config.locale == DEFAULT_LOCALE || config.locale == "zh");
     Ok(())
 }
 

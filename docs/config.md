@@ -32,10 +32,12 @@ Set top-level `locale` in `config.toml` to choose the preferred locale for
 localized user-facing strings. For example:
 
 ```toml
-locale = "zh-CN"
+locale = "zh"
 ```
 
-When unset, Codex falls back to the system locale and then to `en-US`.
+Codex resolves locales to canonical locale codes, preferring specific locale
+codes first, then generic language codes, and finally `en-US`. For example,
+`zh-HK` falls back to `zh` when there is no `zh-HK` resource bundle.
 
 ## JSON Schema
 

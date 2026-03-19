@@ -14,6 +14,73 @@ use unic_langid::LanguageIdentifier;
 
 const LOCALES_DIR: &str = "src/locales";
 pub const DEFAULT_LOCALE: &str = "en-US";
+const CANONICAL_LOCALE_CODES: &[&str] = &[
+    DEFAULT_LOCALE,
+    "am",
+    "ar",
+    "bg",
+    "bn",
+    "bs",
+    "ca",
+    "cs",
+    "da",
+    "de",
+    "el",
+    "es",
+    "es-419",
+    "et",
+    "fa",
+    "fi",
+    "fr",
+    "fr-CA",
+    "gu",
+    "hi",
+    "hr",
+    "hu",
+    "hy",
+    "id",
+    "is",
+    "it",
+    "ja",
+    "ka",
+    "kk",
+    "kn",
+    "ko",
+    "lt",
+    "lv",
+    "mk",
+    "ml",
+    "mn",
+    "mr",
+    "ms",
+    "my",
+    "nb",
+    "nl",
+    "pa",
+    "pl",
+    "pt",
+    "pt-PT",
+    "ro",
+    "ru",
+    "sk",
+    "sl",
+    "so",
+    "sq",
+    "sr",
+    "sv",
+    "sw",
+    "ta",
+    "te",
+    "th",
+    "tl",
+    "tr",
+    "uk",
+    "ur",
+    "vi",
+    "zh",
+    "zh-HK",
+    "zh-Hant",
+];
 
 type Bundle = FluentBundle<FluentResource>;
 
@@ -50,10 +117,14 @@ pub fn resolve_locale_with_system(
 }
 
 pub fn format_message(locale: &str, message_id: &str, args: &[(&str, &str)]) -> String {
+    let locale = parse_locale(locale).as_ref().map_or_else(
+        || DEFAULT_LOCALE.to_string(),
+        |requested| negotiate_locale(Some(requested)),
+    );
     let rendered = LOCALE_RESOURCES.as_ref().and_then(|locale_resources| {
         locale_resources
             .bundles
-            .get(locale)
+            .get(&locale)
             .and_then(|bundle| render_message(bundle, message_id, args))
             .or_else(|| {
                 (locale != DEFAULT_LOCALE)
@@ -87,17 +158,41 @@ fn negotiate_locale(requested: Option<&LanguageIdentifier>) -> String {
         return DEFAULT_LOCALE.to_string();
     };
 
-    let exact = requested.to_string();
-    if supported_locales().iter().any(|locale| locale == &exact) {
-        return exact;
+    for candidate in canonical_locale_candidates(requested) {
+        if supported_locales()
+            .iter()
+            .any(|locale| locale == &candidate)
+        {
+            return candidate;
+        }
     }
 
-    let requested_language = requested.language.as_str();
-    supported_locales()
-        .iter()
-        .find(|locale| locale.split('-').next() == Some(requested_language))
-        .cloned()
-        .unwrap_or_else(|| DEFAULT_LOCALE.to_string())
+    DEFAULT_LOCALE.to_string()
+}
+
+fn canonical_locale_candidates(requested: &LanguageIdentifier) -> Vec<String> {
+    let mut candidates = Vec::new();
+    let mut push_candidate = |candidate: String| {
+        if CANONICAL_LOCALE_CODES.contains(&candidate.as_str()) && !candidates.contains(&candidate)
+        {
+            candidates.push(candidate);
+        }
+    };
+
+    push_candidate(requested.to_string());
+
+    let language = requested.language.as_str();
+
+    if let Some(region) = requested.region.as_ref() {
+        push_candidate(format!("{language}-{region}"));
+    }
+
+    if let Some(script) = requested.script.as_ref() {
+        push_candidate(format!("{language}-{script}"));
+    }
+
+    push_candidate(language.to_string());
+    candidates
 }
 
 fn supported_locales() -> &'static [String] {
@@ -121,6 +216,9 @@ fn load_locale_resources() -> io::Result<LocaleResources> {
         let Some(language_identifier) = parse_locale(&locale_name) else {
             continue;
         };
+        if !CANONICAL_LOCALE_CODES.contains(&locale_name.as_str()) {
+            continue;
+        }
 
         let bundle = load_bundle(&entry.path(), &locale_name, language_identifier)?;
         supported_locales.push(locale_name.clone());
@@ -206,7 +304,7 @@ mod tests {
     fn explicit_locale_overrides_system_locale() {
         assert_eq!(
             resolve_locale_with_system(Some("zh-CN"), Some("en-US")).expect("resolve locale"),
-            "zh-CN"
+            "zh"
         );
     }
 
@@ -222,7 +320,15 @@ mod tests {
     fn supported_system_locale_is_used_when_config_is_missing() {
         assert_eq!(
             resolve_locale_with_system(None, Some("zh")).expect("resolve locale"),
-            "zh-CN"
+            "zh"
+        );
+    }
+
+    #[test]
+    fn specific_locale_falls_back_to_generic_locale() {
+        assert_eq!(
+            resolve_locale_with_system(None, Some("zh-HK")).expect("resolve locale"),
+            "zh"
         );
     }
 
@@ -262,7 +368,7 @@ mod tests {
             &[("connector_name", "Google Docs")],
         );
         let chinese = format_message(
-            "zh-CN",
+            "zh-HK",
             "approval-question-google-docs-create-document",
             &[("connector_name", "Google Docs")],
         );
