@@ -3421,23 +3421,9 @@ impl Session {
             });
         drop(ts);
         drop(active);
-        self.record_direct_approval_outcome(
-            &pending_approval.call_id,
-            decision,
-            pending_approval.approval_source,
-        )
-        .await;
-    }
-
-    pub async fn record_direct_approval_outcome(
-        &self,
-        call_id: &str,
-        decision: &ReviewDecision,
-        approval_source: ApprovalSourceMetadata,
-    ) {
         self.record_call_approval_outcome(
-            call_id.to_string(),
-            ApprovalOutcomeMetadata::reviewed(decision, approval_source),
+            pending_approval.call_id,
+            ApprovalOutcomeMetadata::reviewed(decision, pending_approval.approval_source),
         )
         .await;
     }

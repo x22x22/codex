@@ -13,6 +13,7 @@ use crate::sandboxing::ExecRequest;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::ShellType;
 use crate::skills::SkillMetadata;
+use crate::state::ApprovalOutcomeMetadata;
 use crate::tools::runtimes::ExecveSessionApproval;
 use crate::tools::runtimes::build_command_spec;
 use crate::tools::sandboxing::SandboxAttempt;
@@ -440,10 +441,12 @@ impl CoreShellActionProvider {
                     )
                     .await;
                     session
-                        .record_direct_approval_outcome(
-                            &call_id,
-                            &decision,
-                            ApprovalSourceMetadata::Guardian,
+                        .record_call_approval_outcome(
+                            call_id.clone(),
+                            ApprovalOutcomeMetadata::reviewed(
+                                &decision,
+                                ApprovalSourceMetadata::Guardian,
+                            ),
                         )
                         .await;
                     return decision;
@@ -529,14 +532,24 @@ impl CoreShellActionProvider {
     ) -> anyhow::Result<EscalationDecision> {
         let action = match decision {
             Decision::Forbidden => {
-                self.session.record_policy_outcome(&self.call_id).await;
+                self.session
+                    .record_call_approval_outcome(
+                        self.call_id.clone(),
+                        ApprovalOutcomeMetadata::policy(),
+                    )
+                    .await;
                 EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
             }
             Decision::Prompt => {
                 if execve_prompt_is_rejected_by_policy(self.approval_policy, &decision_source)
                     .is_some()
                 {
-                    self.session.record_policy_outcome(&self.call_id).await;
+                    self.session
+                        .record_call_approval_outcome(
+                            self.call_id.clone(),
+                            ApprovalOutcomeMetadata::policy(),
+                        )
+                        .await;
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
                 } else {
                     match self
