@@ -20,6 +20,8 @@ use futures::SinkExt;
 use futures::StreamExt;
 use http::HeaderMap;
 use http::HeaderValue;
+use serde_json::Value;
+use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -507,6 +509,27 @@ impl RealtimeWebsocketClient {
             .await?;
         Ok(connection)
     }
+}
+
+pub fn realtime_client_secret_request_body(
+    config: &RealtimeSessionConfig,
+) -> Result<Value, ApiError> {
+    let session_mode = normalized_session_mode(config.event_parser, config.session_mode);
+    let mut session = serde_json::to_value(session_update_session(
+        config.event_parser,
+        config.instructions.clone(),
+        session_mode,
+    ))
+    .map_err(|err| ApiError::Stream(format!("failed to encode realtime session config: {err}")))?;
+    if let Some(model) = config.model.as_ref()
+        && let Some(session_object) = session.as_object_mut()
+    {
+        session_object.insert("model".to_string(), Value::String(model.clone()));
+    }
+
+    Ok(json!({
+        "session": session,
+    }))
 }
 
 fn merge_request_headers(

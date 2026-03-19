@@ -13,6 +13,7 @@ pub use methods::RealtimeWebsocketClient;
 pub use methods::RealtimeWebsocketConnection;
 pub use methods::RealtimeWebsocketEvents;
 pub use methods::RealtimeWebsocketWriter;
+pub use methods::realtime_client_secret_request_body;
 pub use protocol::RealtimeEventParser;
 pub use protocol::RealtimeSessionConfig;
 pub use protocol::RealtimeSessionMode;

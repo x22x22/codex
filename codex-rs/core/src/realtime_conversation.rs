@@ -1,12 +1,12 @@
 use crate::CodexAuth;
 use crate::api_bridge::map_api_error;
-use crate::auth::read_openai_api_key_from_env;
 use crate::codex::Session;
 use crate::config::RealtimeWsMode;
 use crate::config::RealtimeWsVersion;
 use crate::default_client::default_headers;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::realtime_client_secrets::fetch_realtime_client_secret;
 use crate::realtime_context::build_realtime_startup_context;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -453,7 +453,6 @@ async fn prepare_realtime_start(
 ) -> CodexResult<PreparedRealtimeConversationStart> {
     let provider = sess.provider().await;
     let auth = sess.services.auth_manager.auth().await;
-    let realtime_api_key = realtime_api_key(auth.as_ref(), &provider)?;
     let mut api_provider = provider.to_api_provider(Some(crate::auth::AuthMode::ApiKey))?;
     let config = sess.get_config().await;
     if let Some(realtime_ws_base_url) = &config.experimental_realtime_ws_base_url {
@@ -494,8 +493,12 @@ async fn prepare_realtime_start(
         event_parser,
         session_mode,
     };
-    let extra_headers =
-        realtime_request_headers(requested_session_id.as_deref(), realtime_api_key.as_str())?;
+    let realtime_bearer_token =
+        realtime_bearer_token(auth.as_ref(), &provider, &config, &session_config).await?;
+    let extra_headers = realtime_request_headers(
+        requested_session_id.as_deref(),
+        realtime_bearer_token.as_str(),
+    )?;
     Ok(PreparedRealtimeConversationStart {
         api_provider,
         extra_headers,
@@ -625,9 +628,11 @@ fn realtime_text_from_handoff_request(handoff: &RealtimeHandoffRequested) -> Opt
         .or((!handoff.input_transcript.is_empty()).then_some(handoff.input_transcript.clone()))
 }
 
-fn realtime_api_key(
+async fn realtime_bearer_token(
     auth: Option<&CodexAuth>,
     provider: &crate::ModelProviderInfo,
+    config: &crate::config::Config,
+    session_config: &RealtimeSessionConfig,
 ) -> CodexResult<String> {
     if let Some(api_key) = provider.api_key()? {
         return Ok(api_key);
@@ -637,26 +642,23 @@ fn realtime_api_key(
         return Ok(token);
     }
 
-    if let Some(api_key) = auth.and_then(CodexAuth::api_key) {
-        return Ok(api_key.to_string());
-    }
-
-    // TODO(aibrahim): Remove this temporary fallback once realtime auth no longer
-    // requires API key auth for ChatGPT/SIWC sessions.
-    if provider.is_openai()
-        && let Some(api_key) = read_openai_api_key_from_env()
-    {
-        return Ok(api_key);
+    if let Some(auth) = auth {
+        if auth.is_chatgpt_auth() {
+            return fetch_realtime_client_secret(auth, config, session_config).await;
+        }
+        if let Some(api_key) = auth.api_key() {
+            return Ok(api_key.to_string());
+        }
     }
 
     Err(CodexErr::InvalidRequest(
-        "realtime conversation requires API key auth".to_string(),
+        "realtime conversation requires API key or ChatGPT auth".to_string(),
     ))
 }
 
 fn realtime_request_headers(
     session_id: Option<&str>,
-    api_key: &str,
+    bearer_token: &str,
 ) -> CodexResult<Option<HeaderMap>> {
     let mut headers = HeaderMap::new();
 
@@ -666,8 +668,8 @@ fn realtime_request_headers(
         headers.insert("x-session-id", session_id);
     }
 
-    let auth_value = HeaderValue::from_str(&format!("Bearer {api_key}")).map_err(|err| {
-        CodexErr::InvalidRequest(format!("invalid realtime api key header: {err}"))
+    let auth_value = HeaderValue::from_str(&format!("Bearer {bearer_token}")).map_err(|err| {
+        CodexErr::InvalidRequest(format!("invalid realtime bearer token header: {err}"))
     })?;
     headers.insert(AUTHORIZATION, auth_value);
 
