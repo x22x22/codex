@@ -283,6 +283,8 @@ use crate::skills::injection::app_id_from_path;
 use crate::skills::injection::tool_kind_for_path;
 use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
+use crate::state::ApprovalOutcomeMetadata;
+use crate::state::PendingApprovalMetadata;
 use crate::state::SessionServices;
 use crate::state::SessionState;
 use crate::state_db;
@@ -325,7 +327,6 @@ use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ResponseItemMetadata;
-use codex_protocol::models::ReviewDecisionMetadata;
 use codex_protocol::models::SandboxPolicyMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -1061,28 +1062,6 @@ fn stamp_message_metadata_on_response_item(
     }
 }
 
-fn review_decision_to_metadata(decision: &ReviewDecision) -> ReviewDecisionMetadata {
-    match decision {
-        ReviewDecision::Approved => ReviewDecisionMetadata::Approved,
-        ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-            ReviewDecisionMetadata::ApprovedWithAmendment
-        }
-        ReviewDecision::ApprovedForSession => ReviewDecisionMetadata::ApprovedForSession,
-        ReviewDecision::NetworkPolicyAmendment {
-            network_policy_amendment,
-        } => match network_policy_amendment.action {
-            codex_protocol::protocol::NetworkPolicyRuleAction::Allow => {
-                ReviewDecisionMetadata::ApprovedWithNetworkPolicyAllow
-            }
-            codex_protocol::protocol::NetworkPolicyRuleAction::Deny => {
-                ReviewDecisionMetadata::DeniedWithNetworkPolicyDeny
-            }
-        },
-        ReviewDecision::Denied => ReviewDecisionMetadata::Denied,
-        ReviewDecision::Abort => ReviewDecisionMetadata::Abort,
-    }
-}
-
 fn response_item_tool_call_id(item: &ResponseItem) -> Option<&str> {
     match item {
         ResponseItem::LocalShellCall {
@@ -1135,7 +1114,7 @@ fn tool_call_metadata_or_default(item: &ResponseItem) -> Option<ResponseItemMeta
 
 #[derive(Clone, Debug, Default)]
 struct ToolApprovalMetadataSnapshot {
-    approval_outcomes_by_call_id: HashMap<String, ReviewDecisionMetadata>,
+    approval_outcomes_by_call_id: HashMap<String, ApprovalOutcomeMetadata>,
     pending_approval_call_ids: HashSet<String>,
 }
 
@@ -1163,9 +1142,9 @@ fn stamp_tool_approval_metadata_with_snapshot(
     ));
 
     match outcome {
-        Some(review_decision) => {
+        Some(outcome) => {
             metadata.is_tool_call_escalated = Some(true);
-            metadata.review_decision = Some(review_decision);
+            metadata.review_decision = outcome.review_decision;
         }
         None if !has_pending_approval => {
             metadata.is_tool_call_escalated = Some(false);
@@ -3067,7 +3046,9 @@ impl Session {
                     let mut ts = at.turn_state.lock().await;
                     ts.insert_pending_approval_call_id(
                         effective_approval_id.clone(),
-                        call_id.clone(),
+                        PendingApprovalMetadata {
+                            call_id: call_id.clone(),
+                        },
                     );
                     ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
                 }
@@ -3134,7 +3115,12 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval_call_id(approval_id.clone(), call_id.clone());
+                    ts.insert_pending_approval_call_id(
+                        approval_id.clone(),
+                        PendingApprovalMetadata {
+                            call_id: call_id.clone(),
+                        },
+                    );
                     ts.insert_pending_approval(approval_id.clone(), tx_approve)
                 }
                 None => None,
@@ -3426,13 +3412,34 @@ impl Session {
             return;
         };
         let mut ts = at.turn_state.lock().await;
-        let call_id = ts
+        let pending_approval = ts
             .remove_pending_approval_call_id(approval_id)
-            .unwrap_or_else(|| approval_id.to_string());
+            .unwrap_or_else(|| PendingApprovalMetadata {
+                call_id: approval_id.to_string(),
+            });
+        drop(ts);
+        drop(active);
+        self.record_call_approval_outcome(
+            pending_approval.call_id,
+            ApprovalOutcomeMetadata::reviewed(decision),
+        )
+        .await;
+    }
+
+    pub(crate) async fn record_call_approval_outcome(
+        &self,
+        call_id: String,
+        outcome: ApprovalOutcomeMetadata,
+    ) {
+        let mut active = self.active_turn.lock().await;
+        let Some(at) = active.as_mut() else {
+            return;
+        };
         if !self.enabled(Feature::ItemMetadata) {
             return;
         }
-        ts.record_approval_outcome(call_id, review_decision_to_metadata(decision));
+        let mut ts = at.turn_state.lock().await;
+        ts.record_approval_outcome(call_id, outcome);
     }
 
     pub async fn notify_approval(&self, approval_id: &str, decision: ReviewDecision) {

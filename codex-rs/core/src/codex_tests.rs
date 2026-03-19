@@ -43,6 +43,7 @@ use crate::protocol::UserMessageEvent;
 use crate::rollout::policy::EventPersistenceMode;
 use crate::rollout::recorder::RolloutRecorder;
 use crate::rollout::recorder::RolloutRecorderParams;
+use crate::state::ApprovalOutcomeMetadata;
 use crate::state::TaskKind;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
@@ -4285,20 +4286,56 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
 #[test]
 fn review_decision_metadata_mapping_is_stable() {
     assert_eq!(
-        review_decision_to_metadata(&ReviewDecision::Approved),
-        codex_protocol::models::ReviewDecisionMetadata::Approved
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Approved).review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::Approved)
     );
     assert_eq!(
-        review_decision_to_metadata(&ReviewDecision::Denied),
-        codex_protocol::models::ReviewDecisionMetadata::Denied
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied).review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
     );
     assert_eq!(
-        review_decision_to_metadata(&ReviewDecision::Abort),
-        codex_protocol::models::ReviewDecisionMetadata::Abort
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Abort).review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::Abort)
     );
     assert_eq!(
-        review_decision_to_metadata(&ReviewDecision::ApprovedForSession),
-        codex_protocol::models::ReviewDecisionMetadata::ApprovedForSession
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::ApprovedForSession).review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedForSession)
+    );
+    assert_eq!(
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::ApprovedExecpolicyAmendment {
+            proposed_execpolicy_amendment: codex_protocol::approvals::ExecPolicyAmendment::new(
+                vec!["echo".to_string(), "hi".to_string()],
+                codex_protocol::protocol::BehaviorRule {
+                    action: codex_execpolicy::ExecAction::Allow,
+                    tag: "test".to_string(),
+                    users: Vec::new(),
+                    always_apply: false,
+                    reason: None,
+                },
+            ),
+        })
+        .review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedWithAmendment)
+    );
+    assert_eq!(
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+                host: "example.com".to_string(),
+                action: codex_protocol::protocol::NetworkPolicyRuleAction::Allow,
+            },
+        })
+        .review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::ApprovedWithNetworkPolicyAllow)
+    );
+    assert_eq!(
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::NetworkPolicyAmendment {
+            network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+                host: "example.com".to_string(),
+                action: codex_protocol::protocol::NetworkPolicyRuleAction::Deny,
+            },
+        })
+        .review_decision,
+        Some(codex_protocol::models::ReviewDecisionMetadata::DeniedWithNetworkPolicyDeny)
     );
 }
 
@@ -4342,8 +4379,11 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
     .await;
     while rx.try_recv().is_ok() {}
 
-    sess.record_approval_outcome("call-1", &ReviewDecision::Denied)
-        .await;
+    sess.record_call_approval_outcome(
+        "call-1".to_string(),
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied),
+    )
+    .await;
     sess.record_response_item_and_emit_turn_item(
         tc.as_ref(),
         ResponseItem::FunctionCall {
@@ -4526,8 +4566,11 @@ async fn tool_call_metadata_can_be_restamped_after_approval_outcome() {
         },
     )
     .await;
-    sess.record_approval_outcome("call-restamp-1", &ReviewDecision::Denied)
-        .await;
+    sess.record_call_approval_outcome(
+        "call-restamp-1".to_string(),
+        ApprovalOutcomeMetadata::reviewed(&ReviewDecision::Denied),
+    )
+    .await;
 
     let original_item = sess
         .clone_history()
