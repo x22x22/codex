@@ -259,6 +259,7 @@ fn parses_hook_prompt_and_hides_other_contextual_fragments() {
                         .to_string(),
             },
         ],
+        metadata: None,
         end_turn: None,
         phase: None,
     };
