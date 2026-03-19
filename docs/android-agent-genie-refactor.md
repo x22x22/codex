@@ -13,6 +13,7 @@ The current repo now contains these implementation slices:
 - The Agent app can:
   - register `AgentService`
   - plan target packages for a user objective
+  - bridge framework session APIs into the hosted Agent Codex runtime
   - launch direct parent + child framework sessions
   - start one Genie session per selected target package
   - display framework session state and event timelines
@@ -26,10 +27,12 @@ The current repo now contains these implementation slices:
 - The current Binder bridge exposes small fixed-form calls, and the Genie
   runtime already uses it to fetch Agent-owned runtime metadata from the
   hosted Agent Codex runtime, including auth status and configured model/provider.
-- Target-package planning now runs through a hosted Agent Codex tool call for
-  launchable-app discovery instead of a Kotlin-built app list prompt.
-- Direct child-session launch now also runs through a hosted Agent Codex tool
-  call, with Kotlin reduced to the framework/session host layer.
+- Target-package planning now relies on the hosted Agent Codex runtime using
+  standard Android shell tools already available on-device (`cmd package`, `pm`,
+  `am`) instead of Kotlin-side app discovery wrappers.
+- Direct child-session launch now runs through a dedicated hosted Agent
+  framework-session bridge, with Kotlin reduced to the framework/session host
+  layer.
 - The Genie runtime inspects the paired target package from inside the
   target-app sandbox and feeds package metadata plus launcher intent details
   into the delegated Codex prompt.
@@ -40,8 +43,9 @@ The current repo now contains these implementation slices:
 - The Binder bridge now exposes a **narrow Responses transport** owned by the
   Agent app itself, so Genie model traffic no longer depends on the legacy
   `codexd` socket service.
-- The Genie runtime exposes reusable Android capabilities to Codex as
-  **dynamic tools**, not via a custom `TOOL:` text protocol.
+- The Genie runtime still exposes Android-specific capabilities that are not
+  ordinary shell tools through host dynamic tools, but standard Android shell
+  and device commands stay in the normal Codex tool path.
 - Non-bridge Genie questions surface through AgentSDK question flow by mapping
   `request_user_input` back into Agent-managed questions and answers.
 - The Agent also attempts to answer Genie questions through its hosted Codex
@@ -129,10 +133,9 @@ foreground-service auth/status surface while this refactor proceeds.
 - Agent app manifest/service wiring
 - Genie app manifest/service wiring
 - Direct session launcher in the Agent UI
-- Agent-side target-package planning from installed launchable apps, with an
-  optional package override
-- Hosted Agent planning tools for launchable-app discovery
-- Hosted Agent planning/orchestration tool for direct Genie-session launch
+- Agent-side target-package planning with an optional package override
+- Hosted Agent planning via standard Android shell tools already available on-device
+- Dedicated framework-session bridge tool for direct Genie-session launch
 - Framework session inspection UI in the Agent app
 - Question answering and detached-target attach controls
 - Exported Binder bridge request handling in `CodexAgentBridgeService`
@@ -180,6 +183,8 @@ foreground-service auth/status surface while this refactor proceeds.
   - framework `AgentService`
 - `android/app/src/main/java/com/openai/codexd/AgentSessionController.kt`
   - Agent-side `AgentManager` orchestration helper
+- `android/app/src/main/java/com/openai/codexd/AgentFrameworkToolBridge.kt`
+  - hosted Agent bridge for framework session APIs
 - `android/app/src/main/java/com/openai/codexd/MainActivity.kt`
   - Agent session UI plus existing `codexd` bridge controls
 - `android/genie/src/main/java/com/openai/codex/genie/CodexGenieService.kt`
@@ -230,7 +235,10 @@ binaries. The Genie app depends on `just android-build` for the packaged
 
 ## Next Implementation Steps
 
-1. Expand the Binder control plane into a fuller Agent<->Genie runtime API.
+1. Route more Agent orchestration through the hosted runtime while keeping the
+   host bridge limited to framework session APIs.
 2. Split the remaining legacy `codexd` auth/status concerns out of the Agent UI.
 3. Add more Android-native tool surfaces and richer observation types to the
    hosted Genie runtime.
+4. Later, replace the framework-session host bridge with command-line
+   equivalents once those are stable enough to rely on.
