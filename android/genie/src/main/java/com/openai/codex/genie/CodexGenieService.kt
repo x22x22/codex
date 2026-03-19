@@ -49,7 +49,7 @@ class CodexGenieService : GenieService() {
             )
             callback.publishTrace(
                 sessionId,
-                "Genie is headless. It hosts codex app-server locally, routes model traffic through the Agent-owned codexd socket, and exposes Android tooling as dynamic tools.",
+                "Genie is headless. It hosts codex app-server locally, routes model traffic through the Agent Binder bridge, and exposes Android tooling as dynamic tools.",
             )
 
             val targetAppContext = runCatching { TargetAppInspector.inspect(this, request.targetPackage) }
@@ -92,6 +92,7 @@ class CodexGenieService : GenieService() {
                     request = request,
                     callback = callback,
                     control = control,
+                    bridgeClient = bridgeClient,
                     runtimeStatus = runtimeStatus,
                     targetAppContext = targetAppContext.getOrNull(),
                 ).use { host ->

@@ -13,9 +13,13 @@ import java.io.IOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+interface CodexHttpRequestForwarder {
+    fun sendHttpRequest(method: String, path: String, body: String?): CodexAgentBridge.HttpResponse
+}
+
 class AgentBridgeClient(
     private val context: Context,
-) : Closeable {
+) : Closeable, CodexHttpRequestForwarder {
     companion object {
         private const val AGENT_PACKAGE = "com.openai.codexd"
         private const val AGENT_BRIDGE_SERVICE = "com.openai.codexd.CodexAgentBridgeService"
@@ -69,12 +73,16 @@ class AgentBridgeClient(
         )
     }
 
-    fun sendHttpRequest(method: String, path: String, body: String?): CodexAgentBridge.HttpResponse {
+    override fun sendHttpRequest(
+        method: String,
+        path: String,
+        body: String?,
+    ): CodexAgentBridge.HttpResponse {
         val service = requireService()
         val response = service.sendHttpRequest(BridgeHttpRequest(method, path, body))
         return CodexAgentBridge.HttpResponse(
             statusCode = response.statusCode,
-            body = response.body,
+            body = response.body ?: "",
         )
     }
 

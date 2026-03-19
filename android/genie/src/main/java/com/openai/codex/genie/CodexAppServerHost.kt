@@ -21,12 +21,12 @@ class CodexAppServerHost(
     private val request: GenieRequest,
     private val callback: GenieService.Callback,
     private val control: GenieSessionControl,
+    private val bridgeClient: AgentBridgeClient,
     private val runtimeStatus: CodexAgentBridge.RuntimeStatus,
     private val targetAppContext: TargetAppContext?,
 ) : Closeable {
     companion object {
         private const val TAG = "CodexAppServerHost"
-        private const val AGENT_SOCKET_PATH = "@com.openai.codexd.codexd"
         private const val REQUEST_TIMEOUT_MS = 30_000L
         private const val POLL_TIMEOUT_MS = 250L
     }
@@ -43,6 +43,7 @@ class CodexAppServerHost(
     private var stderrThread: Thread? = null
     private var finalAgentMessage: String? = null
     private var resultPublished = false
+    private var localProxy: GenieLocalCodexProxy? = null
 
     fun run() {
         startProcess()
@@ -56,6 +57,7 @@ class CodexAppServerHost(
     override fun close() {
         stdoutThread?.interrupt()
         stderrThread?.interrupt()
+        localProxy?.close()
         synchronized(writerLock) {
             runCatching { writer.close() }
         }
@@ -67,9 +69,19 @@ class CodexAppServerHost(
 
     private fun startProcess() {
         val codexHome = File(context.filesDir, "codex-home").apply { mkdirs() }
+        localProxy = GenieLocalCodexProxy(
+            sessionId = request.sessionId,
+            requestForwarder = bridgeClient,
+        ).also(GenieLocalCodexProxy::start)
+        val proxyBaseUrl = localProxy?.baseUrl
+            ?: throw IOException("local Genie proxy did not start")
         val processBuilder = ProcessBuilder(
             listOf(
                 CodexBinaryLocator.resolve(context).absolutePath,
+                "-c",
+                "enable_request_compression=false",
+                "-c",
+                "openai_base_url=\"$proxyBaseUrl\"",
                 "app-server",
                 "--listen",
                 "stdio://",
@@ -77,8 +89,7 @@ class CodexAppServerHost(
         )
         val env = processBuilder.environment()
         env["CODEX_HOME"] = codexHome.absolutePath
-        env["CODEX_OPENAI_UNIX_SOCKET"] = AGENT_SOCKET_PATH
-        env["OPENAI_BASE_URL"] = "http://localhost/v1"
+        env["CODEX_USE_AGENT_AUTH_PROXY"] = "1"
         env["RUST_LOG"] = "info"
         process = processBuilder.start()
         control.process = process

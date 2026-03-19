@@ -29,9 +29,10 @@ The current repo now contains these implementation slices:
 - The Genie runtime inspects the paired target package from inside the
   target-app sandbox and feeds package metadata plus launcher intent details
   into the delegated Codex prompt.
-- The hosted `codex app-server` process routes model traffic through the
-  Agent-owned `codexd` abstract Unix socket, keeping network/auth Agent-owned
-  even while the Genie runs inside the target-app sandbox.
+- The hosted `codex app-server` process now talks to a **Genie-local loopback
+  HTTP proxy** inside the Genie app. That proxy forwards HTTP traffic to the
+  Agent over Binder/AIDL, keeping network/auth Agent-owned without assuming the
+  Genie child process can reach the Agent's abstract socket directly.
 - The Genie runtime exposes reusable Android capabilities to Codex as
   **dynamic tools**, not via a custom `TOOL:` text protocol.
 - Non-bridge Genie questions surface through AgentSDK question flow by mapping
@@ -39,7 +40,9 @@ The current repo now contains these implementation slices:
 - The Agent also attempts to answer Genie questions through the embedded
   `codexd` runtime before falling back to notification/UI escalation.
 - Runtime testing on the emulator shows that the exported Agent Binder service
-  is reachable from Genie execution for the current bootstrap calls.
+  is reachable from Genie execution for the current bootstrap calls, while
+  direct cross-app access to the Agent-owned abstract socket is not a valid
+  assumption.
 
 The Rust `codexd` service/client split remains in place and is still the
 existing network/auth bridge while this refactor proceeds.
@@ -70,7 +73,9 @@ existing network/auth bridge while this refactor proceeds.
 - Internal Agent<->Genie coordination now splits into:
   - Binder/AIDL for fixed-form control/data RPC
   - AgentSDK session events for free-form product dialogue
-  - hosted `codex app-server` inside Genie for the actual Codex execution loop
+- hosted `codex app-server` inside Genie for the actual Codex execution loop
+- Genie-local transport termination between the hosted `codex` child process
+  and the Binder control plane
 
 ## Runtime Model
 
@@ -104,6 +109,7 @@ existing network/auth bridge while this refactor proceeds.
   - Android dynamic tool execution
   - Agent escalation via `request_user_input`
   - runtime bootstrap from the Agent-owned Binder bridge
+  - local proxying of hosted `codex` HTTP traffic onto Binder
 
 ## First Milestone Scope
 
@@ -123,8 +129,8 @@ existing network/auth bridge while this refactor proceeds.
 - Agent-owned `/internal/runtime/status` metadata for Genie bootstrap
 - Target-app package metadata and launcher-intent inspection from the Genie
   sandbox, with that context included in the delegated Codex prompt
-- Hosted `codex app-server` inside Genie, with model traffic routed through the
-  Agent-owned `codexd` abstract socket
+- Hosted `codex app-server` inside Genie, with model traffic routed through a
+  Genie-local proxy backed by the Agent Binder bridge
 - Android dynamic tools registered on the Genie Codex thread with:
   - `android.package.inspect`
   - `android.intent.launch`
@@ -169,6 +175,9 @@ existing network/auth bridge while this refactor proceeds.
 - `android/genie/src/main/java/com/openai/codex/genie/CodexAppServerHost.kt`
   - stdio JSON-RPC host for `codex app-server`, dynamic tools, and
     `request_user_input` bridging
+- `android/genie/src/main/java/com/openai/codex/genie/GenieLocalCodexProxy.kt`
+  - Genie-local loopback HTTP proxy that forwards hosted `codex` HTTP traffic to
+    the Agent Binder bridge
 - `android/app/src/main/java/com/openai/codexd/CodexAgentBridgeService.kt`
   - exported Binder/AIDL bridge for Genie control-plane calls
 - `android/genie/src/main/java/com/openai/codex/genie/AgentBridgeClient.kt`
