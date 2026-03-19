@@ -14,7 +14,6 @@ use crate::mention_syntax::TOOL_MENTION_SIGIL;
 use crate::mentions::build_skill_name_counts;
 use crate::skills::SkillMetadata;
 use codex_exec_server::ExecutorFileSystem;
-use codex_exec_server::LocalFileSystem;
 use codex_otel::SessionTelemetry;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
@@ -50,22 +49,6 @@ pub(crate) struct SkillInjections {
 }
 
 pub(crate) async fn build_skill_injections(
-    mentioned_skills: &[SkillMetadata],
-    otel: Option<&SessionTelemetry>,
-    analytics_client: &AnalyticsEventsClient,
-    tracking: TrackEventsContext,
-) -> SkillInjections {
-    build_skill_injections_with_filesystem(
-        mentioned_skills,
-        otel,
-        analytics_client,
-        tracking,
-        Arc::new(LocalFileSystem),
-    )
-    .await
-}
-
-pub(crate) async fn build_skill_injections_with_filesystem(
     mentioned_skills: &[SkillMetadata],
     otel: Option<&SessionTelemetry>,
     analytics_client: &AnalyticsEventsClient,

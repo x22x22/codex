@@ -22,11 +22,9 @@ use crate::config_loader::merge_toml_values;
 use crate::config_loader::project_root_markers_from_config;
 use crate::features::Feature;
 use codex_app_server_protocol::ConfigLayerSource;
-use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize as normalize_path;
-use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use toml::Value as TomlValue;
@@ -80,21 +78,11 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
 
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
-pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
-    let file_system = match filesystem_for_config(config).await {
-        Ok(file_system) => Some(file_system),
-        Err(err) => {
-            error!("error creating environment filesystem for project docs: {err}");
-            None
-        }
-    };
-
-    let project_docs = if let Some(file_system) = file_system {
-        read_project_docs_with_filesystem(config, &file_system).await
-    } else {
-        Ok(None)
-    };
-
+pub(crate) async fn get_user_instructions(
+    config: &Config,
+    filesystem: Arc<dyn ExecutorFileSystem>,
+) -> Option<String> {
+    let project_docs = read_project_docs(config, filesystem).await;
     let mut output = String::new();
 
     if let Some(instructions) = config.user_instructions.clone() {
@@ -141,8 +129,10 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
 /// concatenation of all discovered docs. If no documentation file is found the
 /// function returns `Ok(None)`. Unexpected I/O failures bubble up as `Err` so
 /// callers can decide how to handle them.
-pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String>> {
-    let filesystem = filesystem_for_config(config).await?;
+pub async fn read_project_docs(
+    config: &Config,
+    filesystem: Arc<dyn ExecutorFileSystem>,
+) -> std::io::Result<Option<String>> {
     read_project_docs_with_filesystem(config, &filesystem).await
 }
 
@@ -209,17 +199,6 @@ async fn read_project_docs_with_filesystem(
         Ok(None)
     } else {
         Ok(Some(parts.join("\n\n")))
-    }
-}
-
-async fn filesystem_for_config(config: &Config) -> io::Result<Arc<dyn ExecutorFileSystem>> {
-    if let Some(url) = &config.experimental_exec_server_url {
-        let environment = Environment::create(Some(url.to_string()))
-            .await
-            .map_err(|err| io::Error::other(err.to_string()))?;
-        Ok(environment.get_filesystem())
-    } else {
-        Ok(Environment::local().get_filesystem())
     }
 }
 

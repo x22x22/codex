@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use codex_exec_server::Environment;
-use codex_exec_server::ExecSpawnRequest;
-use codex_exec_server::InheritedFd;
-use codex_exec_server::SandboxKind;
-use codex_utils_absolute_path::AbsolutePathBuf;
+use codex_exec_server::ExecServerClient;
 use tracing::debug;
 
 use crate::exec::SandboxType;
@@ -47,31 +44,31 @@ impl UnifiedExecSessionFactory for LocalUnifiedExecSessionFactory {
     }
 }
 
-pub(crate) struct EnvironmentUnifiedExecSessionFactory {
-    environment: Arc<Environment>,
+pub(crate) struct ExecServerUnifiedExecSessionFactory {
+    client: ExecServerClient,
 }
 
-impl std::fmt::Debug for EnvironmentUnifiedExecSessionFactory {
+impl std::fmt::Debug for ExecServerUnifiedExecSessionFactory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("EnvironmentUnifiedExecSessionFactory")
+        f.debug_struct("ExecServerUnifiedExecSessionFactory")
             .finish_non_exhaustive()
     }
 }
 
-impl EnvironmentUnifiedExecSessionFactory {
-    pub(crate) fn new(environment: Arc<Environment>) -> UnifiedExecSessionFactoryHandle {
-        Arc::new(Self { environment })
+impl ExecServerUnifiedExecSessionFactory {
+    pub(crate) fn from_client(client: ExecServerClient) -> UnifiedExecSessionFactoryHandle {
+        Arc::new(Self { client })
     }
 }
 
 #[async_trait]
-impl UnifiedExecSessionFactory for EnvironmentUnifiedExecSessionFactory {
+impl UnifiedExecSessionFactory for ExecServerUnifiedExecSessionFactory {
     async fn open_session(
         &self,
         process_id: i32,
         env: &ExecRequest,
         tty: bool,
-        mut spawn_lifecycle: SpawnLifecycleHandle,
+        spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
         let inherited_fds = spawn_lifecycle.inherited_fds();
         if !inherited_fds.is_empty() {
@@ -91,34 +88,25 @@ impl UnifiedExecSessionFactory for EnvironmentUnifiedExecSessionFactory {
             return open_local_session(env, tty, spawn_lifecycle).await;
         }
 
-        let session = self
-            .environment
-            .executor()
-            .spawn(ExecSpawnRequest {
-                process_id: process_id.to_string(),
-                argv: env.command.clone(),
-                cwd: AbsolutePathBuf::try_from(env.cwd.clone())
-                    .map_err(|err| UnifiedExecError::create_process(err.to_string()))?,
-                env: env.env.clone(),
-                arg0: env.arg0.clone(),
-                tty,
-                sandbox: sandbox_kind(env.sandbox),
-                inherited_fds: inherited_fds
-                    .into_iter()
-                    .map(|target_fd| InheritedFd { target_fd })
-                    .collect(),
-            })
-            .await
-            .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        spawn_lifecycle.after_spawn();
-        UnifiedExecProcess::from_exec_session(session, env.sandbox, tty, spawn_lifecycle).await
+        UnifiedExecProcess::from_exec_server(
+            self.client.clone(),
+            process_id,
+            env,
+            tty,
+            spawn_lifecycle,
+        )
+        .await
     }
 }
 
 pub(crate) fn unified_exec_session_factory_for_environment(
     environment: &Environment,
 ) -> UnifiedExecSessionFactoryHandle {
-    EnvironmentUnifiedExecSessionFactory::new(Arc::new(environment.clone()))
+    if let Some(client) = environment.exec_server_client() {
+        ExecServerUnifiedExecSessionFactory::from_client(client)
+    } else {
+        local_unified_exec_session_factory()
+    }
 }
 
 async fn open_local_session(
@@ -157,13 +145,4 @@ async fn open_local_session(
     let spawned = spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
     spawn_lifecycle.after_spawn();
     UnifiedExecProcess::from_spawned(spawned, env.sandbox, spawn_lifecycle).await
-}
-
-fn sandbox_kind(sandbox: SandboxType) -> SandboxKind {
-    match sandbox {
-        SandboxType::None => SandboxKind::None,
-        SandboxType::MacosSeatbelt => SandboxKind::MacosSeatbelt,
-        SandboxType::LinuxSeccomp => SandboxKind::LinuxSeccomp,
-        SandboxType::WindowsRestrictedToken => SandboxKind::WindowsRestrictedToken,
-    }
 }

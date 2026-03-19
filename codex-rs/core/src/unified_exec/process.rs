@@ -17,10 +17,12 @@ use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StreamOutput;
 use crate::exec::is_likely_sandbox_denied;
+use crate::sandboxing::ExecRequest;
 use crate::truncate::TruncationPolicy;
 use crate::truncate::formatted_truncate_text;
-use codex_exec_server::ExecOutputEvent;
-use codex_exec_server::ExecSession;
+use codex_exec_server::ExecParams;
+use codex_exec_server::ExecServerClient;
+use codex_exec_server::ExecServerEvent;
 use codex_utils_pty::ExecCommandSession;
 use codex_utils_pty::SpawnedPty;
 
@@ -89,7 +91,7 @@ impl std::fmt::Debug for ProcessBackend {
 #[derive(Clone)]
 struct RemoteExecSession {
     process_key: String,
-    session: Arc<dyn ExecSession>,
+    client: ExecServerClient,
     writer_tx: mpsc::Sender<Vec<u8>>,
     exited: Arc<AtomicBool>,
     exit_code: Arc<StdMutex<Option<i32>>>,
@@ -214,10 +216,11 @@ impl UnifiedExecProcess {
         match &self.process_handle {
             ProcessBackend::Local(process_handle) => process_handle.terminate(),
             ProcessBackend::Remote(process_handle) => {
-                let session = Arc::clone(&process_handle.session);
+                let client = process_handle.client.clone();
+                let process_key = process_handle.process_key.clone();
                 if let Ok(handle) = tokio::runtime::Handle::try_current() {
                     handle.spawn(async move {
-                        let _ = session.terminate().await;
+                        let _ = client.terminate(&process_key).await;
                     });
                 }
             }
@@ -329,15 +332,27 @@ impl UnifiedExecProcess {
         Ok(managed)
     }
 
-    pub(super) async fn from_exec_session(
-        session: Box<dyn ExecSession>,
-        sandbox_type: SandboxType,
-        _tty: bool,
+    pub(super) async fn from_exec_server(
+        client: ExecServerClient,
+        process_id: i32,
+        env: &ExecRequest,
+        tty: bool,
         spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<Self, UnifiedExecError> {
-        let process_key = session.process_id().to_string();
-        let session: Arc<dyn ExecSession> = Arc::from(session);
-        let mut session_output_rx = session.subscribe_output();
+        let process_key = process_id.to_string();
+        let mut events_rx = client.event_receiver();
+        client
+            .exec(ExecParams {
+                process_id: process_key.clone(),
+                argv: env.command.clone(),
+                cwd: env.cwd.clone(),
+                env: env.env.clone(),
+                tty,
+                arg0: env.arg0.clone(),
+            })
+            .await
+            .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+
         let (output_tx, output_rx) = broadcast::channel(256);
         let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(256);
         let exited = Arc::new(AtomicBool::new(false));
@@ -346,21 +361,21 @@ impl UnifiedExecProcess {
         let managed = Self::new(
             ProcessBackend::Remote(RemoteExecSession {
                 process_key: process_key.clone(),
-                session: Arc::clone(&session),
+                client: client.clone(),
                 writer_tx,
                 exited: Arc::clone(&exited),
                 exit_code: Arc::clone(&exit_code),
             }),
             output_rx,
-            sandbox_type,
+            env.sandbox,
             spawn_lifecycle,
         );
 
         {
-            let session = Arc::clone(&session);
+            let client = client.clone();
             tokio::spawn(async move {
                 while let Some(chunk) = writer_rx.recv().await {
-                    if session.write(chunk).await.is_err() {
+                    if client.write(&process_key, chunk).await.is_err() {
                         break;
                     }
                 }
@@ -368,41 +383,34 @@ impl UnifiedExecProcess {
         }
 
         {
+            let process_key = process_id.to_string();
             let exited = Arc::clone(&exited);
             let exit_code = Arc::clone(&exit_code);
             let cancellation_token = managed.cancellation_token();
-            let session = Arc::clone(&session);
             tokio::spawn(async move {
-                loop {
-                    match session_output_rx.recv().await {
-                        Ok(ExecOutputEvent::Stdout(chunk) | ExecOutputEvent::Stderr(chunk)) => {
-                            let _ = output_tx.send(chunk);
+                while let Ok(event) = events_rx.recv().await {
+                    match event {
+                        ExecServerEvent::OutputDelta(notification)
+                            if notification.process_id == process_key =>
+                        {
+                            let _ = output_tx.send(notification.chunk.into_inner());
                         }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        ExecServerEvent::Exited(notification)
+                            if notification.process_id == process_key =>
+                        {
+                            exited.store(true, Ordering::SeqCst);
+                            if let Ok(mut guard) = exit_code.lock() {
+                                *guard = Some(notification.exit_code);
+                            }
+                            cancellation_token.cancel();
+                            break;
+                        }
+                        ExecServerEvent::OutputDelta(_) | ExecServerEvent::Exited(_) => {}
                     }
                 }
             });
-
-            tokio::spawn(async move {
-                let exit = session.wait().await;
-                if let Ok(exit) = exit {
-                    exited.store(true, Ordering::SeqCst);
-                    if let Ok(mut guard) = exit_code.lock() {
-                        *guard = Some(exit.exit_code);
-                    }
-                }
-                cancellation_token.cancel();
-            });
         }
 
-        if let Some(exit) = session.try_exit_status() {
-            exited.store(true, Ordering::SeqCst);
-            if let Ok(mut guard) = exit_code.lock() {
-                *guard = Some(exit.exit_code);
-            }
-            managed.signal_exit();
-        }
         Ok(managed)
     }
 
