@@ -234,7 +234,16 @@ fn load_locale_resources() -> io::Result<LocaleResources> {
 }
 
 fn resolve_locales_dir() -> io::Result<PathBuf> {
-    codex_utils_cargo_bin::find_resource!(LOCALES_DIR)
+    let runfile_path = codex_utils_cargo_bin::find_resource!(LOCALES_DIR);
+    let source_path = Path::new(env!("CARGO_MANIFEST_DIR")).join(LOCALES_DIR);
+
+    match runfile_path {
+        Ok(path) if path.exists() => Ok(path),
+        Ok(_) if source_path.exists() => Ok(source_path),
+        Ok(path) => Ok(path),
+        Err(_) if source_path.exists() => Ok(source_path),
+        Err(err) => Err(err),
+    }
 }
 
 fn load_bundle(
