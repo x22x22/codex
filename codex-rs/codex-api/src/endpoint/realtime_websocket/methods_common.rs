@@ -16,7 +16,7 @@ use serde_json::Value;
 pub(super) const REALTIME_AUDIO_SAMPLE_RATE: u32 = 24_000;
 const AGENT_FINAL_MESSAGE_PREFIX: &str = "\"Agent Final Message\":\n\n";
 
-fn normalized_session_mode(
+pub(crate) fn normalized_session_mode(
     event_parser: RealtimeEventParser,
     session_mode: RealtimeSessionMode,
 ) -> RealtimeSessionMode {
@@ -50,7 +50,7 @@ pub(super) fn conversation_handoff_append_message(
     }
 }
 
-fn session_update_session(
+pub(crate) fn session_update_session(
     event_parser: RealtimeEventParser,
     instructions: String,
     session_mode: RealtimeSessionMode,
