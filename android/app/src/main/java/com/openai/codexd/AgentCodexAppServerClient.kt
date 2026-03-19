@@ -16,6 +16,7 @@ import org.json.JSONObject
 object AgentCodexAppServerClient {
     private const val TAG = "AgentCodexClient"
     private const val REQUEST_TIMEOUT_MS = 30_000L
+    private const val DEFAULT_AGENT_MODEL = "gpt-5.3-codex"
 
     data class RuntimeStatus(
         val authenticated: Boolean,
@@ -466,16 +467,17 @@ object AgentCodexAppServerClient {
     ): RuntimeStatus {
         val account = accountResponse.optJSONObject("account")
         val config = configResponse.optJSONObject("config") ?: JSONObject()
-        val configuredModel = config.optString("model").ifBlank { null }
-        val configuredProvider = config.optString("model_provider").ifBlank { null }
-        val accountType = account?.optString("type").orEmpty()
+        val configuredModel = config.optNullableString("model")
+        val effectiveModel = configuredModel ?: DEFAULT_AGENT_MODEL
+        val configuredProvider = config.optNullableString("model_provider")
+        val accountType = account?.optNullableString("type").orEmpty()
         return RuntimeStatus(
             authenticated = account != null,
-            accountEmail = account?.optString("email")?.ifBlank { null },
+            accountEmail = account?.optNullableString("email"),
             clientCount = activeRequests.get(),
             modelProviderId = configuredProvider ?: inferModelProviderId(accountType),
             configuredModel = configuredModel,
-            effectiveModel = configuredModel,
+            effectiveModel = effectiveModel,
             upstreamBaseUrl = resolveUpstreamBaseUrl(
                 config = config,
                 accountType = accountType,
@@ -490,6 +492,11 @@ object AgentCodexAppServerClient {
             "apiKey" -> "openai"
             else -> "unknown"
         }
+    }
+
+    private fun JSONObject.optNullableString(name: String): String? = when {
+        isNull(name) -> null
+        else -> optString(name).ifBlank { null }
     }
 
     private fun resolveUpstreamBaseUrl(

@@ -28,6 +28,7 @@ class CodexAppServerHost(
         private const val TAG = "CodexAppServerHost"
         private const val REQUEST_TIMEOUT_MS = 30_000L
         private const val POLL_TIMEOUT_MS = 250L
+        private const val DEFAULT_HOSTED_MODEL = "gpt-5.3-codex"
     }
 
     private val requestIdSequence = AtomicInteger(1)
@@ -47,8 +48,9 @@ class CodexAppServerHost(
     fun run() {
         startProcess()
         initialize()
-        val threadId = startThread()
-        startTurn(threadId)
+        val model = resolveModel()
+        val threadId = startThread(model)
+        startTurn(threadId, model)
         callback.publishTrace(request.sessionId, "Hosted codex app-server thread $threadId for ${request.targetPackage}.")
         eventLoop()
     }
@@ -167,7 +169,7 @@ class CodexAppServerHost(
         notify("initialized", JSONObject())
     }
 
-    private fun startThread(): String {
+    private fun startThread(model: String): String {
         val params = JSONObject()
             .put("approvalPolicy", "never")
             .put("sandbox", "read-only")
@@ -176,9 +178,7 @@ class CodexAppServerHost(
             .put("serviceName", "android_genie")
             .put("baseInstructions", buildBaseInstructions())
             .put("dynamicTools", buildDynamicToolSpecs())
-        runtimeStatus.effectiveModel?.takeIf(String::isNotBlank)?.let { model ->
-            params.put("model", model)
-        }
+        params.put("model", model)
         val result = request(
             method = "thread/start",
             params = params,
@@ -186,11 +186,16 @@ class CodexAppServerHost(
         return result.getJSONObject("thread").getString("id")
     }
 
-    private fun startTurn(threadId: String) {
+    private fun startTurn(
+        threadId: String,
+        model: String,
+    ) {
+        Log.i(TAG, "Starting hosted turn for ${request.sessionId} with model=$model")
         request(
             method = "turn/start",
             params = JSONObject()
                 .put("threadId", threadId)
+                .put("model", model)
                 .put(
                     "input",
                     JSONArray().put(
@@ -201,6 +206,12 @@ class CodexAppServerHost(
                 ),
         )
     }
+
+    private fun resolveModel(): String = runtimeStatus.effectiveModel
+        ?.takeIf(String::isNotBlank)
+        ?: runtimeStatus.configuredModel
+            ?.takeIf(String::isNotBlank)
+        ?: DEFAULT_HOSTED_MODEL
 
     private fun eventLoop() {
         while (!control.cancelled) {

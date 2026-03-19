@@ -29,11 +29,11 @@ class AgentBridgeClient(
         ).getJSONObject("runtimeStatus")
         return CodexAgentBridge.RuntimeStatus(
             authenticated = status.getBoolean("authenticated"),
-            accountEmail = status.optString("accountEmail").ifBlank { null },
+            accountEmail = status.optNullableString("accountEmail"),
             clientCount = status.optInt("clientCount"),
             modelProviderId = status.optString("modelProviderId"),
-            configuredModel = status.optString("configuredModel").ifBlank { null },
-            effectiveModel = status.optString("effectiveModel").ifBlank { null },
+            configuredModel = status.optNullableString("configuredModel"),
+            effectiveModel = status.optNullableString("effectiveModel"),
             upstreamBaseUrl = status.optString("upstreamBaseUrl"),
         )
     }
@@ -78,4 +78,9 @@ class AgentBridgeClient(
         }
         return response
     }
+}
+
+internal fun JSONObject.optNullableString(name: String): String? = when {
+    isNull(name) -> null
+    else -> optString(name).ifBlank { null }
 }

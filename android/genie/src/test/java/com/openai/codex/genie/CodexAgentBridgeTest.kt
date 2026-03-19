@@ -3,6 +3,7 @@ package com.openai.codex.genie
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class CodexAgentBridgeTest {
@@ -86,5 +87,18 @@ class CodexAgentBridgeTest {
         val outputText = CodexAgentBridge.parseResponsesOutputText(response)
 
         assertEquals("Open Clock. Start the timer.", outputText)
+    }
+
+    @Test
+    fun optNullableStringTreatsJsonNullAsNull() {
+        val json = JSONObject()
+            .put("present", "gpt-5.3-codex")
+            .put("blank", "")
+            .put("missingViaNull", JSONObject.NULL)
+
+        assertEquals("gpt-5.3-codex", json.optNullableString("present"))
+        assertNull(json.optNullableString("blank"))
+        assertNull(json.optNullableString("missingViaNull"))
+        assertNull(json.optNullableString("missing"))
     }
 }
