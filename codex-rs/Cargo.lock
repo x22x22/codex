@@ -1664,6 +1664,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-state",
  "codex-stdio-to-uds",
+ "codex-terminal",
  "codex-tui",
  "codex-tui-app-server",
  "codex-utils-cargo-bin",
@@ -1858,6 +1859,7 @@ dependencies = [
  "codex-shell-escalation",
  "codex-skills",
  "codex-state",
+ "codex-terminal",
  "codex-test-macros",
  "codex-utils-absolute-path",
  "codex-utils-cache",
@@ -2201,6 +2203,7 @@ dependencies = [
  "codex-core",
  "codex-protocol",
  "codex-shell-command",
+ "codex-terminal",
  "codex-utils-cli",
  "codex-utils-json-to-toml",
  "core_test_support",
@@ -2508,6 +2511,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-terminal"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "tracing",
+]
+
+[[package]]
 name = "codex-test-macros"
 version = "0.0.0"
 dependencies = [
@@ -2542,6 +2553,7 @@ dependencies = [
  "codex-protocol",
  "codex-shell-command",
  "codex-state",
+ "codex-terminal",
  "codex-tui-app-server",
  "codex-utils-absolute-path",
  "codex-utils-approval-presets",
@@ -2633,6 +2645,7 @@ dependencies = [
  "codex-protocol",
  "codex-shell-command",
  "codex-state",
+ "codex-terminal",
  "codex-utils-absolute-path",
  "codex-utils-approval-presets",
  "codex-utils-cargo-bin",
