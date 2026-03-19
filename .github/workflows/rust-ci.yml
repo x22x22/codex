@@ -292,14 +292,17 @@ jobs:
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: sccache
-          version: 0.7.5
+          version: 0.10.0
 
       - name: Configure sccache backend
         if: ${{ env.USE_SCCACHE == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+          echo "ACTIONS_CACHE_URL set: $([[ -n "${ACTIONS_CACHE_URL:-}" ]] && echo yes || echo no)"
+          echo "ACTIONS_RESULTS_URL set: $([[ -n "${ACTIONS_RESULTS_URL:-}" ]] && echo yes || echo no)"
+          echo "ACTIONS_RUNTIME_TOKEN set: $([[ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]] && echo yes || echo no)"
+          if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" && ( -n "${ACTIONS_CACHE_URL:-}" || -n "${ACTIONS_RESULTS_URL:-}" ) ]]; then
             echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
             echo "Using sccache GitHub backend"
           else
@@ -594,14 +597,17 @@ jobs:
         uses: taiki-e/install-action@44c6d64aa62cd779e873306675c7a58e86d6d532 # v2
         with:
           tool: sccache
-          version: 0.7.5
+          version: 0.10.0
 
       - name: Configure sccache backend
         if: ${{ env.USE_SCCACHE == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${ACTIONS_CACHE_URL:-}" && -n "${ACTIONS_RUNTIME_TOKEN:-}" ]]; then
+          echo "ACTIONS_CACHE_URL set: $([[ -n "${ACTIONS_CACHE_URL:-}" ]] && echo yes || echo no)"
+          echo "ACTIONS_RESULTS_URL set: $([[ -n "${ACTIONS_RESULTS_URL:-}" ]] && echo yes || echo no)"
+          echo "ACTIONS_RUNTIME_TOKEN set: $([[ -n "${ACTIONS_RUNTIME_TOKEN:-}" ]] && echo yes || echo no)"
+          if [[ -n "${ACTIONS_RUNTIME_TOKEN:-}" && ( -n "${ACTIONS_CACHE_URL:-}" || -n "${ACTIONS_RESULTS_URL:-}" ) ]]; then
             echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
             echo "Using sccache GitHub backend"
           else
