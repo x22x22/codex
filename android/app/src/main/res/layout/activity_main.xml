@@ -195,7 +195,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:paddingTop="24dp"
-            android:text="Codexd Bridge"
+            android:text="Legacy Codexd Bridge"
             android:textStyle="bold" />
 
         <TextView
@@ -227,7 +227,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingTop="12dp"
-            android:text="Auth status: unknown" />
+            android:text="Codexd status: unknown" />
 
         <TextView
             android:id="@+id/connected_clients_heading"
@@ -265,7 +265,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
             android:onClick="toggleCodexd"
-            android:text="Start codexd" />
+            android:text="Start legacy codexd" />
 
         <Button
             android:id="@+id/auth_action"

@@ -42,13 +42,16 @@ class MainActivity : Activity() {
     @Volatile
     private var agentRefreshInFlight = false
     @Volatile
-    private var latestRuntimeStatus: RuntimeStatus? = null
+    private var agentRuntimeRefreshInFlight = false
+    @Volatile
+    private var latestAgentRuntimeStatus: AgentCodexAppServerClient.RuntimeStatus? = null
 
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val agentSessionController by lazy { AgentSessionController(this) }
     private val sessionUiLeaseToken = Binder()
     private val refreshRunnable = object : Runnable {
         override fun run() {
+            refreshAgentRuntimeStatus()
             refreshAuthStatus()
             refreshAgentSessions()
             refreshHandler.postDelayed(this, STATUS_REFRESH_INTERVAL_MS)
@@ -108,8 +111,8 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.socket_path).text = defaultSocketPath()
         findViewById<TextView>(R.id.codex_home).text = defaultCodexHome()
         isServiceRunning = false
-        latestRuntimeStatus = null
-        updateAuthUi("Auth status: unknown", false, null, emptyList())
+        latestAgentRuntimeStatus = null
+        updateAuthUi("Codexd status: unknown", false, null, emptyList())
         updateAgentUi(AgentSnapshot.unavailable)
     }
 
@@ -312,14 +315,14 @@ class MainActivity : Activity() {
             intent.action = CodexdForegroundService.ACTION_STOP
             startService(intent)
             isServiceRunning = false
-            updateAuthUi("Auth status: stopping service...", false, 0, emptyList())
+            updateAuthUi("Codexd status: stopping service...", false, 0, emptyList())
             return
         }
 
         intent.action = CodexdForegroundService.ACTION_START
         startForegroundService(intent)
         isServiceRunning = true
-        updateAuthUi("Auth status: starting service...", isAuthenticated, null, emptyList())
+        updateAuthUi("Codexd status: starting service...", isAuthenticated, null, emptyList())
         refreshAuthStatus()
     }
 
@@ -339,25 +342,25 @@ class MainActivity : Activity() {
         }
         startForegroundService(intent)
         isServiceRunning = true
-        updateAuthUi("Auth status: requesting device code...", false, null, emptyList())
+        updateAuthUi("Codexd status: requesting device code...", false, null, emptyList())
         thread {
             val socketPath = defaultSocketPath()
             val response = runCatching { postDeviceAuthWithRetry(socketPath) }
             response.onFailure { err ->
                 isServiceRunning = false
-                updateAuthUi("Auth status: failed (${err.message})", false, null, emptyList())
+                updateAuthUi("Codexd status: failed (${err.message})", false, null, emptyList())
             }
             response.onSuccess { deviceResponse ->
                 when (deviceResponse.status) {
                     "already_authenticated" -> {
-                        updateAuthUi("Auth status: already authenticated", true, null, emptyList())
+                        updateAuthUi("Codexd status: already authenticated", true, null, emptyList())
                         showToast("Already signed in")
                     }
                     "pending", "in_progress" -> {
                         val url = deviceResponse.verificationUrl.orEmpty()
                         val code = deviceResponse.userCode.orEmpty()
                         updateAuthUi(
-                            "Auth status: open $url and enter code $code",
+                            "Codexd status: open $url and enter code $code",
                             false,
                             null,
                             emptyList(),
@@ -365,7 +368,7 @@ class MainActivity : Activity() {
                         pollForAuthSuccess(socketPath)
                     }
                     else -> updateAuthUi(
-                        "Auth status: ${deviceResponse.status}",
+                        "Codexd status: ${deviceResponse.status}",
                         false,
                         null,
                         emptyList(),
@@ -376,13 +379,13 @@ class MainActivity : Activity() {
     }
 
     private fun startSignOut() {
-        updateAuthUi("Auth status: signing out...", false, null, emptyList())
+        updateAuthUi("Codexd status: signing out...", false, null, emptyList())
         thread {
             val socketPath = defaultSocketPath()
             val result = runCatching { postLogoutWithRetry(socketPath) }
             result.onFailure { err ->
                 updateAuthUi(
-                    "Auth status: sign out failed (${err.message})",
+                    "Codexd status: sign out failed (${err.message})",
                     false,
                     null,
                     emptyList(),
@@ -403,12 +406,10 @@ class MainActivity : Activity() {
         thread {
             val socketPath = defaultSocketPath()
             val result = runCatching { fetchAuthStatusWithRetry(socketPath) }
-            val runtimeStatus = runCatching { fetchRuntimeStatusWithRetry(socketPath) }.getOrNull()
             result.onFailure { err ->
                 isServiceRunning = false
-                latestRuntimeStatus = null
                 updateAuthUi(
-                    "Auth status: codexd stopped or unavailable (${err.message})",
+                    "Codexd status: stopped or unavailable (${err.message})",
                     false,
                     null,
                     emptyList(),
@@ -416,16 +417,31 @@ class MainActivity : Activity() {
             }
             result.onSuccess { status ->
                 isServiceRunning = true
-                latestRuntimeStatus = runtimeStatus
                 val message = if (status.authenticated) {
                     val emailSuffix = status.accountEmail?.let { " ($it)" } ?: ""
-                    "Auth status: signed in$emailSuffix"
+                    "Codexd status: signed in$emailSuffix"
                 } else {
-                    "Auth status: not signed in"
+                    "Codexd status: not signed in"
                 }
                 updateAuthUi(message, status.authenticated, status.clientCount, status.clients)
             }
             statusRefreshInFlight = false
+        }
+    }
+
+    private fun refreshAgentRuntimeStatus() {
+        if (agentRuntimeRefreshInFlight) {
+            return
+        }
+        agentRuntimeRefreshInFlight = true
+        thread {
+            latestAgentRuntimeStatus = runCatching {
+                AgentCodexAppServerClient.readRuntimeStatus(this)
+            }.getOrNull()
+            runOnUiThread {
+                findViewById<TextView>(R.id.agent_runtime_status).text = renderAgentRuntimeStatus()
+            }
+            agentRuntimeRefreshInFlight = false
         }
     }
 
@@ -458,7 +474,7 @@ class MainActivity : Activity() {
             if (status?.authenticated == true) {
                 val emailSuffix = status.accountEmail?.let { " ($it)" } ?: ""
                 updateAuthUi(
-                    "Auth status: signed in$emailSuffix",
+                    "Codexd status: signed in$emailSuffix",
                     true,
                     status.clientCount,
                     status.clients,
@@ -613,25 +629,21 @@ class MainActivity : Activity() {
     }
 
     private fun renderAgentRuntimeStatus(): String {
-        val runtimeStatus = latestRuntimeStatus
+        val runtimeStatus = latestAgentRuntimeStatus
         if (runtimeStatus == null) {
-            return if (isServiceRunning) {
-                "codexd bridge: probing..."
-            } else {
-                "codexd bridge: unavailable"
-            }
+            return "Agent runtime: probing..."
         }
         val authSummary = if (runtimeStatus.authenticated) {
             runtimeStatus.accountEmail?.let { "signed in ($it)" } ?: "signed in"
         } else {
-            "not signed in"
+            "not signed in; use the legacy codexd controls below to start sign-in"
         }
         val configuredModelSuffix = runtimeStatus.configuredModel
             ?.takeIf { it != runtimeStatus.effectiveModel }
             ?.let { ", configured=$it" }
             ?: ""
         val effectiveModel = runtimeStatus.effectiveModel ?: "unknown"
-        return "codexd bridge: $authSummary, provider=${runtimeStatus.modelProviderId}, effective=$effectiveModel$configuredModelSuffix, clients=${runtimeStatus.clientCount}, base=${runtimeStatus.upstreamBaseUrl}"
+        return "Agent runtime: $authSummary, provider=${runtimeStatus.modelProviderId}, effective=$effectiveModel$configuredModelSuffix, clients=${runtimeStatus.clientCount}, base=${runtimeStatus.upstreamBaseUrl}"
     }
 
     private fun updateAuthUi(
@@ -645,7 +657,7 @@ class MainActivity : Activity() {
             val statusView = findViewById<TextView>(R.id.auth_status)
             statusView.text = message
             val serviceButton = findViewById<Button>(R.id.service_toggle)
-            serviceButton.text = if (isServiceRunning) "Stop codexd" else "Start codexd"
+            serviceButton.text = if (isServiceRunning) "Stop legacy codexd" else "Start legacy codexd"
             val actionButton = findViewById<Button>(R.id.auth_action)
             actionButton.text = if (authenticated) "Sign out" else "Start sign-in"
             actionButton.isEnabled = isServiceRunning
@@ -723,16 +735,6 @@ class MainActivity : Activity() {
         val clients: List<ClientStats>,
     )
 
-    private data class RuntimeStatus(
-        val authenticated: Boolean,
-        val accountEmail: String?,
-        val clientCount: Int,
-        val modelProviderId: String,
-        val configuredModel: String?,
-        val effectiveModel: String?,
-        val upstreamBaseUrl: String,
-    )
-
     private data class ClientStats(
         val id: String,
         val activeConnections: Int,
@@ -805,28 +807,6 @@ class MainActivity : Activity() {
             accountEmail = accountEmail,
             clientCount = clientCount,
             clients = clients,
-        )
-    }
-
-    private fun fetchRuntimeStatusWithRetry(socketPath: String): RuntimeStatus {
-        val response = executeSocketRequestWithRetry(
-            socketPath,
-            "GET",
-            "/internal/runtime/status",
-            null,
-        )
-        if (response.statusCode != 200) {
-            throw IOException("HTTP ${response.statusCode}: ${response.body}")
-        }
-        val json = JSONObject(response.body)
-        return RuntimeStatus(
-            authenticated = json.optBoolean("authenticated", false),
-            accountEmail = if (json.isNull("accountEmail")) null else json.optString("accountEmail"),
-            clientCount = json.optInt("clientCount", 0),
-            modelProviderId = json.optString("modelProviderId", "unknown"),
-            configuredModel = if (json.isNull("configuredModel")) null else json.optString("configuredModel"),
-            effectiveModel = if (json.isNull("effectiveModel")) null else json.optString("effectiveModel"),
-            upstreamBaseUrl = json.optString("upstreamBaseUrl", "unknown"),
         )
     }
 
