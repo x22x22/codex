@@ -128,14 +128,12 @@ class CodexAgentService : AgentService() {
         question: String,
         events: List<AgentSessionEvent>,
     ): String {
-        val runtimeStatus = CodexdLocalClient.waitForRuntimeStatus(this)
+        val runtimeStatus = AgentCodexAppServerClient.readRuntimeStatus(this)
         if (!runtimeStatus.authenticated) {
-            throw IOException("codexd is not authenticated")
+            throw IOException("Agent runtime is not authenticated")
         }
-        val model = runtimeStatus.effectiveModel ?: throw IOException("codexd effective model unavailable")
-        return CodexResponsesClient.requestText(
+        return AgentCodexAppServerClient.requestText(
             context = this,
-            model = model,
             instructions = AUTO_ANSWER_INSTRUCTIONS,
             prompt = buildAutoAnswerPrompt(session, question, events),
         )

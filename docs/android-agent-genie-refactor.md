@@ -25,7 +25,7 @@ The current repo now contains these implementation slices:
   events.
 - The current Binder bridge exposes small fixed-form calls, and the Genie
   runtime already uses it to fetch Agent-owned runtime metadata from the
-  embedded `codexd`, including auth status and the effective model/provider.
+  hosted Agent Codex runtime, including auth status and configured model/provider.
 - The Genie runtime inspects the paired target package from inside the
   target-app sandbox and feeds package metadata plus launcher intent details
   into the delegated Codex prompt.
@@ -37,15 +37,15 @@ The current repo now contains these implementation slices:
   **dynamic tools**, not via a custom `TOOL:` text protocol.
 - Non-bridge Genie questions surface through AgentSDK question flow by mapping
   `request_user_input` back into Agent-managed questions and answers.
-- The Agent also attempts to answer Genie questions through the embedded
-  `codexd` runtime before falling back to notification/UI escalation.
+- The Agent also attempts to answer Genie questions through its hosted Codex
+  runtime before falling back to notification/UI escalation.
 - Runtime testing on the emulator shows that the exported Agent Binder service
   is reachable from Genie execution for the current bootstrap calls, while
   direct cross-app access to the Agent-owned abstract socket is not a valid
   assumption.
 
-The Rust `codexd` service/client split remains in place and is still the
-existing network/auth bridge while this refactor proceeds.
+The Rust `codexd` service/client split remains in place as the temporary
+HTTP/network bridge for Genie model traffic while this refactor proceeds.
 
 ## Fixed Architecture Decisions
 
@@ -103,7 +103,7 @@ existing network/auth bridge while this refactor proceeds.
   - driving the paired target app
   - publishing trace, question, result, and error events
   - requesting detached target actions when appropriate
-- The current implementation hosts `codex app-server` inside the Genie sandbox.
+- The current implementation hosts `codex app-server` inside both the Agent and Genie sandboxes.
 - Kotlin is now only the host/bridge layer for:
   - framework lifecycle and result publication
   - Android dynamic tool execution
@@ -126,7 +126,7 @@ existing network/auth bridge while this refactor proceeds.
 - Question answering and detached-target attach controls
 - Exported Binder bridge request handling in `CodexAgentBridgeService`
 - Binder bridge request issuance in `CodexGenieService`
-- Agent-owned `/internal/runtime/status` metadata for Genie bootstrap
+- Agent-hosted runtime metadata for Genie bootstrap
 - Target-app package metadata and launcher-intent inspection from the Genie
   sandbox, with that context included in the delegated Codex prompt
 - Hosted `codex app-server` inside Genie, with model traffic routed through a
@@ -141,8 +141,8 @@ existing network/auth bridge while this refactor proceeds.
   - bounded waits
 - `request_user_input` bridged from hosted Codex back into AgentSDK questions
 - Agent-owned question notifications for Genie questions that need user input
-- Agent-mediated free-form answers for Genie questions, using the current
-  embedded `codexd` runtime as the temporary answer engine
+- Agent-mediated free-form answers for Genie questions, using the hosted Agent
+  Codex runtime as the temporary answer engine
 - Abstract-unix-socket support in the legacy Rust bridge via `@name` or
   `abstract:name`, so the compatibility transport can move off app-private
   filesystem sockets when Agent<->Genie traffic is introduced
@@ -153,15 +153,15 @@ existing network/auth bridge while this refactor proceeds.
 - Expanding the Binder control plane beyond the current fixed-form runtime
   bootstrap/status calls
 - Making the Agent the default product surface instead of the legacy service app
-- Replacing the remaining Agent-side use of embedded `codexd` for planning and
-  auto-answering with a first-class Agent runtime
+- Removing the remaining use of `codexd` as the Genie HTTP bridge by moving
+  proxied model traffic into the Agent-hosted runtime
 - Adding more Android-native tool surfaces and richer observation types to the
   hosted Genie runtime
 
 ## Current Code Layout
 
 - `android/app`
-  - Agent scaffold and legacy `codexd` wrapper live together for now
+  - Agent scaffold, hosted Agent Codex runtime, and legacy `codexd` bridge live together for now
 - `android/genie`
   - standalone Genie scaffold APK with hosted `codex app-server`
 - `android/app/src/main/java/com/openai/codexd/CodexAgentService.kt`
@@ -182,8 +182,10 @@ existing network/auth bridge while this refactor proceeds.
   - exported Binder/AIDL bridge for Genie control-plane calls
 - `android/genie/src/main/java/com/openai/codex/genie/AgentBridgeClient.kt`
   - Genie-side Binder client for the Agent bridge service
+- `android/app/src/main/java/com/openai/codexd/AgentCodexAppServerClient.kt`
+  - hosted Agent `codex app-server` client for planning, auto-answering, and runtime metadata
 - `android/app/src/main/java/com/openai/codexd/CodexdLocalClient.kt`
-  - Agent-local client for the embedded `codexd` bridge
+  - Agent-local client for the temporary `codexd` HTTP bridge used by Genie traffic
 
 ## Build
 
@@ -207,9 +209,10 @@ cd android
 ./gradlew :genie:assembleDebug :app:assembleDebug
 ```
 
-The Agent app depends on `just android-service-build` for the packaged
-`codexd` JNI binaries. The Genie app now also depends on `just android-build`
-for the packaged `codex` JNI binaries.
+The Agent app depends on both `just android-build` and
+`just android-service-build` for the packaged `codex` and `codexd` JNI
+binaries. The Genie app depends on `just android-build` for the packaged
+`codex` JNI binaries.
 
 ## Next Implementation Steps
 

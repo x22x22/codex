@@ -162,17 +162,20 @@ class CodexAppServerHost(
     }
 
     private fun startThread(): String {
+        val params = JSONObject()
+            .put("approvalPolicy", "never")
+            .put("sandbox", "read-only")
+            .put("ephemeral", true)
+            .put("cwd", context.filesDir.absolutePath)
+            .put("serviceName", "android_genie")
+            .put("baseInstructions", buildBaseInstructions())
+            .put("dynamicTools", buildDynamicToolSpecs())
+        runtimeStatus.effectiveModel?.takeIf(String::isNotBlank)?.let { model ->
+            params.put("model", model)
+        }
         val result = request(
             method = "thread/start",
-            params = JSONObject()
-                .put("model", runtimeStatus.effectiveModel)
-                .put("approvalPolicy", "never")
-                .put("sandbox", "read-only")
-                .put("ephemeral", true)
-                .put("cwd", context.filesDir.absolutePath)
-                .put("serviceName", "android_genie")
-                .put("baseInstructions", buildBaseInstructions())
-                .put("dynamicTools", buildDynamicToolSpecs()),
+            params = params,
         )
         return result.getJSONObject("thread").getString("id")
     }

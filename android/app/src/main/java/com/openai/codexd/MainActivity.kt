@@ -177,7 +177,6 @@ class MainActivity : Activity() {
             showToast("Enter a prompt")
             return
         }
-        ensureCodexdRunningForAgent()
         thread {
             val result = runCatching {
                 val plan = AgentTaskPlanner.plan(
@@ -617,9 +616,9 @@ class MainActivity : Activity() {
         val runtimeStatus = latestRuntimeStatus
         if (runtimeStatus == null) {
             return if (isServiceRunning) {
-                "Agent runtime: probing codexd..."
+                "codexd bridge: probing..."
             } else {
-                "Agent runtime: codexd unavailable"
+                "codexd bridge: unavailable"
             }
         }
         val authSummary = if (runtimeStatus.authenticated) {
@@ -632,7 +631,7 @@ class MainActivity : Activity() {
             ?.let { ", configured=$it" }
             ?: ""
         val effectiveModel = runtimeStatus.effectiveModel ?: "unknown"
-        return "Agent runtime: $authSummary, provider=${runtimeStatus.modelProviderId}, effective=$effectiveModel$configuredModelSuffix, clients=${runtimeStatus.clientCount}, base=${runtimeStatus.upstreamBaseUrl}"
+        return "codexd bridge: $authSummary, provider=${runtimeStatus.modelProviderId}, effective=$effectiveModel$configuredModelSuffix, clients=${runtimeStatus.clientCount}, base=${runtimeStatus.upstreamBaseUrl}"
     }
 
     private fun updateAuthUi(
@@ -715,16 +714,6 @@ class MainActivity : Activity() {
         runOnUiThread {
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
         }
-    }
-
-    private fun ensureCodexdRunningForAgent() {
-        val intent = Intent(this, CodexdForegroundService::class.java).apply {
-            action = CodexdForegroundService.ACTION_START
-            putExtra(CodexdForegroundService.EXTRA_SOCKET_PATH, defaultSocketPath())
-            putExtra(CodexdForegroundService.EXTRA_CODEX_HOME, defaultCodexHome())
-        }
-        startForegroundService(intent)
-        isServiceRunning = true
     }
 
     private data class AuthStatus(

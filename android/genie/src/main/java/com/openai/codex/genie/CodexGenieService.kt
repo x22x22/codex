@@ -78,10 +78,10 @@ class CodexGenieService : GenieService() {
                     sessionId,
                     "Reached Agent Binder bridge; authenticated=${runtimeStatus.authenticated}${accountSuffix}, provider=${runtimeStatus.modelProviderId}, model=${runtimeStatus.effectiveModel ?: "unknown"}, clients=${runtimeStatus.clientCount}.",
                 )
-                if (!runtimeStatus.authenticated || runtimeStatus.effectiveModel.isNullOrBlank()) {
+                if (!runtimeStatus.authenticated) {
                     callback.publishResult(
                         sessionId,
-                        "Reached the Agent bridge, but the Agent runtime was not authenticated or did not expose an effective model for ${request.targetPackage}.",
+                        "Reached the Agent bridge, but the Agent runtime was not authenticated for ${request.targetPackage}.",
                     )
                     callback.updateState(sessionId, AgentSessionInfo.STATE_COMPLETED)
                     return

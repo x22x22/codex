@@ -54,19 +54,13 @@ object AgentTaskPlanner {
                 usedOverride = true,
             )
         }
-        val runtimeStatus = CodexdLocalClient.waitForRuntimeStatus(context)
-        if (!runtimeStatus.authenticated) {
-            throw IOException("codexd is not authenticated")
-        }
-        val model = runtimeStatus.effectiveModel ?: throw IOException("codexd effective model unavailable")
         val launchableApps = AgentInstalledAppCatalog.listLaunchableApps(context)
             .take(MAX_LAUNCHABLE_APPS)
         if (launchableApps.isEmpty()) {
             throw IOException("No launchable apps available for planning")
         }
-        val planText = CodexResponsesClient.requestText(
+        val planText = AgentCodexAppServerClient.requestText(
             context = context,
-            model = model,
             instructions = PLANNER_INSTRUCTIONS,
             prompt = buildPlannerPrompt(userObjective, launchableApps),
         )

@@ -19,7 +19,7 @@ class CodexAgentBridgeService : Service() {
     private val binder = object : ICodexAgentBridgeService.Stub() {
         override fun getRuntimeStatus(): BridgeRuntimeStatus {
             val status = runCatching {
-                CodexdLocalClient.waitForRuntimeStatus(this@CodexAgentBridgeService)
+                AgentCodexAppServerClient.readRuntimeStatus(this@CodexAgentBridgeService)
             }.getOrElse { err ->
                 throw err.asBinderError("getRuntimeStatus")
             }
