@@ -1,12 +1,13 @@
 use crate::CodexAuth;
+use crate::api_bridge::CoreAuthProvider;
 use crate::api_bridge::map_api_error;
 use crate::codex::Session;
 use crate::config::RealtimeWsMode;
 use crate::config::RealtimeWsVersion;
+use crate::default_client::build_reqwest_client;
 use crate::default_client::default_headers;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::realtime_client_secrets::fetch_realtime_client_secret;
 use crate::realtime_context::build_realtime_startup_context;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -15,11 +16,13 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_api::Provider as ApiProvider;
 use codex_api::RealtimeAudioFrame;
+use codex_api::RealtimeClientSecretsClient;
 use codex_api::RealtimeEvent;
 use codex_api::RealtimeEventParser;
 use codex_api::RealtimeSessionConfig;
 use codex_api::RealtimeSessionMode;
 use codex_api::RealtimeWebsocketClient;
+use codex_api::ReqwestTransport;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
 use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
 use codex_protocol::protocol::CodexErrorInfo;
@@ -644,7 +647,17 @@ async fn realtime_bearer_token(
 
     if let Some(auth) = auth {
         if auth.is_chatgpt_auth() {
-            return fetch_realtime_client_secret(auth, config, session_config).await;
+            let auth_provider = CoreAuthProvider::from_auth(auth)?;
+            let transport = ReqwestTransport::new(build_reqwest_client());
+            let client = RealtimeClientSecretsClient::new(
+                transport,
+                realtime_client_secret_provider(config)?,
+                auth_provider,
+            );
+            return client
+                .create(session_config, HeaderMap::new())
+                .await
+                .map_err(map_api_error);
         }
         if let Some(api_key) = auth.api_key() {
             return Ok(api_key.to_string());
@@ -654,6 +667,24 @@ async fn realtime_bearer_token(
     Err(CodexErr::InvalidRequest(
         "realtime conversation requires API key or ChatGPT auth".to_string(),
     ))
+}
+
+fn realtime_client_secret_provider(config: &crate::config::Config) -> CodexResult<ApiProvider> {
+    crate::ModelProviderInfo::create_openai_provider(Some(normalized_chatgpt_base_url(
+        &config.chatgpt_base_url,
+    )))
+    .to_api_provider(Some(crate::auth::AuthMode::Chatgpt))
+}
+
+fn normalized_chatgpt_base_url(input: &str) -> String {
+    let mut base_url = input.trim_end_matches('/').to_string();
+    if (base_url.starts_with("https://chatgpt.com")
+        || base_url.starts_with("https://chat.openai.com"))
+        && !base_url.contains("/backend-api")
+    {
+        base_url = format!("{base_url}/backend-api");
+    }
+    base_url
 }
 
 fn realtime_request_headers(
