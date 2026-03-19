@@ -102,7 +102,7 @@ impl CodexFeedback {
     }
 
     pub fn snapshot(&self, session_id: Option<ThreadId>) -> FeedbackSnapshot {
-        self.snapshot_with_sqlite_home(session_id, None)
+        self.snapshot_with_sqlite_home(session_id, /*sqlite_home*/ None)
     }
 
     pub fn snapshot_with_sqlite_home(
@@ -557,7 +557,7 @@ async fn find_rollout_path_by_id(
     thread_id: ThreadId,
 ) -> Option<PathBuf> {
     state_db
-        .find_rollout_path_by_id(thread_id, None)
+        .find_rollout_path_by_id(thread_id, /*archived_only*/ None)
         .await
         .unwrap_or_else(|err| {
             tracing::warn!("failed to resolve rollout path during feedback upload: {err}");
