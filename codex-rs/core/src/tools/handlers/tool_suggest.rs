@@ -23,7 +23,6 @@ use crate::tools::context::ToolPayload;
 use crate::tools::discoverable::DiscoverableTool;
 use crate::tools::discoverable::DiscoverableToolAction;
 use crate::tools::discoverable::DiscoverableToolType;
-use crate::tools::discoverable::filter_tool_suggest_discoverable_tools_for_client;
 use crate::tools::handlers::parse_arguments;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
@@ -116,12 +115,6 @@ impl ToolHandler for ToolSuggestHandler {
             &accessible_connectors,
         )
         .await
-        .map(|discoverable_tools| {
-            filter_tool_suggest_discoverable_tools_for_client(
-                discoverable_tools,
-                turn.app_server_client_name.as_deref(),
-            )
-        })
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
                 "tool suggestions are unavailable right now: {err}"

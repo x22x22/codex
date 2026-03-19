@@ -90,13 +90,6 @@ impl From<DiscoverablePluginInfo> for DiscoverableTool {
     }
 }
 
-pub(crate) fn filter_tool_suggest_discoverable_tools_for_client(
-    discoverable_tools: Vec<DiscoverableTool>,
-    _app_server_client_name: Option<&str>,
-) -> Vec<DiscoverableTool> {
-    discoverable_tools
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DiscoverablePluginInfo {
     pub(crate) id: String,
