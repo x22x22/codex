@@ -417,6 +417,10 @@ pub(crate) struct CodexMessageProcessorArgs {
 }
 
 impl CodexMessageProcessor {
+    pub(crate) fn thread_state_manager(&self) -> ThreadStateManager {
+        self.thread_state_manager.clone()
+    }
+
     pub(crate) fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_manager().clear_cache();
@@ -1839,6 +1843,7 @@ impl CodexMessageProcessor {
             service_name,
             base_instructions,
             developer_instructions,
+            network_delegation,
             dynamic_tools,
             mock_experimental_field: _mock_experimental_field,
             experimental_raw_events,
@@ -1879,6 +1884,7 @@ impl CodexMessageProcessor {
                 config,
                 typesafe_overrides,
                 dynamic_tools,
+                network_delegation,
                 persist_extended_history,
                 service_name,
                 experimental_raw_events,
@@ -1944,6 +1950,7 @@ impl CodexMessageProcessor {
         config_overrides: Option<HashMap<String, serde_json::Value>>,
         typesafe_overrides: ConfigOverrides,
         dynamic_tools: Option<Vec<ApiDynamicToolSpec>>,
+        network_delegation: Option<codex_app_server_protocol::NetworkDelegationConfig>,
         persist_extended_history: bool,
         service_name: Option<String>,
         experimental_raw_events: bool,
@@ -2021,6 +2028,15 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = new_conv;
+                if let Err(error) =
+                    Self::set_network_delegation(thread.as_ref(), network_delegation).await
+                {
+                    listener_task_context
+                        .outgoing
+                        .send_error(request_id, error)
+                        .await;
+                    return;
+                }
                 let config_snapshot = thread
                     .config_snapshot()
                     .instrument(tracing::info_span!(
@@ -3413,6 +3429,7 @@ impl CodexMessageProcessor {
             base_instructions,
             developer_instructions,
             personality,
+            network_delegation,
             persist_extended_history,
         } = params;
 
@@ -3494,6 +3511,12 @@ impl CodexMessageProcessor {
                 thread,
                 session_configured,
             }) => {
+                if let Err(error) =
+                    Self::set_network_delegation(thread.as_ref(), network_delegation).await
+                {
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
                 let SessionConfiguredEvent { rollout_path, .. } = session_configured;
                 let Some(rollout_path) = rollout_path else {
                     self.send_internal_error(
@@ -3913,6 +3936,7 @@ impl CodexMessageProcessor {
             config: cli_overrides,
             base_instructions,
             developer_instructions,
+            network_delegation,
             ephemeral,
             persist_extended_history,
         } = params;
@@ -4060,6 +4084,12 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        if let Err(error) =
+            Self::set_network_delegation(forked_thread.as_ref(), network_delegation).await
+        {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         // Auto-attach a conversation listener when forking a thread.
         Self::log_listener_attach_result(
@@ -6059,6 +6089,20 @@ impl CodexMessageProcessor {
             })
     }
 
+    async fn set_network_delegation(
+        thread: &CodexThread,
+        network_delegation: Option<codex_app_server_protocol::NetworkDelegationConfig>,
+    ) -> Result<(), JSONRPCErrorError> {
+        thread
+            .set_network_delegation(network_delegation)
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to set network delegation: {err}"),
+                data: None,
+            })
+    }
+
     async fn turn_steer(&self, request_id: ConnectionRequestId, params: TurnSteerParams) {
         let (_, thread) = match self.load_thread(&params.thread_id).await {
             Ok(v) => v,
@@ -7438,6 +7482,14 @@ fn collect_resume_override_mismatches(
             config_snapshot.service_tier
         ));
     }
+    if let Some(requested_network_delegation) = request.network_delegation.as_ref()
+        && config_snapshot.network_delegation.as_ref() != Some(requested_network_delegation)
+    {
+        mismatch_details.push(format!(
+            "network_delegation requested={requested_network_delegation:?} active={:?}",
+            config_snapshot.network_delegation
+        ));
+    }
     if let Some(requested_cwd) = request.cwd.as_deref() {
         let requested_cwd_path = std::path::PathBuf::from(requested_cwd);
         if requested_cwd_path != config_snapshot.cwd {
@@ -8423,6 +8475,7 @@ mod tests {
             base_instructions: None,
             developer_instructions: None,
             personality: None,
+            network_delegation: None,
             persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {
@@ -8436,6 +8489,7 @@ mod tests {
             ephemeral: false,
             reasoning_effort: None,
             personality: None,
+            network_delegation: None,
             session_source: SessionSource::Cli,
         };
 
