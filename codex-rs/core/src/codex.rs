@@ -3986,7 +3986,10 @@ impl Session {
             .mcp_connection_manager
             .read()
             .await
-            .set_request_headers_for_server(crate::mcp::CODEX_APPS_MCP_SERVER_NAME, None);
+            .set_request_headers_for_server(
+                crate::mcp::CODEX_APPS_MCP_SERVER_NAME,
+                /*request_headers*/ None,
+            );
     }
 
     pub(crate) async fn parse_mcp_tool_name(
