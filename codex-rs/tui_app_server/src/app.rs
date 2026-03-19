@@ -3718,10 +3718,14 @@ impl App {
                 category,
                 include_logs,
             } => {
-                self.chat_widget.open_feedback_note(category, include_logs);
+                self.chat_widget.open_feedback_note(
+                    category,
+                    include_logs,
+                    app_server.request_handle(),
+                );
             }
             AppEvent::OpenFeedbackConsent { category } => {
-                self.chat_widget.open_feedback_consent(category);
+                self.chat_widget.open_feedback_consent(category, None);
             }
             AppEvent::LaunchExternalEditor => {
                 if self.chat_widget.external_editor_state() == ExternalEditorState::Active {

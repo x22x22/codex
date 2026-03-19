@@ -1,6 +1,3 @@
-use std::cell::RefCell;
-use std::path::PathBuf;
-
 use codex_feedback::feedback_diagnostics::FEEDBACK_DIAGNOSTICS_ATTACHMENT_FILENAME;
 use codex_feedback::feedback_diagnostics::FeedbackDiagnostics;
 use crossterm::event::KeyCode;
@@ -15,13 +12,13 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::Widget;
+use std::cell::RefCell;
 
 use crate::app_event::AppEvent;
 use crate::app_event::FeedbackCategory;
 use crate::app_event_sender::AppEventSender;
 use crate::history_cell;
 use crate::render::renderable::Renderable;
-use codex_protocol::protocol::SessionSource;
 
 use super::CancellationEvent;
 use super::bottom_pane_view::BottomPaneView;
@@ -49,7 +46,7 @@ pub(crate) enum FeedbackAudience {
 pub(crate) struct FeedbackNoteView {
     category: FeedbackCategory,
     snapshot: codex_feedback::FeedbackSnapshot,
-    rollout_path: Option<PathBuf>,
+    app_server_request_handle: Option<codex_app_server_client::AppServerRequestHandle>,
     app_event_tx: AppEventSender,
     include_logs: bool,
     feedback_audience: FeedbackAudience,
@@ -64,7 +61,7 @@ impl FeedbackNoteView {
     pub(crate) fn new(
         category: FeedbackCategory,
         snapshot: codex_feedback::FeedbackSnapshot,
-        rollout_path: Option<PathBuf>,
+        app_server_request_handle: Option<codex_app_server_client::AppServerRequestHandle>,
         app_event_tx: AppEventSender,
         include_logs: bool,
         feedback_audience: FeedbackAudience,
@@ -72,7 +69,7 @@ impl FeedbackNoteView {
         Self {
             category,
             snapshot,
-            rollout_path,
+            app_server_request_handle,
             app_event_tx,
             include_logs,
             feedback_audience,
@@ -84,90 +81,107 @@ impl FeedbackNoteView {
 
     fn submit(&mut self) {
         let note = self.textarea.text().trim().to_string();
-        let reason_opt = if note.is_empty() {
-            None
-        } else {
-            Some(note.as_str())
-        };
-        let attachment_paths = if self.include_logs {
-            self.rollout_path.iter().cloned().collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+        let reason = (!note.is_empty()).then_some(note);
         let classification = feedback_classification(self.category);
+        let thread_id = self.snapshot.thread_id.clone();
+        let include_logs = self.include_logs;
+        let category = self.category;
+        let feedback_audience = self.feedback_audience;
+        let app_event_tx = self.app_event_tx.clone();
+        let Some(app_server_request_handle) = self.app_server_request_handle.clone() else {
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_error_event(
+                    "Failed to upload feedback: missing app-server request handle".to_string(),
+                ),
+            )));
+            self.complete = true;
+            return;
+        };
 
-        let mut thread_id = self.snapshot.thread_id.clone();
+        tokio::spawn(async move {
+            let request_id = codex_app_server_protocol::RequestId::String(format!(
+                "feedback-upload-{}",
+                uuid::Uuid::new_v4()
+            ));
+            let result = app_server_request_handle
+                .request_typed::<codex_app_server_protocol::FeedbackUploadResponse>(
+                    codex_app_server_protocol::ClientRequest::FeedbackUpload {
+                        request_id,
+                        params: codex_app_server_protocol::FeedbackUploadParams {
+                            classification: classification.to_string(),
+                            reason,
+                            thread_id: Some(thread_id),
+                            include_logs,
+                            extra_log_files: None,
+                        },
+                    },
+                )
+                .await;
 
-        let result = self.snapshot.upload_feedback(
-            classification,
-            reason_opt,
-            self.include_logs,
-            &attachment_paths,
-            Some(SessionSource::Cli),
-            /*logs_override*/ None,
-        );
-
-        match result {
-            Ok(()) => {
-                let prefix = if self.include_logs {
-                    "• Feedback uploaded."
-                } else {
-                    "• Feedback recorded (no logs)."
-                };
-                let issue_url =
-                    issue_url_for_category(self.category, &thread_id, self.feedback_audience);
-                let mut lines = vec![Line::from(match issue_url.as_ref() {
-                    Some(_) if self.feedback_audience == FeedbackAudience::OpenAiEmployee => {
-                        format!("{prefix} Please report this in #codex-feedback:")
+            match result {
+                Ok(response) => {
+                    let mut thread_id = response.thread_id;
+                    let prefix = if include_logs {
+                        "• Feedback uploaded."
+                    } else {
+                        "• Feedback recorded (no logs)."
+                    };
+                    let issue_url = issue_url_for_category(category, &thread_id, feedback_audience);
+                    let mut lines = vec![Line::from(match issue_url.as_ref() {
+                        Some(_) if feedback_audience == FeedbackAudience::OpenAiEmployee => {
+                            format!("{prefix} Please report this in #codex-feedback:")
+                        }
+                        Some(_) => {
+                            format!("{prefix} Please open an issue using the following URL:")
+                        }
+                        None => format!("{prefix} Thanks for the feedback!"),
+                    })];
+                    match issue_url {
+                        Some(url) if feedback_audience == FeedbackAudience::OpenAiEmployee => {
+                            lines.extend([
+                                "".into(),
+                                Line::from(vec!["  ".into(), url.cyan().underlined()]),
+                                "".into(),
+                                Line::from("  Share this and add some info about your problem:"),
+                                Line::from(vec![
+                                    "    ".into(),
+                                    format!("https://go/codex-feedback/{thread_id}").bold(),
+                                ]),
+                            ]);
+                        }
+                        Some(url) => {
+                            lines.extend([
+                                "".into(),
+                                Line::from(vec!["  ".into(), url.cyan().underlined()]),
+                                "".into(),
+                                Line::from(vec![
+                                    "  Or mention your thread ID ".into(),
+                                    std::mem::take(&mut thread_id).bold(),
+                                    " in an existing issue.".into(),
+                                ]),
+                            ]);
+                        }
+                        None => {
+                            lines.extend([
+                                "".into(),
+                                Line::from(vec![
+                                    "  Thread ID: ".into(),
+                                    std::mem::take(&mut thread_id).bold(),
+                                ]),
+                            ]);
+                        }
                     }
-                    Some(_) => format!("{prefix} Please open an issue using the following URL:"),
-                    None => format!("{prefix} Thanks for the feedback!"),
-                })];
-                match issue_url {
-                    Some(url) if self.feedback_audience == FeedbackAudience::OpenAiEmployee => {
-                        lines.extend([
-                            "".into(),
-                            Line::from(vec!["  ".into(), url.cyan().underlined()]),
-                            "".into(),
-                            Line::from("  Share this and add some info about your problem:"),
-                            Line::from(vec![
-                                "    ".into(),
-                                format!("https://go/codex-feedback/{thread_id}").bold(),
-                            ]),
-                        ]);
-                    }
-                    Some(url) => {
-                        lines.extend([
-                            "".into(),
-                            Line::from(vec!["  ".into(), url.cyan().underlined()]),
-                            "".into(),
-                            Line::from(vec![
-                                "  Or mention your thread ID ".into(),
-                                std::mem::take(&mut thread_id).bold(),
-                                " in an existing issue.".into(),
-                            ]),
-                        ]);
-                    }
-                    None => {
-                        lines.extend([
-                            "".into(),
-                            Line::from(vec![
-                                "  Thread ID: ".into(),
-                                std::mem::take(&mut thread_id).bold(),
-                            ]),
-                        ]);
-                    }
+                    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::PlainHistoryCell::new(lines),
+                    )));
                 }
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::PlainHistoryCell::new(lines),
-                )));
+                Err(err) => {
+                    app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(format!("Failed to upload feedback: {err}")),
+                    )));
+                }
             }
-            Err(e) => {
-                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                    history_cell::new_error_event(format!("Failed to upload feedback: {e}")),
-                )));
-            }
-        }
+        });
         self.complete = true;
     }
 }
@@ -502,6 +516,7 @@ pub(crate) fn feedback_upload_consent_params(
     app_event_tx: AppEventSender,
     category: FeedbackCategory,
     rollout_path: Option<std::path::PathBuf>,
+    guardian_rollout_path: Option<std::path::PathBuf>,
     feedback_diagnostics: &FeedbackDiagnostics,
 ) -> super::SelectionViewParams {
     use super::popup_consts::standard_popup_hint_line;
@@ -534,10 +549,17 @@ pub(crate) fn feedback_upload_consent_params(
         Line::from("The following files will be sent:".dim()).into(),
         Line::from(vec!["  • ".into(), "codex-logs.log".into()]).into(),
     ];
-    if let Some(path) = rollout_path.as_deref()
-        && let Some(name) = path.file_name().map(|s| s.to_string_lossy().to_string())
+    for rollout_path in rollout_path
+        .iter()
+        .chain(guardian_rollout_path.iter())
+        .map(std::path::PathBuf::as_path)
     {
-        header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
+        if let Some(name) = rollout_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+        {
+            header_lines.push(Line::from(vec!["  • ".into(), name.into()]).into());
+        }
     }
     if !feedback_diagnostics.is_empty() {
         header_lines.push(
