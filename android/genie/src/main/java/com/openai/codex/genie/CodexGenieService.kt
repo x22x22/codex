@@ -15,6 +15,8 @@ class CodexGenieService : GenieService() {
         private const val TAG = "CodexGenieService"
         private const val MAX_BRIDGE_PROMPT_CHARS = 240
         private const val MAX_BRIDGE_ANSWER_CHARS = 120
+        private const val GENIE_RESPONSE_INSTRUCTIONS =
+            "You are Codex acting as an Android Genie. Reply with exactly one line that starts with QUESTION: or RESULT:."
     }
 
     private val sessionControls = ConcurrentHashMap<String, SessionControl>()
@@ -106,50 +108,45 @@ class CodexGenieService : GenieService() {
                 return
             }
 
-            val answer = waitForUserResponse(control)
-            callback.updateState(sessionId, AgentSessionInfo.STATE_RUNNING)
-            callback.publishTrace(sessionId, "Received user response: $answer")
             val runtime = runtimeStatus.getOrNull()
-            val modelResponse = runtime?.takeIf { status ->
-                status.authenticated && !status.effectiveModel.isNullOrBlank()
-            }?.let { status ->
+            if (runtime == null) {
+                callback.publishResult(
+                    sessionId,
+                    "Reached the framework-managed Agent bridge, but runtime status was unavailable. Replace this scaffold with a real Codex-driven Genie executor.",
+                )
+                callback.updateState(sessionId, AgentSessionInfo.STATE_COMPLETED)
+                return
+            }
+            if (!runtime.authenticated || runtime.effectiveModel.isNullOrBlank()) {
+                callback.publishResult(
+                    sessionId,
+                    "Reached the Agent bridge, but the Agent runtime was not authenticated or did not expose an effective model for ${request.targetPackage}.",
+                )
+                callback.updateState(sessionId, AgentSessionInfo.STATE_COMPLETED)
+                return
+            }
+
+            var answer = waitForAgentAnswer(sessionId, callback, control)
+            Log.i(TAG, "Received Agent answer for $sessionId")
+            callback.publishTrace(sessionId, "Received Agent answer: $answer")
+            while (!control.cancelled) {
                 callback.publishTrace(
                     sessionId,
-                    "Requesting a non-streaming /v1/responses call through the Agent using ${status.effectiveModel}.",
+                    "Requesting a non-streaming /v1/responses call through the Agent using ${runtime.effectiveModel}.",
                 )
-                runCatching {
+                val modelResponse = runCatching {
                     requestModelNextStep(
                         sessionId = sessionId,
                         request = request,
                         answer = answer,
-                        runtimeStatus = status,
+                        runtimeStatus = runtime,
                         targetAppContext = targetAppContext.getOrNull(),
                         callback = callback,
                         control = control,
                     )
                 }
-            }
 
-            when {
-                modelResponse == null && runtime == null -> {
-                    callback.publishResult(
-                        sessionId,
-                        "Reached the framework-managed Agent bridge, but runtime status was unavailable. Replace this scaffold with a real Codex-driven Genie executor.",
-                    )
-                }
-                modelResponse == null -> {
-                    callback.publishResult(
-                        sessionId,
-                        "Reached the Agent bridge, but the Agent runtime was not authenticated or did not expose an effective model for ${request.targetPackage}.",
-                    )
-                }
-                modelResponse.isSuccess -> {
-                    callback.publishResult(
-                        sessionId,
-                        modelResponse.getOrThrow(),
-                    )
-                }
-                else -> {
+                if (modelResponse.isFailure) {
                     callback.publishTrace(
                         sessionId,
                         "Agent-mediated /v1/responses request failed: ${modelResponse.exceptionOrNull()?.message}",
@@ -158,9 +155,29 @@ class CodexGenieService : GenieService() {
                         sessionId,
                         "Reached the Agent bridge for ${request.targetPackage}, but the proxied model request failed. Replace this scaffold with a real Codex-driven Genie executor.",
                     )
+                    callback.updateState(sessionId, AgentSessionInfo.STATE_COMPLETED)
+                    return
+                }
+                when (val turn = parseGenieModelTurn(modelResponse.getOrThrow())) {
+                    is GenieModelTurn.Result -> {
+                        Log.i(TAG, "Publishing Genie result for $sessionId")
+                        callback.publishResult(sessionId, turn.text)
+                        callback.updateState(sessionId, AgentSessionInfo.STATE_COMPLETED)
+                        return
+                    }
+                    is GenieModelTurn.Question -> {
+                        Log.i(TAG, "Publishing Genie follow-up question for $sessionId")
+                        callback.publishTrace(sessionId, "Genie follow-up question: ${turn.text}")
+                        callback.publishQuestion(sessionId, turn.text)
+                        callback.updateState(sessionId, AgentSessionInfo.STATE_WAITING_FOR_USER)
+                        answer = waitForAgentAnswer(sessionId, callback, control)
+                        Log.i(TAG, "Received follow-up Agent answer for $sessionId")
+                        callback.publishTrace(sessionId, "Received Agent answer: $answer")
+                    }
                 }
             }
-            callback.updateState(sessionId, AgentSessionInfo.STATE_COMPLETED)
+            callback.publishError(sessionId, "Cancelled")
+            callback.updateState(sessionId, AgentSessionInfo.STATE_CANCELLED)
         } catch (err: InterruptedException) {
             Thread.currentThread().interrupt()
             callback.publishError(sessionId, "Interrupted: ${err.message}")
@@ -202,6 +219,7 @@ class CodexGenieService : GenieService() {
             CodexAgentBridge.buildResponsesRequest(
                 requestId = requestId,
                 model = model,
+                instructions = GENIE_RESPONSE_INSTRUCTIONS,
                 prompt = buildModelPrompt(
                     request = request,
                     answer = answer,
@@ -213,6 +231,16 @@ class CodexGenieService : GenieService() {
         val response = waitForBridgeResponse(control, requestId)
         callback.updateState(sessionId, AgentSessionInfo.STATE_RUNNING)
         return CodexAgentBridge.parseResponsesOutputText(response, requestId)
+    }
+
+    private fun waitForAgentAnswer(
+        sessionId: String,
+        callback: Callback,
+        control: SessionControl,
+    ): String {
+        val answer = waitForUserResponse(control)
+        callback.updateState(sessionId, AgentSessionInfo.STATE_RUNNING)
+        return answer
     }
 
     private fun waitForBridgeResponse(control: SessionControl, requestId: String): String {
@@ -253,12 +281,12 @@ class CodexGenieService : GenieService() {
             You are Codex acting as an Android Genie for the target package ${request.targetPackage}.
             Original objective: $objective
             The Agent answered your latest question with: $userAnswer
-            
+
             $targetSummary
 
-            Reply with either:
-            1. one short sentence describing the next automation step you would take in the target app, or
-            2. one short follow-up question if you are blocked and need clarification.
+            Emit exactly one line starting with QUESTION: or RESULT:.
+            Use QUESTION: when you need another free-form answer from the Agent before you can proceed.
+            Use RESULT: when you are ready to report the next concrete step or final outcome.
         """.trimIndent()
     }
 
@@ -268,6 +296,32 @@ class CodexGenieService : GenieService() {
     ): String {
         val displayName = targetAppContext?.displayName() ?: request.targetPackage
         return "Codex Genie is ready to drive $displayName. Reply with any extra constraints or answer 'continue' to let Genie proceed."
+    }
+
+    private fun parseGenieModelTurn(message: String): GenieModelTurn {
+        val trimmed = message.trim()
+        val question = stripTurnPrefix(trimmed, "QUESTION:")
+        if (question != null) {
+            return GenieModelTurn.Question(question)
+        }
+        val result = stripTurnPrefix(trimmed, "RESULT:")
+        if (result != null) {
+            return GenieModelTurn.Result(result)
+        }
+        return if (trimmed.endsWith("?")) {
+            GenieModelTurn.Question(trimmed)
+        } else {
+            GenieModelTurn.Result(trimmed)
+        }
+    }
+
+    private fun stripTurnPrefix(message: String, prefix: String): String? {
+        if (!message.startsWith(prefix, ignoreCase = true)) {
+            return null
+        }
+        return message.substring(prefix.length).trim().ifEmpty {
+            "continue"
+        }
     }
 
     private fun abbreviate(value: String, maxChars: Int): String {
@@ -281,5 +335,11 @@ class CodexGenieService : GenieService() {
         @Volatile var cancelled = false
         val bridgeResponses = LinkedBlockingQueue<String>()
         val userResponses = LinkedBlockingQueue<String>()
+    }
+
+    private sealed interface GenieModelTurn {
+        data class Question(val text: String) : GenieModelTurn
+
+        data class Result(val text: String) : GenieModelTurn
     }
 }

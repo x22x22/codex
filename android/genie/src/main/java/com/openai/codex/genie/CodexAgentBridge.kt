@@ -1,5 +1,6 @@
 package com.openai.codex.genie
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 
@@ -34,17 +35,29 @@ object CodexAgentBridge {
     fun buildResponsesRequest(
         requestId: String,
         model: String,
+        instructions: String,
         prompt: String,
     ): String {
         val body = JSONObject()
             .put("model", model)
             .put("store", false)
             .put("stream", false)
+            .put("instructions", instructions)
             .put(
-                "instructions",
-                "You are Codex acting as an Android Genie. Reply with exactly one short sentence.",
+                "input",
+                JSONArray().put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put(
+                            "content",
+                            JSONArray().put(
+                                JSONObject()
+                                    .put("type", "input_text")
+                                    .put("text", prompt),
+                            ),
+                        ),
+                ),
             )
-            .put("input", prompt)
             .toString()
         return buildHttpRequest(requestId, "POST", "/v1/responses", body)
     }

@@ -33,6 +33,8 @@ The current repo now contains the first implementation slice:
 - Non-bridge Genie questions now surface through an Agent-owned notification,
   which gives the Agent a concrete user-escalation path without making the
   Genie the user-facing surface.
+- The Agent now also attempts to answer non-bridge Genie questions through the
+  embedded `codexd` runtime before falling back to that notification path.
 - This is intentional: runtime testing on the emulator showed that a Genie
   execution runs inside the paired target app's sandbox/UID, so ordinary
   cross-app Android service/provider IPC to the Agent app is not a reliable
@@ -118,6 +120,8 @@ existing network/auth bridge while this refactor proceeds.
 - One real non-streaming proxied `/v1/responses` request from Genie through the
   Agent-owned bridge after the user answer
 - Agent-owned question notifications for non-bridge Genie questions
+- Agent-mediated free-form answers for non-bridge Genie questions, using the
+  current embedded `codexd` runtime as the temporary answer engine
 - Abstract-unix-socket support in the legacy Rust bridge via `@name` or
   `abstract:name`, so the compatibility transport can move off app-private
   filesystem sockets when Agent<->Genie traffic is introduced

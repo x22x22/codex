@@ -20,6 +20,16 @@ object CodexdLocalClient {
         val clientCount: Int,
     )
 
+    data class RuntimeStatus(
+        val authenticated: Boolean,
+        val accountEmail: String?,
+        val clientCount: Int,
+        val modelProviderId: String,
+        val configuredModel: String?,
+        val effectiveModel: String?,
+        val upstreamBaseUrl: String,
+    )
+
     fun waitForResponse(
         context: Context,
         method: String,
@@ -50,6 +60,14 @@ object CodexdLocalClient {
             throw IOException("HTTP ${response.statusCode}: ${response.body}")
         }
         return parseAuthStatus(response.body)
+    }
+
+    fun waitForRuntimeStatus(context: Context): RuntimeStatus {
+        val response = waitForResponse(context, "GET", "/internal/runtime/status", null)
+        if (response.statusCode != 200) {
+            throw IOException("HTTP ${response.statusCode}: ${response.body}")
+        }
+        return parseRuntimeStatus(response.body)
     }
 
     fun fetchAuthStatus(socketPath: String): AuthStatus? {
@@ -122,6 +140,19 @@ object CodexdLocalClient {
             authenticated = json.optBoolean("authenticated", false),
             accountEmail = accountEmail,
             clientCount = clientCount,
+        )
+    }
+
+    private fun parseRuntimeStatus(body: String): RuntimeStatus {
+        val json = JSONObject(body)
+        return RuntimeStatus(
+            authenticated = json.optBoolean("authenticated", false),
+            accountEmail = if (json.isNull("accountEmail")) null else json.optString("accountEmail"),
+            clientCount = json.optInt("clientCount", 0),
+            modelProviderId = json.optString("modelProviderId", "unknown"),
+            configuredModel = if (json.isNull("configuredModel")) null else json.optString("configuredModel"),
+            effectiveModel = if (json.isNull("effectiveModel")) null else json.optString("effectiveModel"),
+            upstreamBaseUrl = json.optString("upstreamBaseUrl", "unknown"),
         )
     }
 }
