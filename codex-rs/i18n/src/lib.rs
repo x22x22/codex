@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn unsupported_explicit_locale_falls_back_to_default() {
         assert_eq!(
-            resolve_locale_with_system(Some("fr-FR"), Some("zh-CN")).expect("resolve locale"),
+            resolve_locale_with_system(Some("zu-ZA"), Some("zh-CN")).expect("resolve locale"),
             DEFAULT_LOCALE
         );
     }
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn unsupported_system_locale_falls_back_to_default() {
         assert_eq!(
-            resolve_locale_with_system(None, Some("fr-FR")).expect("resolve locale"),
+            resolve_locale_with_system(None, Some("zu-ZA")).expect("resolve locale"),
             DEFAULT_LOCALE
         );
     }
@@ -383,7 +383,7 @@ mod tests {
         let english = format_message("en-US", "approval-option-allow", &[]);
 
         assert_eq!(
-            format_message("fr-FR", "approval-option-allow", &[]),
+            format_message("zu-ZA", "approval-option-allow", &[]),
             english
         );
     }
@@ -391,7 +391,7 @@ mod tests {
     #[test]
     fn format_message_returns_message_id_when_message_is_missing() {
         assert_eq!(
-            format_message("fr-FR", "approval-option-missing", &[]),
+            format_message("zu-ZA", "approval-option-missing", &[]),
             "approval-option-missing".to_string()
         );
     }
