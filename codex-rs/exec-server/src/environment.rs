@@ -53,15 +53,7 @@ impl Environment {
         self.experimental_exec_server_url.as_deref()
     }
 
-    pub fn remote_exec_server_client(&self) -> Option<&ExecServerClient> {
-        if self.experimental_exec_server_url.is_some() {
-            Some(&self.exec_server_client)
-        } else {
-            None
-        }
-    }
-
-    pub fn process(&self) -> &(dyn ExecProcess + '_) {
+    pub fn get_executor(&self) -> &(dyn ExecProcess + '_) {
         &self.exec_server_client
     }
 
@@ -75,8 +67,8 @@ impl Environment {
 }
 
 impl ExecutorEnvironment for Environment {
-    fn process(&self) -> &(dyn ExecProcess + '_) {
-        self.process()
+    fn get_executor(&self) -> &(dyn ExecProcess + '_) {
+        self.get_executor()
     }
 }
 
@@ -90,6 +82,5 @@ mod tests {
         let environment = Environment::create(None).await.expect("create environment");
 
         assert_eq!(environment.experimental_exec_server_url(), None);
-        assert!(environment.remote_exec_server_client().is_none());
     }
 }

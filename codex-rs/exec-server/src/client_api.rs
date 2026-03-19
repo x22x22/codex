@@ -56,5 +56,5 @@ pub trait ExecProcess: Send + Sync {
 
 /// Capability bundle exposed by an execution environment.
 pub trait ExecutorEnvironment: Send + Sync {
-    fn process(&self) -> &(dyn ExecProcess + '_);
+    fn get_executor(&self) -> &(dyn ExecProcess + '_);
 }
