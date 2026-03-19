@@ -1035,6 +1035,30 @@ mod tests {
     }
 
     #[test]
+    fn mixed_ascii_and_osc8_wrapped_spans_preserve_ratatui_spans_across_wraps() {
+        let url = "https://example.com/docs";
+        let line = Line::from(vec![
+            "ab".into(),
+            osc8_hyperlink(url, "cdef").cyan().underlined(),
+            "gh".into(),
+        ]);
+
+        let out = word_wrap_line(&line, 4);
+
+        let expected = vec![
+            Line::from(vec![
+                "ab".into(),
+                osc8_hyperlink(url, "cd").cyan().underlined(),
+            ]),
+            Line::from(vec![
+                osc8_hyperlink(url, "ef").cyan().underlined(),
+                "gh".into(),
+            ]),
+        ];
+        assert_eq!(out, expected);
+    }
+
+    #[test]
     fn leading_spaces_preserved_on_first_line() {
         let line = Line::from("   hello");
         let out = word_wrap_line(&line, 8);

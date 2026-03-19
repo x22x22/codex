@@ -154,6 +154,28 @@ mod tests {
     }
 
     #[test]
+    fn truncate_line_to_width_preserves_osc8_between_ascii_spans() {
+        let line = Line::from(vec![
+            "A".into(),
+            Span::from(osc8_hyperlink("https://example.com/docs", "BC"))
+                .cyan()
+                .underlined(),
+            "DE".into(),
+        ]);
+
+        let truncated = truncate_line_to_width(line, 4);
+
+        let expected = Line::from(vec![
+            "A".into(),
+            Span::from(osc8_hyperlink("https://example.com/docs", "BC"))
+                .cyan()
+                .underlined(),
+            "D".into(),
+        ]);
+        assert_eq!(truncated, expected);
+    }
+
+    #[test]
     fn truncate_line_with_ellipsis_if_overflow_preserves_osc8_wrapped_prefix() {
         let line = Line::from(vec![
             "See ".into(),
