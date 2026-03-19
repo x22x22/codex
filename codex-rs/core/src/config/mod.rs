@@ -417,6 +417,9 @@ pub struct Config {
     /// Maximum nesting depth allowed for spawned agent threads.
     pub agent_max_depth: i32,
 
+    /// Global fallback nickname candidates for spawned agent threads.
+    pub agent_nickname_pool: Vec<String>,
+
     /// User-defined role declarations keyed by role name.
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
 
@@ -1666,6 +1669,15 @@ pub struct AgentsToml {
     #[schemars(range(min = 1))]
     pub job_max_runtime_seconds: Option<u64>,
 
+    /// Global fallback nickname candidates for spawned agent threads.
+    ///
+    /// Example:
+    /// ```toml
+    /// [agents]
+    /// nickname_pool = ["Scout", "Builder", "Reviewer"]
+    /// ```
+    pub nickname_pool: Option<Vec<String>>,
+
     /// User-defined role declarations keyed by role name.
     ///
     /// Example:
@@ -2442,6 +2454,13 @@ impl Config {
                 "agents.job_max_runtime_seconds must fit within a 64-bit signed integer",
             ));
         }
+        let agent_nickname_pool = agent_roles::normalize_agent_nickname_pool(
+            "agents.nickname_pool",
+            cfg.agents
+                .as_ref()
+                .and_then(|agents| agents.nickname_pool.as_deref()),
+        )?
+        .unwrap_or_default();
         let background_terminal_max_timeout = cfg
             .background_terminal_max_timeout
             .unwrap_or(DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS)
@@ -2707,6 +2726,7 @@ impl Config {
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
             agent_max_depth,
+            agent_nickname_pool,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,

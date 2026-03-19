@@ -441,6 +441,47 @@ fn normalize_agent_role_nickname_candidates(
     Ok(Some(normalized_candidates))
 }
 
+pub(crate) fn normalize_agent_nickname_pool(
+    field_label: &str,
+    nickname_pool: Option<&[String]>,
+) -> std::io::Result<Option<Vec<String>>> {
+    let Some(nickname_pool) = nickname_pool else {
+        return Ok(None);
+    };
+
+    let mut normalized_candidates = Vec::with_capacity(nickname_pool.len());
+    let mut seen_candidates = BTreeSet::new();
+
+    for nickname in nickname_pool {
+        let normalized_nickname = nickname.trim();
+        if normalized_nickname.is_empty() {
+            continue;
+        }
+
+        if !normalized_nickname
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_'))
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "{field_label} may only contain ASCII letters, digits, spaces, hyphens, and underscores"
+                ),
+            ));
+        }
+
+        if seen_candidates.insert(normalized_nickname.to_owned()) {
+            normalized_candidates.push(normalized_nickname.to_owned());
+        }
+    }
+
+    if normalized_candidates.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(normalized_candidates))
+    }
+}
+
 fn discover_agent_roles_in_dir(
     agents_dir: &Path,
     declared_role_files: &BTreeSet<PathBuf>,
