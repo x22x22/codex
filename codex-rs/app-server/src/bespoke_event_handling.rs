@@ -2723,8 +2723,11 @@ mod tests {
     use codex_app_server_protocol::JSONRPCErrorError;
     use codex_app_server_protocol::TurnPlanStepStatus;
     use codex_protocol::mcp::CallToolResult;
+    use codex_protocol::models::ContentItem;
     use codex_protocol::models::FileSystemPermissions as CoreFileSystemPermissions;
     use codex_protocol::models::NetworkPermissions as CoreNetworkPermissions;
+    use codex_protocol::models::ResponseItem;
+    use codex_protocol::models::ResponseItemMetadata;
     use codex_protocol::plan_tool::PlanItemArg;
     use codex_protocol::plan_tool::StepStatus;
     use codex_protocol::protocol::CollabResumeBeginEvent;
@@ -3754,6 +3757,76 @@ mod tests {
         .await;
 
         assert!(rx.try_recv().is_err(), "no messages expected");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn raw_response_item_completed_preserves_existing_metadata_uuid() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(CHANNEL_CAPACITY);
+        let outgoing = Arc::new(OutgoingMessageSender::new(tx));
+        let conversation_id = ThreadId::new();
+        let outgoing = ThreadScopedOutgoingMessageSender::new(
+            outgoing,
+            vec![ConnectionId(1)],
+            conversation_id.clone(),
+        );
+        let expected_uuid = uuid::Uuid::new_v4().to_string();
+
+        maybe_emit_raw_response_item_completed(
+            ApiVersion::V2,
+            conversation_id.clone(),
+            "turn-1",
+            ResponseItem::Message {
+                id: Some("msg_123".to_string()),
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "hello".to_string(),
+                }],
+                metadata: Some(ResponseItemMetadata {
+                    user_message_type: None,
+                    uuid: Some(expected_uuid.clone()),
+                }),
+                end_turn: None,
+                phase: None,
+            },
+            &outgoing,
+        )
+        .await;
+
+        let msg = recv_broadcast_message(&mut rx).await?;
+        match msg {
+            OutgoingMessage::AppServerNotification(
+                ServerNotification::RawResponseItemCompleted(notification),
+            ) => {
+                assert_eq!(notification.thread_id, conversation_id.to_string());
+                assert_eq!(notification.turn_id, "turn-1");
+                match notification.item {
+                    ResponseItem::Message {
+                        id,
+                        metadata,
+                        role,
+                        content,
+                        ..
+                    } => {
+                        assert_eq!(id, Some("msg_123".to_string()));
+                        assert_eq!(role, "assistant");
+                        assert_eq!(
+                            content,
+                            vec![ContentItem::OutputText {
+                                text: "hello".to_string()
+                            }]
+                        );
+                        let metadata = metadata.expect("metadata should be present");
+                        assert_eq!(metadata.user_message_type, None);
+                        let uuid = metadata.uuid.expect("uuid should be present");
+                        assert_eq!(uuid, expected_uuid);
+                    }
+                    other => bail!("unexpected response item: {other:?}"),
+                }
+            }
+            other => bail!("unexpected message: {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "no extra messages expected");
         Ok(())
     }
 }
