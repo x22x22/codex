@@ -69,6 +69,11 @@ impl FeedbackNoteView {
         include_logs: bool,
         feedback_audience: FeedbackAudience,
     ) -> Self {
+        let attachment_paths = if include_logs {
+            attachment_paths
+        } else {
+            Vec::new()
+        };
         Self {
             category,
             snapshot,
