@@ -73,6 +73,35 @@ GitHub releases also publish a DotSlash file named
 x64. The published package contains a small runner executable, a bundled
 `cargo-dylint`, and the prebuilt lint library.
 
+The Unix archive layout is:
+
+```text
+argument-comment-lint/
+  bin/
+    argument-comment-lint
+    cargo-dylint
+  lib/
+    libargument_comment_lint@nightly-2025-09-18-<target>.dylib|so
+```
+
+On Windows the same layout is published as a `.zip`, with `.exe` and `.dll`
+filenames instead.
+
+DotSlash resolves the package entrypoint to `argument-comment-lint/bin/argument-comment-lint`
+(or `.exe` on Windows). That runner then finds the sibling bundled
+`cargo-dylint` binary and the single packaged Dylint library under `lib/`, and
+invokes `cargo-dylint dylint --lib-path <that-library>` with the repo's default
+`DYLINT_RUSTFLAGS` and `CARGO_INCREMENTAL=0` settings.
+
+`run.sh` prefers that packaged runner when `dotslash` is installed, and falls
+back to the local `cargo dylint --path ...` flow when the release asset is not
+available yet or `CODEX_ARGUMENT_COMMENT_LINT_USE_LOCAL=1` is set. To refresh
+the cached DotSlash manifest after a new release:
+
+```bash
+CODEX_ARGUMENT_COMMENT_LINT_REFRESH=1 ./tools/argument-comment-lint/run.sh -p codex-core
+```
+
 Run the lint against `codex-rs` from the repo root:
 
 ```bash
