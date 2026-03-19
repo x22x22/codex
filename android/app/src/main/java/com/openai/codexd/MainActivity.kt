@@ -182,14 +182,12 @@ class MainActivity : Activity() {
         }
         thread {
             val result = runCatching {
-                val plan = AgentTaskPlanner.plan(
+                AgentTaskPlanner.startSession(
                     context = this,
                     userObjective = prompt,
                     targetPackageOverride = targetPackageOverride.ifBlank { null },
-                )
-                agentSessionController.startDirectSession(
-                    plan = plan,
                     allowDetachedMode = true,
+                    sessionController = agentSessionController,
                 )
             }
             result.onFailure { err ->

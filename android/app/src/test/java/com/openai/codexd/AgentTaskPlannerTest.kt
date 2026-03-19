@@ -3,6 +3,7 @@ package com.openai.codexd
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.json.JSONObject
 
 class AgentTaskPlannerTest {
     @Test
@@ -43,6 +44,57 @@ class AgentTaskPlannerTest {
                 responseText = """
                     {"targets":[{"packageName":"com.unknown.app","objective":"Do the task."}]}
                 """.trimIndent(),
+                userObjective = "Start a timer.",
+                allowedPackageNames = linkedSetOf("com.android.deskclock"),
+            )
+        }.exceptionOrNull()
+
+        assertTrue(err is java.io.IOException)
+        assertEquals("Planner response did not select an installed package", err?.message)
+    }
+
+    @Test
+    fun parseLaunchToolArgumentsExtractsTargetsAndReason() {
+        val plan = AgentTaskPlanner.parseLaunchToolArguments(
+            arguments = JSONObject(
+                """
+                {
+                  "targets": [
+                    {
+                      "packageName": "com.android.deskclock",
+                      "objective": "Start the requested timer in Clock."
+                    }
+                  ],
+                  "reason": "Clock is the installed timer app."
+                }
+                """.trimIndent(),
+            ),
+            userObjective = "Start a 5-minute timer.",
+            allowedPackageNames = linkedSetOf("com.android.deskclock", "com.android.contacts"),
+        )
+
+        assertEquals("Start a 5-minute timer.", plan.originalObjective)
+        assertEquals("Clock is the installed timer app.", plan.rationale)
+        assertEquals("com.android.deskclock", plan.targets.single().packageName)
+        assertEquals("Start the requested timer in Clock.", plan.targets.single().objective)
+    }
+
+    @Test
+    fun parseLaunchToolArgumentsRejectsUnknownPackages() {
+        val err = runCatching {
+            AgentTaskPlanner.parseLaunchToolArguments(
+                arguments = JSONObject(
+                    """
+                    {
+                      "targets": [
+                        {
+                          "packageName": "com.unknown.app",
+                          "objective": "Do the task."
+                        }
+                      ]
+                    }
+                    """.trimIndent(),
+                ),
                 userObjective = "Start a timer.",
                 allowedPackageNames = linkedSetOf("com.android.deskclock"),
             )
