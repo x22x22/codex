@@ -27,10 +27,12 @@ class CodexAgentService : AgentService() {
     override fun onSessionChanged(session: AgentSessionInfo) {
         Log.i(TAG, "onSessionChanged $session")
         handleInternalBridgeQuestion(session.sessionId)
+        updateQuestionNotification(session)
     }
 
     override fun onSessionRemoved(sessionId: String) {
         Log.i(TAG, "onSessionRemoved sessionId=$sessionId")
+        AgentQuestionNotifier.cancel(this, sessionId)
     }
 
     private fun handleInternalBridgeQuestion(sessionId: String) {
@@ -165,5 +167,29 @@ class CodexAgentService : AgentService() {
     ): Boolean {
         return err.message?.contains("not waiting for user input", ignoreCase = true) == true ||
             !isSessionWaitingForUser(manager, sessionId)
+    }
+
+    private fun updateQuestionNotification(session: AgentSessionInfo) {
+        if (session.state != AgentSessionInfo.STATE_WAITING_FOR_USER) {
+            AgentQuestionNotifier.cancel(this, session.sessionId)
+            return
+        }
+        val manager = agentManager ?: return
+        val question = manager.getSessionEvents(session.sessionId)
+            .lastOrNull { event ->
+                event.type == AgentSessionEvent.TYPE_QUESTION &&
+                    event.message != null &&
+                    !event.message.startsWith(BRIDGE_REQUEST_PREFIX)
+            }?.message
+        if (question.isNullOrBlank()) {
+            AgentQuestionNotifier.cancel(this, session.sessionId)
+            return
+        }
+        AgentQuestionNotifier.showQuestion(
+            context = this,
+            sessionId = session.sessionId,
+            targetPackage = session.targetPackage,
+            question = question,
+        )
     }
 }

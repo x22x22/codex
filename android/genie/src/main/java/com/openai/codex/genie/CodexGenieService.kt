@@ -93,7 +93,10 @@ class CodexGenieService : GenieService() {
 
             callback.publishQuestion(
                 sessionId,
-                "Codex Genie is active for ${targetAppContext.getOrNull()?.displayName() ?: request.targetPackage}. Continue with the Agent-bridged next-step synthesis?",
+                buildAgentQuestion(
+                    request = request,
+                    targetAppContext = targetAppContext.getOrNull(),
+                ),
             )
             callback.updateState(sessionId, AgentSessionInfo.STATE_WAITING_FOR_USER)
 
@@ -249,12 +252,22 @@ class CodexGenieService : GenieService() {
         return """
             You are Codex acting as an Android Genie for the target package ${request.targetPackage}.
             Original objective: $objective
-            The user answered the current question with: $userAnswer
+            The Agent answered your latest question with: $userAnswer
             
             $targetSummary
 
-            Reply with one short sentence describing the next automation step you would take in the target app.
+            Reply with either:
+            1. one short sentence describing the next automation step you would take in the target app, or
+            2. one short follow-up question if you are blocked and need clarification.
         """.trimIndent()
+    }
+
+    private fun buildAgentQuestion(
+        request: GenieRequest,
+        targetAppContext: TargetAppContext?,
+    ): String {
+        val displayName = targetAppContext?.displayName() ?: request.targetPackage
+        return "Codex Genie is ready to drive $displayName. Reply with any extra constraints or answer 'continue' to let Genie proceed."
     }
 
     private fun abbreviate(value: String, maxChars: Int): String {

@@ -30,6 +30,9 @@ The current repo now contains the first implementation slice:
 - The Genie scaffold now issues one real **non-streaming `/v1/responses`**
   request through that bridge after the user answer, proving that model traffic
   can stay Agent-owned even while the Genie runs inside the target-app sandbox.
+- Non-bridge Genie questions now surface through an Agent-owned notification,
+  which gives the Agent a concrete user-escalation path without making the
+  Genie the user-facing surface.
 - This is intentional: runtime testing on the emulator showed that a Genie
   execution runs inside the paired target app's sandbox/UID, so ordinary
   cross-app Android service/provider IPC to the Agent app is not a reliable
@@ -47,6 +50,10 @@ existing network/auth bridge while this refactor proceeds.
 - A running Genie session instance is the unit of target pairing, sandboxing,
   and Android tool access.
 - Genie is **headless** and must not access the internet directly.
+- The Agent<->Genie product contract is free-form text:
+  - Agent -> Genie: free-form objective / instructions
+  - Genie -> Agent: free-form result / progress / follow-up question
+  - Agent decides whether to answer directly or escalate to the user
 - The Agent is the only runtime that owns:
   - auth
   - outbound network access
@@ -110,6 +117,7 @@ existing network/auth bridge while this refactor proceeds.
   sandbox, with that context included in the bridged model prompt
 - One real non-streaming proxied `/v1/responses` request from Genie through the
   Agent-owned bridge after the user answer
+- Agent-owned question notifications for non-bridge Genie questions
 - Abstract-unix-socket support in the legacy Rust bridge via `@name` or
   `abstract:name`, so the compatibility transport can move off app-private
   filesystem sockets when Agent<->Genie traffic is introduced

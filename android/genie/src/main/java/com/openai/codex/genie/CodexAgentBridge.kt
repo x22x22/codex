@@ -40,6 +40,10 @@ object CodexAgentBridge {
             .put("model", model)
             .put("store", false)
             .put("stream", false)
+            .put(
+                "instructions",
+                "You are Codex acting as an Android Genie. Reply with exactly one short sentence.",
+            )
             .put("input", prompt)
             .toString()
         return buildHttpRequest(requestId, "POST", "/v1/responses", body)
