@@ -3,6 +3,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde::Deserialize;
 use std::io::Read;
 use std::path::Path;
+use std::process::Child;
 use std::process::Command;
 use std::process::Output;
 use std::process::Stdio;
@@ -155,46 +156,8 @@ fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseO
         Err(_) => return PowershellParseOutcome::Failed,
     };
 
-    let deadline = Instant::now() + POWERSHELL_PARSER_TIMEOUT;
-    let output = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-
-                if let Some(mut reader) = child.stdout.take()
-                    && reader.read_to_end(&mut stdout).is_err()
-                {
-                    return PowershellParseOutcome::Failed;
-                }
-
-                if let Some(mut reader) = child.stderr.take()
-                    && reader.read_to_end(&mut stderr).is_err()
-                {
-                    return PowershellParseOutcome::Failed;
-                }
-
-                break Output {
-                    status,
-                    stdout,
-                    stderr,
-                };
-            }
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return PowershellParseOutcome::Failed;
-                }
-
-                thread::sleep(POWERSHELL_PARSER_POLL_INTERVAL);
-            }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return PowershellParseOutcome::Failed;
-            }
-        }
+    let Some(output) = wait_for_output_with_timeout(&mut child, POWERSHELL_PARSER_TIMEOUT) else {
+        return PowershellParseOutcome::Failed;
     };
 
     match output.status.success() {
@@ -206,6 +169,50 @@ fn parse_with_powershell_ast(executable: &str, script: &str) -> PowershellParseO
             }
         }
         false => PowershellParseOutcome::Failed,
+    }
+}
+
+fn wait_for_output_with_timeout(child: &mut Child, timeout: Duration) -> Option<Output> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+
+                if let Some(mut reader) = child.stdout.take()
+                    && reader.read_to_end(&mut stdout).is_err()
+                {
+                    return None;
+                }
+
+                if let Some(mut reader) = child.stderr.take()
+                    && reader.read_to_end(&mut stderr).is_err()
+                {
+                    return None;
+                }
+
+                return Some(Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+
+                thread::sleep(POWERSHELL_PARSER_POLL_INTERVAL);
+            }
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
     }
 }
 
@@ -406,11 +413,9 @@ fn is_safe_git_command(words: &[String]) -> bool {
 mod tests {
     use super::*;
     use crate::powershell::try_find_pwsh_executable_blocking;
-    use std::fs;
     use std::string::ToString;
     use std::time::Duration;
     use std::time::Instant;
-    use std::time::SystemTime;
 
     /// Converts a slice of string literals into owned `String`s for the tests.
     fn vec_str(args: &[&str]) -> Vec<String> {
@@ -685,23 +690,17 @@ mod tests {
 
     #[test]
     fn powershell_ast_parser_times_out_for_stuck_child() {
-        let unique = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .expect("system time")
-            .as_nanos();
-        let script_path =
-            std::env::temp_dir().join(format!("codex-powershell-parser-timeout-{unique}.cmd"));
-        fs::write(&script_path, "@echo off\r\ntimeout /t 10 /nobreak >nul\r\n")
-            .expect("write fake powershell");
-
+        let mut child = Command::new("timeout.exe")
+            .args(["/t", "10", "/nobreak"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn timeout");
         let started = Instant::now();
-        let outcome = parse_with_powershell_ast(
-            script_path.to_str().expect("utf8 temp path"),
-            "Write-Output ok",
-        );
-        let _ = fs::remove_file(&script_path);
+        let output = wait_for_output_with_timeout(&mut child, POWERSHELL_PARSER_TIMEOUT);
 
-        assert!(matches!(outcome, PowershellParseOutcome::Failed));
+        assert!(output.is_none());
         assert!(started.elapsed() < POWERSHELL_PARSER_TIMEOUT + Duration::from_secs(1));
     }
 }
