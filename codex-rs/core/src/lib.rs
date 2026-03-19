@@ -14,6 +14,7 @@ pub mod auth;
 mod auth_env_telemetry;
 mod client;
 mod client_common;
+#[cfg(test)]
 mod client_tools;
 pub mod codex;
 mod realtime_context;

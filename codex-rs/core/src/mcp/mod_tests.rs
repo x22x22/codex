@@ -1,12 +1,17 @@
 use super::*;
 use crate::config::CONFIG_TOML_FILE;
 use crate::config::ConfigBuilder;
+use crate::config::types::McpServerConfig;
+use crate::config::types::McpServerTransportConfig;
 use crate::features::Feature;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginCapabilitySummary;
+use crate::plugins::PluginsManager;
+use codex_protocol::mcp::Tool;
 use pretty_assertions::assert_eq;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 use toml::Value;
 
 fn write_file(path: &Path, contents: &str) {
