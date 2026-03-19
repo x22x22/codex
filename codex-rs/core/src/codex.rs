@@ -6370,21 +6370,7 @@ pub(crate) async fn built_tools(
                 accessible_connectors.as_slice(),
             )
             .await
-            .map(|discoverable_tools| {
-                if turn_context.app_server_client_name.as_deref() != Some("codex-tui") {
-                    return discoverable_tools;
-                }
-
-                discoverable_tools
-                    .into_iter()
-                    .filter(|tool| {
-                        !matches!(
-                            tool,
-                            crate::tools::discoverable::DiscoverableTool::Plugin(_)
-                        )
-                    })
-                    .collect()
-            }) {
+            {
                 Ok(discoverable_tools) if discoverable_tools.is_empty() => None,
                 Ok(discoverable_tools) => Some(discoverable_tools),
                 Err(err) => {

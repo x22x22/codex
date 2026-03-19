@@ -115,16 +115,6 @@ impl ToolHandler for ToolSuggestHandler {
             &accessible_connectors,
         )
         .await
-        .map(|discoverable_tools| {
-            if turn.app_server_client_name.as_deref() != Some("codex-tui") {
-                return discoverable_tools;
-            }
-
-            discoverable_tools
-                .into_iter()
-                .filter(|tool| !matches!(tool, DiscoverableTool::Plugin(_)))
-                .collect()
-        })
         .map_err(|err| {
             FunctionCallError::RespondToModel(format!(
                 "tool suggestions are unavailable right now: {err}"
