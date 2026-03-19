@@ -492,6 +492,7 @@ fn server_notification_thread_target(
             Some(notification.thread_id.as_str())
         }
         ServerNotification::SkillsChanged(_)
+        | ServerNotification::McpServerStatusUpdated(_)
         | ServerNotification::McpServerOauthLoginCompleted(_)
         | ServerNotification::AccountUpdated(_)
         | ServerNotification::AccountRateLimitsUpdated(_)
@@ -870,6 +871,7 @@ fn turn_snapshot_events(
                         }),
                 );
             }
+            TurnItem::HookPrompt(_) => {}
         }
     }
 
@@ -1010,6 +1012,7 @@ fn thread_item_to_core(item: &ThreadItem) -> Option<TurnItem> {
         | ThreadItem::McpToolCall { .. }
         | ThreadItem::DynamicToolCall { .. }
         | ThreadItem::CollabAgentToolCall { .. }
+        | ThreadItem::HookPrompt { .. }
         | ThreadItem::ImageView { .. }
         | ThreadItem::EnteredReviewMode { .. }
         | ThreadItem::ExitedReviewMode { .. } => {

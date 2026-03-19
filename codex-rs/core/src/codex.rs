@@ -49,7 +49,6 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
-use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
@@ -87,6 +86,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
@@ -116,6 +116,7 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_terminal_detection::user_agent;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -125,8 +126,6 @@ use futures::future::BoxFuture;
 use futures::future::Shared;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
-use reqwest::header::HeaderMap;
-use reqwest::header::HeaderValue;
 use rmcp::model::ListResourceTemplatesResult;
 use rmcp::model::ListResourcesResult;
 use rmcp::model::PaginatedRequestParams;
@@ -1287,6 +1286,7 @@ impl Session {
 
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
+        conversation_id: ThreadId,
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
@@ -1337,6 +1337,7 @@ impl Session {
 
         let cwd = session_configuration.cwd.clone();
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
+            conversation_id.to_string(),
             sub_id.clone(),
             cwd.clone(),
             session_configuration.sandbox_policy.get(),
@@ -1582,7 +1583,7 @@ impl Session {
         let account_id = auth.and_then(CodexAuth::get_account_id);
         let account_email = auth.and_then(CodexAuth::get_account_email);
         let originator = crate::default_client::originator().value;
-        let terminal_type = terminal::user_agent();
+        let terminal_type = user_agent();
         let session_model = session_configuration.collaboration_mode.model().to_string();
         let auth_env_telemetry = collect_auth_env_telemetry(
             &session_configuration.provider,
@@ -1827,7 +1828,9 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: Arc::new(Environment),
+            environment: Arc::new(
+                Environment::create(config.experimental_exec_server_url.clone()).await?,
+            ),
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -2393,6 +2396,7 @@ impl Session {
                 .skills_for_config(&per_turn_config),
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
+            self.conversation_id,
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
             session_configuration.provider.clone(),
@@ -3952,45 +3956,6 @@ impl Session {
             .await
     }
 
-    pub(crate) async fn sync_mcp_request_headers_for_turn(&self, turn_context: &TurnContext) {
-        let mut request_headers = HeaderMap::new();
-        let session_id = self.conversation_id.to_string();
-        if let Ok(value) = HeaderValue::from_str(&session_id) {
-            request_headers.insert("session_id", value.clone());
-            request_headers.insert("x-client-request-id", value);
-        }
-        if let Some(turn_metadata) = turn_context.turn_metadata_state.current_header_value()
-            && let Ok(value) = HeaderValue::from_str(&turn_metadata)
-        {
-            request_headers.insert(crate::X_CODEX_TURN_METADATA_HEADER, value);
-        }
-
-        let request_headers = if request_headers.is_empty() {
-            None
-        } else {
-            Some(request_headers)
-        };
-        self.services
-            .mcp_connection_manager
-            .read()
-            .await
-            .set_request_headers_for_server(
-                crate::mcp::CODEX_APPS_MCP_SERVER_NAME,
-                request_headers,
-            );
-    }
-
-    pub(crate) async fn clear_mcp_request_headers(&self) {
-        self.services
-            .mcp_connection_manager
-            .read()
-            .await
-            .set_request_headers_for_server(
-                crate::mcp::CODEX_APPS_MCP_SERVER_NAME,
-                /*request_headers*/ None,
-            );
-    }
-
     pub(crate) async fn parse_mcp_tool_name(
         &self,
         name: &str,
@@ -5258,6 +5223,7 @@ async fn spawn_review_thread(
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
+        sess.conversation_id.to_string(),
         review_turn_id.clone(),
         parent_turn_context.cwd.clone(),
         parent_turn_context.sandbox_policy.get(),
@@ -5775,13 +5741,12 @@ pub(crate) async fn run_turn(
                             .await;
                     }
                     if stop_outcome.should_block {
-                        if let Some(continuation_prompt) = stop_outcome.continuation_prompt.clone()
+                        if let Some(hook_prompt_message) =
+                            build_hook_prompt_message(&stop_outcome.continuation_fragments)
                         {
-                            let developer_message: ResponseItem =
-                                DeveloperInstructions::new(continuation_prompt).into();
                             sess.record_conversation_items(
                                 &turn_context,
-                                std::slice::from_ref(&developer_message),
+                                std::slice::from_ref(&hook_prompt_message),
                             )
                             .await;
                             stop_hook_active = true;
