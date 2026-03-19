@@ -9,7 +9,9 @@ use crate::markdown_render::COLON_LOCATION_SUFFIX_RE;
 use crate::markdown_render::HASH_LOCATION_SUFFIX_RE;
 use crate::markdown_render::render_markdown_text;
 use crate::markdown_render::render_markdown_text_with_width_and_cwd;
+use crate::osc8::ParsedOsc8;
 use crate::osc8::osc8_hyperlink;
+use crate::osc8::parse_osc8_hyperlink;
 use crate::osc8::strip_osc8_hyperlinks;
 use insta::assert_snapshot;
 
@@ -828,6 +830,36 @@ fn nested_styled_url_link_preserves_destination_outer_style() {
         ")".into(),
     ]));
     assert_eq!(text, expected);
+}
+
+#[test]
+fn wrapped_url_link_label_stays_clickable_across_lines() {
+    let text = render_markdown_text_with_width_and_cwd(
+        "[abcdefgh](https://example.com/docs)",
+        Some(4),
+        None,
+    );
+
+    let wrapped_label_lines = text.lines.iter().take(3).cloned().collect::<Vec<_>>();
+    let expected = vec![
+        Line::from(osc8_hyperlink("https://example.com/docs", "abc").underlined()),
+        Line::from(osc8_hyperlink("https://example.com/docs", "def").underlined()),
+        Line::from(osc8_hyperlink("https://example.com/docs", "gh").underlined()),
+    ];
+    assert_eq!(wrapped_label_lines, expected);
+
+    let first = text.lines[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert_eq!(
+        parse_osc8_hyperlink(&first),
+        Some(ParsedOsc8 {
+            destination: "https://example.com/docs",
+            text: "abc",
+        })
+    );
 }
 
 #[test]
