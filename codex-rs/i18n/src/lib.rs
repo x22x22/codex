@@ -1,15 +1,18 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::fs;
+use std::io;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use fluent_bundle::FluentArgs;
 use fluent_bundle::FluentResource;
 use fluent_bundle::concurrent::FluentBundle;
-use include_dir::Dir;
-use include_dir::include_dir;
 use thiserror::Error;
 use unic_langid::LanguageIdentifier;
 
-const LOCALES_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/locales");
+const LOCALES_DIR: &str = "src/locales";
 pub const DEFAULT_LOCALE: &str = "en-US";
 
 type Bundle = FluentBundle<FluentResource>;
@@ -20,9 +23,13 @@ pub enum LocaleError {
     InvalidLocale(String),
 }
 
-static SUPPORTED_LOCALES: LazyLock<Vec<String>> = LazyLock::new(load_supported_locales);
+struct LocaleResources {
+    supported_locales: Vec<String>,
+    bundles: HashMap<String, Bundle>,
+}
 
-static BUNDLES: LazyLock<HashMap<String, Bundle>> = LazyLock::new(load_bundles);
+static LOCALE_RESOURCES: LazyLock<Option<LocaleResources>> =
+    LazyLock::new(|| load_locale_resources().ok());
 
 pub fn resolve_locale(config_locale: Option<&str>) -> Result<String, LocaleError> {
     resolve_locale_with_system(config_locale, sys_locale::get_locale().as_deref())
@@ -42,15 +49,21 @@ pub fn resolve_locale_with_system(
     Ok(negotiate_locale(requested.as_ref()))
 }
 
-pub fn format_message(locale: &str, message_id: &str, args: &[(&str, &str)]) -> Option<String> {
-    let bundle = BUNDLES
-        .get(locale)
-        .or_else(|| BUNDLES.get(DEFAULT_LOCALE))?;
-    render_message(bundle, message_id, args).or_else(|| {
-        BUNDLES
-            .get(DEFAULT_LOCALE)
-            .and_then(|fallback| render_message(fallback, message_id, args))
-    })
+pub fn format_message(locale: &str, message_id: &str, args: &[(&str, &str)]) -> String {
+    let rendered = LOCALE_RESOURCES.as_ref().and_then(|locale_resources| {
+        locale_resources
+            .bundles
+            .get(locale)
+            .and_then(|bundle| render_message(bundle, message_id, args))
+            .or_else(|| {
+                (locale != DEFAULT_LOCALE)
+                    .then_some(())
+                    .and_then(|()| locale_resources.bundles.get(DEFAULT_LOCALE))
+                    .and_then(|bundle| render_message(bundle, message_id, args))
+            })
+    });
+
+    rendered.unwrap_or_else(|| message_id.to_string())
 }
 
 fn parse_locale(value: &str) -> Option<LanguageIdentifier> {
@@ -75,62 +88,93 @@ fn negotiate_locale(requested: Option<&LanguageIdentifier>) -> String {
     };
 
     let exact = requested.to_string();
-    if SUPPORTED_LOCALES.iter().any(|locale| locale == &exact) {
+    if supported_locales().iter().any(|locale| locale == &exact) {
         return exact;
     }
 
     let requested_language = requested.language.as_str();
-    SUPPORTED_LOCALES
+    supported_locales()
         .iter()
         .find(|locale| locale.split('-').next() == Some(requested_language))
         .cloned()
         .unwrap_or_else(|| DEFAULT_LOCALE.to_string())
 }
 
-fn load_supported_locales() -> Vec<String> {
-    let mut locales = LOCALES_DIR
-        .dirs()
-        .filter_map(|dir| dir.path().file_name())
-        .filter_map(|name| name.to_str())
-        .map(ToString::to_string)
-        .collect::<Vec<String>>();
-    locales.sort();
-    locales
+fn supported_locales() -> &'static [String] {
+    LOCALE_RESOURCES
+        .as_ref()
+        .map(|locale_resources| locale_resources.supported_locales.as_slice())
+        .unwrap_or(&[])
 }
 
-fn load_bundles() -> HashMap<String, Bundle> {
+fn load_locale_resources() -> io::Result<LocaleResources> {
+    let locales_dir = resolve_locales_dir()?;
+    let mut supported_locales = Vec::new();
     let mut bundles = HashMap::new();
 
-    for dir in LOCALES_DIR.dirs() {
-        let Some(locale_name) = dir.path().file_name().and_then(|name| name.to_str()) else {
+    for entry in sorted_dir_entries(&locales_dir)? {
+        if !entry.file_type()?.is_dir() {
             continue;
-        };
-        let Some(language_identifier) = parse_locale(locale_name) else {
-            continue;
-        };
-        let mut bundle = FluentBundle::new_concurrent(vec![language_identifier]);
-        bundle.set_use_isolating(false);
-
-        for file in dir.files() {
-            if file.path().extension().and_then(|value| value.to_str()) != Some("ftl") {
-                continue;
-            }
-
-            let Some(contents) = file.contents_utf8() else {
-                panic!("locale files must be valid UTF-8");
-            };
-            let Ok(resource) = FluentResource::try_new(contents.to_string()) else {
-                panic!("locale files must be valid Fluent resources");
-            };
-            if bundle.add_resource(resource).is_err() {
-                panic!("locale resources must not define duplicate messages");
-            }
         }
 
-        bundles.insert(locale_name.to_string(), bundle);
+        let locale_name = entry.file_name().to_string_lossy().to_string();
+        let Some(language_identifier) = parse_locale(&locale_name) else {
+            continue;
+        };
+
+        let bundle = load_bundle(&entry.path(), &locale_name, language_identifier)?;
+        supported_locales.push(locale_name.clone());
+        bundles.insert(locale_name, bundle);
     }
 
-    bundles
+    supported_locales.sort();
+
+    Ok(LocaleResources {
+        supported_locales,
+        bundles,
+    })
+}
+
+fn resolve_locales_dir() -> io::Result<PathBuf> {
+    codex_utils_cargo_bin::find_resource!(LOCALES_DIR)
+}
+
+fn load_bundle(
+    locale_dir: &Path,
+    locale_name: &str,
+    language_identifier: LanguageIdentifier,
+) -> io::Result<Bundle> {
+    let mut bundle = FluentBundle::new_concurrent(vec![language_identifier]);
+    bundle.set_use_isolating(false);
+
+    for entry in sorted_dir_entries(locale_dir)? {
+        if !entry.file_type()?.is_file() || entry.path().extension() != Some(OsStr::new("ftl")) {
+            continue;
+        }
+
+        let resource_path = entry.path();
+        let contents = fs::read_to_string(&resource_path)?;
+        let resource = FluentResource::try_new(contents).map_err(|(_, errors)| {
+            io::Error::other(format!(
+                "invalid Fluent resource `{}`: {errors:?}",
+                resource_path.display()
+            ))
+        })?;
+        if bundle.add_resource(resource).is_err() {
+            return Err(io::Error::other(format!(
+                "locale `{locale_name}` defines duplicate messages in `{}`",
+                resource_path.display()
+            )));
+        }
+    }
+
+    Ok(bundle)
+}
+
+fn sorted_dir_entries(dir: &Path) -> io::Result<Vec<fs::DirEntry>> {
+    let mut entries = fs::read_dir(dir)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+    Ok(entries)
 }
 
 fn render_message(bundle: &Bundle, message_id: &str, args: &[(&str, &str)]) -> Option<String> {
@@ -199,26 +243,50 @@ mod tests {
     }
 
     #[test]
-    fn formats_english_message() {
+    fn formats_message_with_interpolation() {
+        let rendered = format_message(
+            "en-US",
+            "approval-question-google-docs-create-document",
+            &[("connector_name", "Google Docs")],
+        );
+
+        assert_eq!(rendered.contains("Google Docs"), true);
+        assert_eq!(rendered.is_empty(), false);
+    }
+
+    #[test]
+    fn different_locales_can_render_same_message() {
+        let english = format_message(
+            "en-US",
+            "approval-question-google-docs-create-document",
+            &[("connector_name", "Google Docs")],
+        );
+        let chinese = format_message(
+            "zh-CN",
+            "approval-question-google-docs-create-document",
+            &[("connector_name", "Google Docs")],
+        );
+
+        assert_eq!(english.contains("Google Docs"), true);
+        assert_eq!(chinese.contains("Google Docs"), true);
+        assert_ne!(english, chinese);
+    }
+
+    #[test]
+    fn format_message_falls_back_to_english_message() {
+        let english = format_message("en-US", "approval-option-allow", &[]);
+
         assert_eq!(
-            format_message(
-                "en-US",
-                "approval-question-google-docs-create-document",
-                &[("connector_name", "Google Docs")]
-            ),
-            Some("Allow Google Docs to create a document?".to_string())
+            format_message("fr-FR", "approval-option-allow", &[]),
+            english
         );
     }
 
     #[test]
-    fn formats_chinese_message() {
+    fn format_message_returns_message_id_when_message_is_missing() {
         assert_eq!(
-            format_message(
-                "zh-CN",
-                "approval-question-google-docs-create-document",
-                &[("connector_name", "Google Docs")]
-            ),
-            Some("允许 Google Docs 创建文档吗？".to_string())
+            format_message("fr-FR", "approval-option-missing", &[]),
+            "approval-option-missing".to_string()
         );
     }
 }

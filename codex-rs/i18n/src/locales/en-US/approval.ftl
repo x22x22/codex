@@ -1,3 +1,19 @@
+approval-header = Approve app tool call?
+approval-option-allow = Allow
+approval-option-allow-description = Run the tool and continue.
+approval-option-allow-session = Allow for this session
+approval-option-allow-session-description = Run the tool and remember this choice for this session.
+approval-option-allow-remember = Allow and don't ask me again
+approval-option-allow-remember-description = Run the tool and remember this choice for future tool calls.
+approval-option-cancel = Cancel
+approval-option-cancel-description = Cancel this tool call.
+approval-fallback-question-connector = Allow {$connector_name} to run tool "{$tool_name}"?
+approval-fallback-question-this-app = Allow this app to run tool "{$tool_name}"?
+approval-fallback-question-server = Allow the {$server} MCP server to run tool "{$tool_name}"?
+approval-monitor-question = Tool call needs your approval. Reason: {$reason}
+approval-safety-cancelled = Tool call was cancelled because of safety risks.
+approval-safety-cancelled-with-reason = Tool call was cancelled because of safety risks: {$reason}
+
 approval-param-action = Action
 approval-param-attendees = Attendees
 approval-param-base-branch = Base branch

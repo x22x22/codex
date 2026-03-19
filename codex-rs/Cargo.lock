@@ -2116,8 +2116,8 @@ dependencies = [
 name = "codex-i18n"
 version = "0.0.0"
 dependencies = [
+ "codex-utils-cargo-bin",
  "fluent-bundle 0.16.0",
- "include_dir",
  "pretty_assertions",
  "sys-locale",
  "thiserror 2.0.18",

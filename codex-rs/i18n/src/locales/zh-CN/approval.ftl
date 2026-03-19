@@ -1,3 +1,19 @@
+approval-header = 批准应用工具调用？
+approval-option-allow = 允许
+approval-option-allow-description = 运行该工具并继续。
+approval-option-allow-session = 在此会话中允许
+approval-option-allow-session-description = 运行该工具，并在此会话中记住这个选择。
+approval-option-allow-remember = 允许，不再询问
+approval-option-allow-remember-description = 运行该工具，并在未来的工具调用中记住这个选择。
+approval-option-cancel = 取消
+approval-option-cancel-description = 取消此次工具调用。
+approval-fallback-question-connector = 允许 {$connector_name} 运行工具 "{$tool_name}" 吗？
+approval-fallback-question-this-app = 允许此应用运行工具 "{$tool_name}" 吗？
+approval-fallback-question-server = 允许 {$server} MCP 服务器运行工具 "{$tool_name}" 吗？
+approval-monitor-question = 此工具调用需要你的批准。原因：{$reason}
+approval-safety-cancelled = 该工具调用因安全风险已被取消。
+approval-safety-cancelled-with-reason = 该工具调用因安全风险已被取消：{$reason}
+
 approval-param-action = 操作
 approval-param-attendees = 参与者
 approval-param-base-branch = 目标分支
