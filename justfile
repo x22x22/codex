@@ -77,8 +77,13 @@ build-for-release:
 
 # Build codex for Android (arm64-v8a and x86_64).
 android-build:
-    CARGO_TARGET_DIR=target/android cargo ndk --platform 26 -t arm64-v8a -t x86_64 build -p codex-cli --release --bin codex
-
+    #!/usr/bin/env bash
+    set -euo pipefail
+    profile_args=(--release)
+    if [[ -n "${CODEX_ANDROID_SKIP_LTO:-}" ]]; then
+      profile_args=(--profile android-release-no-lto)
+    fi
+    CARGO_TARGET_DIR=target/android cargo ndk --platform 26 -t arm64-v8a -t x86_64 build -p codex-cli "${profile_args[@]}" --bin codex
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"

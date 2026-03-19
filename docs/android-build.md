@@ -27,13 +27,17 @@ From the repo root:
 just android-build
 ```
 
+For faster local iteration, you can skip Android release LTO:
+
+```bash
+CODEX_ANDROID_SKIP_LTO=1 just android-build
+```
 Build the Android Agent/Genie prototype APKs with the Android Agent Platform
 stub SDK:
 
 ```bash
 export ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP=/path/to/android-agent-platform-stub-sdk.zip
 just android-build
-just android-service-build
 cd android
 ./gradlew :genie:assembleDebug :app:assembleDebug
 ```
