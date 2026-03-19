@@ -13,7 +13,7 @@ use thiserror::Error;
 use unic_langid::LanguageIdentifier;
 
 const LOCALES_DIR: &str = "src/locales";
-pub const DEFAULT_LOCALE: &str = "en-US";
+pub const DEFAULT_LOCALE: &str = "en";
 const CANONICAL_LOCALE_CODES: &[&str] = &[
     DEFAULT_LOCALE,
     "am",
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn formats_message_with_interpolation() {
         let rendered = format_message(
-            "en-US",
+            "en",
             "approval-question-google-docs-create-document",
             &[("connector_name", "Google Docs")],
         );
@@ -372,7 +372,7 @@ mod tests {
     #[test]
     fn different_locales_can_render_same_message() {
         let english = format_message(
-            "en-US",
+            "en",
             "approval-question-google-docs-create-document",
             &[("connector_name", "Google Docs")],
         );
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn format_message_falls_back_to_english_message() {
-        let english = format_message("en-US", "approval-option-allow", &[]);
+        let english = format_message("en", "approval-option-allow", &[]);
 
         assert_eq!(
             format_message("zu-ZA", "approval-option-allow", &[]),
