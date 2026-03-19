@@ -1850,6 +1850,7 @@ dependencies = [
  "codex-git",
  "codex-hooks",
  "codex-keyring-store",
+ "codex-mcp-types",
  "codex-network-proxy",
  "codex-otel",
  "codex-protocol",
@@ -2228,6 +2229,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "wiremock",
+]
+
+[[package]]
+name = "codex-mcp-types"
+version = "0.0.0"
+dependencies = [
+ "codex-protocol",
+ "serde",
 ]
 
 [[package]]

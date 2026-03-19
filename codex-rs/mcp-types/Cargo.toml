@@ -1,0 +1,17 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-mcp-types"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_mcp_types"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+codex-protocol = { workspace = true }
+serde = { workspace = true, features = ["derive"] }

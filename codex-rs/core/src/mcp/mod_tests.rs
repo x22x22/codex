@@ -84,7 +84,7 @@ fn group_tools_by_server_strips_prefix_and_groups() {
     expected.insert("alpha".to_string(), expected_alpha);
     expected.insert("beta".to_string(), expected_beta);
 
-    assert_eq!(snapshot::group_tools_by_server(&tools), expected);
+    assert_eq!(types::group_tools_by_server(&tools), expected);
 }
 
 #[test]

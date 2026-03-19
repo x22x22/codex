@@ -9,7 +9,7 @@ pub(crate) use config::with_codex_apps_mcp;
 pub(crate) use manager::McpManager;
 pub(crate) use skill_dependencies::maybe_prompt_and_install_mcp_dependencies;
 pub(crate) use snapshot::collect_mcp_snapshot_from_manager;
-pub(crate) use snapshot::split_qualified_tool_name;
+pub(crate) use types::split_qualified_tool_name;
 
 use std::collections::HashMap;
 

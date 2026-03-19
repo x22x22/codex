@@ -49,10 +49,10 @@ use codex_protocol::openai_models::WebSearchToolType;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
-pub use codex_tool_spec::JsonSchema;
-pub use codex_tool_spec::parse_tool_input_schema;
 #[cfg(test)]
 pub use codex_tool_spec::AdditionalProperties;
+pub use codex_tool_spec::JsonSchema;
+pub use codex_tool_spec::parse_tool_input_schema;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde::Serialize;
