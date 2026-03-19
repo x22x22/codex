@@ -1,51 +1,37 @@
-package com.openai.codex.genie
+package com.openai.codexd
 
-import android.net.LocalServerSocket
-import android.net.LocalSocket
-import android.net.LocalSocketAddress
 import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.EOFException
-import java.io.File
 import java.io.IOException
-import java.io.InputStream
-import java.io.OutputStream
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
-class GenieLocalCodexProxy(
-    private val sessionId: String,
-    socketDirectory: File,
-    private val requestForwarder: CodexResponsesRequestForwarder,
+class AgentLocalCodexProxy(
+    private val requestForwarder: (String) -> CodexdLocalClient.HttpResponse,
 ) : Closeable {
     companion object {
-        private const val TAG = "GenieLocalProxy"
+        private const val TAG = "AgentLocalProxy"
     }
 
-    private val socketFile = File(
-        socketDirectory,
-        "s${UUID.randomUUID().toString().replace("-", "").take(8)}.sock",
-    )
-    private val boundSocket = LocalSocket().apply {
-        socketFile.parentFile?.mkdirs()
-        if (socketFile.exists()) {
-            socketFile.delete()
-        }
-        bind(LocalSocketAddress(socketFile.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM))
-    }
-    private val serverSocket = LocalServerSocket(boundSocket.fileDescriptor)
+    private val pathSecret = UUID.randomUUID().toString().replace("-", "")
+    private val loopbackAddress = InetAddress.getByName("127.0.0.1")
+    private val serverSocket = ServerSocket(0, 50, loopbackAddress)
     private val closed = AtomicBoolean(false)
-    private val clientSockets = Collections.synchronizedSet(mutableSetOf<LocalSocket>())
-    private val acceptThread = Thread(::acceptLoop, "GenieLocalProxy-$sessionId")
+    private val clientSockets = Collections.synchronizedSet(mutableSetOf<Socket>())
+    private val acceptThread = Thread(::acceptLoop, "AgentLocalProxy")
 
-    val socketPath: String = socketFile.absolutePath
+    val baseUrl: String = "http://${loopbackAddress.hostAddress}:${serverSocket.localPort}/${pathSecret}/v1"
 
     fun start() {
         acceptThread.start()
-        logInfo("Listening on $socketPath for $sessionId")
+        logInfo("Listening on $baseUrl")
     }
 
     override fun close() {
@@ -53,12 +39,10 @@ class GenieLocalCodexProxy(
             return
         }
         runCatching { serverSocket.close() }
-        runCatching { boundSocket.close() }
         synchronized(clientSockets) {
             clientSockets.forEach { socket -> runCatching { socket.close() } }
             clientSockets.clear()
         }
-        runCatching { socketFile.delete() }
         acceptThread.interrupt()
     }
 
@@ -68,33 +52,41 @@ class GenieLocalCodexProxy(
                 serverSocket.accept()
             } catch (err: IOException) {
                 if (!closed.get()) {
-                    logWarn("Failed to accept local proxy connection for $sessionId", err)
+                    logWarn("Failed to accept local proxy connection", err)
                 }
                 return
             }
             clientSockets += socket
             Thread(
                 { handleClient(socket) },
-                "GenieLocalProxyClient-$sessionId",
+                "AgentLocalProxyClient",
             ).start()
         }
     }
 
-    private fun handleClient(socket: LocalSocket) {
+    private fun handleClient(socket: Socket) {
         socket.use { client ->
             try {
-                GenieLocalCodexHttpProxy.handleExchange(
-                    input = client.inputStream,
-                    output = client.outputStream,
-                    requestForwarder = requestForwarder,
-                    logRequest = { request ->
-                        logInfo("Forwarding ${request.method} ${request.forwardPath} for $sessionId")
-                    },
+                val request = readRequest(client)
+                logInfo("Forwarding ${request.method} ${request.forwardPath}")
+                val response = forwardResponsesRequest(request)
+                writeResponse(
+                    socket = client,
+                    statusCode = response.statusCode,
+                    body = response.body,
+                    path = request.forwardPath,
                 )
             } catch (err: Exception) {
                 if (!closed.get()) {
-                    logWarn("Local proxy request failed for $sessionId", err)
-                    runCatching { GenieLocalCodexHttpProxy.writeError(client.outputStream, err) }
+                    logWarn("Local proxy request failed", err)
+                    runCatching {
+                        writeResponse(
+                            socket = client,
+                            statusCode = 502,
+                            body = err.message ?: err::class.java.simpleName,
+                            path = "/error",
+                        )
+                    }
                 }
             } finally {
                 clientSockets -= client
@@ -102,74 +94,24 @@ class GenieLocalCodexProxy(
         }
     }
 
-    private fun logInfo(message: String) {
-        runCatching { Log.i(TAG, message) }
-    }
-
-    private fun logWarn(
-        message: String,
-        err: Throwable,
-    ) {
-        runCatching { Log.w(TAG, message, err) }
-    }
-}
-
-internal object GenieLocalCodexHttpProxy {
-    internal data class ParsedRequest(
-        val method: String,
-        val forwardPath: String,
-        val body: String?,
-    )
-
-    fun handleExchange(
-        input: InputStream,
-        output: OutputStream,
-        requestForwarder: CodexResponsesRequestForwarder,
-        logRequest: (ParsedRequest) -> Unit = {},
-    ) {
-        val request = readRequest(input)
-        logRequest(request)
-        val response = forwardResponsesRequest(request, requestForwarder)
-        writeResponse(
-            output = output,
-            statusCode = response.statusCode,
-            body = response.body,
-            path = request.forwardPath,
-        )
-    }
-
-    fun writeError(
-        output: OutputStream,
-        err: Throwable,
-    ) {
-        writeResponse(
-            output = output,
-            statusCode = 502,
-            body = err.message ?: err::class.java.simpleName,
-            path = "/error",
-        )
-    }
-
-    private fun forwardResponsesRequest(
-        request: ParsedRequest,
-        requestForwarder: CodexResponsesRequestForwarder,
-    ): CodexAgentBridge.HttpResponse {
+    private fun forwardResponsesRequest(request: ParsedRequest): CodexdLocalClient.HttpResponse {
         if (request.method != "POST") {
-            return CodexAgentBridge.HttpResponse(
+            return CodexdLocalClient.HttpResponse(
                 statusCode = 405,
                 body = "Unsupported local proxy method: ${request.method}",
             )
         }
         if (request.forwardPath != "/v1/responses") {
-            return CodexAgentBridge.HttpResponse(
+            return CodexdLocalClient.HttpResponse(
                 statusCode = 404,
                 body = "Unsupported local proxy path: ${request.forwardPath}",
             )
         }
-        return requestForwarder.sendResponsesRequest(request.body.orEmpty())
+        return requestForwarder(request.body.orEmpty())
     }
 
-    private fun readRequest(input: InputStream): ParsedRequest {
+    private fun readRequest(socket: Socket): ParsedRequest {
+        val input = socket.getInputStream()
         val headerBuffer = ByteArrayOutputStream()
         var matched = 0
         while (matched < 4) {
@@ -226,15 +168,26 @@ internal object GenieLocalCodexHttpProxy {
             offset += read
         }
 
+        val rawPath = requestParts[1]
+        val forwardPath = normalizeForwardPath(rawPath)
         return ParsedRequest(
             method = requestParts[0],
-            forwardPath = requestParts[1],
+            forwardPath = forwardPath,
             body = if (bodyBytes.isEmpty()) null else bodyBytes.toString(StandardCharsets.UTF_8),
         )
     }
 
+    private fun normalizeForwardPath(rawPath: String): String {
+        val expectedPrefix = "/$pathSecret"
+        if (!rawPath.startsWith(expectedPrefix)) {
+            throw IOException("unexpected local proxy path: $rawPath")
+        }
+        val strippedPath = rawPath.removePrefix(expectedPrefix)
+        return if (strippedPath.isBlank()) "/" else strippedPath
+    }
+
     private fun writeResponse(
-        output: OutputStream,
+        socket: Socket,
         statusCode: Int,
         body: String,
         path: String,
@@ -255,6 +208,7 @@ internal object GenieLocalCodexHttpProxy {
             append("\r\n")
         }
 
+        val output = socket.getOutputStream()
         output.write(responseHeaders.toByteArray(StandardCharsets.US_ASCII))
         output.write(bodyBytes)
         output.flush()
@@ -273,4 +227,21 @@ internal object GenieLocalCodexHttpProxy {
             else -> "Response"
         }
     }
+
+    private fun logInfo(message: String) {
+        runCatching { Log.i(TAG, message) }
+    }
+
+    private fun logWarn(
+        message: String,
+        err: Throwable,
+    ) {
+        runCatching { Log.w(TAG, message, err) }
+    }
+
+    private data class ParsedRequest(
+        val method: String,
+        val forwardPath: String,
+        val body: String?,
+    )
 }

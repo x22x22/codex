@@ -38,12 +38,12 @@ class CodexAppServerHost(
 
     private lateinit var process: Process
     private lateinit var writer: BufferedWriter
+    private lateinit var codexHome: File
+    private var localProxy: GenieLocalCodexProxy? = null
     private var stdoutThread: Thread? = null
     private var stderrThread: Thread? = null
     private var finalAgentMessage: String? = null
     private var resultPublished = false
-    private var localProxy: GenieLocalCodexProxy? = null
-
     fun run() {
         startProcess()
         initialize()
@@ -56,9 +56,13 @@ class CodexAppServerHost(
     override fun close() {
         stdoutThread?.interrupt()
         stderrThread?.interrupt()
-        localProxy?.close()
         synchronized(writerLock) {
             runCatching { writer.close() }
+        }
+        localProxy?.close()
+        localProxy = null
+        if (::codexHome.isInitialized) {
+            runCatching { codexHome.deleteRecursively() }
         }
         if (::process.isInitialized) {
             process.destroy()
@@ -67,20 +71,22 @@ class CodexAppServerHost(
     }
 
     private fun startProcess() {
-        val codexHome = File(context.filesDir, "codex-home").apply { mkdirs() }
-        localProxy = GenieLocalCodexProxy(
+        codexHome = File(context.cacheDir, "codex-home/${request.sessionId}").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val proxy = GenieLocalCodexProxy(
             sessionId = request.sessionId,
+            socketDirectory = File(context.cacheDir, "g"),
             requestForwarder = bridgeClient,
-        ).also(GenieLocalCodexProxy::start)
-        val proxyBaseUrl = localProxy?.baseUrl
-            ?: throw IOException("local Genie proxy did not start")
+        )
+        proxy.start()
+        localProxy = proxy
         val processBuilder = ProcessBuilder(
             listOf(
                 CodexBinaryLocator.resolve(context).absolutePath,
                 "-c",
                 "enable_request_compression=false",
-                "-c",
-                "openai_base_url=\"$proxyBaseUrl\"",
                 "app-server",
                 "--listen",
                 "stdio://",
@@ -89,6 +95,7 @@ class CodexAppServerHost(
         val env = processBuilder.environment()
         env["CODEX_HOME"] = codexHome.absolutePath
         env["CODEX_USE_AGENT_AUTH_PROXY"] = "1"
+        env["CODEX_OPENAI_UNIX_SOCKET"] = proxy.socketPath
         env["RUST_LOG"] = "info"
         process = processBuilder.start()
         control.process = process
@@ -486,11 +493,11 @@ class CodexAppServerHost(
 
     private fun buildDynamicToolSpecs(): JSONArray {
         return JSONArray()
-            .put(dynamicToolSpec("android.target.show", "Show the detached target window.", emptyObjectSchema()))
-            .put(dynamicToolSpec("android.target.hide", "Hide the detached target window.", emptyObjectSchema()))
-            .put(dynamicToolSpec("android.target.attach", "Reattach the detached target back to the main display.", emptyObjectSchema()))
-            .put(dynamicToolSpec("android.target.close", "Close the detached target window.", emptyObjectSchema()))
-            .put(dynamicToolSpec("android.target.capture_frame", "Capture the detached target window as an image.", emptyObjectSchema()))
+            .put(dynamicToolSpec(AndroidGenieToolExecutor.SHOW_TARGET_TOOL, "Show the detached target window.", emptyObjectSchema()))
+            .put(dynamicToolSpec(AndroidGenieToolExecutor.HIDE_TARGET_TOOL, "Hide the detached target window.", emptyObjectSchema()))
+            .put(dynamicToolSpec(AndroidGenieToolExecutor.ATTACH_TARGET_TOOL, "Reattach the detached target back to the main display.", emptyObjectSchema()))
+            .put(dynamicToolSpec(AndroidGenieToolExecutor.CLOSE_TARGET_TOOL, "Close the detached target window.", emptyObjectSchema()))
+            .put(dynamicToolSpec(AndroidGenieToolExecutor.CAPTURE_TARGET_FRAME_TOOL, "Capture the detached target window as an image.", emptyObjectSchema()))
     }
 
     private fun dynamicToolSpec(

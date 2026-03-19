@@ -1,4 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <queries>
+        <package android:name="com.openai.codexd" />
+    </queries>
+
     <uses-permission android:name="com.openai.codex.permission.BIND_AGENT_BRIDGE" />
 
     <application

@@ -28,18 +28,11 @@ object AgentResponsesProxy {
         context: Context,
         requestBody: String,
     ): CodexdLocalClient.HttpResponse {
-        val runtimeStatus = AgentCodexAppServerClient.readRuntimeStatus(
-            context = context,
-            refreshToken = true,
-        )
-        if (!runtimeStatus.authenticated) {
-            return CodexdLocalClient.HttpResponse(
-                statusCode = 401,
-                body = "not authenticated",
-            )
-        }
         val authSnapshot = loadAuthSnapshot(File(context.filesDir, "codex-home/auth.json"))
-        val upstreamUrl = buildResponsesUrl(runtimeStatus.upstreamBaseUrl, authSnapshot.authMode)
+        val upstreamUrl = buildResponsesUrl(
+            upstreamBaseUrl = "provider-default",
+            authSnapshot.authMode,
+        )
         Log.i(TAG, "Proxying /v1/responses -> $upstreamUrl (auth_mode=${authSnapshot.authMode})")
         return executeRequest(upstreamUrl, requestBody, authSnapshot)
     }

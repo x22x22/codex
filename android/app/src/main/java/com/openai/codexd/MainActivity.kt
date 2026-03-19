@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -30,7 +31,12 @@ import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
     companion object {
+        private const val TAG = "CodexMainActivity"
         private const val STATUS_REFRESH_INTERVAL_MS = 2000L
+        private const val ACTION_DEBUG_START_AGENT_SESSION =
+            "com.openai.codexd.action.DEBUG_START_AGENT_SESSION"
+        private const val EXTRA_DEBUG_PROMPT = "prompt"
+        private const val EXTRA_DEBUG_TARGET_PACKAGE = "targetPackage"
     }
 
     @Volatile
@@ -121,6 +127,24 @@ class MainActivity : Activity() {
         if (!sessionId.isNullOrEmpty()) {
             focusedFrameworkSessionId = sessionId
         }
+        maybeStartSessionFromIntent(intent)
+    }
+
+    private fun maybeStartSessionFromIntent(intent: Intent?) {
+        if (intent?.action != ACTION_DEBUG_START_AGENT_SESSION) {
+            return
+        }
+        val prompt = intent.getStringExtra(EXTRA_DEBUG_PROMPT)?.trim().orEmpty()
+        if (prompt.isEmpty()) {
+            Log.w(TAG, "Ignoring debug start intent without prompt")
+            return
+        }
+        val targetPackageOverride = intent.getStringExtra(EXTRA_DEBUG_TARGET_PACKAGE)?.trim()
+        findViewById<EditText>(R.id.agent_prompt).setText(prompt)
+        findViewById<EditText>(R.id.agent_target_package).setText(targetPackageOverride.orEmpty())
+        Log.i(TAG, "Handling debug start intent override=$targetPackageOverride prompt=${prompt.take(160)}")
+        startDirectAgentSession(findViewById(R.id.agent_start_button))
+        intent.action = null
     }
 
     private fun registerSessionListenerIfNeeded() {
@@ -180,6 +204,7 @@ class MainActivity : Activity() {
             showToast("Enter a prompt")
             return
         }
+        Log.i(TAG, "startDirectAgentSession override=$targetPackageOverride prompt=${prompt.take(160)}")
         thread {
             val result = runCatching {
                 AgentTaskPlanner.startSession(
@@ -194,10 +219,15 @@ class MainActivity : Activity() {
                 )
             }
             result.onFailure { err ->
+                Log.w(TAG, "Failed to start Agent session", err)
                 showToast("Failed to start Agent session: ${err.message}")
                 refreshAgentSessions()
             }
             result.onSuccess { sessionStart ->
+                Log.i(
+                    TAG,
+                    "Started Agent session parent=${sessionStart.parentSessionId} children=${sessionStart.childSessionIds}",
+                )
                 focusedFrameworkSessionId = sessionStart.childSessionIds.firstOrNull()
                 val targetSummary = sessionStart.plannedTargets.joinToString(", ")
                 showToast("Started ${sessionStart.childSessionIds.size} Genie session(s) for $targetSummary via ${sessionStart.geniePackage}")

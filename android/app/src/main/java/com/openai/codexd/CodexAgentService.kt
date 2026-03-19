@@ -7,10 +7,15 @@ import android.app.agent.AgentSessionInfo
 import android.util.Log
 import java.io.IOException
 import kotlin.concurrent.thread
+import org.json.JSONObject
 
 class CodexAgentService : AgentService() {
     companion object {
         private const val TAG = "CodexAgentService"
+        private const val BRIDGE_REQUEST_PREFIX = "__codex_bridge__ "
+        private const val BRIDGE_RESPONSE_PREFIX = "__codex_bridge_result__ "
+        private const val BRIDGE_METHOD_GET_RUNTIME_STATUS = "getRuntimeStatus"
+        private const val BRIDGE_METHOD_SEND_RESPONSES_REQUEST = "sendResponsesRequest"
         private const val AUTO_ANSWER_ESCALATE_PREFIX = "ESCALATE:"
         private const val AUTO_ANSWER_INSTRUCTIONS =
             "You are Codex acting as the Android Agent supervising a Genie execution. If you can answer the current Genie question from the available session context, call the framework session tool `android.framework.sessions.answer_question` exactly once with a short free-form answer. You may inspect current framework state with `android.framework.sessions.list`. If user input is required, do not call any framework tool. Instead reply with `ESCALATE: ` followed by the exact question the Agent should ask the user."
@@ -49,7 +54,7 @@ class CodexAgentService : AgentService() {
         }
         val manager = agentManager ?: return
         val events = manager.getSessionEvents(session.sessionId)
-        val question = findVisibleQuestion(events) ?: return
+        val question = findLatestQuestion(events) ?: return
         val questionKey = genieQuestionKey(session.sessionId, question)
         if (handledGenieQuestions.contains(questionKey) || !pendingGenieQuestions.add(questionKey)) {
             return
@@ -57,26 +62,33 @@ class CodexAgentService : AgentService() {
         thread(name = "CodexAgentAutoAnswer-${session.sessionId}") {
             Log.i(TAG, "Attempting Agent auto-answer for ${session.sessionId}")
             runCatching {
-                when (val result = requestGenieAutoAnswer(session, question, events)) {
-                    AutoAnswerResult.Answered -> {
-                        handledGenieQuestions.add(questionKey)
-                        AgentQuestionNotifier.cancel(this, session.sessionId)
-                        Log.i(TAG, "Auto-answered Genie question for ${session.sessionId}")
-                    }
-                    is AutoAnswerResult.Escalate -> {
-                        if (sessionController.isSessionWaitingForUser(session.sessionId)) {
-                            AgentQuestionNotifier.showQuestion(
-                                context = this,
-                                sessionId = session.sessionId,
-                                targetPackage = session.targetPackage,
-                                question = result.question,
-                            )
+                if (isBridgeQuestion(question)) {
+                    answerBridgeQuestion(session, question)
+                    handledGenieQuestions.add(questionKey)
+                    AgentQuestionNotifier.cancel(this, session.sessionId)
+                    Log.i(TAG, "Answered bridge question for ${session.sessionId}")
+                } else {
+                    when (val result = requestGenieAutoAnswer(session, question, events)) {
+                        AutoAnswerResult.Answered -> {
+                            handledGenieQuestions.add(questionKey)
+                            AgentQuestionNotifier.cancel(this, session.sessionId)
+                            Log.i(TAG, "Auto-answered Genie question for ${session.sessionId}")
+                        }
+                        is AutoAnswerResult.Escalate -> {
+                            if (sessionController.isSessionWaitingForUser(session.sessionId)) {
+                                AgentQuestionNotifier.showQuestion(
+                                    context = this,
+                                    sessionId = session.sessionId,
+                                    targetPackage = session.targetPackage,
+                                    question = result.question,
+                                )
+                            }
                         }
                     }
                 }
             }.onFailure { err ->
                 Log.i(TAG, "Agent auto-answer unavailable for ${session.sessionId}: ${err.message}")
-                if (sessionController.isSessionWaitingForUser(session.sessionId)) {
+                if (!isBridgeQuestion(question) && sessionController.isSessionWaitingForUser(session.sessionId)) {
                     AgentQuestionNotifier.showQuestion(
                         context = this,
                         sessionId = session.sessionId,
@@ -95,8 +107,12 @@ class CodexAgentService : AgentService() {
             return
         }
         val manager = agentManager ?: return
-        val question = findVisibleQuestion(manager.getSessionEvents(session.sessionId))
+        val question = findLatestQuestion(manager.getSessionEvents(session.sessionId))
         if (question.isNullOrBlank()) {
+            AgentQuestionNotifier.cancel(this, session.sessionId)
+            return
+        }
+        if (isBridgeQuestion(question)) {
             AgentQuestionNotifier.cancel(this, session.sessionId)
             return
         }
@@ -194,11 +210,73 @@ class CodexAgentService : AgentService() {
         return context.takeLast(MAX_AUTO_ANSWER_CONTEXT_CHARS)
     }
 
-    private fun findVisibleQuestion(events: List<AgentSessionEvent>): String? {
+    private fun findLatestQuestion(events: List<AgentSessionEvent>): String? {
         return events.lastOrNull { event ->
             event.type == AgentSessionEvent.TYPE_QUESTION &&
                 !event.message.isNullOrBlank()
         }?.message
+    }
+
+    private fun isBridgeQuestion(question: String): Boolean {
+        return question.startsWith(BRIDGE_REQUEST_PREFIX)
+    }
+
+    private fun answerBridgeQuestion(
+        session: AgentSessionInfo,
+        question: String,
+    ) {
+        val request = JSONObject(question.removePrefix(BRIDGE_REQUEST_PREFIX))
+        val requestId = request.optString("requestId")
+        val response: JSONObject = runCatching {
+            when (request.optString("method")) {
+                BRIDGE_METHOD_GET_RUNTIME_STATUS -> {
+                    val status = AgentCodexAppServerClient.readRuntimeStatus(this)
+                    JSONObject()
+                        .put("requestId", requestId)
+                        .put("ok", true)
+                        .put(
+                            "runtimeStatus",
+                            JSONObject()
+                                .put("authenticated", status.authenticated)
+                                .put("accountEmail", status.accountEmail)
+                                .put("clientCount", status.clientCount)
+                                .put("modelProviderId", status.modelProviderId)
+                                .put("configuredModel", status.configuredModel)
+                                .put("effectiveModel", status.effectiveModel)
+                                .put("upstreamBaseUrl", status.upstreamBaseUrl),
+                        )
+                }
+                BRIDGE_METHOD_SEND_RESPONSES_REQUEST -> {
+                    val httpResponse = AgentResponsesProxy.sendResponsesRequest(
+                        this,
+                        request.optString("requestBody"),
+                    )
+                    JSONObject()
+                        .put("requestId", requestId)
+                        .put("ok", true)
+                        .put(
+                            "httpResponse",
+                            JSONObject()
+                                .put("statusCode", httpResponse.statusCode)
+                                .put("body", httpResponse.body),
+                        )
+                }
+                else -> JSONObject()
+                    .put("requestId", requestId)
+                    .put("ok", false)
+                    .put("error", "Unsupported bridge method: ${request.optString("method")}")
+            }
+        }.getOrElse { err ->
+            JSONObject()
+                .put("requestId", requestId)
+                .put("ok", false)
+                .put("error", err.message ?: err::class.java.simpleName)
+        }
+        sessionController.answerQuestion(
+            session.sessionId,
+            BRIDGE_RESPONSE_PREFIX + response.toString(),
+            session.parentSessionId,
+        )
     }
 
     private fun eventTypeToString(type: Int): String {

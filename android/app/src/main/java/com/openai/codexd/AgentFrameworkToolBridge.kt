@@ -1,6 +1,7 @@
 package com.openai.codexd
 
 import android.content.Context
+import android.util.Log
 import java.io.IOException
 import org.json.JSONArray
 import org.json.JSONObject
@@ -10,11 +11,12 @@ class AgentFrameworkToolBridge(
     private val sessionController: AgentSessionController,
 ) {
     companion object {
-        const val START_DIRECT_SESSION_TOOL = "android.framework.sessions.start_direct"
-        const val LIST_SESSIONS_TOOL = "android.framework.sessions.list"
-        const val ANSWER_QUESTION_TOOL = "android.framework.sessions.answer_question"
-        const val ATTACH_TARGET_TOOL = "android.framework.sessions.attach_target"
-        const val CANCEL_SESSION_TOOL = "android.framework.sessions.cancel"
+        private const val TAG = "AgentFrameworkTool"
+        const val START_DIRECT_SESSION_TOOL = "android_framework_sessions_start_direct"
+        const val LIST_SESSIONS_TOOL = "android_framework_sessions_list"
+        const val ANSWER_QUESTION_TOOL = "android_framework_sessions_answer_question"
+        const val ATTACH_TARGET_TOOL = "android_framework_sessions_attach_target"
+        const val CANCEL_SESSION_TOOL = "android_framework_sessions_cancel"
 
         internal fun parseStartDirectSessionArguments(
             arguments: JSONObject,
@@ -82,6 +84,7 @@ class AgentFrameworkToolBridge(
         onSessionStarted: ((SessionStartResult) -> Unit)? = null,
         focusedSessionId: String? = null,
     ): JSONObject {
+        Log.i(TAG, "handleToolCall tool=$toolName arguments=$arguments")
         return when (toolName) {
             START_DIRECT_SESSION_TOOL -> {
                 val request = parseStartDirectSessionArguments(
@@ -92,6 +95,10 @@ class AgentFrameworkToolBridge(
                 val startedSession = sessionController.startDirectSession(
                     plan = request.plan,
                     allowDetachedMode = request.allowDetachedMode,
+                )
+                Log.i(
+                    TAG,
+                    "Started framework sessions parent=${startedSession.parentSessionId} children=${startedSession.childSessionIds}",
                 )
                 onSessionStarted?.invoke(startedSession)
                 successText(

@@ -11,28 +11,36 @@ class AndroidGenieToolExecutor(
     private val callback: GenieService.Callback,
     private val sessionId: String,
 ) {
+    companion object {
+        const val SHOW_TARGET_TOOL = "android_target_show"
+        const val HIDE_TARGET_TOOL = "android_target_hide"
+        const val ATTACH_TARGET_TOOL = "android_target_attach"
+        const val CLOSE_TARGET_TOOL = "android_target_close"
+        const val CAPTURE_TARGET_FRAME_TOOL = "android_target_capture_frame"
+    }
+
     fun execute(
         toolName: String,
         @Suppress("UNUSED_PARAMETER") arguments: JSONObject,
     ): GenieToolObservation {
         return when (toolName) {
-            "android.target.show" -> requestTargetVisibility(
+            SHOW_TARGET_TOOL -> requestTargetVisibility(
                 action = "show",
                 request = callback::requestShowDetachedTarget,
             )
-            "android.target.hide" -> requestTargetVisibility(
+            HIDE_TARGET_TOOL -> requestTargetVisibility(
                 action = "hide",
                 request = callback::requestHideDetachedTarget,
             )
-            "android.target.attach" -> requestTargetVisibility(
+            ATTACH_TARGET_TOOL -> requestTargetVisibility(
                 action = "attach",
                 request = callback::requestAttachTarget,
             )
-            "android.target.close" -> requestTargetVisibility(
+            CLOSE_TARGET_TOOL -> requestTargetVisibility(
                 action = "close",
                 request = callback::requestCloseDetachedTarget,
             )
-            "android.target.capture_frame" -> captureDetachedTargetFrame()
+            CAPTURE_TARGET_FRAME_TOOL -> captureDetachedTargetFrame()
             else -> throw IOException("Unknown tool: $toolName")
         }
     }
@@ -43,9 +51,9 @@ class AndroidGenieToolExecutor(
     ): GenieToolObservation {
         request(sessionId)
         return GenieToolObservation(
-            name = "android.target.$action",
+            name = "android_target_$action",
             summary = "Requested detached target $action.",
-            promptDetails = "Requested framework action android.target.$action for session $sessionId.",
+            promptDetails = "Requested framework action android_target_$action for session $sessionId.",
         )
     }
 
@@ -64,7 +72,7 @@ class AndroidGenieToolExecutor(
             output.toByteArray()
         }
         return GenieToolObservation(
-            name = "android.target.capture_frame",
+            name = CAPTURE_TARGET_FRAME_TOOL,
             summary = "Captured detached target frame ${copy.width}x${copy.height}.",
             promptDetails = "Captured detached target frame ${copy.width}x${copy.height}. Use the attached image to inspect the current UI.",
             imageDataUrls = listOf(

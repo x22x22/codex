@@ -1,10 +1,7 @@
 package com.openai.codex.genie
 
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
-import java.net.Socket
-import java.net.URI
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
@@ -13,10 +10,22 @@ import org.junit.Test
 
 class GenieLocalCodexProxyTest {
     @Test
-    fun forwardsLoopbackResponsesRequestsToAgentBridge() {
+    fun forwardsResponsesRequestsToAgentBridge() {
         val forwardedRequestBody = AtomicReference<String?>()
-        val proxy = GenieLocalCodexProxy(
-            sessionId = "session-1",
+        val body = """{"model":"gpt-5.3-codex"}"""
+        val request = buildString {
+            append("POST /v1/responses HTTP/1.1\r\n")
+            append("Host: localhost\r\n")
+            append("Content-Type: application/json\r\n")
+            append("Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n")
+            append("\r\n")
+            append(body)
+        }
+        val responseBytes = ByteArrayOutputStream()
+
+        GenieLocalCodexHttpProxy.handleExchange(
+            input = ByteArrayInputStream(request.toByteArray(StandardCharsets.UTF_8)),
+            output = responseBytes,
             requestForwarder = object : CodexResponsesRequestForwarder {
                 override fun sendResponsesRequest(body: String): CodexAgentBridge.HttpResponse {
                     forwardedRequestBody.set(body)
@@ -28,29 +37,9 @@ class GenieLocalCodexProxyTest {
             },
         )
 
-        proxy.use { localProxy ->
-            localProxy.start()
-            val uri = URI(localProxy.baseUrl)
-            Socket(uri.host, uri.port).use { socket ->
-                val body = """{"model":"gpt-5.3-codex"}"""
-                val requestPath = "${uri.rawPath}/responses"
-                val writer = OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8)
-                writer.write("POST $requestPath HTTP/1.1\r\n")
-                writer.write("Host: ${uri.host}\r\n")
-                writer.write("Content-Type: application/json\r\n")
-                writer.write("Content-Length: ${body.toByteArray(StandardCharsets.UTF_8).size}\r\n")
-                writer.write("\r\n")
-                writer.write(body)
-                writer.flush()
-                socket.shutdownOutput()
-                val responseText = BufferedReader(
-                    InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8),
-                ).readText()
-                assertTrue(responseText.startsWith("HTTP/1.1 200 OK"))
-                assertTrue(responseText.contains("""{"ok":true}"""))
-            }
-        }
-
+        val responseText = responseBytes.toString(StandardCharsets.UTF_8)
+        assertTrue(responseText.startsWith("HTTP/1.1 200 OK"))
+        assertTrue(responseText.contains("""{"ok":true}"""))
         assertEquals("""{"model":"gpt-5.3-codex"}""", forwardedRequestBody.get())
     }
 }

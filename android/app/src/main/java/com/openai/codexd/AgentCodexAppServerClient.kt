@@ -2,6 +2,7 @@ package com.openai.codexd
 
 import android.content.Context
 import android.util.Log
+import com.openai.codex.bridge.HostedCodexConfig
 import java.io.BufferedWriter
 import java.io.File
 import java.io.IOException
@@ -36,6 +37,7 @@ object AgentCodexAppServerClient {
     private var writer: BufferedWriter? = null
     private var stdoutThread: Thread? = null
     private var stderrThread: Thread? = null
+    private var localProxy: AgentLocalCodexProxy? = null
     private var initialized = false
 
     fun requestText(
@@ -49,6 +51,10 @@ object AgentCodexAppServerClient {
         ensureStarted(context.applicationContext)
         activeRequests.incrementAndGet()
         try {
+            Log.i(
+                TAG,
+                "requestText start tools=${dynamicTools?.length() ?: 0} prompt=${prompt.take(160)}",
+            )
             notifications.clear()
             val threadId = startThread(
                 context = context.applicationContext,
@@ -56,7 +62,9 @@ object AgentCodexAppServerClient {
                 dynamicTools = dynamicTools,
             )
             startTurn(threadId, prompt)
-            waitForTurnCompletion(toolCallHandler, requestUserInputHandler)
+            waitForTurnCompletion(toolCallHandler, requestUserInputHandler).also { response ->
+                Log.i(TAG, "requestText completed response=${response.take(160)}")
+            }
         } finally {
             activeRequests.decrementAndGet()
         }
@@ -91,6 +99,12 @@ object AgentCodexAppServerClient {
         notifications.clear()
         pendingResponses.clear()
         val codexHome = File(context.filesDir, "codex-home").apply(File::mkdirs)
+        localProxy = AgentLocalCodexProxy { requestBody ->
+            AgentResponsesProxy.sendResponsesRequest(context, requestBody)
+        }.also(AgentLocalCodexProxy::start)
+        val proxyBaseUrl = localProxy?.baseUrl
+            ?: throw IOException("local Agent proxy did not start")
+        HostedCodexConfig.write(codexHome, proxyBaseUrl)
         val startedProcess = ProcessBuilder(
             listOf(
                 CodexCliBinaryLocator.resolve(context).absolutePath,
@@ -117,6 +131,8 @@ object AgentCodexAppServerClient {
         stderrThread?.interrupt()
         runCatching { writer?.close() }
         writer = null
+        localProxy?.close()
+        localProxy = null
         process?.destroy()
         process = null
         initialized = false
@@ -209,8 +225,19 @@ object AgentCodexAppServerClient {
                             .append(params.optString("delta"))
                     }
                 }
+                "item/started" -> {
+                    val item = params.optJSONObject("item")
+                    Log.i(
+                        TAG,
+                        "item/started type=${item?.optString("type")} tool=${item?.optString("tool")}",
+                    )
+                }
                 "item/completed" -> {
                     val item = params.optJSONObject("item") ?: continue
+                    Log.i(
+                        TAG,
+                        "item/completed type=${item.optString("type")} status=${item.optString("status")} tool=${item.optString("tool")}",
+                    )
                     if (item.optString("type") == "agentMessage") {
                         val itemId = item.optString("id")
                         val text = item.optString("text").ifBlank {
@@ -223,6 +250,10 @@ object AgentCodexAppServerClient {
                 }
                 "turn/completed" -> {
                     val turn = params.optJSONObject("turn") ?: JSONObject()
+                    Log.i(
+                        TAG,
+                        "turn/completed status=${turn.optString("status")} error=${turn.opt("error")} finalMessage=${finalAgentMessage?.take(160)}",
+                    )
                     return when (turn.optString("status")) {
                         "completed" -> finalAgentMessage?.takeIf(String::isNotBlank)
                             ?: throw IOException("Agent turn completed without an assistant message")
@@ -245,6 +276,7 @@ object AgentCodexAppServerClient {
         val requestId = message.opt("id") ?: return
         val method = message.optString("method", "unknown")
         val params = message.optJSONObject("params") ?: JSONObject()
+        Log.i(TAG, "handleServerRequest method=$method")
         when (method) {
             "item/tool/call" -> {
                 if (toolCallHandler == null) {
@@ -257,6 +289,7 @@ object AgentCodexAppServerClient {
                 }
                 val toolName = params.optString("tool").trim()
                 val arguments = params.optJSONObject("arguments") ?: JSONObject()
+                Log.i(TAG, "tool/call tool=$toolName arguments=$arguments")
                 val result = runCatching { toolCallHandler(toolName, arguments) }
                     .getOrElse { err ->
                         sendError(
@@ -266,6 +299,7 @@ object AgentCodexAppServerClient {
                         )
                         return
                     }
+                Log.i(TAG, "tool/call completed tool=$toolName result=$result")
                 sendResult(requestId, result)
             }
             "item/tool/requestUserInput" -> {
@@ -278,6 +312,7 @@ object AgentCodexAppServerClient {
                     return
                 }
                 val questions = params.optJSONArray("questions") ?: JSONArray()
+                Log.i(TAG, "requestUserInput questions=$questions")
                 val result = runCatching { requestUserInputHandler(questions) }
                     .getOrElse { err ->
                         sendError(
@@ -287,6 +322,7 @@ object AgentCodexAppServerClient {
                         )
                         return
                     }
+                Log.i(TAG, "requestUserInput completed result=$result")
                 sendResult(requestId, result)
             }
             else -> {

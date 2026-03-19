@@ -1,6 +1,7 @@
 package com.openai.codexd
 
 import android.content.Context
+import android.util.Log
 import java.io.IOException
 import org.json.JSONArray
 import org.json.JSONObject
@@ -21,6 +22,8 @@ data class AgentDelegationPlan(
 }
 
 object AgentTaskPlanner {
+    private const val TAG = "AgentTaskPlanner"
+
     private val PLANNER_INSTRUCTIONS =
         """
         You are Codex acting as the Android Agent orchestrator.
@@ -43,6 +46,7 @@ object AgentTaskPlanner {
         requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
     ): SessionStartResult {
         if (!targetPackageOverride.isNullOrBlank()) {
+            Log.i(TAG, "Using explicit target override $targetPackageOverride")
             return sessionController.startDirectSession(
                 plan = AgentDelegationPlan(
                     originalObjective = userObjective,
@@ -60,6 +64,7 @@ object AgentTaskPlanner {
         }
         var sessionStartResult: SessionStartResult? = null
         val frameworkToolBridge = AgentFrameworkToolBridge(context, sessionController)
+        Log.i(TAG, "Planning Agent session for objective=${userObjective.take(160)}")
         AgentCodexAppServerClient.requestText(
             context = context,
             instructions = PLANNER_INSTRUCTIONS,
@@ -74,12 +79,17 @@ object AgentTaskPlanner {
                         if (sessionStartResult != null) {
                             throw IOException("Agent runtime attempted to start multiple Genie batches")
                         }
+                        Log.i(
+                            TAG,
+                            "Framework tool started parent=${startedSession.parentSessionId} children=${startedSession.childSessionIds}",
+                        )
                         sessionStartResult = startedSession
                     },
                 )
             },
             requestUserInputHandler = requestUserInputHandler,
         )
+        Log.i(TAG, "Planner sessionStartResult=$sessionStartResult")
         return sessionStartResult
             ?: throw IOException("Agent runtime did not launch any Genie sessions")
     }
