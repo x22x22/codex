@@ -257,6 +257,7 @@ fn run_login_server_impl(
         }
     };
     progress.emit(LoginPhase::LocalServerBound { port: actual_port });
+    info!(port = actual_port, "local callback server bound");
     let server = Arc::new(server);
 
     let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
@@ -278,7 +279,7 @@ fn run_login_server_impl(
                 match tx.blocking_send(request) {
                     Ok(()) => {}
                     Err(error) => {
-                        eprintln!("Failed to send request to channel: {error}");
+                        error!(%error, "failed to forward login request to async handler");
                         return Err(io::Error::other("Failed to send request to channel"));
                     }
                 }
@@ -297,6 +298,7 @@ fn run_login_server_impl(
         tokio::spawn(async move {
             let _ = ready_tx.send(());
             progress.emit(LoginPhase::WaitingForCallback);
+            info!("waiting for oauth callback from browser");
 
             let result = loop {
                 tokio::select! {
@@ -375,6 +377,7 @@ fn run_login_server_impl(
 
     if opts.open_browser {
         if ready_rx.recv_timeout(Duration::from_secs(2)).is_err() {
+            error!("timed out waiting for callback handler readiness");
             progress.emit(LoginPhase::Failed {
                 phase: LoginFailurePhase::BindLocalServer,
                 category: LoginFailureCategory::LocalServerUnavailable,
@@ -385,7 +388,9 @@ fn run_login_server_impl(
             ));
         }
         progress.emit(LoginPhase::OpeningBrowser);
+        info!("opening browser for oauth authorization");
         if let Err(err) = webbrowser::open(&auth_url) {
+            warn!(%err, "failed to open browser for oauth authorization");
             progress.emit(LoginPhase::Failed {
                 phase: LoginFailurePhase::OpenBrowser,
                 category: LoginFailureCategory::BrowserLaunchFailed,
@@ -425,7 +430,7 @@ async fn process_request(
     let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
         Ok(u) => u,
         Err(e) => {
-            eprintln!("URL parse error: {e}");
+            warn!(%e, "failed to parse local callback url");
             return HandledRequest::Response(
                 Response::from_string("Bad Request").with_status_code(400),
             );
@@ -477,6 +482,7 @@ async fn process_request(
                 let message = oauth_callback_error_message(error_code, error_description);
                 warn!(
                     error_code,
+                    error_description = error_description.unwrap_or(""),
                     has_error_description = error_description.is_some_and(|s| !s.trim().is_empty()),
                     "oauth callback returned error"
                 );
@@ -497,6 +503,10 @@ async fn process_request(
                 _ => {
                     let message =
                         "Missing authorization code. Sign-in could not be completed.".to_string();
+                    warn!(
+                        has_state,
+                        has_error, "login callback missing authorization code"
+                    );
                     progress.emit(LoginPhase::Failed {
                         phase: LoginFailurePhase::ValidateCallback,
                         category: LoginFailureCategory::MissingAuthorizationCode,
@@ -538,6 +548,7 @@ async fn process_request(
                         .await
                         .ok();
                     progress.emit(LoginPhase::PersistingCredentials);
+                    info!("persisting login credentials");
                     if let Err(err) = persist_tokens_async(
                         &opts.codex_home,
                         api_key.clone(),
@@ -561,6 +572,7 @@ async fn process_request(
                             Some(&err.to_string()),
                         );
                     }
+                    info!("login credentials persisted");
 
                     let success_url = compose_success_url(
                         actual_port,
@@ -571,6 +583,7 @@ async fn process_request(
                     match tiny_http::Header::from_bytes(&b"Location"[..], success_url.as_bytes()) {
                         Ok(header) => {
                             progress.emit(LoginPhase::Succeeded);
+                            info!("browser login flow completed");
                             HandledRequest::RedirectWithHeader(header)
                         }
                         Err(_) => {
@@ -749,6 +762,10 @@ fn bind_server(port: u16, progress: &ProgressEmitter) -> io::Result<Server> {
     let started_at = Instant::now();
 
     loop {
+        info!(
+            attempt = attempts + 1,
+            port, "binding local callback server"
+        );
         progress.emit(LoginPhase::BindingLocalServer {
             attempt: attempts + 1,
         });
@@ -766,10 +783,15 @@ fn bind_server(port: u16, progress: &ProgressEmitter) -> io::Result<Server> {
                 if is_addr_in_use {
                     if !cancel_attempted {
                         cancel_attempted = true;
+                        warn!(
+                            attempt = attempts,
+                            port,
+                            "previous login server detected on callback port; cancelling stale session"
+                        );
                         progress
                             .emit(LoginPhase::PreviousLoginServerDetected { attempt: attempts });
                         if let Err(cancel_err) = send_cancel_request(port) {
-                            eprintln!("Failed to cancel previous login server: {cancel_err}");
+                            warn!(%cancel_err, port, "failed to cancel previous login server");
                         }
                     }
 
@@ -779,6 +801,12 @@ fn bind_server(port: u16, progress: &ProgressEmitter) -> io::Result<Server> {
                         let message = format!(
                             "Port {bind_address} is already in use after {} ms",
                             started_at.elapsed().as_millis()
+                        );
+                        error!(
+                            port,
+                            attempts,
+                            elapsed_ms = started_at.elapsed().as_millis(),
+                            "local callback server port remained in use"
                         );
                         progress.emit(LoginPhase::Failed {
                             phase: LoginFailurePhase::BindLocalServer,
@@ -792,6 +820,7 @@ fn bind_server(port: u16, progress: &ProgressEmitter) -> io::Result<Server> {
                 }
 
                 let message = err.to_string();
+                error!(port, error = %message, "failed to bind local callback server");
                 progress.emit(LoginPhase::Failed {
                     phase: LoginFailurePhase::BindLocalServer,
                     category: LoginFailureCategory::LocalServerUnavailable,
@@ -961,6 +990,7 @@ pub(crate) async fn exchange_code_for_tokens(
             %status,
             error_code = detail.error_code.as_deref().unwrap_or("unknown"),
             error_message = detail.error_message.as_deref().unwrap_or("unknown"),
+            error_detail = %detail,
             "oauth token exchange returned non-success status"
         );
         return Err(TokenExchangeError::endpoint_rejected(
@@ -1074,7 +1104,7 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
     let (_h, payload_b64, _s) = match (parts.next(), parts.next(), parts.next()) {
         (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => (h, p, s),
         _ => {
-            eprintln!("Invalid JWT format while extracting claims");
+            warn!("invalid jwt format while extracting claims");
             return serde_json::Map::new();
         }
     };
@@ -1087,14 +1117,14 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
                 {
                     return obj.clone();
                 }
-                eprintln!("JWT payload missing expected 'https://api.openai.com/auth' object");
+                warn!("jwt payload missing expected 'https://api.openai.com/auth' object");
             }
             Err(e) => {
-                eprintln!("Failed to parse JWT JSON payload: {e}");
+                warn!(%e, "failed to parse jwt json payload");
             }
         },
         Err(e) => {
-            eprintln!("Failed to base64url-decode JWT payload: {e}");
+            warn!(%e, "failed to base64url-decode jwt payload");
         }
     }
     serde_json::Map::new()
