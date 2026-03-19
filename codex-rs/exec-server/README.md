@@ -1,6 +1,6 @@
 # codex-exec-server
 
-`codex-exec-server` is a small standalone JSON-RPC server for spawning
+`codex-exec-server` is a small standalone stdio JSON-RPC server for spawning
 and controlling subprocesses through `codex-utils-pty`.
 
 This PR intentionally lands only the standalone binary, client, wire protocol,
@@ -18,16 +18,20 @@ unified-exec in this PR; it is only the standalone transport layer.
 
 ## Transport
 
-The server speaks the shared `codex-app-server-protocol` message envelope on
-the wire.
+The server speaks newline-delimited JSON-RPC 2.0 over stdio.
 
-The standalone binary supports:
+- `stdin`: one JSON-RPC message per line
+- `stdout`: one JSON-RPC message per line
+- `stderr`: reserved for logs / process errors
 
-- `ws://IP:PORT` (default)
+Like the app-server transport, messages on the wire omit the `"jsonrpc":"2.0"`
+field and use the shared `codex-app-server-protocol` envelope types.
 
-Wire framing:
+The current protocol version is:
 
-- websocket: one JSON-RPC message per websocket text frame
+```text
+exec-server.v0
+```
 
 ## Lifecycle
 
@@ -41,8 +45,8 @@ Each connection follows this sequence:
 If the server receives any notification other than `initialized`, it replies
 with an error using request id `-1`.
 
-If the websocket connection closes, the server terminates any remaining managed
-processes for that client connection.
+If the stdio connection closes, the server terminates any remaining managed
+processes before exiting.
 
 ## API
 
@@ -61,7 +65,9 @@ Request params:
 Response:
 
 ```json
-{}
+{
+  "protocolVersion": "exec-server.v0"
+}
 ```
 
 ### `initialized`
@@ -237,13 +243,13 @@ Typical error cases:
 The crate exports:
 
 - `ExecServerClient`
+- `ExecServerLaunchCommand`
+- `ExecServerProcess`
 - `ExecServerError`
-- `ExecServerClientConnectOptions`
-- `RemoteExecServerConnectArgs`
-- protocol structs `InitializeParams` and `InitializeResponse`
-- `DEFAULT_LISTEN_URL` and `ExecServerListenUrlParseError`
-- `run_main_with_listen_url()`
-- `run_main()` for embedding the websocket server in a binary
+- protocol structs such as `ExecParams`, `ExecResponse`,
+  `WriteParams`, `TerminateParams`, `ExecOutputDeltaNotification`, and
+  `ExecExitedNotification`
+- `run_main()` for embedding the stdio server in a binary
 
 ## Example session
 
@@ -251,7 +257,7 @@ Initialize:
 
 ```json
 {"id":1,"method":"initialize","params":{"clientName":"example-client"}}
-{"id":1,"result":{}}
+{"id":1,"result":{"protocolVersion":"exec-server.v0"}}
 {"method":"initialized","params":{}}
 ```
 

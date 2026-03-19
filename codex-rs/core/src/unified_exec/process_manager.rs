@@ -539,42 +539,14 @@ impl UnifiedExecProcessManager {
 
     pub(crate) async fn open_session_with_exec_env(
         &self,
+        process_id: i32,
         env: &ExecRequest,
         tty: bool,
-        mut spawn_lifecycle: SpawnLifecycleHandle,
+        spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let (program, args) = env
-            .command
-            .split_first()
-            .ok_or(UnifiedExecError::MissingCommandLine)?;
-        let inherited_fds = spawn_lifecycle.inherited_fds();
-
-        let spawn_result = if tty {
-            codex_utils_pty::pty::spawn_process_with_inherited_fds(
-                program,
-                args,
-                env.cwd.as_path(),
-                &env.env,
-                &env.arg0,
-                codex_utils_pty::TerminalSize::default(),
-                &inherited_fds,
-            )
+        self.session_factory
+            .open_session(process_id, env, tty, spawn_lifecycle)
             .await
-        } else {
-            codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
-                program,
-                args,
-                env.cwd.as_path(),
-                &env.env,
-                &env.arg0,
-                &inherited_fds,
-            )
-            .await
-        };
-        let spawned =
-            spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        spawn_lifecycle.after_spawn();
-        UnifiedExecProcess::from_spawned(spawned, env.sandbox, spawn_lifecycle).await
     }
 
     pub(super) async fn open_session_with_sandbox(
@@ -610,6 +582,7 @@ impl UnifiedExecProcessManager {
             })
             .await;
         let req = UnifiedExecToolRequest {
+            process_id: request.process_id,
             command: request.command.clone(),
             cwd,
             env,

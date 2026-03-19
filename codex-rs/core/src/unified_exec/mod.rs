@@ -38,6 +38,7 @@ use crate::codex::TurnContext;
 use crate::sandboxing::SandboxPermissions;
 
 mod async_watcher;
+mod backend;
 mod errors;
 mod head_tail_buffer;
 mod process;
@@ -47,6 +48,9 @@ pub(crate) fn set_deterministic_process_ids_for_tests(enabled: bool) {
     process_manager::set_deterministic_process_ids_for_tests(enabled);
 }
 
+pub(crate) use backend::UnifiedExecSessionFactoryHandle;
+pub(crate) use backend::local_unified_exec_session_factory;
+pub(crate) use backend::unified_exec_session_factory_for_config;
 pub(crate) use errors::UnifiedExecError;
 pub(crate) use process::NoopSpawnLifecycle;
 #[cfg(unix)]
@@ -123,14 +127,26 @@ impl ProcessStore {
 pub(crate) struct UnifiedExecProcessManager {
     process_store: Mutex<ProcessStore>,
     max_write_stdin_yield_time_ms: u64,
+    session_factory: UnifiedExecSessionFactoryHandle,
 }
 
 impl UnifiedExecProcessManager {
     pub(crate) fn new(max_write_stdin_yield_time_ms: u64) -> Self {
+        Self::with_session_factory(
+            max_write_stdin_yield_time_ms,
+            local_unified_exec_session_factory(),
+        )
+    }
+
+    pub(crate) fn with_session_factory(
+        max_write_stdin_yield_time_ms: u64,
+        session_factory: UnifiedExecSessionFactoryHandle,
+    ) -> Self {
         Self {
             process_store: Mutex::new(ProcessStore::default()),
             max_write_stdin_yield_time_ms: max_write_stdin_yield_time_ms
                 .max(MIN_EMPTY_YIELD_TIME_MS),
+            session_factory,
         }
     }
 }

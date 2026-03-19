@@ -543,6 +543,14 @@ pub struct Config {
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
+    /// When `true`, route unified-exec process launches through `codex-exec-server`
+    /// instead of spawning them directly in-process.
+    pub experimental_unified_exec_use_exec_server: bool,
+
+    /// When `true`, start a session-scoped local `codex-exec-server` subprocess
+    /// during session startup and route unified-exec calls through it.
+    pub experimental_unified_exec_spawn_local_exec_server: bool,
+
     /// Maximum poll window for background terminal output (`write_stdin`), in milliseconds.
     /// Default: `300000` (5 minutes).
     pub background_terminal_max_timeout: u64,
@@ -1513,6 +1521,8 @@ pub struct ConfigToml {
     pub experimental_instructions_file: Option<AbsolutePathBuf>,
     pub experimental_compact_prompt_file: Option<AbsolutePathBuf>,
     pub experimental_use_unified_exec_tool: Option<bool>,
+    pub experimental_unified_exec_use_exec_server: Option<bool>,
+    pub experimental_unified_exec_spawn_local_exec_server: Option<bool>,
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
@@ -2482,6 +2492,14 @@ impl Config {
 
         let include_apply_patch_tool_flag = features.enabled(Feature::ApplyPatchFreeform);
         let use_experimental_unified_exec_tool = features.enabled(Feature::UnifiedExec);
+        let experimental_unified_exec_use_exec_server = config_profile
+            .experimental_unified_exec_use_exec_server
+            .or(cfg.experimental_unified_exec_use_exec_server)
+            .unwrap_or(false);
+        let experimental_unified_exec_spawn_local_exec_server = config_profile
+            .experimental_unified_exec_spawn_local_exec_server
+            .or(cfg.experimental_unified_exec_spawn_local_exec_server)
+            .unwrap_or(false);
 
         let forced_chatgpt_workspace_id =
             cfg.forced_chatgpt_workspace_id.as_ref().and_then(|value| {
@@ -2777,6 +2795,8 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
             use_experimental_unified_exec_tool,
+            experimental_unified_exec_use_exec_server,
+            experimental_unified_exec_spawn_local_exec_server,
             background_terminal_max_timeout,
             ghost_snapshot,
             features,
