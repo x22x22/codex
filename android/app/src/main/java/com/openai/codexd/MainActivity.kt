@@ -41,6 +41,8 @@ class MainActivity : Activity() {
     private var statusRefreshInFlight = false
     @Volatile
     private var agentRefreshInFlight = false
+    @Volatile
+    private var latestRuntimeStatus: RuntimeStatus? = null
 
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val agentSessionController by lazy { AgentSessionController(this) }
@@ -106,6 +108,7 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.socket_path).text = defaultSocketPath()
         findViewById<TextView>(R.id.codex_home).text = defaultCodexHome()
         isServiceRunning = false
+        latestRuntimeStatus = null
         updateAuthUi("Auth status: unknown", false, null, emptyList())
         updateAgentUi(AgentSnapshot.unavailable)
     }
@@ -400,8 +403,10 @@ class MainActivity : Activity() {
         thread {
             val socketPath = defaultSocketPath()
             val result = runCatching { fetchAuthStatusWithRetry(socketPath) }
+            val runtimeStatus = runCatching { fetchRuntimeStatusWithRetry(socketPath) }.getOrNull()
             result.onFailure { err ->
                 isServiceRunning = false
+                latestRuntimeStatus = null
                 updateAuthUi(
                     "Auth status: codexd stopped or unavailable (${err.message})",
                     false,
@@ -411,6 +416,7 @@ class MainActivity : Activity() {
             }
             result.onSuccess { status ->
                 isServiceRunning = true
+                latestRuntimeStatus = runtimeStatus
                 val message = if (status.authenticated) {
                     val emailSuffix = status.accountEmail?.let { " ($it)" } ?: ""
                     "Auth status: signed in$emailSuffix"
@@ -467,6 +473,7 @@ class MainActivity : Activity() {
     private fun updateAgentUi(snapshot: AgentSnapshot, unavailableMessage: String? = null) {
         runOnUiThread {
             val statusView = findViewById<TextView>(R.id.agent_status)
+            val runtimeStatusView = findViewById<TextView>(R.id.agent_runtime_status)
             val genieView = findViewById<TextView>(R.id.agent_genie_package)
             val focusView = findViewById<TextView>(R.id.agent_session_focus)
             val groupView = findViewById<TextView>(R.id.agent_session_group)
@@ -485,6 +492,7 @@ class MainActivity : Activity() {
                 statusView.text = unavailableMessage?.let {
                     "Agent framework unavailable ($it)"
                 } ?: "Agent framework unavailable on this build"
+                runtimeStatusView.text = renderAgentRuntimeStatus()
                 genieView.text = "No GENIE role holder configured"
                 focusView.text = "No framework session selected"
                 groupView.text = "No framework sessions available"
@@ -508,6 +516,7 @@ class MainActivity : Activity() {
                 snapshot.roleHolders.joinToString(", ")
             }
             statusView.text = "Agent framework active. Genie role holders: $roleHolders"
+            runtimeStatusView.text = renderAgentRuntimeStatus()
             genieView.text = snapshot.selectedGeniePackage ?: "No GENIE role holder configured"
             focusView.text = renderSelectedSession(snapshot)
             groupView.text = renderSessionGroup(snapshot)
@@ -601,6 +610,28 @@ class MainActivity : Activity() {
             append("\n\nSelected child ${selectedSession.sessionId}\n")
             append(selectedSession.timeline)
         }
+    }
+
+    private fun renderAgentRuntimeStatus(): String {
+        val runtimeStatus = latestRuntimeStatus
+        if (runtimeStatus == null) {
+            return if (isServiceRunning) {
+                "Agent runtime: probing codexd..."
+            } else {
+                "Agent runtime: codexd unavailable"
+            }
+        }
+        val authSummary = if (runtimeStatus.authenticated) {
+            runtimeStatus.accountEmail?.let { "signed in ($it)" } ?: "signed in"
+        } else {
+            "not signed in"
+        }
+        val configuredModelSuffix = runtimeStatus.configuredModel
+            ?.takeIf { it != runtimeStatus.effectiveModel }
+            ?.let { ", configured=$it" }
+            ?: ""
+        val effectiveModel = runtimeStatus.effectiveModel ?: "unknown"
+        return "Agent runtime: $authSummary, provider=${runtimeStatus.modelProviderId}, effective=$effectiveModel$configuredModelSuffix, clients=${runtimeStatus.clientCount}, base=${runtimeStatus.upstreamBaseUrl}"
     }
 
     private fun updateAuthUi(
@@ -702,6 +733,16 @@ class MainActivity : Activity() {
         val clients: List<ClientStats>,
     )
 
+    private data class RuntimeStatus(
+        val authenticated: Boolean,
+        val accountEmail: String?,
+        val clientCount: Int,
+        val modelProviderId: String,
+        val configuredModel: String?,
+        val effectiveModel: String?,
+        val upstreamBaseUrl: String,
+    )
+
     private data class ClientStats(
         val id: String,
         val activeConnections: Int,
@@ -774,6 +815,28 @@ class MainActivity : Activity() {
             accountEmail = accountEmail,
             clientCount = clientCount,
             clients = clients,
+        )
+    }
+
+    private fun fetchRuntimeStatusWithRetry(socketPath: String): RuntimeStatus {
+        val response = executeSocketRequestWithRetry(
+            socketPath,
+            "GET",
+            "/internal/runtime/status",
+            null,
+        )
+        if (response.statusCode != 200) {
+            throw IOException("HTTP ${response.statusCode}: ${response.body}")
+        }
+        val json = JSONObject(response.body)
+        return RuntimeStatus(
+            authenticated = json.optBoolean("authenticated", false),
+            accountEmail = if (json.isNull("accountEmail")) null else json.optString("accountEmail"),
+            clientCount = json.optInt("clientCount", 0),
+            modelProviderId = json.optString("modelProviderId", "unknown"),
+            configuredModel = if (json.isNull("configuredModel")) null else json.optString("configuredModel"),
+            effectiveModel = if (json.isNull("effectiveModel")) null else json.optString("effectiveModel"),
+            upstreamBaseUrl = json.optString("upstreamBaseUrl", "unknown"),
         )
     }
 
