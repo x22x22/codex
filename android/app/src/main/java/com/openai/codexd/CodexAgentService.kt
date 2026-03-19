@@ -4,7 +4,6 @@ import android.app.agent.AgentManager
 import android.app.agent.AgentService
 import android.app.agent.AgentSessionEvent
 import android.app.agent.AgentSessionInfo
-import android.os.Process
 import android.util.Log
 import java.io.IOException
 import kotlin.concurrent.thread
@@ -12,16 +11,24 @@ import kotlin.concurrent.thread
 class CodexAgentService : AgentService() {
     companion object {
         private const val TAG = "CodexAgentService"
-        private const val BRIDGE_ANSWER_RETRY_COUNT = 10
-        private const val BRIDGE_ANSWER_RETRY_DELAY_MS = 50L
+        private const val AUTO_ANSWER_ESCALATE_PREFIX = "ESCALATE:"
         private const val AUTO_ANSWER_INSTRUCTIONS =
-            "You are Codex acting as the Android Agent supervising a Genie execution. Reply with the exact free-form answer that should be sent back to the Genie. Keep it short and actionable. If the Genie can proceed without extra constraints, reply with exactly: continue"
+            "You are Codex acting as the Android Agent supervising a Genie execution. If you can answer the current Genie question from the available session context, call the framework session tool `android.framework.sessions.answer_question` exactly once with a short free-form answer. You may inspect current framework state with `android.framework.sessions.list`. If user input is required, do not call any framework tool. Instead reply with `ESCALATE: ` followed by the exact question the Agent should ask the user."
         private const val MAX_AUTO_ANSWER_CONTEXT_CHARS = 800
+    }
+
+    private sealed class AutoAnswerResult {
+        data object Answered : AutoAnswerResult()
+
+        data class Escalate(
+            val question: String,
+        ) : AutoAnswerResult()
     }
 
     private val handledGenieQuestions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val pendingGenieQuestions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val agentManager by lazy { getSystemService(AgentManager::class.java) }
+    private val sessionController by lazy { AgentSessionController(this) }
 
     override fun onSessionChanged(session: AgentSessionInfo) {
         Log.i(TAG, "onSessionChanged $session")
@@ -34,37 +41,6 @@ class CodexAgentService : AgentService() {
         AgentQuestionNotifier.cancel(this, sessionId)
         handledGenieQuestions.removeIf { it.startsWith("$sessionId:") }
         pendingGenieQuestions.removeIf { it.startsWith("$sessionId:") }
-    }
-
-    private fun answerQuestionWithRetry(manager: AgentManager, sessionId: String, response: String) {
-        repeat(BRIDGE_ANSWER_RETRY_COUNT) { attempt ->
-            runCatching {
-                manager.answerQuestion(sessionId, response)
-            }.onSuccess {
-                return
-            }.onFailure { err ->
-                if (attempt == BRIDGE_ANSWER_RETRY_COUNT - 1 || !isBridgeQuestionPending(manager, sessionId, err)) {
-                    throw err
-                }
-                Thread.sleep(BRIDGE_ANSWER_RETRY_DELAY_MS)
-            }
-        }
-    }
-
-    private fun isSessionWaitingForUser(manager: AgentManager, sessionId: String): Boolean {
-        return manager.getSessions(Process.myUid() / 100000).any { session ->
-            session.sessionId == sessionId &&
-                session.state == AgentSessionInfo.STATE_WAITING_FOR_USER
-        }
-    }
-
-    private fun isBridgeQuestionPending(
-        manager: AgentManager,
-        sessionId: String,
-        err: Throwable,
-    ): Boolean {
-        return err.message?.contains("not waiting for user input", ignoreCase = true) == true ||
-            !isSessionWaitingForUser(manager, sessionId)
     }
 
     private fun maybeAutoAnswerGenieQuestion(session: AgentSessionInfo) {
@@ -81,14 +57,26 @@ class CodexAgentService : AgentService() {
         thread(name = "CodexAgentAutoAnswer-${session.sessionId}") {
             Log.i(TAG, "Attempting Agent auto-answer for ${session.sessionId}")
             runCatching {
-                val answer = requestGenieAutoAnswer(session, question, events)
-                answerQuestionWithRetry(manager, session.sessionId, answer)
-                handledGenieQuestions.add(questionKey)
-                AgentQuestionNotifier.cancel(this, session.sessionId)
-                Log.i(TAG, "Auto-answered Genie question for ${session.sessionId}")
+                when (val result = requestGenieAutoAnswer(session, question, events)) {
+                    AutoAnswerResult.Answered -> {
+                        handledGenieQuestions.add(questionKey)
+                        AgentQuestionNotifier.cancel(this, session.sessionId)
+                        Log.i(TAG, "Auto-answered Genie question for ${session.sessionId}")
+                    }
+                    is AutoAnswerResult.Escalate -> {
+                        if (sessionController.isSessionWaitingForUser(session.sessionId)) {
+                            AgentQuestionNotifier.showQuestion(
+                                context = this,
+                                sessionId = session.sessionId,
+                                targetPackage = session.targetPackage,
+                                question = result.question,
+                            )
+                        }
+                    }
+                }
             }.onFailure { err ->
                 Log.i(TAG, "Agent auto-answer unavailable for ${session.sessionId}: ${err.message}")
-                if (isSessionWaitingForUser(manager, session.sessionId)) {
+                if (sessionController.isSessionWaitingForUser(session.sessionId)) {
                     AgentQuestionNotifier.showQuestion(
                         context = this,
                         sessionId = session.sessionId,
@@ -127,16 +115,56 @@ class CodexAgentService : AgentService() {
         session: AgentSessionInfo,
         question: String,
         events: List<AgentSessionEvent>,
-    ): String {
+    ): AutoAnswerResult {
         val runtimeStatus = AgentCodexAppServerClient.readRuntimeStatus(this)
         if (!runtimeStatus.authenticated) {
             throw IOException("Agent runtime is not authenticated")
         }
-        return AgentCodexAppServerClient.requestText(
+        val frameworkToolBridge = AgentFrameworkToolBridge(this, sessionController)
+        var answered = false
+        val response = AgentCodexAppServerClient.requestText(
             context = this,
             instructions = AUTO_ANSWER_INSTRUCTIONS,
             prompt = buildAutoAnswerPrompt(session, question, events),
-        )
+            dynamicTools = frameworkToolBridge.buildQuestionResolutionToolSpecs(),
+            toolCallHandler = { toolName, arguments ->
+                if (
+                    toolName == AgentFrameworkToolBridge.ANSWER_QUESTION_TOOL &&
+                    arguments.optString("sessionId").trim().isEmpty()
+                ) {
+                    arguments.put("sessionId", session.sessionId)
+                }
+                if (
+                    toolName == AgentFrameworkToolBridge.ANSWER_QUESTION_TOOL &&
+                    arguments.optString("parentSessionId").trim().isEmpty() &&
+                    !session.parentSessionId.isNullOrBlank()
+                ) {
+                    arguments.put("parentSessionId", session.parentSessionId)
+                }
+                val toolResult = frameworkToolBridge.handleToolCall(
+                    toolName = toolName,
+                    arguments = arguments,
+                    userObjective = question,
+                    focusedSessionId = session.sessionId,
+                )
+                if (toolName == AgentFrameworkToolBridge.ANSWER_QUESTION_TOOL) {
+                    answered = true
+                }
+                toolResult
+            },
+        ).trim()
+        if (answered) {
+            return AutoAnswerResult.Answered
+        }
+        if (response.startsWith(AUTO_ANSWER_ESCALATE_PREFIX, ignoreCase = true)) {
+            val escalateQuestion = response.substringAfter(':').trim().ifEmpty { question }
+            return AutoAnswerResult.Escalate(escalateQuestion)
+        }
+        if (response.isNotBlank()) {
+            sessionController.answerQuestion(session.sessionId, response, session.parentSessionId)
+            return AutoAnswerResult.Answered
+        }
+        throw IOException("Agent runtime did not return an answer")
     }
 
     private fun buildAutoAnswerPrompt(
@@ -165,6 +193,7 @@ class CodexAgentService : AgentService() {
         }
         return context.takeLast(MAX_AUTO_ANSWER_CONTEXT_CHARS)
     }
+
     private fun findVisibleQuestion(events: List<AgentSessionEvent>): String? {
         return events.lastOrNull { event ->
             event.type == AgentSessionEvent.TYPE_QUESTION &&

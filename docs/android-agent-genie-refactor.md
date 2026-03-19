@@ -49,7 +49,9 @@ The current repo now contains these implementation slices:
 - Non-bridge Genie questions surface through AgentSDK question flow by mapping
   `request_user_input` back into Agent-managed questions and answers.
 - The Agent also attempts to answer Genie questions through its hosted Codex
-  runtime before falling back to notification/UI escalation.
+  runtime before falling back to notification/UI escalation, and now submits
+  those answers through the same framework-session bridge instead of a separate
+  Kotlin-only path.
 - Runtime testing on the emulator shows that the exported Agent Binder service
   is reachable from Genie execution for the current bootstrap calls, while
   direct cross-app access to the Agent-owned abstract socket is not a valid
@@ -135,7 +137,7 @@ foreground-service auth/status surface while this refactor proceeds.
 - Direct session launcher in the Agent UI
 - Agent-side target-package planning with an optional package override
 - Hosted Agent planning via standard Android shell tools already available on-device
-- Dedicated framework-session bridge tool for direct Genie-session launch
+- Dedicated framework-session bridge tools for direct Genie-session launch and question resolution
 - Framework session inspection UI in the Agent app
 - Question answering and detached-target attach controls
 - Exported Binder bridge request handling in `CodexAgentBridgeService`

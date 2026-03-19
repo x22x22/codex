@@ -11,6 +11,8 @@ import java.util.concurrent.Executor
 class AgentSessionController(context: Context) {
     companion object {
         private const val PREFERRED_GENIE_PACKAGE = "com.openai.codex.genie"
+        private const val QUESTION_ANSWER_RETRY_COUNT = 10
+        private const val QUESTION_ANSWER_RETRY_DELAY_MS = 50L
     }
 
     private val agentManager = context.getSystemService(AgentManager::class.java)
@@ -128,9 +130,28 @@ class AgentSessionController(context: Context) {
 
     fun answerQuestion(sessionId: String, answer: String, parentSessionId: String?) {
         val manager = requireAgentManager()
-        manager.answerQuestion(sessionId, answer)
-        if (parentSessionId != null) {
-            manager.publishTrace(parentSessionId, "Answered question for $sessionId: $answer")
+        repeat(QUESTION_ANSWER_RETRY_COUNT) { attempt ->
+            runCatching {
+                manager.answerQuestion(sessionId, answer)
+            }.onSuccess {
+                if (parentSessionId != null) {
+                    manager.publishTrace(parentSessionId, "Answered question for $sessionId: $answer")
+                }
+                return
+            }.onFailure { err ->
+                if (attempt == QUESTION_ANSWER_RETRY_COUNT - 1 || !shouldRetryAnswerQuestion(sessionId, err)) {
+                    throw err
+                }
+                Thread.sleep(QUESTION_ANSWER_RETRY_DELAY_MS)
+            }
+        }
+    }
+
+    fun isSessionWaitingForUser(sessionId: String): Boolean {
+        val manager = agentManager ?: return false
+        return manager.getSessions(currentUserId()).any { session ->
+            session.sessionId == sessionId &&
+                session.state == AgentSessionInfo.STATE_WAITING_FOR_USER
         }
     }
 
@@ -169,6 +190,14 @@ class AgentSessionController(context: Context) {
 
     private fun requireAgentManager(): AgentManager {
         return checkNotNull(agentManager) { "AgentManager unavailable" }
+    }
+
+    private fun shouldRetryAnswerQuestion(
+        sessionId: String,
+        err: Throwable,
+    ): Boolean {
+        return err.message?.contains("not waiting for user input", ignoreCase = true) == true ||
+            !isSessionWaitingForUser(sessionId)
     }
 
     private fun chooseSelectedSession(

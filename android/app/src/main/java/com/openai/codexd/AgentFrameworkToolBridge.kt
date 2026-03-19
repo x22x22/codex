@@ -63,10 +63,14 @@ class AgentFrameworkToolBridge(
         return JSONArray().put(buildStartDirectSessionToolSpec())
     }
 
-    fun buildSessionManagementToolSpecs(): JSONArray {
+    fun buildQuestionResolutionToolSpecs(): JSONArray {
         return JSONArray()
             .put(buildListSessionsToolSpec())
             .put(buildAnswerQuestionToolSpec())
+    }
+
+    fun buildSessionManagementToolSpecs(): JSONArray {
+        return buildQuestionResolutionToolSpecs()
             .put(buildAttachTargetToolSpec())
             .put(buildCancelSessionToolSpec())
     }
