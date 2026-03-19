@@ -1,15 +1,10 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use codex_exec_server::Environment;
 use codex_exec_server::ExecServerClient;
-use codex_exec_server::ExecServerClientConnectOptions;
-use codex_exec_server::ExecServerLaunchCommand;
-use codex_exec_server::SpawnedExecServer;
-use codex_exec_server::spawn_local_exec_server;
 use tracing::debug;
 
-use crate::config::Config;
 use crate::exec::SandboxType;
 use crate::sandboxing::ExecRequest;
 use crate::unified_exec::SpawnLifecycleHandle;
@@ -51,32 +46,18 @@ impl UnifiedExecSessionFactory for LocalUnifiedExecSessionFactory {
 
 pub(crate) struct ExecServerUnifiedExecSessionFactory {
     client: ExecServerClient,
-    _spawned_server: Option<Arc<SpawnedExecServer>>,
 }
 
 impl std::fmt::Debug for ExecServerUnifiedExecSessionFactory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExecServerUnifiedExecSessionFactory")
-            .field("owns_spawned_server", &self._spawned_server.is_some())
             .finish_non_exhaustive()
     }
 }
 
 impl ExecServerUnifiedExecSessionFactory {
     pub(crate) fn from_client(client: ExecServerClient) -> UnifiedExecSessionFactoryHandle {
-        Arc::new(Self {
-            client,
-            _spawned_server: None,
-        })
-    }
-
-    pub(crate) fn from_spawned_server(
-        spawned_server: Arc<SpawnedExecServer>,
-    ) -> UnifiedExecSessionFactoryHandle {
-        Arc::new(Self {
-            client: spawned_server.client().clone(),
-            _spawned_server: Some(spawned_server),
-        })
+        Arc::new(Self { client })
     }
 }
 
@@ -118,45 +99,13 @@ impl UnifiedExecSessionFactory for ExecServerUnifiedExecSessionFactory {
     }
 }
 
-pub(crate) async fn unified_exec_session_factory_for_config(
-    config: &Config,
-    local_exec_server_command: Option<ExecServerLaunchCommand>,
-) -> Result<UnifiedExecSessionFactoryHandle, UnifiedExecError> {
-    if !config.experimental_unified_exec_use_exec_server {
-        return Ok(local_unified_exec_session_factory());
-    }
-
-    if config.experimental_unified_exec_spawn_local_exec_server {
-        let command = local_exec_server_command.unwrap_or_else(default_local_exec_server_command);
-        let spawned_server =
-            spawn_local_exec_server(command, ExecServerClientConnectOptions::default())
-                .await
-                .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        return Ok(ExecServerUnifiedExecSessionFactory::from_spawned_server(
-            Arc::new(spawned_server),
-        ));
-    }
-
-    let client = ExecServerClient::connect_in_process(ExecServerClientConnectOptions::default())
-        .await
-        .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-    Ok(ExecServerUnifiedExecSessionFactory::from_client(client))
-}
-
-fn default_local_exec_server_command() -> ExecServerLaunchCommand {
-    let binary_name = if cfg!(windows) {
-        "codex-exec-server.exe"
+pub(crate) fn unified_exec_session_factory_for_environment(
+    environment: &Environment,
+) -> UnifiedExecSessionFactoryHandle {
+    if let Some(client) = environment.exec_server_client() {
+        ExecServerUnifiedExecSessionFactory::from_client(client)
     } else {
-        "codex-exec-server"
-    };
-    let program = std::env::current_exe()
-        .ok()
-        .map(|current_exe| current_exe.with_file_name(binary_name))
-        .filter(|candidate| candidate.exists())
-        .unwrap_or_else(|| PathBuf::from(binary_name));
-    ExecServerLaunchCommand {
-        program,
-        args: Vec::new(),
+        local_unified_exec_session_factory()
     }
 }
 

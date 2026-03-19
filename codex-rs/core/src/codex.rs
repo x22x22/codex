@@ -314,7 +314,7 @@ use crate::turn_timing::TurnTimingState;
 use crate::turn_timing::record_turn_ttfm_metric;
 use crate::turn_timing::record_turn_ttft_metric;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::unified_exec::unified_exec_session_factory_for_config;
+use crate::unified_exec::unified_exec_session_factory_for_environment;
 use crate::util::backoff;
 use crate::windows_sandbox::WindowsSandboxLevelExt;
 use codex_async_utils::OrCancelExt;
@@ -1774,11 +1774,10 @@ impl Session {
             });
         }
 
-        let unified_exec_session_factory = unified_exec_session_factory_for_config(
-            config.as_ref(),
-            None,
-        )
-        .await?;
+        let environment =
+            Arc::new(Environment::create(config.experimental_exec_server_url.clone()).await?);
+        let unified_exec_session_factory =
+            unified_exec_session_factory_for_environment(environment.as_ref());
 
         let services = SessionServices {
             // Initialize the MCP connection manager with an uninitialized
@@ -1834,9 +1833,7 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: Arc::new(
-                Environment::create(config.experimental_exec_server_url.clone()).await?,
-            ),
+            environment,
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
