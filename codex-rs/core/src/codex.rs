@@ -485,7 +485,7 @@ impl Codex {
 
         let user_instructions = get_user_instructions(&config).await;
 
-        let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
+        let exec_policy = if session_source.is_guardian_reviewer() {
             // Guardian review should rely on the built-in shell safety checks,
             // not on caller-provided exec-policy rules that could shape the
             // reviewer or silently auto-approve commands.
@@ -3433,8 +3433,7 @@ impl Session {
             )
             .into_text(),
         );
-        let separate_guardian_developer_message =
-            crate::guardian::is_guardian_reviewer_source(&session_source);
+        let separate_guardian_developer_message = session_source.is_guardian_reviewer();
         // Keep the guardian policy prompt out of the aggregated developer bundle so it
         // stays isolated as its own top-level developer message for guardian subagents.
         if !separate_guardian_developer_message

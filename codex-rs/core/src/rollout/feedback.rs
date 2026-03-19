@@ -14,6 +14,7 @@ use tracing::warn;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
+use super::list::find_thread_path_by_id_str_in_subdir_via_file_search;
 
 pub fn feedback_rollout_attachment_paths(
     codex_home: &Path,
@@ -107,68 +108,18 @@ fn find_rollout_path_by_thread_id_in_subdir(
     subdir: &str,
     thread_id: &str,
 ) -> Option<PathBuf> {
-    let root = codex_home.join(subdir);
-    if !root.exists() {
-        return None;
-    }
-
-    let expected_suffix = format!("-{thread_id}.jsonl");
-    let mut dirs = vec![root];
-    while let Some(dir) = dirs.pop() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(err) => {
-                warn!(
-                    path = %dir.display(),
-                    error = %err,
-                    "failed to scan rollout directory while resolving guardian rollout"
-                );
-                continue;
-            }
-        };
-
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(err) => {
-                    warn!(
-                        path = %dir.display(),
-                        error = %err,
-                        "failed to read rollout directory entry while resolving guardian rollout"
-                    );
-                    continue;
-                }
-            };
-            let path = entry.path();
-            let file_type = match entry.file_type() {
-                Ok(file_type) => file_type,
-                Err(err) => {
-                    warn!(
-                        path = %path.display(),
-                        error = %err,
-                        "failed to inspect rollout directory entry while resolving guardian rollout"
-                    );
-                    continue;
-                }
-            };
-
-            if file_type.is_dir() {
-                dirs.push(path);
-                continue;
-            }
-
-            if file_type.is_file()
-                && path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.ends_with(&expected_suffix))
-            {
-                return Some(path);
-            }
+    match find_thread_path_by_id_str_in_subdir_via_file_search(codex_home, subdir, thread_id) {
+        Ok(path) => path,
+        Err(err) => {
+            warn!(
+                subdir,
+                thread_id,
+                error = %err,
+                "failed to locate guardian rollout while resolving feedback attachments"
+            );
+            None
         }
     }
-
-    None
 }
 
 fn push_existing_unique_path(

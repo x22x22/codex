@@ -66,12 +66,6 @@ pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
         && turn.config.approvals_reviewer == ApprovalsReviewer::GuardianSubagent
 }
 
-pub(crate) fn is_guardian_reviewer_source(
-    session_source: &codex_protocol::protocol::SessionSource,
-) -> bool {
-    session_source.is_guardian_reviewer()
-}
-
 /// This function always fails closed: any timeout, review-session failure, or
 /// parse failure is treated as a high-risk denial.
 async fn run_guardian_review(

@@ -1167,6 +1167,37 @@ fn truncate_to_seconds(dt: OffsetDateTime) -> Option<OffsetDateTime> {
     dt.replace_nanosecond(0).ok()
 }
 
+pub(crate) fn find_thread_path_by_id_str_in_subdir_via_file_search(
+    codex_home: &Path,
+    subdir: &str,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    // Validate UUID format early.
+    if Uuid::parse_str(id_str).is_err() {
+        return Ok(None);
+    }
+
+    let mut root = codex_home.to_path_buf();
+    root.push(subdir);
+    if !root.exists() {
+        return Ok(None);
+    }
+    // This is safe because we know the values are valid.
+    #[allow(clippy::unwrap_used)]
+    let limit = NonZero::new(1).unwrap();
+    let options = file_search::FileSearchOptions {
+        limit,
+        compute_indices: false,
+        respect_gitignore: false,
+        ..Default::default()
+    };
+
+    let results = file_search::run(id_str, vec![root], options, /*cancel_flag*/ None)
+        .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+
+    Ok(results.matches.into_iter().next().map(|m| m.full_path()))
+}
+
 async fn find_thread_path_by_id_str_in_subdir(
     codex_home: &Path,
     subdir: &str,
@@ -1208,25 +1239,7 @@ async fn find_thread_path_by_id_str_in_subdir(
         );
     }
 
-    let mut root = codex_home.to_path_buf();
-    root.push(subdir);
-    if !root.exists() {
-        return Ok(None);
-    }
-    // This is safe because we know the values are valid.
-    #[allow(clippy::unwrap_used)]
-    let limit = NonZero::new(1).unwrap();
-    let options = file_search::FileSearchOptions {
-        limit,
-        compute_indices: false,
-        respect_gitignore: false,
-        ..Default::default()
-    };
-
-    let results = file_search::run(id_str, vec![root], options, /*cancel_flag*/ None)
-        .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
-
-    let found = results.matches.into_iter().next().map(|m| m.full_path());
+    let found = find_thread_path_by_id_str_in_subdir_via_file_search(codex_home, subdir, id_str)?;
     if let Some(found_path) = found.as_ref() {
         tracing::debug!("state db missing rollout path for thread {id_str}");
         tracing::warn!(
