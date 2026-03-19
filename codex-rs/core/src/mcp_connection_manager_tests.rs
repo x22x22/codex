@@ -409,7 +409,10 @@ async fn list_all_tools_uses_startup_snapshot_while_client_is_pending() {
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
-    manager.clients.insert(
+    Arc::get_mut(&mut manager.backend)
+        .expect("test manager backend should be uniquely owned")
+        .clients
+        .insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
@@ -434,7 +437,10 @@ async fn list_all_tools_blocks_while_client_is_pending_without_startup_snapshot(
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
-    manager.clients.insert(
+    Arc::get_mut(&mut manager.backend)
+        .expect("test manager backend should be uniquely owned")
+        .clients
+        .insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
@@ -456,7 +462,10 @@ async fn list_all_tools_does_not_block_when_startup_snapshot_cache_hit_is_empty(
         .shared();
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
-    manager.clients.insert(
+    Arc::get_mut(&mut manager.backend)
+        .expect("test manager backend should be uniquely owned")
+        .clients
+        .insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: pending_client,
@@ -488,7 +497,10 @@ async fn list_all_tools_uses_startup_snapshot_when_client_startup_fails() {
     let approval_policy = Constrained::allow_any(AskForApproval::OnFailure);
     let mut manager = McpConnectionManager::new_uninitialized(&approval_policy);
     let startup_complete = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    manager.clients.insert(
+    Arc::get_mut(&mut manager.backend)
+        .expect("test manager backend should be uniquely owned")
+        .clients
+        .insert(
         CODEX_APPS_MCP_SERVER_NAME.to_string(),
         AsyncManagedClient {
             client: failed_client,
