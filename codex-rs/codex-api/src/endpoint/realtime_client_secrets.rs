@@ -1,7 +1,6 @@
 use crate::auth::AuthProvider;
 use crate::endpoint::realtime_websocket::RealtimeSessionConfig;
-use crate::endpoint::realtime_websocket::methods_common::normalized_session_mode;
-use crate::endpoint::realtime_websocket::methods_common::session_update_session;
+use crate::endpoint::realtime_websocket::session_update_session_json;
 use crate::endpoint::session::EndpointSession;
 use crate::error::ApiError;
 use crate::provider::Provider;
@@ -61,13 +60,11 @@ impl<T: HttpTransport, A: AuthProvider> RealtimeClientSecretsClient<T, A> {
 }
 
 fn realtime_client_secret_request_body(config: &RealtimeSessionConfig) -> Result<Value, ApiError> {
-    let session_mode = normalized_session_mode(config.event_parser, config.session_mode);
-    let mut session = serde_json::to_value(session_update_session(
+    let mut session = session_update_session_json(
         config.event_parser,
         config.instructions.clone(),
-        session_mode,
-    ))
-    .map_err(|err| ApiError::Stream(format!("failed to encode realtime session config: {err}")))?;
+        config.session_mode,
+    )?;
     if let Some(model) = config.model.as_ref()
         && let Some(session_object) = session.as_object_mut()
     {
