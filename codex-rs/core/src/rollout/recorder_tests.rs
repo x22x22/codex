@@ -16,9 +16,6 @@ use std::fs::{self};
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
@@ -83,14 +80,10 @@ async fn flush_test_rollout_writer(tx: &mpsc::Sender<RolloutCmd>) -> std::io::Re
         .map_err(|e| IoError::other(format!("flush ack should be sent: {e}")))?
 }
 
-async fn wait_for_test_fault_to_fire(fault: &AtomicUsize) {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while fault.load(Ordering::Acquire) != 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("injected rollout fault should be consumed");
+async fn open_read_only_rollout_writer(path: &Path) -> std::io::Result<JsonlWriter> {
+    std::fs::write(path, "")?;
+    let file = tokio::fs::OpenOptions::new().read(true).open(path).await?;
+    Ok(JsonlWriter::new(file))
 }
 
 fn assert_rollout_message_count(text: &str, message: &str, expected: usize) {
@@ -183,17 +176,11 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
 }
 
 #[tokio::test]
-async fn rollout_writer_recovers_after_transient_write_failure() -> std::io::Result<()> {
+async fn rollout_writer_reopens_after_initial_write_error_and_retries_pending_items()
+-> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let rollout_path = home.path().join("rollout.jsonl");
-    let fail_next_writes = Arc::new(AtomicUsize::new(1));
-
-    let file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&rollout_path)
-        .await?;
-    let writer = JsonlWriter::with_fail_next_writes(file, fail_next_writes.clone());
+    let writer = open_read_only_rollout_writer(&rollout_path).await?;
     let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
     let writer_task = tokio::spawn(rollout_writer(
         Some(writer),
@@ -211,11 +198,10 @@ async fn rollout_writer_recovers_after_transient_write_failure() -> std::io::Res
     queue_test_rollout_agent_message(&tx, "first-write-fails")
         .await
         .expect("first write should queue");
-
-    wait_for_test_fault_to_fire(&fail_next_writes).await;
-
-    let _ = queue_test_rollout_agent_message(&tx, "second-write-succeeds").await;
-    let _ = flush_test_rollout_writer(&tx).await;
+    queue_test_rollout_agent_message(&tx, "second-write-succeeds")
+        .await
+        .expect("second write should queue after reopen");
+    flush_test_rollout_writer(&tx).await?;
 
     drop(tx);
 
@@ -238,59 +224,59 @@ async fn rollout_writer_recovers_after_transient_write_failure() -> std::io::Res
 }
 
 #[tokio::test]
-async fn rollout_writer_rolls_back_partial_batch_and_retries_without_duplicates()
--> std::io::Result<()> {
+async fn recorder_retries_persist_after_materialization_failure() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
-    let rollout_path = home.path().join("rollout.jsonl");
-    let fail_next_flushes = Arc::new(AtomicUsize::new(1));
-
-    let file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&rollout_path)
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
         .await?;
-    let writer = JsonlWriter::with_fail_next_flushes(file, fail_next_flushes.clone());
-    let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
-    let writer_task = tokio::spawn(rollout_writer(
-        Some(writer),
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            ThreadId::new(),
+            None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
         None,
-        rx,
         None,
-        home.path().to_path_buf(),
-        rollout_path.clone(),
-        None,
-        None,
-        "test-provider".to_string(),
-        false,
-    ));
+    )
+    .await?;
+    let rollout_path = recorder.rollout_path().to_path_buf();
+    std::fs::create_dir_all(
+        rollout_path
+            .parent()
+            .expect("rollout path should have a parent directory"),
+    )?;
+    std::fs::create_dir(&rollout_path)?;
 
-    tx.send(RolloutCmd::AddItems(vec![
-        test_rollout_agent_message("batch-item-1"),
-        test_rollout_agent_message("batch-item-2"),
-    ]))
-    .await
-    .expect("failed batch should queue");
-    wait_for_test_fault_to_fire(&fail_next_flushes).await;
-
-    queue_test_rollout_agent_message(&tx, "batch-item-3")
+    recorder
+        .record_items(&[test_rollout_agent_message("buffered-before-failure")])
+        .await?;
+    let persist_error = recorder
+        .persist()
         .await
-        .expect("retry trigger should queue");
-    flush_test_rollout_writer(&tx).await?;
-    drop(tx);
+        .expect_err("materialization should fail while the rollout path is a directory");
+    assert!(
+        persist_error.to_string().contains("Is a directory"),
+        "expected a real open failure, got: {persist_error}"
+    );
+
+    std::fs::remove_dir(&rollout_path)?;
+
+    recorder
+        .record_items(&[test_rollout_agent_message("buffered-after-failure")])
+        .await?;
+    recorder.persist().await?;
+    recorder.flush().await?;
 
     let text = std::fs::read_to_string(&rollout_path)?;
-    assert_rollout_message_count(&text, "batch-item-1", 1);
-    assert_rollout_message_count(&text, "batch-item-2", 1);
-    assert_rollout_message_count(&text, "batch-item-3", 1);
-    for line in text.lines() {
-        serde_json::from_str::<serde_json::Value>(line).expect("rollout line should be valid JSON");
-    }
+    assert_rollout_message_count(&text, "buffered-before-failure", 1);
+    assert_rollout_message_count(&text, "buffered-after-failure", 1);
 
-    writer_task
-        .await
-        .expect("writer task should join cleanly")
-        .expect("writer task should exit cleanly after channel closes");
-
+    recorder.shutdown().await?;
     Ok(())
 }
 

@@ -5,12 +5,6 @@ use std::fs::{self};
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
-#[cfg(test)]
-use std::sync::Arc;
-#[cfg(test)]
-use std::sync::atomic::AtomicUsize;
-#[cfg(test)]
-use std::sync::atomic::Ordering;
 
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -761,7 +755,16 @@ async fn rollout_writer(
                 pending_items.extend(items);
 
                 if writer.is_none() {
-                    continue;
+                    if meta.is_some() {
+                        continue;
+                    }
+                    match reopen_rollout_writer(&rollout_path) {
+                        Ok(reopened_writer) => writer = Some(reopened_writer),
+                        Err(err) => {
+                            warn!("rollout reopen failed; keeping pending items queued: {err}");
+                            continue;
+                        }
+                    }
                 }
 
                 write_and_reconcile_items(
@@ -774,18 +777,20 @@ async fn rollout_writer(
                 )
                 .await
                 .map(|()| pending_items.clear())
-                .unwrap_or_else(|err| warn!("rollout write failed; keeping writer alive: {err}"));
+                .unwrap_or_else(|err| {
+                    writer = None;
+                    warn!("rollout write failed; queued items will retry after reopen: {err}");
+                });
             }
             RolloutCmd::Persist { ack } => {
                 if writer.is_none() || meta.is_some() || !pending_items.is_empty() {
                     let result = async {
                         if writer.is_none() {
-                            let Some(log_file_info) = deferred_log_file_info.as_ref() else {
-                                return Err(IoError::other(
-                                    "deferred rollout recorder missing log file metadata",
-                                ));
-                            };
-                            let file = open_log_file(log_file_info.path.as_path())?;
+                            let writer_path = deferred_log_file_info
+                                .as_ref()
+                                .map(|log_file_info| log_file_info.path.as_path())
+                                .unwrap_or(rollout_path.as_path());
+                            let file = open_log_file(writer_path)?;
                             writer = Some(JsonlWriter::new(tokio::fs::File::from_std(file)));
                         }
 
@@ -823,6 +828,7 @@ async fn rollout_writer(
                     .await;
 
                     if let Err(err) = result {
+                        writer = None;
                         warn!("rollout persist failed; keeping writer alive: {err}");
                         let _ = ack.send(Err(err));
                         continue;
@@ -832,9 +838,10 @@ async fn rollout_writer(
             }
             RolloutCmd::Flush { ack } => {
                 // Deferred fresh threads may not have an initialized file yet.
-                if let Some(writer) = writer.as_mut()
-                    && let Err(e) = writer.file.flush().await
+                if let Some(current_writer) = writer.as_mut()
+                    && let Err(e) = current_writer.file.flush().await
                 {
+                    writer = None;
                     warn!("rollout flush failed; keeping writer alive: {e}");
                     let _ = ack.send(Err(e));
                     continue;
@@ -960,10 +967,6 @@ async fn sync_thread_state_after_write(
 
 struct JsonlWriter {
     file: tokio::fs::File,
-    #[cfg(test)]
-    fail_next_writes: Option<Arc<AtomicUsize>>,
-    #[cfg(test)]
-    fail_next_flushes: Option<Arc<AtomicUsize>>,
 }
 
 #[derive(serde::Serialize)]
@@ -975,31 +978,7 @@ struct RolloutLineRef<'a> {
 
 impl JsonlWriter {
     fn new(file: tokio::fs::File) -> Self {
-        Self {
-            file,
-            #[cfg(test)]
-            fail_next_writes: None,
-            #[cfg(test)]
-            fail_next_flushes: None,
-        }
-    }
-
-    #[cfg(test)]
-    fn with_fail_next_writes(file: tokio::fs::File, fail_next_writes: Arc<AtomicUsize>) -> Self {
-        Self {
-            file,
-            fail_next_writes: Some(fail_next_writes),
-            fail_next_flushes: None,
-        }
-    }
-
-    #[cfg(test)]
-    fn with_fail_next_flushes(file: tokio::fs::File, fail_next_flushes: Arc<AtomicUsize>) -> Self {
-        Self {
-            file,
-            fail_next_writes: None,
-            fail_next_flushes: Some(fail_next_flushes),
-        }
+        Self { file }
     }
 
     async fn write_rollout_item(&mut self, rollout_item: &RolloutItem) -> std::io::Result<()> {
@@ -1008,17 +987,6 @@ impl JsonlWriter {
     }
 
     async fn write_rollout_items(&mut self, rollout_items: &[RolloutItem]) -> std::io::Result<()> {
-        #[cfg(test)]
-        if let Some(fail_next_writes) = self.fail_next_writes.as_ref()
-            && fail_next_writes
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-                    (remaining > 0).then(|| remaining - 1)
-                })
-                .is_ok()
-        {
-            return Err(IoError::other("injected rollout write failure"));
-        }
-
         let file_len_before_write = self.file.metadata().await?.len();
         let mut json = String::new();
         for rollout_item in rollout_items {
@@ -1028,16 +996,6 @@ impl JsonlWriter {
 
         let result = async {
             self.file.write_all(json.as_bytes()).await?;
-            #[cfg(test)]
-            if let Some(fail_next_flushes) = self.fail_next_flushes.as_ref()
-                && fail_next_flushes
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-                        (remaining > 0).then(|| remaining - 1)
-                    })
-                    .is_ok()
-            {
-                return Err(IoError::other("injected rollout flush failure"));
-            }
             self.file.flush().await
         }
         .await;
@@ -1068,6 +1026,12 @@ impl JsonlWriter {
         };
         serde_json::to_string(&line).map_err(IoError::other)
     }
+}
+
+fn reopen_rollout_writer(rollout_path: &Path) -> std::io::Result<JsonlWriter> {
+    open_log_file(rollout_path)
+        .map(tokio::fs::File::from_std)
+        .map(JsonlWriter::new)
 }
 
 impl From<codex_state::ThreadsPage> for ThreadsPage {
