@@ -421,6 +421,10 @@ impl CodexMessageProcessor {
         self.thread_state_manager.clone()
     }
 
+    pub(crate) fn clear_runtime_references(&self) {
+        self.thread_manager.set_delegated_model_transport(None);
+    }
+
     pub(crate) fn clear_plugin_related_caches(&self) {
         self.thread_manager.plugins_manager().clear_cache();
         self.thread_manager.skills_manager().clear_cache();

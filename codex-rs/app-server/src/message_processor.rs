@@ -279,6 +279,7 @@ impl MessageProcessor {
     }
 
     pub(crate) fn clear_runtime_references(&self) {
+        self.codex_message_processor.clear_runtime_references();
         self.auth_manager.clear_external_auth_refresher();
     }
 
