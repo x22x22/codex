@@ -713,7 +713,7 @@ impl RmcpClient {
             }
             None => None,
         };
-        let request_meta = match meta {
+        let meta = match meta {
             Some(Value::Object(map)) => Some(rmcp::model::Meta(map)),
             Some(other) => {
                 return Err(anyhow!(
@@ -723,7 +723,7 @@ impl RmcpClient {
             None => None,
         };
         let rmcp_params = CallToolRequestParams {
-            meta: request_meta,
+            meta,
             name: name.into(),
             arguments,
             task: None,
