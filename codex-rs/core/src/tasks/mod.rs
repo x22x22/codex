@@ -199,12 +199,14 @@ impl Session {
                         )
                         .await;
                     let sess = session_ctx.clone_session();
-                    sess.flush_rollout().await;
                     if !task_cancellation_token.is_cancelled() {
-                        // Emit completion uniformly from spawn site so all tasks share the same lifecycle.
+                        // Emit completion uniformly from spawn site so all tasks share the same
+                        // lifecycle. Do this before flushing rollout durability so the UI is not
+                        // stuck in `Working` after the task's visible work already finished.
                         sess.on_task_finished(Arc::clone(&ctx_for_finish), last_agent_message)
                             .await;
                     }
+                    sess.flush_rollout().await;
                     done_clone.notify_waiters();
                 }
                 .instrument(task_span),
