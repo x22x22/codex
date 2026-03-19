@@ -4438,10 +4438,9 @@ fn review_decision_metadata_mapping_is_stable() {
     assert_eq!(
         ApprovalOutcomeMetadata::reviewed(
             &ReviewDecision::NetworkPolicyAmendment {
-                network_policy_amendment: codex_protocol::protocol::NetworkPolicyRule {
-                    protocol: codex_execpolicy::NetworkRuleProtocol::Https,
-                    host_pattern: "example.com".to_string(),
-                    action: codex_protocol::protocol::NetworkPolicyRuleAction::Allow,
+                network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Allow,
                 },
             },
             codex_protocol::models::ApprovalSourceMetadata::User,
@@ -4452,10 +4451,9 @@ fn review_decision_metadata_mapping_is_stable() {
     assert_eq!(
         ApprovalOutcomeMetadata::reviewed(
             &ReviewDecision::NetworkPolicyAmendment {
-                network_policy_amendment: codex_protocol::protocol::NetworkPolicyRule {
-                    protocol: codex_execpolicy::NetworkRuleProtocol::Https,
-                    host_pattern: "example.com".to_string(),
-                    action: codex_protocol::protocol::NetworkPolicyRuleAction::Deny,
+                network_policy_amendment: codex_protocol::approvals::NetworkPolicyAmendment {
+                    host: "example.com".to_string(),
+                    action: NetworkPolicyRuleAction::Deny,
                 },
             },
             codex_protocol::models::ApprovalSourceMetadata::User,
