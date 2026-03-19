@@ -1,4 +1,5 @@
 use crate::ExecServerClient;
+use crate::ExecServerClientConnectOptions;
 use crate::ExecServerError;
 use crate::ExecServerEvent;
 use crate::ExecProcess;
@@ -23,7 +24,7 @@ static UNAVAILABLE_EXEC_PROCESS: UnavailableExecProcess = UnavailableExecProcess
 #[derive(Clone, Default)]
 pub struct Environment {
     experimental_exec_server_url: Option<String>,
-    remote_exec_server_client: Option<ExecServerClient>,
+    exec_server_client: Option<ExecServerClient>,
 }
 
 impl std::fmt::Debug for Environment {
@@ -34,8 +35,8 @@ impl std::fmt::Debug for Environment {
                 &self.experimental_exec_server_url,
             )
             .field(
-                "has_remote_exec_server_client",
-                &self.remote_exec_server_client.is_some(),
+                "has_exec_server_client",
+                &self.exec_server_client.is_some(),
             )
             .finish()
     }
@@ -45,22 +46,22 @@ impl Environment {
     pub async fn create(
         experimental_exec_server_url: Option<String>,
     ) -> Result<Self, ExecServerError> {
-        let remote_exec_server_client =
+        let exec_server_client = Some(
             if let Some(websocket_url) = experimental_exec_server_url.as_deref() {
-                Some(
-                    ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
-                        websocket_url.to_string(),
-                        "codex-core".to_string(),
-                    ))
-                    .await?,
-                )
+                ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
+                    websocket_url.to_string(),
+                    "codex-core".to_string(),
+                ))
+                .await?
             } else {
-                None
-            };
+                ExecServerClient::connect_in_process(ExecServerClientConnectOptions::default())
+                    .await?
+            },
+        );
 
         Ok(Self {
             experimental_exec_server_url,
-            remote_exec_server_client,
+            exec_server_client,
         })
     }
 
@@ -69,11 +70,15 @@ impl Environment {
     }
 
     pub fn remote_exec_server_client(&self) -> Option<&ExecServerClient> {
-        self.remote_exec_server_client.as_ref()
+        if self.experimental_exec_server_url.is_some() {
+            self.exec_server_client.as_ref()
+        } else {
+            None
+        }
     }
 
     pub fn process(&self) -> &(dyn ExecProcess + '_) {
-        self.remote_exec_server_client
+        self.exec_server_client
             .as_ref()
             .map_or(&UNAVAILABLE_EXEC_PROCESS as &dyn ExecProcess, |client| client)
     }
