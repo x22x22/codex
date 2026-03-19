@@ -3295,6 +3295,9 @@ impl CodexMessageProcessor {
     ) {
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             let config_snapshot = thread.config_snapshot().await;
+            if config_snapshot.session_source.is_guardian_reviewer() {
+                return;
+            }
             let loaded_thread =
                 build_thread_from_snapshot(thread_id, &config_snapshot, thread.rollout_path());
             self.thread_watch_manager.upsert_thread(loaded_thread).await;

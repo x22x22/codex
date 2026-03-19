@@ -3881,6 +3881,9 @@ impl App {
             }
         };
         let config_snapshot = thread.config_snapshot().await;
+        if config_snapshot.session_source.is_guardian_reviewer() {
+            return Ok(());
+        }
         self.upsert_agent_picker_thread(
             thread_id,
             config_snapshot.session_source.get_nickname(),

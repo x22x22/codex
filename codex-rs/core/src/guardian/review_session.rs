@@ -438,8 +438,7 @@ impl GuardianReviewSessionManager {
         initial_history: Option<InitialHistory>,
     ) -> GuardianReviewSessionRunResult {
         let spawn_cancel_token = CancellationToken::new();
-        let mut fork_config = params.spawn_config.clone();
-        fork_config.ephemeral = true;
+        let fork_config = params.spawn_config.clone();
         let review_session = match run_before_review_deadline_with_cancel(
             deadline,
             params.external_cancel.as_ref(),

@@ -7,7 +7,6 @@ use codex_protocol::protocol::GuardianAssessmentEvent;
 use codex_protocol::protocol::GuardianAssessmentStatus;
 use codex_protocol::protocol::GuardianRiskLevel;
 use codex_protocol::protocol::ReviewDecision;
-use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::protocol::WarningEvent;
 use tokio_util::sync::CancellationToken;
 
@@ -15,7 +14,6 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 
 use super::GUARDIAN_APPROVAL_RISK_THRESHOLD;
-use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::GuardianAssessment;
 use super::approval_request::guardian_assessment_action_value;
@@ -71,11 +69,7 @@ pub(crate) fn routes_approval_to_guardian(turn: &TurnContext) -> bool {
 pub(crate) fn is_guardian_reviewer_source(
     session_source: &codex_protocol::protocol::SessionSource,
 ) -> bool {
-    matches!(
-        session_source,
-        codex_protocol::protocol::SessionSource::SubAgent(SubAgentSource::Other(name))
-            if name == GUARDIAN_REVIEWER_NAME
-    )
+    session_source.is_guardian_reviewer()
 }
 
 /// This function always fails closed: any timeout, review-session failure, or
