@@ -79,7 +79,7 @@ fn group_tools_by_server_strips_prefix_and_groups() {
     expected.insert("alpha".to_string(), expected_alpha);
     expected.insert("beta".to_string(), expected_beta);
 
-    assert_eq!(group_tools_by_server(&tools), expected);
+    assert_eq!(snapshot::group_tools_by_server(&tools), expected);
 }
 
 #[test]
@@ -126,19 +126,19 @@ fn tool_plugin_provenance_collects_app_and_mcp_sources() {
 #[test]
 fn codex_apps_mcp_url_for_base_url_keeps_existing_paths() {
     assert_eq!(
-        codex_apps_mcp_url_for_base_url("https://chatgpt.com/backend-api"),
+        config::codex_apps_mcp_url_for_base_url("https://chatgpt.com/backend-api"),
         "https://chatgpt.com/backend-api/wham/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_base_url("https://chat.openai.com"),
+        config::codex_apps_mcp_url_for_base_url("https://chat.openai.com"),
         "https://chat.openai.com/backend-api/wham/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_base_url("http://localhost:8080/api/codex"),
+        config::codex_apps_mcp_url_for_base_url("http://localhost:8080/api/codex"),
         "http://localhost:8080/api/codex/apps"
     );
     assert_eq!(
-        codex_apps_mcp_url_for_base_url("http://localhost:8080"),
+        config::codex_apps_mcp_url_for_base_url("http://localhost:8080"),
         "http://localhost:8080/api/codex/apps"
     );
 }
@@ -149,7 +149,7 @@ fn codex_apps_mcp_url_uses_legacy_codex_apps_path() {
     config.chatgpt_base_url = "https://chatgpt.com".to_string();
 
     assert_eq!(
-        codex_apps_mcp_url(&config),
+        config::codex_apps_mcp_url(&config),
         "https://chatgpt.com/backend-api/wham/apps"
     );
 }
