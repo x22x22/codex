@@ -332,6 +332,58 @@ pub(crate) async fn execute_exec_request(
     finalize_exec_result(raw_output_result, sandbox, duration)
 }
 
+pub(crate) async fn execute_exec_request_bytes(
+    exec_request: ExecRequest,
+    sandbox_policy: &SandboxPolicy,
+    stdout_stream: Option<StdoutStream>,
+    after_spawn: Option<Box<dyn FnOnce() + Send>>,
+) -> Result<ExecToolCallOutputBytes> {
+    let ExecRequest {
+        command,
+        cwd,
+        env,
+        network,
+        expiration,
+        sandbox,
+        windows_sandbox_level,
+        windows_sandbox_private_desktop,
+        sandbox_permissions,
+        sandbox_policy: _sandbox_policy_from_env,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+        justification,
+        arg0,
+    } = exec_request;
+    let _ = _sandbox_policy_from_env;
+
+    let params = ExecParams {
+        command,
+        cwd,
+        expiration,
+        env,
+        network: network.clone(),
+        sandbox_permissions,
+        windows_sandbox_level,
+        windows_sandbox_private_desktop,
+        justification,
+        arg0,
+    };
+
+    let start = Instant::now();
+    let raw_output_result = exec(
+        params,
+        sandbox,
+        sandbox_policy,
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+        stdout_stream,
+        after_spawn,
+    )
+    .await;
+    let duration = start.elapsed();
+    finalize_exec_result_bytes(raw_output_result, sandbox, duration)
+}
+
 #[cfg(target_os = "windows")]
 fn extract_create_process_as_user_error_code(err: &str) -> Option<String> {
     let marker = "CreateProcessAsUserW failed: ";
@@ -574,6 +626,64 @@ fn finalize_exec_result(
     }
 }
 
+fn finalize_exec_result_bytes(
+    raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr>,
+    sandbox_type: SandboxType,
+    duration: Duration,
+) -> Result<ExecToolCallOutputBytes> {
+    match raw_output_result {
+        Ok(raw_output) => {
+            #[allow(unused_mut)]
+            let mut timed_out = raw_output.timed_out;
+
+            #[cfg(target_family = "unix")]
+            {
+                if let Some(signal) = raw_output.exit_status.signal() {
+                    if signal == TIMEOUT_CODE {
+                        timed_out = true;
+                    } else {
+                        return Err(CodexErr::Sandbox(SandboxErr::Signal(signal)));
+                    }
+                }
+            }
+
+            let mut exit_code = raw_output.exit_status.code().unwrap_or(-1);
+            if timed_out {
+                exit_code = EXEC_TIMEOUT_EXIT_CODE;
+            }
+
+            let exec_output = ExecToolCallOutputBytes {
+                exit_code,
+                stdout: raw_output.stdout,
+                stderr: raw_output.stderr,
+                aggregated_output: raw_output.aggregated_output,
+                duration,
+                timed_out,
+            };
+
+            if timed_out {
+                return Err(CodexErr::Sandbox(SandboxErr::Timeout {
+                    output: Box::new(exec_output.to_utf8_lossy_output()),
+                }));
+            }
+
+            let string_output = exec_output.to_utf8_lossy_output();
+            if is_likely_sandbox_denied(sandbox_type, &string_output) {
+                return Err(CodexErr::Sandbox(SandboxErr::Denied {
+                    output: Box::new(string_output),
+                    network_policy_decision: None,
+                }));
+            }
+
+            Ok(exec_output)
+        }
+        Err(err) => {
+            tracing::error!("exec error: {err}");
+            Err(err)
+        }
+    }
+}
+
 pub(crate) mod errors {
     use super::CodexErr;
     use crate::sandboxing::SandboxTransformError;
@@ -741,6 +851,16 @@ pub struct ExecToolCallOutput {
     pub timed_out: bool,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ExecToolCallOutputBytes {
+    pub exit_code: i32,
+    pub stdout: StreamOutput<Vec<u8>>,
+    pub stderr: StreamOutput<Vec<u8>>,
+    pub aggregated_output: StreamOutput<Vec<u8>>,
+    pub duration: Duration,
+    pub timed_out: bool,
+}
+
 impl Default for ExecToolCallOutput {
     fn default() -> Self {
         Self {
@@ -750,6 +870,19 @@ impl Default for ExecToolCallOutput {
             aggregated_output: StreamOutput::new(String::new()),
             duration: Duration::ZERO,
             timed_out: false,
+        }
+    }
+}
+
+impl ExecToolCallOutputBytes {
+    fn to_utf8_lossy_output(&self) -> ExecToolCallOutput {
+        ExecToolCallOutput {
+            exit_code: self.exit_code,
+            stdout: self.stdout.from_utf8_lossy(),
+            stderr: self.stderr.from_utf8_lossy(),
+            aggregated_output: self.aggregated_output.from_utf8_lossy(),
+            duration: self.duration,
+            timed_out: self.timed_out,
         }
     }
 }
