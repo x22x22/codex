@@ -430,8 +430,7 @@ async fn tool_search_returns_deferred_tools_without_follow_up_tool_injection() -
         .unwrap_or_default()
         .into_iter()
         .find_map(|request| {
-            let body: Value = serde_json::from_slice(&request.body)
-                .expect("apps request body should be valid json");
+            let body: Value = serde_json::from_slice(&request.body).ok()?;
             (request.url.path() == "/api/codex/apps"
                 && body.get("method").and_then(Value::as_str) == Some("tools/call"))
             .then_some(body)
