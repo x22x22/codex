@@ -1,0 +1,42 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.MANAGE_AGENTS" />
+    <uses-permission android:name="android.permission.START_GENIE_EXECUTION" />
+    <uses-permission android:name="android.permission.OBSERVE_AGENT_SESSIONS" />
+
+    <application
+        android:label="@string/app_name"
+        android:allowBackup="false">
+
+        <service
+            android:name=".CodexAgentService"
+            android:exported="true"
+            android:permission="android.permission.BIND_AGENT_SERVICE">
+            <intent-filter>
+                <action android:name="android.app.agent.AgentService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name=".CodexdForegroundService"
+            android:exported="true"
+            android:foregroundServiceType="dataSync" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.app.agent.action.HANDLE_SESSION" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

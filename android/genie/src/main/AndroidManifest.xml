@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name">
+
+        <service
+            android:name=".CodexGenieService"
+            android:exported="true"
+            android:permission="android.permission.BIND_GENIE_SERVICE">
+            <intent-filter>
+                <action android:name="android.app.agent.GenieService" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

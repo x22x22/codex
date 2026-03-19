@@ -27,6 +27,18 @@ From the repo root:
 just android-build
 ```
 
+Build the Android Agent/Genie prototype APKs with the Android Agent Platform
+stub SDK:
+
+```bash
+export ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP=/path/to/android-agent-platform-stub-sdk.zip
+just android-service-build
+cd android
+./gradlew :genie:assembleDebug :app:assembleDebug
+```
+The Agent/Genie prototype modules require
+`ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP` (or `-PagentPlatformStubSdkZip=...`) so
+Gradle can compile against the stub SDK jar.
 If `cargo-ndk` cannot find your NDK, set:
 
 ```bash

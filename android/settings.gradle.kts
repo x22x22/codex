@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "codexd-service"
 include(":app")
+include(":genie")

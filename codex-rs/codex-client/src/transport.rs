@@ -135,6 +135,13 @@ pub struct UdsTransport {
 }
 
 #[cfg(unix)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum UnixSocketEndpoint {
+    Filesystem(std::path::PathBuf),
+    Abstract(String),
+}
+
+#[cfg(unix)]
 impl UdsTransport {
     pub fn new(socket_path: std::path::PathBuf) -> Self {
         Self { socket_path }
@@ -146,7 +153,6 @@ impl UdsTransport {
     ) -> Result<hyper::Response<hyper::body::Incoming>, TransportError> {
         use hyper::client::conn::http1;
         use hyper_util::rt::TokioIo;
-        use tokio::net::UnixStream;
 
         let PreparedRequest {
             method,
@@ -172,9 +178,7 @@ impl UdsTransport {
         };
 
         let connect = async {
-            let stream = UnixStream::connect(&self.socket_path)
-                .await
-                .map_err(|err| TransportError::Network(err.to_string()))?;
+            let stream = connect_unix_stream(&self.socket_path).await?;
             let io = TokioIo::new(stream);
             let (mut sender, conn) = http1::handshake(io)
                 .await
@@ -198,6 +202,71 @@ impl UdsTransport {
             connect.await
         }
     }
+}
+
+#[cfg(unix)]
+fn parse_socket_endpoint(path: &std::path::Path) -> Result<UnixSocketEndpoint, TransportError> {
+    let value = path.as_os_str().to_string_lossy();
+    if let Some(name) = value.strip_prefix('@') {
+        if name.is_empty() {
+            return Err(TransportError::Build(
+                "abstract unix socket name cannot be empty".to_string(),
+            ));
+        }
+        return Ok(UnixSocketEndpoint::Abstract(name.to_string()));
+    }
+    if let Some(name) = value.strip_prefix("abstract:") {
+        if name.is_empty() {
+            return Err(TransportError::Build(
+                "abstract unix socket name cannot be empty".to_string(),
+            ));
+        }
+        return Ok(UnixSocketEndpoint::Abstract(name.to_string()));
+    }
+    Ok(UnixSocketEndpoint::Filesystem(path.to_path_buf()))
+}
+
+#[cfg(unix)]
+async fn connect_unix_stream(
+    socket_path: &std::path::Path,
+) -> Result<tokio::net::UnixStream, TransportError> {
+    match parse_socket_endpoint(socket_path)? {
+        UnixSocketEndpoint::Filesystem(path) => tokio::net::UnixStream::connect(path)
+            .await
+            .map_err(|err| TransportError::Network(err.to_string())),
+        UnixSocketEndpoint::Abstract(name) => connect_abstract_unix_stream(name).await,
+    }
+}
+
+#[cfg(all(unix, any(target_os = "android", target_os = "linux")))]
+async fn connect_abstract_unix_stream(
+    name: String,
+) -> Result<tokio::net::UnixStream, TransportError> {
+    use std::os::unix::net::SocketAddr;
+    use std::os::unix::net::UnixStream as StdUnixStream;
+    use tokio::net::UnixStream;
+
+    tokio::task::spawn_blocking(move || {
+        let address = SocketAddr::from_abstract_name(name.as_bytes())
+            .map_err(|err| TransportError::Network(err.to_string()))?;
+        let stream = StdUnixStream::connect_addr(&address)
+            .map_err(|err| TransportError::Network(err.to_string()))?;
+        stream
+            .set_nonblocking(true)
+            .map_err(|err| TransportError::Network(err.to_string()))?;
+        UnixStream::from_std(stream).map_err(|err| TransportError::Network(err.to_string()))
+    })
+    .await
+    .map_err(|err| TransportError::Network(err.to_string()))?
+}
+
+#[cfg(all(unix, not(any(target_os = "android", target_os = "linux"))))]
+async fn connect_abstract_unix_stream(
+    _name: String,
+) -> Result<tokio::net::UnixStream, TransportError> {
+    Err(TransportError::Build(
+        "abstract unix sockets are unsupported on this platform".to_string(),
+    ))
 }
 
 #[cfg(unix)]
@@ -483,5 +552,50 @@ impl HttpTransport for AnyTransport {
             #[cfg(unix)]
             AnyTransport::Uds(transport) => transport.stream(req).await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TransportError;
+    use super::UnixSocketEndpoint;
+    use super::parse_socket_endpoint;
+    use pretty_assertions::assert_eq;
+    use std::path::Path;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parse_socket_endpoint_preserves_filesystem_paths() {
+        assert_eq!(
+            parse_socket_endpoint(Path::new("/tmp/codexd.sock")).expect("socket endpoint"),
+            UnixSocketEndpoint::Filesystem(PathBuf::from("/tmp/codexd.sock")),
+        );
+    }
+
+    #[test]
+    fn parse_socket_endpoint_supports_at_prefix_for_abstract_sockets() {
+        assert_eq!(
+            parse_socket_endpoint(Path::new("@codex-agent")).expect("socket endpoint"),
+            UnixSocketEndpoint::Abstract("codex-agent".to_string()),
+        );
+    }
+
+    #[test]
+    fn parse_socket_endpoint_supports_abstract_prefix() {
+        assert_eq!(
+            parse_socket_endpoint(Path::new("abstract:codex-agent")).expect("socket endpoint"),
+            UnixSocketEndpoint::Abstract("codex-agent".to_string()),
+        );
+    }
+
+    #[test]
+    fn parse_socket_endpoint_rejects_empty_abstract_socket_names() {
+        let err =
+            parse_socket_endpoint(Path::new("@")).expect_err("empty abstract socket should fail");
+        assert!(matches!(
+            err,
+            TransportError::Build(ref message)
+                if message == "abstract unix socket name cannot be empty"
+        ));
     }
 }
