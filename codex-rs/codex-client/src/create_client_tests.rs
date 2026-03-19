@@ -1,6 +1,17 @@
 use super::*;
-use core_test_support::skip_if_no_network;
+use codex_config::ResidencyRequirement;
 use pretty_assertions::assert_eq;
+
+macro_rules! skip_if_no_network {
+    () => {
+        if std::env::var("CODEX_SANDBOX_NETWORK_DISABLED").is_ok() {
+            println!(
+                "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+            );
+            return;
+        }
+    };
+}
 
 #[test]
 fn test_get_codex_user_agent() {

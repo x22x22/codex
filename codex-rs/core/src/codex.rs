@@ -58,6 +58,7 @@ use chrono::Local;
 use chrono::Utc;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
+use codex_client::originator;
 use codex_exec_server::Environment;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
@@ -1580,7 +1581,7 @@ impl Session {
         let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
         let account_id = auth.and_then(CodexAuth::get_account_id);
         let account_email = auth.and_then(CodexAuth::get_account_email);
-        let originator = crate::default_client::originator().value;
+        let originator = originator().value;
         let terminal_type = user_agent();
         let session_model = session_configuration.collaboration_mode.model().to_string();
         let auth_env_telemetry = collect_auth_env_telemetry(

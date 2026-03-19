@@ -1,0 +1,39 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "codex-auth"
+version.workspace = true
+
+[lib]
+doctest = false
+name = "codex_auth"
+path = "lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+codex-app-server-protocol = { workspace = true }
+codex-client = { workspace = true }
+codex-keyring-store = { workspace = true }
+codex-otel = { workspace = true }
+codex-protocol = { workspace = true }
+once_cell = { workspace = true }
+reqwest = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+keyring = { workspace = true }
+pretty_assertions = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

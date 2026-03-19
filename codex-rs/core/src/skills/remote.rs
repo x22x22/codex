@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::auth::CodexAuth;
 use crate::config::Config;
-use crate::default_client::build_reqwest_client;
+use codex_client::build_reqwest_client;
 
 const REMOTE_SKILLS_API_TIMEOUT: Duration = Duration::from_secs(30);
 

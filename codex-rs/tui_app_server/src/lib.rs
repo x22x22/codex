@@ -20,7 +20,9 @@ use codex_app_server_protocol::Thread as AppServerThread;
 use codex_app_server_protocol::ThreadListParams;
 use codex_app_server_protocol::ThreadSortKey as AppServerThreadSortKey;
 use codex_app_server_protocol::ThreadSourceKind;
+use codex_client::set_default_client_residency_requirement;
 use codex_cloud_requirements::cloud_requirements_loader_for_storage;
+use codex_core::auth::AuthConfig;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
@@ -33,7 +35,6 @@ use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
-use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::read_session_meta_line;
@@ -777,7 +778,12 @@ pub async fn run_main(
 
     if matches!(app_server_target, AppServerTarget::Embedded) {
         #[allow(clippy::print_stderr)]
-        if let Err(err) = enforce_login_restrictions(&config) {
+        if let Err(err) = enforce_login_restrictions(&AuthConfig {
+            codex_home: config.codex_home.clone(),
+            auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
+            forced_login_method: config.forced_login_method,
+            forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
+        }) {
             eprintln!("{err}");
             std::process::exit(1);
         }

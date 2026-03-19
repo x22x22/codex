@@ -1,9 +1,10 @@
 use crate::AuthManager;
 use crate::config::Config;
-use crate::default_client::create_client;
 use crate::git_info::collect_git_info;
 use crate::git_info::get_git_repo_root;
 use crate::plugins::PluginTelemetryMetadata;
+use codex_client::create_client;
+use codex_client::originator;
 use codex_protocol::protocol::SkillScope;
 use serde::Serialize;
 use sha1::Digest;
@@ -525,7 +526,7 @@ async fn send_track_skill_invocations(auth_manager: &AuthManager, job: TrackSkil
                     thread_id: Some(tracking.thread_id.clone()),
                     invoke_type: Some(invocation.invocation_type),
                     model_slug: Some(tracking.model_slug.clone()),
-                    product_client_id: Some(crate::default_client::originator().value),
+                    product_client_id: Some(originator().value),
                     repo_url,
                     skill_scope: Some(skill_scope.to_string()),
                 },
@@ -629,7 +630,7 @@ fn codex_app_metadata(tracking: &TrackEventsContext, app: AppInvocation) -> Code
         thread_id: Some(tracking.thread_id.clone()),
         turn_id: Some(tracking.turn_id.clone()),
         app_name: app.app_name,
-        product_client_id: Some(crate::default_client::originator().value),
+        product_client_id: Some(originator().value),
         invoke_type: app.invocation_type,
         model_slug: Some(tracking.model_slug.clone()),
     }
@@ -654,7 +655,7 @@ fn codex_plugin_metadata(plugin: PluginTelemetryMetadata) -> CodexPluginMetadata
                 .map(|connector_id| connector_id.0)
                 .collect()
         }),
-        product_client_id: Some(crate::default_client::originator().value),
+        product_client_id: Some(originator().value),
     }
 }
 

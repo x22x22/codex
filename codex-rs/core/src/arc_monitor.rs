@@ -8,8 +8,8 @@ use tracing::warn;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::compact::content_items_to_text;
-use crate::default_client::build_reqwest_client;
 use crate::event_mapping::is_contextual_user_message_content;
+use codex_client::build_reqwest_client;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 

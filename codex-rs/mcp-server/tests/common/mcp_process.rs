@@ -10,6 +10,7 @@ use tokio::process::ChildStdin;
 use tokio::process::ChildStdout;
 
 use anyhow::Context;
+use codex_client::originator;
 use codex_mcp_server::CodexToolCallParam;
 use codex_terminal::user_agent;
 
@@ -151,7 +152,7 @@ impl McpProcess {
         let initialized = self.read_jsonrpc_message().await?;
         let os_info = os_info::get();
         let build_version = env!("CARGO_PKG_VERSION");
-        let originator = codex_core::default_client::originator().value;
+        let originator = originator().value;
         let user_agent = format!(
             "{originator}/{build_version} ({} {}; {}) {} (elicitation test; 0.0.0)",
             os_info.os_type(),

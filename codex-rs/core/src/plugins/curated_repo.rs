@@ -1,4 +1,4 @@
-use crate::default_client::build_reqwest_client;
+use codex_client::build_reqwest_client;
 use reqwest::Client;
 use serde::Deserialize;
 use std::fs;

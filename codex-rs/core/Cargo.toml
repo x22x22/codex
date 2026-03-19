@@ -31,6 +31,7 @@ codex-api = { workspace = true }
 codex-app-server-protocol = { workspace = true }
 codex-apply-patch = { workspace = true }
 codex-async-utils = { workspace = true }
+codex-auth = { workspace = true }
 codex-client = { workspace = true }
 codex-connectors = { workspace = true }
 codex-config = { workspace = true }
@@ -74,7 +75,6 @@ keyring = { workspace = true, features = ["crypto-rust"] }
 libc = { workspace = true }
 notify = { workspace = true }
 once_cell = { workspace = true }
-os_info = { workspace = true }
 rand = { workspace = true }
 regex-lite = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"] }

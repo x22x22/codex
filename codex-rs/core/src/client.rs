@@ -97,7 +97,6 @@ use crate::auth::RefreshTokenError;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
-use crate::default_client::build_reqwest_client;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
@@ -111,6 +110,8 @@ use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::FeedbackRequestTags;
 use crate::util::emit_feedback_auth_recovery_tags;
 use crate::util::emit_feedback_request_tags_with_auth_env;
+use codex_client::build_reqwest_client;
+use codex_client::default_headers;
 
 pub const OPENAI_BETA_HEADER: &str = "OpenAI-Beta";
 pub const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
@@ -568,7 +569,7 @@ impl ModelClient {
             websocket_connect_timeout,
             ApiWebSocketResponsesClient::new(api_provider, api_auth).connect(
                 headers,
-                crate::default_client::default_headers(),
+                default_headers(),
                 turn_state,
                 Some(websocket_telemetry),
             ),

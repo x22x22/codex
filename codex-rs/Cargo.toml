@@ -10,6 +10,7 @@ members = [
     "debug-client",
     "apply-patch",
     "arg0",
+    "auth",
     "feedback",
     "codex-backend-openapi-models",
     "cloud-requirements",
@@ -97,6 +98,7 @@ codex-app-server-test-client = { path = "app-server-test-client" }
 codex-apply-patch = { path = "apply-patch" }
 codex-arg0 = { path = "arg0" }
 codex-async-utils = { path = "async-utils" }
+codex-auth = { path = "auth" }
 codex-backend-client = { path = "backend-client" }
 codex-chatgpt = { path = "chatgpt" }
 codex-cli = { path = "cli" }

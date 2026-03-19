@@ -22,11 +22,11 @@ use crate::config::edit::ConfigEditsBuilder;
 use crate::config::load_global_mcp_servers;
 use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
-use crate::default_client::is_first_party_originator;
-use crate::default_client::originator;
 use crate::features::Feature;
 use crate::skills::SkillMetadata;
 use crate::skills::model::SkillToolDependency;
+use codex_client::is_first_party_originator;
+use codex_client::originator;
 
 const SKILL_MCP_DEPENDENCY_PROMPT_ID: &str = "skill_mcp_dependency_install";
 const MCP_DEPENDENCY_OPTION_INSTALL: &str = "Install";

@@ -1,9 +1,7 @@
-use crate::config_loader::ResidencyRequirement;
-use crate::spawn::CODEX_SANDBOX_ENV_VAR;
-use codex_client::BuildCustomCaTransportError;
-use codex_client::CodexHttpClient;
-pub use codex_client::CodexRequestBuilder;
-use codex_client::build_reqwest_client_with_custom_ca;
+use crate::custom_ca::BuildCustomCaTransportError;
+use crate::custom_ca::build_reqwest_client_with_custom_ca;
+use crate::default_client::CodexHttpClient;
+use codex_config::ResidencyRequirement;
 use codex_terminal::user_agent;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
@@ -152,7 +150,7 @@ pub fn get_codex_user_agent() -> String {
 /// Invalid characters are replaced with an underscore.
 ///
 /// If the user agent fails to parse, it falls back to fallback and then to ORIGINATOR.
-fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
+pub fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
     if HeaderValue::from_str(candidate.as_str()).is_ok() {
         return candidate;
     }
@@ -232,9 +230,9 @@ pub fn default_headers() -> HeaderMap {
 }
 
 fn is_sandboxed() -> bool {
-    std::env::var(CODEX_SANDBOX_ENV_VAR).as_deref() == Ok("seatbelt")
+    std::env::var("CODEX_SANDBOX").as_deref() == Ok("seatbelt")
 }
 
 #[cfg(test)]
-#[path = "default_client_tests.rs"]
+#[path = "create_client_tests.rs"]
 mod tests;

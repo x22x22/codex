@@ -40,6 +40,7 @@ use crate::update_action::UpdateAction;
 use crate::version::CODEX_CLI_VERSION;
 use codex_ansi_escape::ansi_escape_line;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_client::originator;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::ThreadManager;
@@ -2078,7 +2079,7 @@ impl App {
             auth_ref.and_then(CodexAuth::get_account_id),
             auth_ref.and_then(CodexAuth::get_account_email),
             auth_mode,
-            codex_core::default_client::originator().value,
+            originator().value,
             config.otel.log_user_prompt,
             user_agent(),
             SessionSource::Cli,

@@ -1,3 +1,4 @@
+mod create_client;
 mod custom_ca;
 mod default_client;
 mod error;
@@ -7,6 +8,23 @@ mod sse;
 mod telemetry;
 mod transport;
 
+pub use crate::create_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
+pub use crate::create_client::DEFAULT_ORIGINATOR;
+pub use crate::create_client::Originator;
+pub use crate::create_client::RESIDENCY_HEADER_NAME;
+pub use crate::create_client::SetOriginatorError;
+pub use crate::create_client::USER_AGENT_SUFFIX;
+pub use crate::create_client::build_reqwest_client;
+pub use crate::create_client::create_client;
+pub use crate::create_client::default_headers;
+pub use crate::create_client::get_codex_user_agent;
+pub use crate::create_client::is_first_party_chat_originator;
+pub use crate::create_client::is_first_party_originator;
+pub use crate::create_client::originator;
+pub use crate::create_client::sanitize_user_agent;
+pub use crate::create_client::set_default_client_residency_requirement;
+pub use crate::create_client::set_default_originator;
+pub use crate::create_client::try_build_reqwest_client;
 pub use crate::custom_ca::BuildCustomCaTransportError;
 /// Test-only subprocess hook for custom CA coverage.
 ///

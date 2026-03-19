@@ -60,6 +60,7 @@ use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadRollbackResponse;
 use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnStatus;
+use codex_client::originator;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::ConfigOverrides;
@@ -2964,7 +2965,7 @@ impl App {
             /*account_id*/ None,
             bootstrap.account_email.clone(),
             auth_mode,
-            codex_core::default_client::originator().value,
+            originator().value,
             config.otel.log_user_prompt,
             user_agent(),
             SessionSource::Cli,

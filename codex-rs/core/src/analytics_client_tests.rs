@@ -109,7 +109,7 @@ fn app_mentioned_event_serializes_expected_shape() {
                 "thread_id": "thread-1",
                 "turn_id": "turn-1",
                 "app_name": "Calendar",
-                "product_client_id": crate::default_client::originator().value,
+                "product_client_id": originator().value,
                 "invoke_type": "explicit",
                 "model_slug": "gpt-5"
             }
@@ -147,7 +147,7 @@ fn app_used_event_serializes_expected_shape() {
                 "thread_id": "thread-2",
                 "turn_id": "turn-2",
                 "app_name": "Google Drive",
-                "product_client_id": crate::default_client::originator().value,
+                "product_client_id": originator().value,
                 "invoke_type": "implicit",
                 "model_slug": "gpt-5"
             }
@@ -210,7 +210,7 @@ fn plugin_used_event_serializes_expected_shape() {
                 "has_skills": true,
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
-                "product_client_id": crate::default_client::originator().value,
+                "product_client_id": originator().value,
                 "thread_id": "thread-3",
                 "turn_id": "turn-3",
                 "model_slug": "gpt-5"
@@ -239,7 +239,7 @@ fn plugin_management_event_serializes_expected_shape() {
                 "has_skills": true,
                 "mcp_server_count": 2,
                 "connector_ids": ["calendar", "drive"],
-                "product_client_id": crate::default_client::originator().value
+                "product_client_id": originator().value
             }
         })
     );
