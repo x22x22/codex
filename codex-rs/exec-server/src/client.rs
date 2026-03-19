@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use codex_app_server_protocol::FsCopyParams;
 use codex_app_server_protocol::FsCopyResponse;
 use codex_app_server_protocol::FsCreateDirectoryParams;
@@ -26,6 +27,7 @@ use tracing::warn;
 
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::ExecServerEvent;
+use crate::client_api::ExecProcess;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 use crate::protocol::EXEC_EXITED_METHOD;
@@ -501,6 +503,33 @@ impl ExecServerClient {
                 .map_err(ExecServerError::Json),
             ClientBackend::InProcess(backend) => backend.initialized().await,
         }
+    }
+}
+
+#[async_trait]
+impl ExecProcess for ExecServerClient {
+    async fn start(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
+        self.exec(params).await
+    }
+
+    async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
+        self.read(params).await
+    }
+
+    async fn write(
+        &self,
+        process_id: &str,
+        chunk: Vec<u8>,
+    ) -> Result<WriteResponse, ExecServerError> {
+        self.write(process_id, chunk).await
+    }
+
+    async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError> {
+        self.terminate(process_id).await
+    }
+
+    fn subscribe_events(&self) -> broadcast::Receiver<ExecServerEvent> {
+        self.event_receiver()
     }
 }
 

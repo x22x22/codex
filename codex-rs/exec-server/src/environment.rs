@@ -1,8 +1,24 @@
 use crate::ExecServerClient;
 use crate::ExecServerError;
+use crate::ExecServerEvent;
+use crate::ExecProcess;
+use crate::ExecutorEnvironment;
 use crate::RemoteExecServerConnectArgs;
+use crate::protocol::ExecParams;
+use crate::protocol::ExecResponse;
+use crate::protocol::ReadParams;
+use crate::protocol::ReadResponse;
+use crate::protocol::TerminateResponse;
+use crate::protocol::WriteResponse;
 use crate::fs;
 use crate::fs::ExecutorFileSystem;
+use async_trait::async_trait;
+use tokio::sync::broadcast;
+
+#[derive(Debug)]
+struct UnavailableExecProcess;
+
+static UNAVAILABLE_EXEC_PROCESS: UnavailableExecProcess = UnavailableExecProcess;
 
 #[derive(Clone, Default)]
 pub struct Environment {
@@ -56,9 +72,55 @@ impl Environment {
         self.remote_exec_server_client.as_ref()
     }
 
+    pub fn process(&self) -> &(dyn ExecProcess + '_) {
+        self.remote_exec_server_client
+            .as_ref()
+            .map_or(&UNAVAILABLE_EXEC_PROCESS as &dyn ExecProcess, |client| client)
+    }
+
     pub fn get_filesystem(&self) -> impl ExecutorFileSystem + use<> {
         fs::LocalFileSystem
     }
+}
+
+impl ExecutorEnvironment for Environment {
+    fn process(&self) -> &(dyn ExecProcess + '_) {
+        self.process()
+    }
+}
+
+#[async_trait]
+impl ExecProcess for UnavailableExecProcess {
+    async fn start(&self, _params: ExecParams) -> Result<ExecResponse, ExecServerError> {
+        Err(unavailable_exec_process_error())
+    }
+
+    async fn read(&self, _params: ReadParams) -> Result<ReadResponse, ExecServerError> {
+        Err(unavailable_exec_process_error())
+    }
+
+    async fn write(
+        &self,
+        _process_id: &str,
+        _chunk: Vec<u8>,
+    ) -> Result<WriteResponse, ExecServerError> {
+        Err(unavailable_exec_process_error())
+    }
+
+    async fn terminate(&self, _process_id: &str) -> Result<TerminateResponse, ExecServerError> {
+        Err(unavailable_exec_process_error())
+    }
+
+    fn subscribe_events(&self) -> broadcast::Receiver<ExecServerEvent> {
+        let (_tx, rx) = broadcast::channel(1);
+        rx
+    }
+}
+
+fn unavailable_exec_process_error() -> ExecServerError {
+    ExecServerError::Protocol(
+        "exec process capability is unavailable for a local default Environment".to_string(),
+    )
 }
 
 #[cfg(test)]
