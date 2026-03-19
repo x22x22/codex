@@ -1860,6 +1860,7 @@ dependencies = [
  "codex-skills",
  "codex-state",
  "codex-test-macros",
+ "codex-tool-spec",
  "codex-utils-absolute-path",
  "codex-utils-cache",
  "codex-utils-cargo-bin",
@@ -2523,6 +2524,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.114",
+]
+
+[[package]]
+name = "codex-tool-spec"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -69,6 +69,7 @@ members = [
     "state",
     "codex-experimental-api-macros",
     "test-macros",
+    "tool-spec",
     "package-manager",
     "artifacts",
 ]
@@ -133,6 +134,7 @@ codex-skills = { path = "skills" }
 codex-state = { path = "state" }
 codex-stdio-to-uds = { path = "stdio-to-uds" }
 codex-test-macros = { path = "test-macros" }
+codex-tool-spec = { path = "tool-spec" }
 codex-tui = { path = "tui" }
 codex-tui-app-server = { path = "tui_app_server" }
 codex-utils-absolute-path = { path = "utils/absolute-path" }
