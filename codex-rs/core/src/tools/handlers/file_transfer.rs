@@ -140,7 +140,7 @@ async fn handle_upload(
                 http_status_code: None,
                 path: Some(path.display().to_string()),
             },
-            false,
+            /*success*/ false,
         );
     }
 
@@ -169,7 +169,7 @@ async fn handle_upload(
                     http_status_code: None,
                     path: Some(path.display().to_string()),
                 },
-                false,
+                /*success*/ false,
             );
         }
     };
@@ -188,16 +188,16 @@ async fn handle_upload(
                 http_status_code: None,
                 path: Some(path.display().to_string()),
             },
-            false,
+            /*success*/ false,
         );
     }
 
     let auth = session.services.auth_manager.auth().await;
     let Some(auth) = auth else {
-        return json_output(&upload_auth_required(&path), false);
+        return json_output(&upload_auth_required(&path), /*success*/ false);
     };
     if !auth.is_chatgpt_auth() {
-        return json_output(&upload_auth_required(&path), false);
+        return json_output(&upload_auth_required(&path), /*success*/ false);
     }
     let bearer_token = auth.get_token().map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to load chatgpt auth token: {err}"))
@@ -265,7 +265,7 @@ async fn handle_download(
                     retryable: Some(false),
                     http_status_code: None,
                 },
-                false,
+                /*success*/ false,
             );
         };
         if !parent.exists() {
@@ -286,7 +286,7 @@ async fn handle_download(
                     retryable: Some(false),
                     http_status_code: None,
                 },
-                false,
+                /*success*/ false,
             );
         }
     }
@@ -316,16 +316,22 @@ async fn handle_download(
                 retryable: Some(false),
                 http_status_code: None,
             },
-            false,
+            /*success*/ false,
         );
     }
 
     let auth = session.services.auth_manager.auth().await;
     let Some(auth) = auth else {
-        return json_output(&download_auth_required(&file_id, &path), false);
+        return json_output(
+            &download_auth_required(&file_id, &path),
+            /*success*/ false,
+        );
     };
     if !auth.is_chatgpt_auth() {
-        return json_output(&download_auth_required(&file_id, &path), false);
+        return json_output(
+            &download_auth_required(&file_id, &path),
+            /*success*/ false,
+        );
     }
     let bearer_token = auth.get_token().map_err(|err| {
         FunctionCallError::RespondToModel(format!("failed to load chatgpt auth token: {err}"))
@@ -410,14 +416,17 @@ async fn run_transfer(
                     "file transfer helper could not run inside the sandbox".to_string(),
                 )
             };
-            json_output_value(content, false)
+            json_output_value(content, /*success*/ false)
         }
         Err(crate::tools::sandboxing::ToolError::Rejected(message)) => {
-            json_output_value(transfer_internal_error(kind, &request, message), false)
+            json_output_value(
+                transfer_internal_error(kind, &request, message),
+                /*success*/ false,
+            )
         }
         Err(crate::tools::sandboxing::ToolError::Codex(err)) => json_output_value(
             transfer_internal_error(kind, &request, err.to_string()),
-            false,
+            /*success*/ false,
         ),
     }
 }
@@ -437,7 +446,7 @@ fn parse_helper_output(
                     output.exit_code, output.stderr.text
                 ),
             ),
-            false,
+            /*success*/ false,
         );
     }
     let parsed: Value = serde_json::from_str(&output.stdout.text).map_err(|err| {
