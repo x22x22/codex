@@ -139,6 +139,31 @@ class AgentSessionController(context: Context) {
         requireAgentManager().cancelSession(sessionId)
     }
 
+    fun cancelActiveSessions(): CancelActiveSessionsResult {
+        val manager = requireAgentManager()
+        val activeSessions = manager.getSessions(currentUserId())
+            .filterNot { isTerminalState(it.state) }
+            .sortedWith(
+                compareByDescending<AgentSessionInfo> { it.parentSessionId != null }
+                    .thenBy { it.sessionId },
+            )
+        val cancelledSessionIds = mutableListOf<String>()
+        val failedSessionIds = mutableMapOf<String, String>()
+        activeSessions.forEach { session ->
+            runCatching {
+                manager.cancelSession(session.sessionId)
+            }.onSuccess {
+                cancelledSessionIds += session.sessionId
+            }.onFailure { err ->
+                failedSessionIds[session.sessionId] = err.message ?: err::class.java.simpleName
+            }
+        }
+        return CancelActiveSessionsResult(
+            cancelledSessionIds = cancelledSessionIds,
+            failedSessionIds = failedSessionIds,
+        )
+    }
+
     private fun requireAgentManager(): AgentManager {
         return checkNotNull(agentManager) { "AgentManager unavailable" }
     }
@@ -304,4 +329,9 @@ data class SessionStartResult(
     val parentSessionId: String,
     val childSessionId: String,
     val geniePackage: String,
+)
+
+data class CancelActiveSessionsResult(
+    val cancelledSessionIds: List<String>,
+    val failedSessionIds: Map<String, String>,
 )

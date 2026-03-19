@@ -203,6 +203,28 @@ class MainActivity : Activity() {
         refreshAgentSessions(force = true)
     }
 
+    fun cancelAllAgentSessions(@Suppress("UNUSED_PARAMETER") view: View) {
+        thread {
+            val result = runCatching { agentSessionController.cancelActiveSessions() }
+            result.onFailure { err ->
+                showToast("Failed to cancel active sessions: ${err.message}")
+            }
+            result.onSuccess { cancelResult ->
+                focusedFrameworkSessionId = null
+                val cancelledCount = cancelResult.cancelledSessionIds.size
+                val failedCount = cancelResult.failedSessionIds.size
+                if (cancelledCount == 0 && failedCount == 0) {
+                    showToast("No active framework sessions")
+                } else if (failedCount == 0) {
+                    showToast("Cancelled $cancelledCount active sessions")
+                } else {
+                    showToast("Cancelled $cancelledCount sessions, $failedCount failed")
+                }
+                refreshAgentSessions(force = true)
+            }
+        }
+    }
+
     fun answerAgentQuestion(@Suppress("UNUSED_PARAMETER") view: View) {
         val selectedSession = latestAgentSnapshot.selectedSession
         if (selectedSession == null) {
@@ -454,6 +476,7 @@ class MainActivity : Activity() {
             val answerButton = findViewById<Button>(R.id.agent_answer_button)
             val attachButton = findViewById<Button>(R.id.agent_attach_button)
             val cancelButton = findViewById<Button>(R.id.agent_cancel_button)
+            val cancelAllButton = findViewById<Button>(R.id.agent_cancel_all_button)
             val timelineView = findViewById<TextView>(R.id.agent_timeline)
             val startButton = findViewById<Button>(R.id.agent_start_button)
             val refreshButton = findViewById<Button>(R.id.agent_refresh_button)
@@ -471,6 +494,7 @@ class MainActivity : Activity() {
                 answerButton.visibility = View.GONE
                 attachButton.visibility = View.GONE
                 cancelButton.visibility = View.GONE
+                cancelAllButton.isEnabled = false
                 timelineView.text = "No framework events yet."
                 startButton.isEnabled = false
                 refreshButton.isEnabled = false
@@ -490,6 +514,7 @@ class MainActivity : Activity() {
             timelineView.text = renderTimeline(snapshot)
             startButton.isEnabled = snapshot.selectedGeniePackage != null
             refreshButton.isEnabled = true
+            cancelAllButton.isEnabled = snapshot.sessions.any { !isTerminalState(it.state) }
 
             val selectedSession = snapshot.selectedSession
             val waitingQuestion = selectedSession?.latestQuestion
@@ -511,6 +536,12 @@ class MainActivity : Activity() {
 
             updateSessionUiLease(snapshot.parentSession?.sessionId)
         }
+    }
+
+    private fun isTerminalState(state: Int): Boolean {
+        return state == AgentSessionInfo.STATE_COMPLETED ||
+            state == AgentSessionInfo.STATE_CANCELLED ||
+            state == AgentSessionInfo.STATE_FAILED
     }
 
     private fun renderSelectedSession(snapshot: AgentSnapshot): String {
