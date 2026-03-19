@@ -12,7 +12,7 @@ use tokio::process::ChildStdout;
 use anyhow::Context;
 use codex_client::originator;
 use codex_mcp_server::CodexToolCallParam;
-use codex_terminal::user_agent;
+use codex_terminal_detection::user_agent;
 
 use pretty_assertions::assert_eq;
 use rmcp::model::CallToolRequestParams;

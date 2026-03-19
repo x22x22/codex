@@ -143,7 +143,7 @@ use codex_protocol::request_user_input::RequestUserInputQuestion;
 use codex_protocol::request_user_input::RequestUserInputQuestionOption;
 use codex_protocol::user_input::TextElement;
 use codex_protocol::user_input::UserInput;
-use codex_terminal::TerminalName;
+use codex_terminal_detection::TerminalName;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_approval_presets::builtin_approval_presets;
 use crossterm::event::KeyCode;

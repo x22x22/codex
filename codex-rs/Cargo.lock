@@ -1667,7 +1667,7 @@ dependencies = [
  "codex-rmcp-client",
  "codex-state",
  "codex-stdio-to-uds",
- "codex-terminal",
+ "codex-terminal-detection",
  "codex-tui",
  "codex-tui-app-server",
  "codex-utils-cargo-bin",
@@ -1696,7 +1696,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "codex-config",
- "codex-terminal",
+ "codex-terminal-detection",
  "codex-utils-cargo-bin",
  "codex-utils-rustls-provider",
  "eventsource-stream",
@@ -1868,7 +1868,7 @@ dependencies = [
  "codex-shell-escalation",
  "codex-skills",
  "codex-state",
- "codex-terminal",
+ "codex-terminal-detection",
  "codex-test-macros",
  "codex-utils-absolute-path",
  "codex-utils-cache",
@@ -2528,7 +2528,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-terminal"
+name = "codex-terminal-detection"
 version = "0.0.0"
 dependencies = [
  "pretty_assertions",
@@ -2570,7 +2570,7 @@ dependencies = [
  "codex-protocol",
  "codex-shell-command",
  "codex-state",
- "codex-terminal",
+ "codex-terminal-detection",
  "codex-tui-app-server",
  "codex-utils-absolute-path",
  "codex-utils-approval-presets",
@@ -2662,7 +2662,7 @@ dependencies = [
  "codex-protocol",
  "codex-shell-command",
  "codex-state",
- "codex-terminal",
+ "codex-terminal-detection",
  "codex-utils-absolute-path",
  "codex-utils-approval-presets",
  "codex-utils-cargo-bin",
@@ -5846,7 +5846,7 @@ dependencies = [
  "codex-client",
  "codex-core",
  "codex-mcp-server",
- "codex-terminal",
+ "codex-terminal-detection",
  "codex-utils-cargo-bin",
  "core_test_support",
  "os_info",

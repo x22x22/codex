@@ -2,7 +2,7 @@ use crate::custom_ca::BuildCustomCaTransportError;
 use crate::custom_ca::build_reqwest_client_with_custom_ca;
 use crate::default_client::CodexHttpClient;
 use codex_config::ResidencyRequirement;
-use codex_terminal::user_agent;
+use codex_terminal_detection::user_agent;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;

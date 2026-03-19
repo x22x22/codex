@@ -1,11 +1,11 @@
 [package]
-name = "codex-terminal"
+name = "codex-terminal-detection"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "codex_terminal"
+name = "codex_terminal_detection"
 path = "src/lib.rs"
 
 [lints]
