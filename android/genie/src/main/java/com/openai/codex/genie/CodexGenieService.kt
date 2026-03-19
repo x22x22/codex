@@ -4,7 +4,11 @@ import android.app.agent.AgentSessionInfo
 import android.app.agent.GenieRequest
 import android.app.agent.GenieService
 import android.util.Log
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+import java.util.UUID
 
 class CodexGenieService : GenieService() {
     companion object {
@@ -30,8 +34,12 @@ class CodexGenieService : GenieService() {
     }
 
     override fun onUserResponse(sessionId: String, response: String) {
-        sessionControls[sessionId]?.answer = response
-        sessionControls[sessionId]?.answerLatch = false
+        val control = sessionControls[sessionId] ?: return
+        if (CodexAgentBridge.isBridgeResponse(response)) {
+            control.bridgeResponses.offer(response)
+        } else {
+            control.userResponses.offer(response)
+        }
         Log.i(TAG, "Received user response for $sessionId")
     }
 
@@ -45,8 +53,22 @@ class CodexGenieService : GenieService() {
             )
             callback.publishTrace(
                 sessionId,
-                "Agent-mediated Codex runtime transport is the next integration step; this service currently validates framework lifecycle and question flow.",
+                "Genie is headless and uses the Agent-owned bridge for auth/network reachability checks.",
             )
+            val bridgeStatus = runCatching { requestAgentAuthStatus(sessionId, callback, control) }
+            bridgeStatus.onSuccess { status ->
+                val accountSuffix = status.accountEmail?.let { " (${it})" } ?: ""
+                callback.publishTrace(
+                    sessionId,
+                    "Reached Agent bridge through framework orchestration; authenticated=${status.authenticated}${accountSuffix}, clients=${status.clientCount}.",
+                )
+            }
+            bridgeStatus.onFailure { err ->
+                callback.publishTrace(
+                    sessionId,
+                    "Agent bridge probe failed: ${err.message}",
+                )
+            }
 
             if (request.isDetachedModeAllowed) {
                 callback.requestLaunchDetachedTargetHidden(sessionId)
@@ -59,18 +81,14 @@ class CodexGenieService : GenieService() {
             )
             callback.updateState(sessionId, AgentSessionInfo.STATE_WAITING_FOR_USER)
 
-            while (control.answerLatch && !control.cancelled) {
-                Thread.sleep(100)
-            }
-
             if (control.cancelled) {
                 callback.publishError(sessionId, "Cancelled")
                 callback.updateState(sessionId, AgentSessionInfo.STATE_CANCELLED)
                 return
             }
 
+            val answer = waitForUserResponse(control)
             callback.updateState(sessionId, AgentSessionInfo.STATE_RUNNING)
-            val answer = control.answer ?: ""
             callback.publishTrace(sessionId, "Received user response: $answer")
             callback.publishResult(
                 sessionId,
@@ -89,9 +107,47 @@ class CodexGenieService : GenieService() {
         }
     }
 
+    private fun requestAgentAuthStatus(
+        sessionId: String,
+        callback: Callback,
+        control: SessionControl,
+    ): CodexAgentBridge.AuthStatus {
+        val requestId = UUID.randomUUID().toString()
+        callback.publishQuestion(sessionId, CodexAgentBridge.buildAuthStatusRequest(requestId))
+        callback.updateState(sessionId, AgentSessionInfo.STATE_WAITING_FOR_USER)
+        val response = waitForBridgeResponse(control, requestId)
+        callback.updateState(sessionId, AgentSessionInfo.STATE_RUNNING)
+        return CodexAgentBridge.parseAuthStatusResponse(response, requestId)
+    }
+
+    private fun waitForBridgeResponse(control: SessionControl, requestId: String): String {
+        val deadlineNanos = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (!control.cancelled) {
+            val remainingNanos = deadlineNanos - System.nanoTime()
+            if (remainingNanos <= 0) {
+                throw IOException("Timed out waiting for Agent bridge response")
+            }
+            val response = control.bridgeResponses.poll(remainingNanos, TimeUnit.NANOSECONDS)
+            if (response != null) {
+                return response
+            }
+        }
+        throw IOException("Cancelled while waiting for Agent bridge response $requestId")
+    }
+
+    private fun waitForUserResponse(control: SessionControl): String {
+        while (!control.cancelled) {
+            val response = control.userResponses.poll(100, TimeUnit.MILLISECONDS)
+            if (response != null) {
+                return response
+            }
+        }
+        throw IOException("Cancelled while waiting for user response")
+    }
+
     private class SessionControl {
-        @Volatile var answerLatch = true
         @Volatile var cancelled = false
-        @Volatile var answer: String? = null
+        val bridgeResponses = LinkedBlockingQueue<String>()
+        val userResponses = LinkedBlockingQueue<String>()
     }
 }

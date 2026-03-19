@@ -7,7 +7,6 @@ import android.app.agent.AgentSessionInfo
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.LocalSocket
-import android.net.LocalSocketAddress
 import android.os.Binder
 import android.os.Build
 import android.os.Bundle
@@ -179,6 +178,7 @@ class MainActivity : Activity() {
             showToast("Enter a prompt")
             return
         }
+        ensureCodexdRunningForAgent()
         thread {
             val result = runCatching {
                 agentSessionController.startDirectSession(
@@ -279,7 +279,10 @@ class MainActivity : Activity() {
     }
 
     fun toggleCodexd(@Suppress("UNUSED_PARAMETER") view: View) {
-        val intent = Intent(this, CodexdForegroundService::class.java)
+        val intent = Intent(this, CodexdForegroundService::class.java).apply {
+            putExtra(CodexdForegroundService.EXTRA_SOCKET_PATH, defaultSocketPath())
+            putExtra(CodexdForegroundService.EXTRA_CODEX_HOME, defaultCodexHome())
+        }
         if (isServiceRunning) {
             intent.action = CodexdForegroundService.ACTION_STOP
             startService(intent)
@@ -306,6 +309,8 @@ class MainActivity : Activity() {
     private fun startDeviceAuth() {
         val intent = Intent(this, CodexdForegroundService::class.java).apply {
             action = CodexdForegroundService.ACTION_START
+            putExtra(CodexdForegroundService.EXTRA_SOCKET_PATH, defaultSocketPath())
+            putExtra(CodexdForegroundService.EXTRA_CODEX_HOME, defaultCodexHome())
         }
         startForegroundService(intent)
         isServiceRunning = true
@@ -649,6 +654,16 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun ensureCodexdRunningForAgent() {
+        val intent = Intent(this, CodexdForegroundService::class.java).apply {
+            action = CodexdForegroundService.ACTION_START
+            putExtra(CodexdForegroundService.EXTRA_SOCKET_PATH, defaultSocketPath())
+            putExtra(CodexdForegroundService.EXTRA_CODEX_HOME, defaultCodexHome())
+        }
+        startForegroundService(intent)
+        isServiceRunning = true
+    }
+
     private data class AuthStatus(
         val authenticated: Boolean,
         val accountEmail: String?,
@@ -791,7 +806,7 @@ class MainActivity : Activity() {
         body: String?,
     ): HttpResponse {
         val socket = LocalSocket()
-        val address = LocalSocketAddress(socketPath, LocalSocketAddress.Namespace.FILESYSTEM)
+        val address = CodexSocketConfig.toLocalSocketAddress(socketPath)
         socket.connect(address)
 
         val payload = body ?: ""
@@ -827,7 +842,7 @@ class MainActivity : Activity() {
     }
 
     private fun defaultSocketPath(): String {
-        return File(filesDir, "codexd.sock").absolutePath
+        return CodexSocketConfig.DEFAULT_SOCKET_PATH
     }
 
     private fun defaultCodexHome(): String {

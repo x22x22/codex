@@ -761,10 +761,9 @@ fn bind_listener(target: &UnixSocketBindTarget) -> Result<UnixListener> {
 
 #[cfg(any(target_os = "android", target_os = "linux"))]
 fn bind_abstract_listener(name: &str) -> Result<UnixListener> {
-    use std::os::unix::net::SocketAddr;
     use std::os::unix::net::UnixListener as StdUnixListener;
 
-    let address = SocketAddr::from_abstract_name(name.as_bytes())
+    let address = abstract_socket_addr(name.as_bytes())
         .with_context(|| format!("failed to create abstract socket address @{name}"))?;
     let listener = StdUnixListener::bind_addr(&address)
         .with_context(|| format!("failed to bind abstract socket @{name}"))?;
@@ -773,6 +772,18 @@ fn bind_abstract_listener(name: &str) -> Result<UnixListener> {
         .with_context(|| format!("failed to set abstract socket @{name} nonblocking"))?;
     UnixListener::from_std(listener)
         .with_context(|| format!("failed to adopt abstract socket @{name} into tokio"))
+}
+
+#[cfg(any(target_os = "android", target_os = "linux"))]
+fn abstract_socket_addr(name: &[u8]) -> std::io::Result<std::os::unix::net::SocketAddr> {
+    use std::os::unix::net::SocketAddr;
+
+    #[cfg(target_os = "android")]
+    use std::os::android::net::SocketAddrExt;
+    #[cfg(target_os = "linux")]
+    use std::os::linux::net::SocketAddrExt;
+
+    SocketAddr::from_abstract_name(name)
 }
 
 #[cfg(not(any(target_os = "android", target_os = "linux")))]

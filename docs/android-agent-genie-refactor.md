@@ -19,6 +19,11 @@ The current repo now contains the first implementation slice:
   - attach detached targets
 - The Genie app currently validates framework lifecycle, detached-target
   requests, question flow, and result publication with a placeholder executor.
+- The first Agent<->Genie bridge now uses **framework question/answer events**
+  for internal machine-to-machine RPC. This is intentional: runtime testing on
+  the emulator showed that a Genie execution runs inside the paired target
+  app's sandbox/UID, so ordinary cross-app Android service/provider IPC to the
+  Agent app is not a reliable transport.
 
 The Rust `codexd` service/client split remains in place and is still the
 existing network/auth bridge while this refactor proceeds.
@@ -39,6 +44,9 @@ existing network/auth bridge while this refactor proceeds.
   - orchestration of parent + child sessions
 - The first milestone keeps the current local CLI/socket bridge internally so
   the Rust runtime can migrate incrementally.
+- Internal Agent<->Genie coordination must use a transport that survives the
+  target-app sandbox boundary. The current working bootstrap path is
+  AgentSDK-mediated internal question/answer exchange.
 
 ## Runtime Model
 
@@ -69,6 +77,7 @@ existing network/auth bridge while this refactor proceeds.
   - question/answer flow
   - detached-target requests
   - result publication
+  - Agent-mediated internal bridge requests over framework session events
 
 ## First Milestone Scope
 
@@ -81,6 +90,8 @@ existing network/auth bridge while this refactor proceeds.
 - Direct session launcher in the Agent UI
 - Framework session inspection UI in the Agent app
 - Question answering and detached-target attach controls
+- Framework-mediated internal bridge request handling in `CodexAgentService`
+- Framework-mediated internal bridge request issuance in `CodexGenieService`
 - Abstract-unix-socket support in the legacy Rust bridge via `@name` or
   `abstract:name`, so the compatibility transport can move off app-private
   filesystem sockets when Agent<->Genie traffic is introduced
@@ -89,8 +100,8 @@ existing network/auth bridge while this refactor proceeds.
 
 - Replacing the placeholder Genie executor with a real Codex runtime
 - Moving network/auth mediation from `codexd` into the Agent runtime
-- Defining the long-term Agent<->Genie transport beyond the current compatibility
-  bridge
+- Replacing the temporary internal question/answer bridge with a transport that
+  supports richer request/response and eventually streaming semantics
 - Wiring Android-native target-driving tools into the Genie runtime
 - Making the Agent the default product surface instead of the legacy service app
 
@@ -108,6 +119,10 @@ existing network/auth bridge while this refactor proceeds.
   - Agent session UI plus existing `codexd` bridge controls
 - `android/genie/src/main/java/com/openai/codex/genie/CodexGenieService.kt`
   - placeholder Genie executor
+- `android/genie/src/main/java/com/openai/codex/genie/CodexAgentBridge.kt`
+  - internal framework bridge protocol helpers
+- `android/app/src/main/java/com/openai/codexd/CodexdLocalClient.kt`
+  - Agent-local client for the embedded `codexd` bridge
 
 ## Build
 
@@ -130,8 +145,8 @@ The Agent app still depends on `just android-service-build` for the packaged
 ## Next Implementation Steps
 
 1. Move the placeholder Genie session executor to a real Codex runtime role.
-2. Define the Agent-mediated local transport that Genie uses for model/backend
-   access.
+2. Generalize the current framework question/answer bridge into a transport the
+   Genie runtime can use for more than auth/status probes.
 3. Split the legacy `codexd` concerns out of the Agent UI once the Agent owns
    auth and transport directly.
 4. Add Android-native tool surfaces to Genie for target inspection and control.

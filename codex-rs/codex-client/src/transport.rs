@@ -242,13 +242,11 @@ async fn connect_unix_stream(
 async fn connect_abstract_unix_stream(
     name: String,
 ) -> Result<tokio::net::UnixStream, TransportError> {
-    use std::os::unix::net::SocketAddr;
     use std::os::unix::net::UnixStream as StdUnixStream;
     use tokio::net::UnixStream;
 
     tokio::task::spawn_blocking(move || {
-        let address = SocketAddr::from_abstract_name(name.as_bytes())
-            .map_err(|err| TransportError::Network(err.to_string()))?;
+        let address = abstract_socket_addr(name.as_bytes())?;
         let stream = StdUnixStream::connect_addr(&address)
             .map_err(|err| TransportError::Network(err.to_string()))?;
         stream
@@ -258,6 +256,18 @@ async fn connect_abstract_unix_stream(
     })
     .await
     .map_err(|err| TransportError::Network(err.to_string()))?
+}
+
+#[cfg(all(unix, any(target_os = "android", target_os = "linux")))]
+fn abstract_socket_addr(name: &[u8]) -> Result<std::os::unix::net::SocketAddr, TransportError> {
+    use std::os::unix::net::SocketAddr;
+
+    #[cfg(target_os = "android")]
+    use std::os::android::net::SocketAddrExt;
+    #[cfg(target_os = "linux")]
+    use std::os::linux::net::SocketAddrExt;
+
+    SocketAddr::from_abstract_name(name).map_err(|err| TransportError::Network(err.to_string()))
 }
 
 #[cfg(all(unix, not(any(target_os = "android", target_os = "linux"))))]
