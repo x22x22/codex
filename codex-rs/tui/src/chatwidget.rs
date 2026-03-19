@@ -1508,7 +1508,9 @@ impl ChatWidget {
         {
             tracing::info!(target: "feedback_tags", chatgpt_user_id);
         }
-        let snapshot = self.feedback.snapshot(self.thread_id);
+        let snapshot = self
+            .feedback
+            .snapshot_with_sqlite_home(self.thread_id, Some(self.config.sqlite_home.clone()));
         self.show_feedback_note(category, include_logs, snapshot);
     }
 
