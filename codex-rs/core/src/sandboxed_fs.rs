@@ -3,6 +3,7 @@ use crate::codex::TurnContext;
 use crate::error::CodexErr;
 use crate::error::SandboxErr;
 use crate::exec::ExecExpiration;
+use crate::exec::ExecStdin;
 use crate::exec::ExecToolCallOutputBytes;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
@@ -27,14 +28,34 @@ pub(crate) async fn read_file(
     turn: &Arc<TurnContext>,
     path: &Path,
 ) -> Result<Vec<u8>, SandboxedFsError> {
-    let output = run_request(session, turn, path).await?;
+    let output = run_request(session, turn, path, "read", ExecStdin::Closed).await?;
     Ok(output.stdout.text)
+}
+
+#[allow(dead_code)]
+pub(crate) async fn write_file(
+    session: &Arc<Session>,
+    turn: &Arc<TurnContext>,
+    path: &Path,
+    contents: &[u8],
+) -> Result<(), SandboxedFsError> {
+    run_request(
+        session,
+        turn,
+        path,
+        "write",
+        ExecStdin::Bytes(contents.to_vec()),
+    )
+    .await?;
+    Ok(())
 }
 
 async fn run_request(
     session: &Arc<Session>,
     turn: &Arc<TurnContext>,
     path: &Path,
+    operation: &str,
+    stdin: ExecStdin,
 ) -> Result<ExecToolCallOutputBytes, SandboxedFsError> {
     let exe = std::env::current_exe().map_err(|error| SandboxedFsError::ResolveExe {
         message: error.to_string(),
@@ -60,13 +81,13 @@ async fn run_request(
         windows_sandbox_level: turn.windows_sandbox_level,
         windows_sandbox_private_desktop: turn.config.permissions.windows_sandbox_private_desktop,
     };
-    let exec_request = attempt
+    let mut exec_request = attempt
         .env_for(
             CommandSpec {
                 program: exe.to_string_lossy().to_string(),
                 args: vec![
                     CODEX_CORE_FS_OPS_ARG1.to_string(),
-                    "read".to_string(),
+                    operation.to_string(),
                     path.to_string_lossy().to_string(),
                 ],
                 cwd: turn.cwd.clone(),
@@ -83,6 +104,7 @@ async fn run_request(
             exit_code: -1,
             message: error.to_string(),
         })?;
+    exec_request.stdin = stdin;
 
     let output = execute_env_output_bytes(exec_request, /*stdout_stream*/ None)
         .await
