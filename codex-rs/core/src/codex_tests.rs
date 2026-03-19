@@ -4638,7 +4638,10 @@ async fn tool_call_metadata_stamps_policy_source_without_review_decision_when_fe
 
     sess.record_call_approval_outcome(
         "call-policy-runtime-1".to_string(),
-        ApprovalOutcomeMetadata::policy(),
+        ApprovalOutcomeMetadata {
+            review_decision: None,
+            approval_source: codex_protocol::models::ApprovalSourceMetadata::Policy,
+        },
     )
     .await;
     sess.record_response_item_and_emit_turn_item(
