@@ -24,6 +24,9 @@ The current repo now contains the first implementation slice:
 - The current bridge shape carries small request/response envelopes, and the
   Genie runtime already uses it to fetch Agent-owned runtime metadata from the
   embedded `codexd`, including auth status and the effective model/provider.
+- The Genie runtime now also inspects the paired target package from inside the
+  target-app sandbox and feeds package metadata plus launcher intent details
+  into the bridged model prompt.
 - The Genie scaffold now issues one real **non-streaming `/v1/responses`**
   request through that bridge after the user answer, proving that model traffic
   can stay Agent-owned even while the Genie runs inside the target-app sandbox.
@@ -103,6 +106,8 @@ existing network/auth bridge while this refactor proceeds.
 - Generic small HTTP request/response envelopes over the internal bridge, with
   the Genie using the real `codexd` HTTP response bodies
 - Agent-owned `/internal/runtime/status` metadata for Genie bootstrap
+- Target-app package metadata and launcher-intent inspection from the Genie
+  sandbox, with that context included in the bridged model prompt
 - One real non-streaming proxied `/v1/responses` request from Genie through the
   Agent-owned bridge after the user answer
 - Abstract-unix-socket support in the legacy Rust bridge via `@name` or

@@ -57,6 +57,19 @@ class CodexGenieService : GenieService() {
                 sessionId,
                 "Genie is headless and routes model/backend traffic through the Agent-owned bridge.",
             )
+            val targetAppContext = runCatching { TargetAppInspector.inspect(this, request.targetPackage) }
+            targetAppContext.onSuccess { targetApp ->
+                callback.publishTrace(
+                    sessionId,
+                    "Inspected target app inside the paired sandbox: ${targetApp.describeForTrace()}",
+                )
+            }
+            targetAppContext.onFailure { err ->
+                callback.publishTrace(
+                    sessionId,
+                    "Target app inspection failed for ${request.targetPackage}: ${err.message}",
+                )
+            }
             val runtimeStatus = runCatching { requestAgentRuntimeStatus(sessionId, callback, control) }
             runtimeStatus.onSuccess { status ->
                 val accountSuffix = status.accountEmail?.let { " (${it})" } ?: ""
@@ -79,7 +92,7 @@ class CodexGenieService : GenieService() {
 
             callback.publishQuestion(
                 sessionId,
-                "Codex Genie scaffold is active for ${request.targetPackage}. Continue the placeholder flow?",
+                "Codex Genie is active for ${targetAppContext.getOrNull()?.displayName() ?: request.targetPackage}. Continue with the Agent-bridged next-step synthesis?",
             )
             callback.updateState(sessionId, AgentSessionInfo.STATE_WAITING_FOR_USER)
 
@@ -101,7 +114,15 @@ class CodexGenieService : GenieService() {
                     "Requesting a non-streaming /v1/responses call through the Agent using ${status.effectiveModel}.",
                 )
                 runCatching {
-                    requestModelNextStep(sessionId, request, answer, status, callback, control)
+                    requestModelNextStep(
+                        sessionId = sessionId,
+                        request = request,
+                        answer = answer,
+                        runtimeStatus = status,
+                        targetAppContext = targetAppContext.getOrNull(),
+                        callback = callback,
+                        control = control,
+                    )
                 }
             }
 
@@ -166,6 +187,7 @@ class CodexGenieService : GenieService() {
         request: GenieRequest,
         answer: String,
         runtimeStatus: CodexAgentBridge.RuntimeStatus,
+        targetAppContext: TargetAppContext?,
         callback: Callback,
         control: SessionControl,
     ): String {
@@ -176,7 +198,11 @@ class CodexGenieService : GenieService() {
             CodexAgentBridge.buildResponsesRequest(
                 requestId = requestId,
                 model = model,
-                prompt = buildModelPrompt(request, answer),
+                prompt = buildModelPrompt(
+                    request = request,
+                    answer = answer,
+                    targetAppContext = targetAppContext,
+                ),
             ),
         )
         callback.updateState(sessionId, AgentSessionInfo.STATE_WAITING_FOR_USER)
@@ -210,13 +236,21 @@ class CodexGenieService : GenieService() {
         throw IOException("Cancelled while waiting for user response")
     }
 
-    private fun buildModelPrompt(request: GenieRequest, answer: String): String {
+    private fun buildModelPrompt(
+        request: GenieRequest,
+        answer: String,
+        targetAppContext: TargetAppContext?,
+    ): String {
         val objective = abbreviate(request.prompt, MAX_BRIDGE_PROMPT_CHARS)
         val userAnswer = abbreviate(answer, MAX_BRIDGE_ANSWER_CHARS)
+        val targetSummary = targetAppContext?.renderPromptSection()
+            ?: "Target app inspection:\n- unavailable"
         return """
             You are Codex acting as an Android Genie for the target package ${request.targetPackage}.
             Original objective: $objective
             The user answered the current question with: $userAnswer
+            
+            $targetSummary
 
             Reply with one short sentence describing the next automation step you would take in the target app.
         """.trimIndent()
