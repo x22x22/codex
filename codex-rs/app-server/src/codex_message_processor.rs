@@ -422,7 +422,8 @@ impl CodexMessageProcessor {
     }
 
     pub(crate) fn clear_runtime_references(&self) {
-        self.thread_manager.set_delegated_model_transport(None);
+        self.thread_manager
+            .set_delegated_model_transport(/*transport*/ None);
     }
 
     pub(crate) fn clear_plugin_related_caches(&self) {

@@ -1007,7 +1007,11 @@ impl ModelClientSession {
         };
 
         let request = self.build_responses_request(
-            &self.client.state.provider.to_api_provider(None)?,
+            &self
+                .client
+                .state
+                .provider
+                .to_api_provider(/*auth_mode*/ None)?,
             prompt,
             model_info,
             effort,
