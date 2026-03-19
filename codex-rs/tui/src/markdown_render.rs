@@ -611,10 +611,16 @@ where
         if let Some(link) = self.link.take() {
             if link.show_destination {
                 self.pop_inline_style();
+                let destination_style = self
+                    .inline_styles
+                    .last()
+                    .copied()
+                    .unwrap_or_default()
+                    .patch(self.styles.link_destination);
                 self.push_span(" (".into());
                 self.push_span(Span::styled(
                     osc8_hyperlink(&link.destination, &link.destination),
-                    self.styles.link_destination,
+                    destination_style,
                 ));
                 self.push_span(")".into());
             } else if let Some(local_target_display) = link.local_target_display {

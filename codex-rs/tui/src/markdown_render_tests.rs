@@ -812,6 +812,25 @@ fn url_link_with_inline_code_is_clickable() {
 }
 
 #[test]
+fn nested_styled_url_link_preserves_destination_outer_style() {
+    let text = render_markdown_text("***[docs](https://example.com/docs)***");
+    let expected = Text::from(Line::from_iter([
+        osc8_hyperlink("https://example.com/docs", "docs")
+            .bold()
+            .italic()
+            .underlined(),
+        " (".into(),
+        osc8_hyperlink("https://example.com/docs", "https://example.com/docs")
+            .bold()
+            .italic()
+            .cyan()
+            .underlined(),
+        ")".into(),
+    ]));
+    assert_eq!(text, expected);
+}
+
+#[test]
 fn url_link_sanitizes_control_chars() {
     assert_eq!(
         osc8_hyperlink("https://example.com/\u{1b}]8;;\u{07}injected", "unsafe"),
