@@ -714,6 +714,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_zero_byte_file_uses_size_zero() -> Result<()> {
+        let server = MockServer::start().await;
+        let file_id = "file-empty";
+        let upload_url = format!("{}/upload-target", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/backend-api/files"))
+            .and(body_json(serde_json::json!({
+                "file_name": "empty.txt",
+                "file_size": 0,
+                "use_case": "codex"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "file_id": file_id,
+                "upload_url": upload_url
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path("/upload-target"))
+            .respond_with(ResponseTemplate::new(201))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(format!("/backend-api/files/{file_id}/uploaded")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/blob/{file_id}", server.uri()),
+                "file_name": "empty.txt",
+                "file_size_bytes": 0,
+                "mime_type": "text/plain"
+            })))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir()?;
+        let path = dir.path().join("empty.txt");
+        tokio::fs::write(&path, b"").await?;
+
+        let output = upload_file(&test_config(&server), &path).await?;
+        assert_eq!(output.file_size_bytes, Some(0));
+        assert_eq!(output.file_id, Some(file_id.to_string()));
+        assert_eq!(output.uri, Some(openai_file_uri(file_id)));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn download_directory_uses_remote_file_name() -> Result<()> {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -841,6 +887,33 @@ mod tests {
         assert_eq!(tokio::fs::read_to_string(path).await?, "hello bytes");
         assert_eq!(output.file_name, Some("fallback.txt".to_string()));
         assert_eq!(output.mime_type, Some("text/plain".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn download_directory_uses_utf8_file_name_from_link_payload() -> Result<()> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/backend-api/files/download/file-unicode"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "success",
+                "download_url": format!("{}/content/file-unicode", server.uri()),
+                "file_name": "café.txt",
+                "mime_type": "text/plain"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/content/file-unicode"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"bonjour".to_vec()))
+            .mount(&server)
+            .await;
+
+        let dir = tempdir()?;
+        let output = download_file(&test_config(&server), "file-unicode", dir.path(), true).await?;
+        let expected_path = dir.path().join("café.txt");
+        assert_eq!(tokio::fs::read_to_string(expected_path).await?, "bonjour");
+        assert_eq!(output.file_name, Some("café.txt".to_string()));
         Ok(())
     }
 
