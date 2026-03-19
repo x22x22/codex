@@ -160,6 +160,8 @@ foreground-service auth/status surface while this refactor proceeds.
 - Agent-owned question notifications for Genie questions that need user input
 - Agent-mediated free-form answers for Genie questions, using the hosted Agent
   Codex runtime as the temporary answer engine
+- Agent planning can now use `request_user_input` to ask the user clarifying
+  questions before launching child Genie sessions
 - Abstract-unix-socket support in the legacy Rust bridge via `@name` or
   `abstract:name`, so the compatibility transport can move off app-private
   filesystem sockets when Agent<->Genie traffic is introduced
@@ -187,7 +189,9 @@ foreground-service auth/status surface while this refactor proceeds.
 - `android/app/src/main/java/com/openai/codexd/AgentFrameworkToolBridge.kt`
   - hosted Agent bridge for framework session APIs
 - `android/app/src/main/java/com/openai/codexd/MainActivity.kt`
-  - Agent session UI plus existing `codexd` bridge controls
+  - Agent session UI, Agent clarification dialogs, and existing `codexd` bridge controls
+- `android/app/src/main/java/com/openai/codexd/AgentUserInputPrompter.kt`
+  - Android dialog bridge for hosted Agent `request_user_input` calls
 - `android/genie/src/main/java/com/openai/codex/genie/CodexGenieService.kt`
   - Genie lifecycle host for the embedded `codex app-server`
 - `android/genie/src/main/java/com/openai/codex/genie/CodexAppServerHost.kt`

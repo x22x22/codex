@@ -188,6 +188,9 @@ class MainActivity : Activity() {
                     targetPackageOverride = targetPackageOverride.ifBlank { null },
                     allowDetachedMode = true,
                     sessionController = agentSessionController,
+                    requestUserInputHandler = { questions ->
+                        AgentUserInputPrompter.promptForAnswers(this, questions)
+                    },
                 )
             }
             result.onFailure { err ->

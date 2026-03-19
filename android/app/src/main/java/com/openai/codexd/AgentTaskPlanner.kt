@@ -2,6 +2,8 @@ package com.openai.codexd
 
 import android.content.Context
 import java.io.IOException
+import org.json.JSONArray
+import org.json.JSONObject
 
 data class AgentDelegationTarget(
     val packageName: String,
@@ -38,6 +40,7 @@ object AgentTaskPlanner {
         targetPackageOverride: String?,
         allowDetachedMode: Boolean,
         sessionController: AgentSessionController,
+        requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
     ): SessionStartResult {
         if (!targetPackageOverride.isNullOrBlank()) {
             return sessionController.startDirectSession(
@@ -75,6 +78,7 @@ object AgentTaskPlanner {
                     },
                 )
             },
+            requestUserInputHandler = requestUserInputHandler,
         )
         return sessionStartResult
             ?: throw IOException("Agent runtime did not launch any Genie sessions")

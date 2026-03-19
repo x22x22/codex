@@ -44,6 +44,7 @@ object AgentCodexAppServerClient {
         prompt: String,
         dynamicTools: JSONArray? = null,
         toolCallHandler: ((String, JSONObject) -> JSONObject)? = null,
+        requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
     ): String = synchronized(lifecycleLock) {
         ensureStarted(context.applicationContext)
         activeRequests.incrementAndGet()
@@ -55,7 +56,7 @@ object AgentCodexAppServerClient {
                 dynamicTools = dynamicTools,
             )
             startTurn(threadId, prompt)
-            waitForTurnCompletion(toolCallHandler)
+            waitForTurnCompletion(toolCallHandler, requestUserInputHandler)
         } finally {
             activeRequests.decrementAndGet()
         }
@@ -180,6 +181,7 @@ object AgentCodexAppServerClient {
 
     private fun waitForTurnCompletion(
         toolCallHandler: ((String, JSONObject) -> JSONObject)?,
+        requestUserInputHandler: ((JSONArray) -> JSONObject)?,
     ): String {
         val streamedAgentMessages = mutableMapOf<String, StringBuilder>()
         var finalAgentMessage: String? = null
@@ -195,7 +197,7 @@ object AgentCodexAppServerClient {
                 continue
             }
             if (notification.has("id") && notification.has("method")) {
-                handleServerRequest(notification, toolCallHandler)
+                handleServerRequest(notification, toolCallHandler, requestUserInputHandler)
                 continue
             }
             val params = notification.optJSONObject("params") ?: JSONObject()
@@ -238,38 +240,64 @@ object AgentCodexAppServerClient {
     private fun handleServerRequest(
         message: JSONObject,
         toolCallHandler: ((String, JSONObject) -> JSONObject)?,
+        requestUserInputHandler: ((JSONArray) -> JSONObject)?,
     ) {
         val requestId = message.opt("id") ?: return
         val method = message.optString("method", "unknown")
-        if (method != "item/tool/call") {
-            sendError(
-                requestId = requestId,
-                code = -32601,
-                message = "Unsupported Agent app-server request: $method",
-            )
-            return
-        }
-        if (toolCallHandler == null) {
-            sendError(
-                requestId = requestId,
-                code = -32601,
-                message = "No Agent tool handler registered for $method",
-            )
-            return
-        }
         val params = message.optJSONObject("params") ?: JSONObject()
-        val toolName = params.optString("tool").trim()
-        val arguments = params.optJSONObject("arguments") ?: JSONObject()
-        val result = runCatching { toolCallHandler(toolName, arguments) }
-            .getOrElse { err ->
+        when (method) {
+            "item/tool/call" -> {
+                if (toolCallHandler == null) {
+                    sendError(
+                        requestId = requestId,
+                        code = -32601,
+                        message = "No Agent tool handler registered for $method",
+                    )
+                    return
+                }
+                val toolName = params.optString("tool").trim()
+                val arguments = params.optJSONObject("arguments") ?: JSONObject()
+                val result = runCatching { toolCallHandler(toolName, arguments) }
+                    .getOrElse { err ->
+                        sendError(
+                            requestId = requestId,
+                            code = -32000,
+                            message = err.message ?: "Agent tool call failed",
+                        )
+                        return
+                    }
+                sendResult(requestId, result)
+            }
+            "item/tool/requestUserInput" -> {
+                if (requestUserInputHandler == null) {
+                    sendError(
+                        requestId = requestId,
+                        code = -32601,
+                        message = "No Agent user-input handler registered for $method",
+                    )
+                    return
+                }
+                val questions = params.optJSONArray("questions") ?: JSONArray()
+                val result = runCatching { requestUserInputHandler(questions) }
+                    .getOrElse { err ->
+                        sendError(
+                            requestId = requestId,
+                            code = -32000,
+                            message = err.message ?: "Agent user input request failed",
+                        )
+                        return
+                    }
+                sendResult(requestId, result)
+            }
+            else -> {
                 sendError(
                     requestId = requestId,
-                    code = -32000,
-                    message = err.message ?: "Agent tool call failed",
+                    code = -32601,
+                    message = "Unsupported Agent app-server request: $method",
                 )
                 return
             }
-        sendResult(requestId, result)
+        }
     }
 
     private fun sendResult(
