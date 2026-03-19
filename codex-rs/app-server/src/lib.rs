@@ -769,7 +769,14 @@ pub async fn run_main_with_transport(
                                                     connection_id,
                                                 )
                                                 .await;
-                                            processor.connection_initialized(connection_id).await;
+                                            processor
+                                                .connection_initialized(
+                                                    connection_id,
+                                                    connection_state
+                                                        .session
+                                                        .experimental_api_enabled,
+                                                )
+                                                .await;
                                             connection_state
                                                 .outbound_initialized
                                                 .store(true, std::sync::atomic::Ordering::Release);
@@ -787,7 +794,9 @@ pub async fn run_main_with_transport(
                                             warn!("dropping notification from unknown connection: {connection_id:?}");
                                             continue;
                                         }
-                                        processor.process_notification(notification).await;
+                                        processor
+                                            .process_notification(connection_id, notification)
+                                            .await;
                                     }
                                     JSONRPCMessage::Error(err) => {
                                         if !connections.contains_key(&connection_id) {

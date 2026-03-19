@@ -352,10 +352,14 @@ impl ModelClient {
     /// This constructor does not perform network I/O itself; the session opens a websocket lazily
     /// when the first stream request is issued.
     pub fn new_session(&self) -> ModelClientSession {
+        self.new_session_with_turn_id(Uuid::new_v4().to_string())
+    }
+
+    pub fn new_session_with_turn_id(&self, turn_id: String) -> ModelClientSession {
         ModelClientSession {
             client: self.clone(),
             websocket_session: self.take_cached_websocket_session(),
-            turn_id: Uuid::new_v4().to_string(),
+            turn_id,
             next_request_id: 0,
             turn_state: Arc::new(OnceLock::new()),
         }
@@ -768,6 +772,11 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn set_turn_id(&mut self, turn_id: String) {
+        self.turn_id = turn_id;
+        self.next_request_id = 0;
+    }
+
     fn reset_websocket_session(&mut self) {
         self.websocket_session.connection = None;
         self.websocket_session.last_request = None;
@@ -944,9 +953,17 @@ impl ModelClientSession {
         &self,
         turn_metadata_header: Option<&str>,
     ) -> HashMap<String, String> {
-        let mut headers = self
-            .client
-            .build_websocket_headers(Some(&self.turn_state), turn_metadata_header);
+        let turn_metadata_header = parse_turn_metadata_header(turn_metadata_header);
+        let conversation_id = self.client.state.conversation_id.to_string();
+        let mut headers = build_responses_headers(
+            self.client.state.beta_features_header.as_deref(),
+            Some(&self.turn_state),
+            turn_metadata_header.as_ref(),
+        );
+        if let Ok(header_value) = HeaderValue::from_str(&conversation_id) {
+            headers.insert("x-client-request-id", header_value);
+        }
+        headers.extend(build_conversation_headers(Some(conversation_id)));
         headers.extend(self.client.build_subagent_headers());
         header_map_to_string_map(&headers)
     }

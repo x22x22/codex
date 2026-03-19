@@ -3341,9 +3341,13 @@ impl CodexMessageProcessor {
         self.thread_manager.subscribe_thread_created()
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        experimental_api_enabled: bool,
+    ) {
         self.thread_state_manager
-            .connection_initialized(connection_id)
+            .connection_initialized(connection_id, experimental_api_enabled)
             .await;
     }
 
@@ -8936,7 +8940,9 @@ mod tests {
         let connection = ConnectionId(1);
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
-        manager.connection_initialized(connection).await;
+        manager
+            .connection_initialized(connection, /*experimental_api_enabled*/ false)
+            .await;
         manager
             .try_ensure_connection_subscribed(thread_id, connection, false)
             .await
@@ -8979,8 +8985,12 @@ mod tests {
         let connection_b = ConnectionId(2);
         let (cancel_tx, mut cancel_rx) = oneshot::channel();
 
-        manager.connection_initialized(connection_a).await;
-        manager.connection_initialized(connection_b).await;
+        manager
+            .connection_initialized(connection_a, /*experimental_api_enabled*/ false)
+            .await;
+        manager
+            .connection_initialized(connection_b, /*experimental_api_enabled*/ false)
+            .await;
         manager
             .try_ensure_connection_subscribed(thread_id, connection_a, false)
             .await
@@ -9014,7 +9024,9 @@ mod tests {
         let thread_id = ThreadId::from_string("ad7f0408-99b8-4f6e-a46f-bd0eec433370")?;
         let connection = ConnectionId(1);
 
-        manager.connection_initialized(connection).await;
+        manager
+            .connection_initialized(connection, /*experimental_api_enabled*/ false)
+            .await;
         manager.remove_connection(connection).await;
 
         assert!(

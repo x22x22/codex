@@ -396,20 +396,31 @@ impl MessageProcessor {
         .await;
     }
 
-    pub(crate) async fn process_notification(&self, notification: JSONRPCNotification) {
+    pub(crate) async fn process_notification(
+        &self,
+        connection_id: ConnectionId,
+        notification: JSONRPCNotification,
+    ) {
         tracing::info!("<- notification: {:?}", notification);
         match ClientNotification::try_from(notification) {
-            Ok(notification) => self.process_client_notification(notification).await,
+            Ok(notification) => {
+                self.process_client_notification(connection_id, notification)
+                    .await
+            }
             Err(err) => tracing::warn!("failed to decode typed client notification: {err}"),
         }
     }
 
     /// Handles typed notifications from in-process clients.
-    pub(crate) async fn process_client_notification(&self, notification: ClientNotification) {
+    pub(crate) async fn process_client_notification(
+        &self,
+        connection_id: ConnectionId,
+        notification: ClientNotification,
+    ) {
         tracing::info!("<- typed notification: {:?}", notification);
         if let Err(err) = self
             .delegated_model_transport
-            .handle_client_notification(notification)
+            .handle_client_notification(connection_id, notification)
             .await
         {
             tracing::warn!("failed to process client notification: {err}");
@@ -447,9 +458,13 @@ impl MessageProcessor {
         }
     }
 
-    pub(crate) async fn connection_initialized(&self, connection_id: ConnectionId) {
+    pub(crate) async fn connection_initialized(
+        &self,
+        connection_id: ConnectionId,
+        experimental_api_enabled: bool,
+    ) {
         self.codex_message_processor
-            .connection_initialized(connection_id)
+            .connection_initialized(connection_id, experimental_api_enabled)
             .await;
     }
 
@@ -612,7 +627,7 @@ impl MessageProcessor {
                     // initialize handling for the specific connection.
                     outbound_initialized.store(true, Ordering::Release);
                     self.codex_message_processor
-                        .connection_initialized(connection_id)
+                        .connection_initialized(connection_id, session.experimental_api_enabled)
                         .await;
                 }
                 return;

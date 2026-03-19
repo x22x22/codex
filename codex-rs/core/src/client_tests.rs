@@ -96,15 +96,21 @@ fn test_session_telemetry() -> SessionTelemetry {
 #[derive(Default)]
 struct RecordingDelegatedTransport {
     compact_requests: Mutex<Vec<DelegatedModelCompactRequest>>,
+    stream_requests: Mutex<Vec<DelegatedModelRequest>>,
 }
 
 #[async_trait]
 impl DelegatedModelTransport for RecordingDelegatedTransport {
     async fn start_model_request(
         &self,
-        _request: DelegatedModelRequest,
+        request: DelegatedModelRequest,
     ) -> crate::error::Result<mpsc::Receiver<DelegatedModelEvent>> {
-        panic!("streaming delegation is not used in this test");
+        self.stream_requests
+            .lock()
+            .expect("stream request recording mutex")
+            .push(request);
+        let (_tx, rx) = mpsc::channel(1);
+        Ok(rx)
     }
 
     async fn run_model_compact_request(
@@ -317,5 +323,84 @@ async fn delegated_compact_conversation_history_routes_through_transport() {
             ),
             ("x-openai-subagent".to_string(), "compact".to_string()),
         ]))
+    );
+}
+
+#[tokio::test]
+async fn delegated_stream_request_uses_live_turn_id_and_http_headers() {
+    let client = test_model_client(SessionSource::SubAgent(SubAgentSource::Other(
+        "delegate".to_string(),
+    )));
+    let transport = Arc::new(RecordingDelegatedTransport::default());
+    client.set_delegated_model_transport(Some(transport.clone()));
+    client.set_network_delegation_config(Some(NetworkDelegationConfig {
+        mode: NetworkDelegationMode::Enabled,
+        stream_idle_timeout_ms: None,
+    }));
+
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: Some("msg_user".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            end_turn: None,
+            phase: None,
+        }],
+        tools: Vec::new(),
+        parallel_tool_calls: false,
+        base_instructions: BaseInstructions {
+            text: "stream instructions".to_string(),
+        },
+        personality: None,
+        output_schema: None,
+    };
+
+    let mut session = client.new_session_with_turn_id("turn-live".to_string());
+    let _stream = session
+        .stream(
+            &prompt,
+            &test_model_info(),
+            &test_session_telemetry(),
+            None,
+            ReasoningSummaryConfig::None,
+            None,
+            None,
+        )
+        .await
+        .expect("delegated stream request should be accepted");
+
+    let recorded = transport
+        .stream_requests
+        .lock()
+        .expect("stream request recording mutex")
+        .clone();
+    assert_eq!(recorded.len(), 1);
+    let request = &recorded[0];
+    assert_eq!(request.thread_id, client.state.conversation_id);
+    assert_eq!(request.turn_id, "turn-live");
+    assert_eq!(request.request_id, "turn-live-0");
+    let headers = request
+        .request
+        .request_headers
+        .as_ref()
+        .expect("delegated stream request should include headers");
+    assert_eq!(
+        headers.get("x-client-request-id"),
+        Some(&client.state.conversation_id.to_string())
+    );
+    assert_eq!(
+        headers.get("session_id"),
+        Some(&client.state.conversation_id.to_string())
+    );
+    assert_eq!(
+        headers.get("x-openai-subagent"),
+        Some(&"delegate".to_string())
+    );
+    assert_eq!(headers.get(super::OPENAI_BETA_HEADER), None);
+    assert_eq!(
+        headers.get(super::X_RESPONSESAPI_INCLUDE_TIMING_METRICS_HEADER),
+        None
     );
 }

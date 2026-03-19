@@ -68,10 +68,16 @@ impl DelegatedRequestKey {
 }
 
 #[derive(Clone)]
+struct InflightDelegatedRequest {
+    connection_id: ConnectionId,
+    sender: mpsc::Sender<DelegatedModelEvent>,
+}
+
+#[derive(Clone)]
 pub(crate) struct AppServerDelegatedModelTransport {
     outgoing: Arc<OutgoingMessageSender>,
     thread_state_manager: ThreadStateManager,
-    inflight: Arc<Mutex<HashMap<DelegatedRequestKey, mpsc::Sender<DelegatedModelEvent>>>>,
+    inflight: Arc<Mutex<HashMap<DelegatedRequestKey, InflightDelegatedRequest>>>,
 }
 
 impl AppServerDelegatedModelTransport {
@@ -88,25 +94,32 @@ impl AppServerDelegatedModelTransport {
 
     pub(crate) async fn handle_client_notification(
         &self,
+        connection_id: ConnectionId,
         notification: ClientNotification,
     ) -> Result<()> {
         match notification {
             ClientNotification::Initialized => Ok(()),
             ClientNotification::ModelStreamMetadata(notification) => {
-                self.deliver_metadata(notification).await
+                self.deliver_metadata(connection_id, notification).await
             }
             ClientNotification::ModelStreamEvent(notification) => {
-                self.deliver_stream_event(notification).await
+                self.deliver_stream_event(connection_id, notification).await
             }
             ClientNotification::ModelRequestFailed(notification) => {
-                self.deliver_request_failed(notification).await
+                self.deliver_request_failed(connection_id, notification)
+                    .await
             }
         }
     }
 
-    async fn deliver_metadata(&self, notification: ModelStreamMetadataNotification) -> Result<()> {
+    async fn deliver_metadata(
+        &self,
+        connection_id: ConnectionId,
+        notification: ModelStreamMetadataNotification,
+    ) -> Result<()> {
         let key = DelegatedRequestKey::from_metadata(&notification);
         self.deliver_event(
+            connection_id,
             key,
             DelegatedModelEvent::StreamMetadata(notification.metadata),
             /*final_event*/ false,
@@ -114,10 +127,15 @@ impl AppServerDelegatedModelTransport {
         .await
     }
 
-    async fn deliver_stream_event(&self, notification: ModelStreamEventNotification) -> Result<()> {
+    async fn deliver_stream_event(
+        &self,
+        connection_id: ConnectionId,
+        notification: ModelStreamEventNotification,
+    ) -> Result<()> {
         let final_event = stream_event_is_final(&notification.event);
         let key = DelegatedRequestKey::from_stream_event(&notification);
         self.deliver_event(
+            connection_id,
             key,
             DelegatedModelEvent::StreamEvent(notification.event),
             final_event,
@@ -127,10 +145,12 @@ impl AppServerDelegatedModelTransport {
 
     async fn deliver_request_failed(
         &self,
+        connection_id: ConnectionId,
         notification: ModelRequestFailedNotification,
     ) -> Result<()> {
         let key = DelegatedRequestKey::from_failed(&notification);
         self.deliver_event(
+            connection_id,
             key,
             DelegatedModelEvent::RequestFailed(notification.error),
             /*final_event*/ true,
@@ -140,11 +160,12 @@ impl AppServerDelegatedModelTransport {
 
     async fn deliver_event(
         &self,
+        connection_id: ConnectionId,
         key: DelegatedRequestKey,
         event: DelegatedModelEvent,
         final_event: bool,
     ) -> Result<()> {
-        let sender = {
+        let inflight = {
             let inflight = self.inflight.lock().await;
             inflight.get(&key).cloned()
         }
@@ -155,7 +176,14 @@ impl AppServerDelegatedModelTransport {
             ))
         })?;
 
-        if sender.send(event).await.is_err() {
+        if inflight.connection_id != connection_id {
+            return Err(CodexErr::InvalidRequest(format!(
+                "received delegated model notification from unexpected connection: expected={:?} actual={:?} thread_id={} turn_id={} request_id={}",
+                inflight.connection_id, connection_id, key.thread_id, key.turn_id, key.request_id
+            )));
+        }
+
+        if inflight.sender.send(event).await.is_err() {
             self.inflight.lock().await.remove(&key);
             return Err(CodexErr::InvalidRequest(format!(
                 "received delegated model notification for completed request: thread_id={} turn_id={} request_id={}",
@@ -171,16 +199,16 @@ impl AppServerDelegatedModelTransport {
     async fn select_handler_connection(&self, thread_id: ThreadId) -> Result<ConnectionId> {
         let mut connection_ids = self
             .thread_state_manager
-            .subscribed_connection_ids(thread_id)
+            .subscribed_connection_ids_with_experimental_api(thread_id)
             .await;
         connection_ids.sort_by_key(|connection_id| connection_id.0);
         match connection_ids.as_slice() {
             [] => Err(CodexErr::InvalidRequest(format!(
-                "cannot delegate model request for thread {thread_id}: no subscribed client is available to handle model/request"
+                "cannot delegate model request for thread {thread_id}: no subscribed experimental-api client is available to handle model/request"
             ))),
             [connection_id] => Ok(*connection_id),
             _ => Err(CodexErr::InvalidRequest(format!(
-                "cannot delegate model request for thread {thread_id}: multiple subscribed clients are attached and PR 1 requires exactly one model/request handler"
+                "cannot delegate model request for thread {thread_id}: multiple subscribed experimental-api clients are attached and PR 1 requires exactly one model/request handler"
             ))),
         }
     }
@@ -236,24 +264,28 @@ fn stream_event_is_final(event: &serde_json::Value) -> bool {
         })
 }
 
-#[async_trait]
-impl DelegatedModelTransport for AppServerDelegatedModelTransport {
-    async fn start_model_request(
+impl AppServerDelegatedModelTransport {
+    async fn start_model_request_impl(
         &self,
         request: DelegatedModelRequest,
     ) -> Result<mpsc::Receiver<DelegatedModelEvent>> {
         let key = DelegatedRequestKey::from_request(&request);
-        let (tx, rx) = mpsc::channel(1600);
-        let existing = self.inflight.lock().await.insert(key.clone(), tx);
-        if existing.is_some() {
-            return Err(CodexErr::InvalidRequest(format!(
-                "delegated model request already exists: thread_id={} turn_id={} request_id={}",
-                key.thread_id, key.turn_id, key.request_id
-            )));
-        }
-
         let result = async {
             let connection_id = self.select_handler_connection(request.thread_id).await?;
+            let (tx, rx) = mpsc::channel(1600);
+            let existing = self.inflight.lock().await.insert(
+                key.clone(),
+                InflightDelegatedRequest {
+                    connection_id,
+                    sender: tx,
+                },
+            );
+            if existing.is_some() {
+                return Err(CodexErr::InvalidRequest(format!(
+                    "delegated model request already exists: thread_id={} turn_id={} request_id={}",
+                    key.thread_id, key.turn_id, key.request_id
+                )));
+            }
             let request_sender = ThreadScopedOutgoingMessageSender::new(
                 Arc::clone(&self.outgoing),
                 vec![connection_id],
@@ -269,19 +301,22 @@ impl DelegatedModelTransport for AppServerDelegatedModelTransport {
                 .await;
             self.handle_model_request_response(&request, response_rx.await)
                 .await?;
-            Ok::<(), CodexErr>(())
+            Ok::<mpsc::Receiver<DelegatedModelEvent>, CodexErr>(rx)
         }
         .await;
 
-        if let Err(err) = result {
-            self.remove_inflight_request(&key).await;
-            return Err(err);
-        }
+        let receiver = match result {
+            Ok(receiver) => receiver,
+            Err(err) => {
+                self.remove_inflight_request(&key).await;
+                return Err(err);
+            }
+        };
 
-        Ok(rx)
+        Ok(receiver)
     }
 
-    async fn run_model_compact_request(
+    async fn run_model_compact_request_impl(
         &self,
         request: DelegatedModelCompactRequest,
     ) -> Result<Vec<codex_protocol::models::ResponseItem>> {
@@ -318,6 +353,23 @@ impl DelegatedModelTransport for AppServerDelegatedModelTransport {
                 "client closed delegated model compact request before responding: {err}"
             ))),
         }
+    }
+}
+
+#[async_trait]
+impl DelegatedModelTransport for AppServerDelegatedModelTransport {
+    async fn start_model_request(
+        &self,
+        request: DelegatedModelRequest,
+    ) -> Result<mpsc::Receiver<DelegatedModelEvent>> {
+        self.start_model_request_impl(request).await
+    }
+
+    async fn run_model_compact_request(
+        &self,
+        request: DelegatedModelCompactRequest,
+    ) -> Result<Vec<codex_protocol::models::ResponseItem>> {
+        self.run_model_compact_request_impl(request).await
     }
 }
 
@@ -397,7 +449,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let connection_id = ConnectionId(7);
         thread_state_manager
-            .connection_initialized(connection_id)
+            .connection_initialized(connection_id, /*experimental_api_enabled*/ true)
             .await;
         assert!(
             thread_state_manager
@@ -450,14 +502,15 @@ mod tests {
         let metadata =
             HashMap::from([("x-codex-turn-state".to_string(), "sticky-route".to_string())]);
         transport
-            .handle_client_notification(ClientNotification::ModelStreamMetadata(
-                ModelStreamMetadataNotification {
+            .handle_client_notification(
+                connection_id,
+                ClientNotification::ModelStreamMetadata(ModelStreamMetadataNotification {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
                     request_id: "req-1".to_string(),
                     metadata: metadata.clone(),
-                },
-            ))
+                }),
+            )
             .await
             .expect("metadata notification should route");
 
@@ -466,14 +519,15 @@ mod tests {
             "delta": "hello",
         });
         transport
-            .handle_client_notification(ClientNotification::ModelStreamEvent(
-                ModelStreamEventNotification {
+            .handle_client_notification(
+                connection_id,
+                ClientNotification::ModelStreamEvent(ModelStreamEventNotification {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
                     request_id: "req-1".to_string(),
                     event: delta_event.clone(),
-                },
-            ))
+                }),
+            )
             .await
             .expect("stream event notification should route");
 
@@ -482,14 +536,15 @@ mod tests {
             "response": { "id": "resp-1" },
         });
         transport
-            .handle_client_notification(ClientNotification::ModelStreamEvent(
-                ModelStreamEventNotification {
+            .handle_client_notification(
+                connection_id,
+                ClientNotification::ModelStreamEvent(ModelStreamEventNotification {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
                     request_id: "req-1".to_string(),
                     event: completed_event.clone(),
-                },
-            ))
+                }),
+            )
             .await
             .expect("final stream event notification should route");
 
@@ -513,8 +568,9 @@ mod tests {
         );
 
         let err = transport
-            .handle_client_notification(ClientNotification::ModelRequestFailed(
-                ModelRequestFailedNotification {
+            .handle_client_notification(
+                connection_id,
+                ClientNotification::ModelRequestFailed(ModelRequestFailedNotification {
                     thread_id: thread_id.to_string(),
                     turn_id: "turn-1".to_string(),
                     request_id: "req-1".to_string(),
@@ -524,8 +580,8 @@ mod tests {
                         param: None,
                         message: "too late".to_string(),
                     },
-                },
-            ))
+                }),
+            )
             .await
             .expect_err("completed requests should be removed from inflight routing");
         assert!(
@@ -547,10 +603,10 @@ mod tests {
         let connection_a = ConnectionId(7);
         let connection_b = ConnectionId(8);
         thread_state_manager
-            .connection_initialized(connection_a)
+            .connection_initialized(connection_a, /*experimental_api_enabled*/ true)
             .await;
         thread_state_manager
-            .connection_initialized(connection_b)
+            .connection_initialized(connection_b, /*experimental_api_enabled*/ true)
             .await;
         assert!(
             thread_state_manager
@@ -586,7 +642,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let connection_id = ConnectionId(7);
         thread_state_manager
-            .connection_initialized(connection_id)
+            .connection_initialized(connection_id, /*experimental_api_enabled*/ true)
             .await;
         assert!(
             thread_state_manager
@@ -645,6 +701,124 @@ mod tests {
                 .expect("compact task should join")
                 .expect("delegated compact should succeed"),
             expected_output
+        );
+    }
+
+    #[tokio::test]
+    async fn delegated_request_requires_experimental_api_subscriber() {
+        let (outgoing_tx, _outgoing_rx) = mpsc::channel(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        let thread_state_manager = ThreadStateManager::new();
+        let transport = AppServerDelegatedModelTransport::new(
+            Arc::clone(&outgoing),
+            thread_state_manager.clone(),
+        );
+        let thread_id = ThreadId::new();
+        let connection_id = ConnectionId(7);
+        thread_state_manager
+            .connection_initialized(connection_id, /*experimental_api_enabled*/ false)
+            .await;
+        assert!(
+            thread_state_manager
+                .try_add_connection_to_thread(thread_id, connection_id)
+                .await
+        );
+
+        let err = transport
+            .start_model_request(test_request(thread_id))
+            .await
+            .expect_err("non-experimental subscribers should be rejected");
+        assert!(
+            err.to_string().contains("experimental-api client"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn delegated_request_rejects_notifications_from_unexpected_connection() {
+        let (outgoing_tx, mut outgoing_rx) = mpsc::channel(8);
+        let outgoing = Arc::new(OutgoingMessageSender::new(outgoing_tx));
+        let thread_state_manager = ThreadStateManager::new();
+        let transport = AppServerDelegatedModelTransport::new(
+            Arc::clone(&outgoing),
+            thread_state_manager.clone(),
+        );
+        let thread_id = ThreadId::new();
+        let handler_connection = ConnectionId(7);
+        let other_connection = ConnectionId(8);
+        thread_state_manager
+            .connection_initialized(handler_connection, /*experimental_api_enabled*/ true)
+            .await;
+        thread_state_manager
+            .connection_initialized(other_connection, /*experimental_api_enabled*/ false)
+            .await;
+        assert!(
+            thread_state_manager
+                .try_add_connection_to_thread(thread_id, handler_connection)
+                .await
+        );
+        assert!(
+            thread_state_manager
+                .try_add_connection_to_thread(thread_id, other_connection)
+                .await
+        );
+
+        let request = test_request(thread_id);
+        let start_task = tokio::spawn({
+            let transport = transport.clone();
+            let request = request.clone();
+            async move { transport.start_model_request(request).await }
+        });
+
+        let request_id = match timeout(Duration::from_secs(1), outgoing_rx.recv())
+            .await
+            .expect("receive model request envelope")
+            .expect("model request should be sent")
+        {
+            OutgoingEnvelope::ToConnection {
+                connection_id,
+                message: OutgoingMessage::Request(ServerRequest::ModelRequest { request_id, .. }),
+            } => {
+                assert_eq!(connection_id, handler_connection);
+                request_id
+            }
+            other => panic!("expected targeted model/request, got {other:?}"),
+        };
+
+        outgoing
+            .notify_client_response(
+                request_id,
+                json!({
+                    "accepted": true,
+                    "rejectionReason": null,
+                }),
+            )
+            .await;
+
+        let event_rx = start_task
+            .await
+            .expect("request task should join")
+            .expect("delegated model request should be accepted");
+        drop(event_rx);
+
+        let err = transport
+            .handle_client_notification(
+                other_connection,
+                ClientNotification::ModelStreamEvent(ModelStreamEventNotification {
+                    thread_id: thread_id.to_string(),
+                    turn_id: "turn-1".to_string(),
+                    request_id: "req-1".to_string(),
+                    event: json!({
+                        "type": "response.completed",
+                        "response": { "id": "resp-1" },
+                    }),
+                }),
+            )
+            .await
+            .expect_err("mismatched connection should be rejected");
+        assert!(
+            err.to_string().contains("unexpected connection"),
+            "unexpected error: {err}"
         );
     }
 }

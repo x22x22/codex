@@ -5659,8 +5659,12 @@ pub(crate) async fn run_turn(
 
     // `ModelClientSession` is turn-scoped and caches WebSocket + sticky routing state, so we reuse
     // one instance across retries within this turn.
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut client_session = prewarmed_client_session.unwrap_or_else(|| {
+        sess.services
+            .model_client
+            .new_session_with_turn_id(turn_context.sub_id.clone())
+    });
+    client_session.set_turn_id(turn_context.sub_id.clone());
 
     loop {
         if run_pending_session_start_hooks(&sess, &turn_context).await {
