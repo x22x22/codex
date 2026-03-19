@@ -1632,6 +1632,41 @@ fn resolve_tool_feature_overrides_profile_web_search_config_only_inherits_disabl
 }
 
 #[test]
+fn resolve_tool_feature_overrides_web_search_config_only_defaults_to_enabled_when_both_layers_present() {
+    let cfg = ConfigToml {
+        tools: Some(ToolsToml {
+            web_search: Some(WebSearchFeatureToml {
+                enabled: None,
+                config: WebSearchToolConfig::default(),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let profile = ConfigProfile {
+        tools: Some(ToolsToml {
+            web_search: Some(WebSearchFeatureToml {
+                enabled: None,
+                config: WebSearchToolConfig {
+                    context_size: Some(WebSearchContextSize::Low),
+                    ..Default::default()
+                },
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        resolve_tool_feature_overrides(&cfg, &profile),
+        ToolFeatureOverrides {
+            web_search: Some(true),
+            ..Default::default()
+        }
+    );
+}
+
+#[test]
 fn web_search_mode_for_turn_uses_preference_for_read_only() {
     let web_search_mode = Constrained::allow_any(WebSearchMode::Cached);
     let mode =
