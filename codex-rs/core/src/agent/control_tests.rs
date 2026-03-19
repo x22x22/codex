@@ -962,9 +962,9 @@ async fn spawn_thread_subagent_uses_role_specific_nickname_candidates() {
 }
 
 #[tokio::test]
-async fn spawn_thread_subagent_uses_global_nickname_pool_when_role_has_no_candidates() {
+async fn spawn_thread_subagent_uses_global_nickname_candidates_when_role_has_no_candidates() {
     let mut harness = AgentControlHarness::new().await;
-    harness.config.agent_nickname_pool = vec!["Scout".to_string()];
+    harness.config.agent_nickname_candidates = vec!["Scout".to_string()];
     harness.config.agent_roles.insert(
         "researcher".to_string(),
         AgentRoleConfig {
@@ -1006,9 +1006,9 @@ async fn spawn_thread_subagent_uses_global_nickname_pool_when_role_has_no_candid
 }
 
 #[tokio::test]
-async fn spawn_thread_subagent_prefers_role_candidates_over_global_nickname_pool() {
+async fn spawn_thread_subagent_prefers_role_candidates_over_global_nickname_candidates() {
     let mut harness = AgentControlHarness::new().await;
-    harness.config.agent_nickname_pool = vec!["Scout".to_string()];
+    harness.config.agent_nickname_candidates = vec!["Scout".to_string()];
     harness.config.agent_roles.insert(
         "researcher".to_string(),
         AgentRoleConfig {

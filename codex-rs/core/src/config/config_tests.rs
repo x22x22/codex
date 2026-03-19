@@ -107,16 +107,17 @@ persistence = "none"
         history_no_persistence_cfg.history
     );
 
-    let agents_with_nickname_pool = r#"
+    let agents_with_nickname_candidates = r#"
 [agents]
-nickname_pool = ["Scout", "Builder", "Reviewer"]
+nickname_candidates = ["Scout", "Builder", "Reviewer"]
 "#;
-    let agents_with_nickname_pool_cfg = toml::from_str::<ConfigToml>(agents_with_nickname_pool)
-        .expect("TOML deserialization should succeed");
+    let agents_with_nickname_candidates_cfg =
+        toml::from_str::<ConfigToml>(agents_with_nickname_candidates)
+            .expect("TOML deserialization should succeed");
     assert_eq!(
-        agents_with_nickname_pool_cfg
+        agents_with_nickname_candidates_cfg
             .agents
-            .and_then(|agents| agents.nickname_pool),
+            .and_then(|agents| agents.nickname_candidates),
         Some(vec![
             "Scout".to_string(),
             "Builder".to_string(),
@@ -1597,7 +1598,8 @@ profile = "project"
 }
 
 #[tokio::test]
-async fn user_agents_nickname_pool_is_used_without_project_override() -> std::io::Result<()> {
+async fn user_agents_nickname_candidates_are_used_without_project_override() -> std::io::Result<()>
+{
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
     let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
@@ -1606,7 +1608,7 @@ async fn user_agents_nickname_pool_is_used_without_project_override() -> std::io
         format!(
             r#"
 [agents]
-nickname_pool = [" Scout ", "", "Builder", "Scout", "   ", "Reviewer"]
+nickname_candidates = [" Scout ", "", "Builder", "Scout", "   ", "Reviewer"]
 
 [projects."{workspace_key}"]
 trust_level = "trusted"
@@ -1621,7 +1623,7 @@ trust_level = "trusted"
         .await?;
 
     assert_eq!(
-        config.agent_nickname_pool,
+        config.agent_nickname_candidates,
         vec![
             "Scout".to_string(),
             "Builder".to_string(),
@@ -1633,7 +1635,7 @@ trust_level = "trusted"
 }
 
 #[tokio::test]
-async fn project_agents_nickname_pool_overrides_user_pool() -> std::io::Result<()> {
+async fn project_agents_nickname_candidates_override_user_candidates() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
     let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
@@ -1642,7 +1644,7 @@ async fn project_agents_nickname_pool_overrides_user_pool() -> std::io::Result<(
         format!(
             r#"
 [agents]
-nickname_pool = ["Scout", "Builder"]
+nickname_candidates = ["Scout", "Builder"]
 
 [projects."{workspace_key}"]
 trust_level = "trusted"
@@ -1655,7 +1657,7 @@ trust_level = "trusted"
         project_config_dir.join(CONFIG_TOML_FILE),
         r#"
 [agents]
-nickname_pool = ["Reviewer"]
+nickname_candidates = ["Reviewer"]
 "#,
     )?;
 
@@ -1665,13 +1667,16 @@ nickname_pool = ["Reviewer"]
         .build()
         .await?;
 
-    assert_eq!(config.agent_nickname_pool, vec!["Reviewer".to_string()]);
+    assert_eq!(
+        config.agent_nickname_candidates,
+        vec!["Reviewer".to_string()]
+    );
 
     Ok(())
 }
 
 #[tokio::test]
-async fn empty_agents_nickname_pool_preserves_default_behavior() -> std::io::Result<()> {
+async fn empty_agents_nickname_candidates_preserve_default_behavior() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let workspace = TempDir::new()?;
     let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
@@ -1680,7 +1685,7 @@ async fn empty_agents_nickname_pool_preserves_default_behavior() -> std::io::Res
         format!(
             r#"
 [agents]
-nickname_pool = ["", "   "]
+nickname_candidates = ["", "   "]
 
 [projects."{workspace_key}"]
 trust_level = "trusted"
@@ -1694,7 +1699,7 @@ trust_level = "trusted"
         .build()
         .await?;
 
-    assert!(config.agent_nickname_pool.is_empty());
+    assert!(config.agent_nickname_candidates.is_empty());
 
     Ok(())
 }
@@ -3184,7 +3189,7 @@ fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result<()> {
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
-            nickname_pool: None,
+            nickname_candidates: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4050,7 +4055,7 @@ fn load_config_normalizes_agent_role_nickname_candidates() -> std::io::Result<()
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
-            nickname_pool: None,
+            nickname_candidates: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4092,7 +4097,7 @@ fn load_config_rejects_empty_agent_role_nickname_candidates() -> std::io::Result
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
-            nickname_pool: None,
+            nickname_candidates: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4128,7 +4133,7 @@ fn load_config_rejects_duplicate_agent_role_nickname_candidates() -> std::io::Re
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
-            nickname_pool: None,
+            nickname_candidates: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4164,7 +4169,7 @@ fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io::Resul
             max_threads: None,
             max_depth: None,
             job_max_runtime_seconds: None,
-            nickname_pool: None,
+            nickname_candidates: None,
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4409,7 +4414,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             tool_output_token_limit: None,
             agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
             agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
-            agent_nickname_pool: Vec::new(),
+            agent_nickname_candidates: Vec::new(),
             agent_roles: BTreeMap::new(),
             memories: MemoriesConfig::default(),
             agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -4551,7 +4556,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
-        agent_nickname_pool: Vec::new(),
+        agent_nickname_candidates: Vec::new(),
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -4691,7 +4696,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
-        agent_nickname_pool: Vec::new(),
+        agent_nickname_candidates: Vec::new(),
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,
@@ -4817,7 +4822,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         tool_output_token_limit: None,
         agent_max_threads: DEFAULT_AGENT_MAX_THREADS,
         agent_max_depth: DEFAULT_AGENT_MAX_DEPTH,
-        agent_nickname_pool: Vec::new(),
+        agent_nickname_candidates: Vec::new(),
         agent_roles: BTreeMap::new(),
         memories: MemoriesConfig::default(),
         agent_job_max_runtime_seconds: DEFAULT_AGENT_JOB_MAX_RUNTIME_SECONDS,

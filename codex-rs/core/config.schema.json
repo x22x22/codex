@@ -54,8 +54,8 @@
           "minimum": 1.0,
           "type": "integer"
         },
-        "nickname_pool": {
-          "description": "Global fallback nickname candidates for spawned agent threads.\n\nExample: ```toml [agents] nickname_pool = [\"Scout\", \"Builder\", \"Reviewer\"] ```",
+        "nickname_candidates": {
+          "description": "Global fallback nickname candidates for spawned agent threads.\n\nExample: ```toml [agents] nickname_candidates = [\"Scout\", \"Builder\", \"Reviewer\"] ```",
           "items": {
             "type": "string"
           },

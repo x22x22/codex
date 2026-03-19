@@ -418,7 +418,7 @@ pub struct Config {
     pub agent_max_depth: i32,
 
     /// Global fallback nickname candidates for spawned agent threads.
-    pub agent_nickname_pool: Vec<String>,
+    pub agent_nickname_candidates: Vec<String>,
 
     /// User-defined role declarations keyed by role name.
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
@@ -1674,9 +1674,9 @@ pub struct AgentsToml {
     /// Example:
     /// ```toml
     /// [agents]
-    /// nickname_pool = ["Scout", "Builder", "Reviewer"]
+    /// nickname_candidates = ["Scout", "Builder", "Reviewer"]
     /// ```
-    pub nickname_pool: Option<Vec<String>>,
+    pub nickname_candidates: Option<Vec<String>>,
 
     /// User-defined role declarations keyed by role name.
     ///
@@ -2454,11 +2454,11 @@ impl Config {
                 "agents.job_max_runtime_seconds must fit within a 64-bit signed integer",
             ));
         }
-        let agent_nickname_pool = agent_roles::normalize_agent_nickname_pool(
-            "agents.nickname_pool",
+        let agent_nickname_candidates = agent_roles::normalize_global_agent_nickname_candidates(
+            "agents.nickname_candidates",
             cfg.agents
                 .as_ref()
-                .and_then(|agents| agents.nickname_pool.as_deref()),
+                .and_then(|agents| agents.nickname_candidates.as_deref()),
         )?
         .unwrap_or_default();
         let background_terminal_max_timeout = cfg
@@ -2726,7 +2726,7 @@ impl Config {
             tool_output_token_limit: cfg.tool_output_token_limit,
             agent_max_threads,
             agent_max_depth,
-            agent_nickname_pool,
+            agent_nickname_candidates,
             agent_roles,
             memories: cfg.memories.unwrap_or_default().into(),
             agent_job_max_runtime_seconds,

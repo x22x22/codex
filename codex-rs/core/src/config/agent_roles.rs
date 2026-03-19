@@ -441,18 +441,18 @@ fn normalize_agent_role_nickname_candidates(
     Ok(Some(normalized_candidates))
 }
 
-pub(crate) fn normalize_agent_nickname_pool(
+pub(crate) fn normalize_global_agent_nickname_candidates(
     field_label: &str,
-    nickname_pool: Option<&[String]>,
+    nickname_candidates: Option<&[String]>,
 ) -> std::io::Result<Option<Vec<String>>> {
-    let Some(nickname_pool) = nickname_pool else {
+    let Some(nickname_candidates) = nickname_candidates else {
         return Ok(None);
     };
 
-    let mut normalized_candidates = Vec::with_capacity(nickname_pool.len());
+    let mut normalized_candidates = Vec::with_capacity(nickname_candidates.len());
     let mut seen_candidates = BTreeSet::new();
 
-    for nickname in nickname_pool {
+    for nickname in nickname_candidates {
         let normalized_nickname = nickname.trim();
         if normalized_nickname.is_empty() {
             continue;
