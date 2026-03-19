@@ -3,16 +3,16 @@ mod client_api;
 mod connection;
 mod environment;
 mod fs;
+mod local_process;
+mod process;
 mod protocol;
+mod remote_process;
 mod rpc;
 mod server;
 
 pub use client::ExecServerClient;
 pub use client::ExecServerError;
-pub use client_api::ExecProcess;
 pub use client_api::ExecServerClientConnectOptions;
-pub use client_api::ExecServerEvent;
-pub use client_api::ExecutorEnvironment;
 pub use client_api::RemoteExecServerConnectArgs;
 pub use codex_app_server_protocol::FsCopyParams;
 pub use codex_app_server_protocol::FsCopyResponse;
@@ -38,6 +38,8 @@ pub use fs::FileSystemResult;
 pub use fs::LocalFileSystem;
 pub use fs::ReadDirectoryEntry;
 pub use fs::RemoveOptions;
+pub use process::ExecProcess;
+pub use process::ExecServerEvent;
 pub use protocol::ExecExitedNotification;
 pub use protocol::ExecOutputDeltaNotification;
 pub use protocol::ExecOutputStream;
@@ -53,5 +55,8 @@ pub use protocol::WriteParams;
 pub use protocol::WriteResponse;
 pub use server::DEFAULT_LISTEN_URL;
 pub use server::ExecServerListenUrlParseError;
+pub trait ExecutorEnvironment: Send + Sync {
+    fn get_executor(&self) -> std::sync::Arc<dyn ExecProcess>;
+}
 pub use server::run_main;
 pub use server::run_main_with_listen_url;

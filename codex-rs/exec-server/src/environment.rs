@@ -1,16 +1,18 @@
-use crate::ExecProcess;
 use crate::ExecServerClient;
 use crate::ExecServerClientConnectOptions;
 use crate::ExecServerError;
-use crate::ExecutorEnvironment;
 use crate::RemoteExecServerConnectArgs;
 use crate::fs;
 use crate::fs::ExecutorFileSystem;
+use crate::local_process::LocalExecProcess;
+use crate::process::ExecProcess;
+use crate::remote_process::RemoteExecProcess;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct Environment {
     experimental_exec_server_url: Option<String>,
-    exec_server_client: ExecServerClient,
+    executor: Arc<dyn ExecProcess>,
 }
 
 impl std::fmt::Debug for Environment {
@@ -32,21 +34,21 @@ impl Environment {
     pub async fn create(
         experimental_exec_server_url: Option<String>,
     ) -> Result<Self, ExecServerError> {
-        let exec_server_client = if let Some(websocket_url) =
-            experimental_exec_server_url.as_deref()
-        {
-            ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
-                websocket_url.to_string(),
-                "codex-core".to_string(),
-            ))
-            .await?
-        } else {
-            ExecServerClient::connect_in_process(ExecServerClientConnectOptions::default()).await?
-        };
+        let executor: Arc<dyn ExecProcess> =
+            if let Some(websocket_url) = experimental_exec_server_url.as_deref() {
+                let client = ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
+                    websocket_url.to_string(),
+                    "codex-core".to_string(),
+                ))
+                .await?;
+                Arc::new(RemoteExecProcess::new(client))
+            } else {
+                Arc::new(LocalExecProcess::new())
+            };
 
         Ok(Self {
             experimental_exec_server_url,
-            exec_server_client,
+            executor,
         })
     }
 
@@ -54,8 +56,8 @@ impl Environment {
         self.experimental_exec_server_url.as_deref()
     }
 
-    pub fn get_executor(&self) -> &(dyn ExecProcess + '_) {
-        &self.exec_server_client
+    pub fn get_executor(&self) -> Arc<dyn ExecProcess> {
+        Arc::clone(&self.executor)
     }
 
     pub fn get_filesystem(&self) -> impl ExecutorFileSystem + use<> {
@@ -63,8 +65,8 @@ impl Environment {
     }
 }
 
-impl ExecutorEnvironment for Environment {
-    fn get_executor(&self) -> &(dyn ExecProcess + '_) {
+impl crate::ExecutorEnvironment for Environment {
+    fn get_executor(&self) -> Arc<dyn ExecProcess> {
         self.get_executor()
     }
 }
