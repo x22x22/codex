@@ -920,6 +920,7 @@ mod tests {
             session_source: SessionSource::Cli,
             enable_codex_api_key_env: false,
             client_name: "test".to_string(),
+            originator_override: None,
             client_version: "test".to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),

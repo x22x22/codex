@@ -57,6 +57,7 @@ const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct RemoteAppServerConnectArgs {
     pub websocket_url: String,
     pub client_name: String,
+    pub originator_override: Option<String>,
     pub client_version: String,
     pub experimental_api: bool,
     pub opt_out_notification_methods: Vec<String>,
@@ -80,8 +81,49 @@ impl RemoteAppServerConnectArgs {
                 title: None,
                 version: self.client_version.clone(),
             },
+            originator_override: self.originator_override.clone(),
             capabilities: Some(capabilities),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RemoteAppServerConnectArgs;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn initialize_params_include_originator_override_when_set() {
+        let args = RemoteAppServerConnectArgs {
+            websocket_url: "ws://127.0.0.1:1234".to_string(),
+            client_name: "codex-tui".to_string(),
+            originator_override: Some("codex_cli_rs".to_string()),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 1,
+        };
+
+        let params = args.initialize_params();
+
+        assert_eq!(params.originator_override, Some("codex_cli_rs".to_string()));
+    }
+
+    #[test]
+    fn initialize_params_omit_originator_override_when_absent() {
+        let args = RemoteAppServerConnectArgs {
+            websocket_url: "ws://127.0.0.1:1234".to_string(),
+            client_name: "codex-tui".to_string(),
+            originator_override: None,
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 1,
+        };
+
+        let params = args.initialize_params();
+
+        assert_eq!(params.originator_override, None);
     }
 }
 

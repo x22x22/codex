@@ -140,6 +140,7 @@ impl TracingHarness {
                             title: None,
                             version: "0.1.0".to_string(),
                         },
+                        originator_override: None,
                         capabilities: Some(InitializeCapabilities {
                             experimental_api: true,
                             ..Default::default()

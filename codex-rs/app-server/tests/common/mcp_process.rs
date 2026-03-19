@@ -214,7 +214,24 @@ impl McpProcess {
     ) -> anyhow::Result<JSONRPCMessage> {
         self.initialize_with_params(InitializeParams {
             client_info,
+            originator_override: None,
             capabilities,
+        })
+        .await
+    }
+
+    pub async fn initialize_with_originator_override(
+        &mut self,
+        client_info: ClientInfo,
+        originator_override: Option<String>,
+    ) -> anyhow::Result<JSONRPCMessage> {
+        self.initialize_with_params(InitializeParams {
+            client_info,
+            originator_override,
+            capabilities: Some(InitializeCapabilities {
+                experimental_api: true,
+                ..Default::default()
+            }),
         })
         .await
     }

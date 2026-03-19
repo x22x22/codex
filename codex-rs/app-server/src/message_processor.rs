@@ -17,6 +17,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::RequestContext;
 use crate::transport::AppServerTransport;
 use async_trait::async_trait;
+use axum::http::HeaderValue;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshParams;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshReason;
 use codex_app_server_protocol::ChatgptAuthTokensRefreshResponse;
@@ -548,15 +549,30 @@ impl MessageProcessor {
                     title: _title,
                     version,
                 } = params.client_info;
+                let effective_originator =
+                    params.originator_override.unwrap_or_else(|| name.clone());
+                if HeaderValue::from_str(&name).is_err() {
+                    let error = JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: format!(
+                            "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
+                        ),
+                        data: None,
+                    };
+                    self.outgoing
+                        .send_error(connection_request_id.clone(), error)
+                        .await;
+                    return;
+                }
                 session.app_server_client_name = Some(name.clone());
                 session.client_version = Some(version.clone());
-                if let Err(error) = set_default_originator(name.clone()) {
+                if let Err(error) = set_default_originator(effective_originator.clone()) {
                     match error {
                         SetOriginatorError::InvalidHeaderValue => {
                             let error = JSONRPCErrorError {
                                 code: INVALID_REQUEST_ERROR_CODE,
                                 message: format!(
-                                    "Invalid clientInfo.name: '{name}'. Must be a valid HTTP header value."
+                                    "Invalid originatorOverride: '{effective_originator}'. Must be a valid HTTP header value."
                                 ),
                                 data: None,
                             };

@@ -33,6 +33,7 @@ use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::ConfigLoadError;
 use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
+use codex_core::default_client::DEFAULT_ORIGINATOR;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
@@ -340,6 +341,7 @@ async fn connect_remote_app_server(websocket_url: String) -> color_eyre::Result<
     let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
         websocket_url,
         client_name: "codex-tui".to_string(),
+        originator_override: Some(DEFAULT_ORIGINATOR.to_string()),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),
@@ -434,6 +436,7 @@ where
         session_source: codex_protocol::protocol::SessionSource::Cli,
         enable_codex_api_key_env: false,
         client_name: "codex-tui".to_string(),
+        originator_override: Some(DEFAULT_ORIGINATOR.to_string()),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),

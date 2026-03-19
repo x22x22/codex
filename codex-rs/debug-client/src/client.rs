@@ -100,6 +100,7 @@ impl AppServerClient {
                     title: Some("Debug Client".to_string()),
                     version: env!("CARGO_PKG_VERSION").to_string(),
                 },
+                originator_override: None,
                 capabilities: Some(InitializeCapabilities {
                     experimental_api: true,
                     opt_out_notification_methods: None,

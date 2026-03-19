@@ -280,6 +280,7 @@ pub(super) async fn send_initialize_request(
             title: Some("WebSocket Test Client".to_string()),
             version: "0.1.0".to_string(),
         },
+        originator_override: None,
         capabilities: None,
     };
     send_request(

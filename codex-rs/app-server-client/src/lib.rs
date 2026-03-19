@@ -190,6 +190,8 @@ pub struct InProcessClientStartArgs {
     pub enable_codex_api_key_env: bool,
     /// Client name reported during initialize.
     pub client_name: String,
+    /// Optional backend originator override reported during initialize.
+    pub originator_override: Option<String>,
     /// Client version reported during initialize.
     pub client_version: String,
     /// Whether experimental APIs are requested at initialize time.
@@ -242,6 +244,7 @@ impl InProcessClientStartArgs {
                 title: None,
                 version: self.client_version.clone(),
             },
+            originator_override: self.originator_override.clone(),
             capabilities: Some(capabilities),
         }
     }
@@ -891,6 +894,7 @@ mod tests {
             session_source,
             enable_codex_api_key_env: false,
             client_name: "codex-app-server-client-test".to_string(),
+            originator_override: None,
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
@@ -988,11 +992,62 @@ mod tests {
         RemoteAppServerConnectArgs {
             websocket_url,
             client_name: "codex-app-server-client-test".to_string(),
+            originator_override: None,
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: 8,
         }
+    }
+
+    #[tokio::test]
+    async fn initialize_params_include_originator_override_when_set() {
+        let args = InProcessClientStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(build_test_config().await),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            client_name: "codex-tui".to_string(),
+            originator_override: Some("codex_cli_rs".to_string()),
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 1,
+        };
+
+        let params = args.initialize_params();
+
+        assert_eq!(params.originator_override, Some("codex_cli_rs".to_string()));
+    }
+
+    #[tokio::test]
+    async fn initialize_params_omit_originator_override_when_absent() {
+        let args = InProcessClientStartArgs {
+            arg0_paths: Arg0DispatchPaths::default(),
+            config: Arc::new(build_test_config().await),
+            cli_overrides: Vec::new(),
+            loader_overrides: LoaderOverrides::default(),
+            cloud_requirements: CloudRequirementsLoader::default(),
+            feedback: CodexFeedback::new(),
+            config_warnings: Vec::new(),
+            session_source: SessionSource::Cli,
+            enable_codex_api_key_env: false,
+            client_name: "codex-tui".to_string(),
+            originator_override: None,
+            client_version: "0.0.0-test".to_string(),
+            experimental_api: true,
+            opt_out_notification_methods: Vec::new(),
+            channel_capacity: 1,
+        };
+
+        let params = args.initialize_params();
+
+        assert_eq!(params.originator_override, None);
     }
 
     #[tokio::test]

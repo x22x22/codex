@@ -1001,6 +1001,7 @@ mod tests {
                     title: Some("Codex VS Code Extension".to_string()),
                     version: "0.1.0".to_string(),
                 },
+                originator_override: None,
                 capabilities: Some(v1::InitializeCapabilities {
                     experimental_api: true,
                     opt_out_notification_methods: Some(vec![
@@ -1066,6 +1067,7 @@ mod tests {
                         title: Some("Codex VS Code Extension".to_string()),
                         version: "0.1.0".to_string(),
                     },
+                    originator_override: None,
                     capabilities: Some(v1::InitializeCapabilities {
                         experimental_api: true,
                         opt_out_notification_methods: Some(vec![
@@ -1075,6 +1077,39 @@ mod tests {
                     }),
                 },
             }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_initialize_with_originator_override() -> Result<()> {
+        let request = ClientRequest::Initialize {
+            request_id: RequestId::Integer(7),
+            params: v1::InitializeParams {
+                client_info: v1::ClientInfo {
+                    name: "codex-tui".to_string(),
+                    title: None,
+                    version: "0.1.0".to_string(),
+                },
+                originator_override: Some("codex_cli_rs".to_string()),
+                capabilities: None,
+            },
+        };
+
+        assert_eq!(
+            json!({
+                "method": "initialize",
+                "id": 7,
+                "params": {
+                    "clientInfo": {
+                        "name": "codex-tui",
+                        "title": null,
+                        "version": "0.1.0"
+                    },
+                    "originatorOverride": "codex_cli_rs"
+                }
+            }),
+            serde_json::to_value(&request)?,
         );
         Ok(())
     }

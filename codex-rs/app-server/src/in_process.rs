@@ -771,6 +771,7 @@ mod tests {
                     title: None,
                     version: "0.0.0".to_string(),
                 },
+                originator_override: None,
                 capabilities: None,
             },
             channel_capacity,

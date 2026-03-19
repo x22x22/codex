@@ -80,6 +80,7 @@ Clients must send a single `initialize` request per transport connection before 
 `initialize.params.capabilities` also supports per-connection notification opt-out via `optOutNotificationMethods`, which is a list of exact method names to suppress for that connection. Matching is exact (no wildcards/prefixes). Unknown method names are accepted and ignored.
 
 Applications building on top of `codex app-server` should identify themselves via the `clientInfo` parameter.
+If you need backend requests to use a different `originator` header than the app-server client identity, set `originatorOverride`. When omitted, the backend originator defaults to `clientInfo.name`. When provided, the returned `userAgent` string also uses the override as its prefix.
 
 **Important**: `clientInfo.name` is used to identify the client for the OpenAI Compliance Logs Platform. If
 you are developing a new Codex integration that is intended for enterprise use, please contact us to get it
@@ -113,6 +114,7 @@ Example with notification opt-out:
       "title": "My Client",
       "version": "0.1.0"
     },
+    "originatorOverride": "codex_cli_rs",
     "capabilities": {
       "experimentalApi": true,
       "optOutNotificationMethods": ["thread/started", "item/agentMessage/delta"]

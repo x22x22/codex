@@ -981,6 +981,12 @@
         },
         "clientInfo": {
           "$ref": "#/definitions/ClientInfo"
+        },
+        "originatorOverride": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
