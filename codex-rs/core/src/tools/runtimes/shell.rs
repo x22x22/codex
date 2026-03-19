@@ -18,6 +18,7 @@ use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::sandboxing::SandboxPermissions;
 use crate::sandboxing::execute_env;
 use crate::shell::ShellType;
+use crate::state::ApprovalOutcomeMetadata;
 use crate::tools::network_approval::NetworkApprovalMode;
 use crate::tools::network_approval::NetworkApprovalSpec;
 use crate::tools::runtimes::build_command_spec;
@@ -169,10 +170,12 @@ impl Approvable<ShellRequest> for ShellRuntime {
                 )
                 .await;
                 session
-                    .record_direct_approval_outcome(
-                        &call_id,
-                        &decision,
-                        ApprovalSourceMetadata::Guardian,
+                    .record_call_approval_outcome(
+                        call_id.clone(),
+                        ApprovalOutcomeMetadata::reviewed(
+                            &decision,
+                            ApprovalSourceMetadata::Guardian,
+                        ),
                     )
                     .await;
                 return decision;

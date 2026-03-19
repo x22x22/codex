@@ -79,11 +79,7 @@ pub(crate) struct ApprovalOutcomeMetadata {
 }
 
 impl ApprovalOutcomeMetadata {
-    pub(crate) fn reviewed(decision: &ReviewDecision) -> Self {
-        Self::reviewed_with_source(decision, ApprovalSourceMetadata::User)
-    }
-
-    pub(crate) fn reviewed_with_source(
+    pub(crate) fn reviewed(
         decision: &ReviewDecision,
         approval_source: ApprovalSourceMetadata,
     ) -> Self {

@@ -91,7 +91,6 @@ use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ApprovalSourceMetadata;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
-use codex_protocol::models::ReviewDecisionMetadata;
 use codex_protocol::models::UserMessageType;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
@@ -1079,28 +1078,6 @@ fn stamp_message_metadata_on_response_item(
             }
         }
         other => other,
-    }
-}
-
-fn review_decision_to_metadata(decision: &ReviewDecision) -> ReviewDecisionMetadata {
-    match decision {
-        ReviewDecision::Approved => ReviewDecisionMetadata::Approved,
-        ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-            ReviewDecisionMetadata::ApprovedWithAmendment
-        }
-        ReviewDecision::ApprovedForSession => ReviewDecisionMetadata::ApprovedForSession,
-        ReviewDecision::NetworkPolicyAmendment {
-            network_policy_amendment,
-        } => match network_policy_amendment.action {
-            codex_protocol::protocol::NetworkPolicyRuleAction::Allow => {
-                ReviewDecisionMetadata::ApprovedWithNetworkPolicyAllow
-            }
-            codex_protocol::protocol::NetworkPolicyRuleAction::Deny => {
-                ReviewDecisionMetadata::DeniedWithNetworkPolicyDeny
-            }
-        },
-        ReviewDecision::Denied => ReviewDecisionMetadata::Denied,
-        ReviewDecision::Abort => ReviewDecisionMetadata::Abort,
     }
 }
 
@@ -3438,23 +3415,9 @@ impl Session {
             });
         drop(ts);
         drop(active);
-        self.record_direct_approval_outcome(
-            &pending_approval.call_id,
-            decision,
-            pending_approval.approval_source,
-        )
-        .await;
-    }
-
-    pub async fn record_direct_approval_outcome(
-        &self,
-        call_id: &str,
-        decision: &ReviewDecision,
-        approval_source: ApprovalSourceMetadata,
-    ) {
         self.record_call_approval_outcome(
-            call_id.to_string(),
-            ApprovalOutcomeMetadata::reviewed_with_source(decision, approval_source),
+            pending_approval.call_id,
+            ApprovalOutcomeMetadata::reviewed(decision, pending_approval.approval_source),
         )
         .await;
     }
@@ -3463,7 +3426,6 @@ impl Session {
         self.record_call_approval_outcome(call_id.to_string(), ApprovalOutcomeMetadata::policy())
         .await;
     }
-
     pub(crate) async fn record_call_approval_outcome(
         &self,
         call_id: String,

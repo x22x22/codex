@@ -32,6 +32,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
+use crate::state::ApprovalOutcomeMetadata;
 use crate::state_db;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ApprovalSourceMetadata;
@@ -533,8 +534,11 @@ async fn maybe_request_mcp_tool_approval(
             monitor_reason.clone(),
         )
         .await;
-        sess.record_direct_approval_outcome(call_id, &decision, ApprovalSourceMetadata::Guardian)
-            .await;
+        sess.record_call_approval_outcome(
+            call_id.to_string(),
+            ApprovalOutcomeMetadata::reviewed(&decision, ApprovalSourceMetadata::Guardian),
+        )
+        .await;
         let decision = mcp_tool_approval_decision_from_guardian(decision);
         apply_mcp_tool_approval_decision(
             sess,
