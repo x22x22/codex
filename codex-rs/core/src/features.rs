@@ -682,7 +682,11 @@ pub const FEATURES: &[FeatureSpec] = &[
     FeatureSpec {
         id: Feature::EnhancedExecPolicySuggestions,
         key: "enhanced_exec_policy_suggestions",
-        stage: Stage::UnderDevelopment,
+        stage: Stage::Experimental {
+            name: "Enhanced exec policy suggestions",
+            menu_description: "When Codex proposes a reusable exec policy prefix, stop before the first flag-like argument and use the first segment of a compound shell command.",
+            announcement: "",
+        },
         default_enabled: false,
     },
     FeatureSpec {
