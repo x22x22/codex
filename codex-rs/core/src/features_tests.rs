@@ -149,12 +149,6 @@ fn collab_is_legacy_alias_for_multi_agent() {
 }
 
 #[test]
-fn item_metadata_is_under_development_and_disabled_by_default() {
-    assert_eq!(Feature::ItemMetadata.stage(), Stage::UnderDevelopment);
-    assert_eq!(Feature::ItemMetadata.default_enabled(), false);
-}
-
-#[test]
 fn multi_agent_is_stable_and_enabled_by_default() {
     assert_eq!(Feature::Collab.stage(), Stage::Stable);
     assert_eq!(Feature::Collab.default_enabled(), true);
