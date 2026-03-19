@@ -50,6 +50,7 @@ pub struct UnifiedExecRequest {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub explicit_env_overrides: HashMap<String, String>,
+    pub runtime_git_config_overrides: Vec<(String, String)>,
     pub network: Option<NetworkProxy>,
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
@@ -195,6 +196,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             session_shell.as_ref(),
             &req.cwd,
             &req.explicit_env_overrides,
+            &req.runtime_git_config_overrides,
         );
         let command = if matches!(session_shell.shell_type, ShellType::PowerShell)
             && ctx.session.features().enabled(Feature::PowershellUtf8)

@@ -42,8 +42,13 @@ fn maybe_wrap_shell_lc_with_snapshot_bootstraps_in_user_shell() {
         "echo hello".to_string(),
     ];
 
-    let rewritten =
-        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path(), &HashMap::new());
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &[],
+    );
 
     assert_eq!(rewritten[0], "/bin/zsh");
     assert_eq!(rewritten[1], "-c");
@@ -68,8 +73,13 @@ fn maybe_wrap_shell_lc_with_snapshot_escapes_single_quotes() {
         "echo 'hello'".to_string(),
     ];
 
-    let rewritten =
-        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path(), &HashMap::new());
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &[],
+    );
 
     assert!(rewritten[2].contains(r#"exec '/bin/bash' -c 'echo '"'"'hello'"'"''"#));
 }
@@ -91,8 +101,13 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_bash_bootstrap_shell() {
         "echo hello".to_string(),
     ];
 
-    let rewritten =
-        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path(), &HashMap::new());
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &[],
+    );
 
     assert_eq!(rewritten[0], "/bin/bash");
     assert_eq!(rewritten[1], "-c");
@@ -117,8 +132,13 @@ fn maybe_wrap_shell_lc_with_snapshot_uses_sh_bootstrap_shell() {
         "echo hello".to_string(),
     ];
 
-    let rewritten =
-        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path(), &HashMap::new());
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &[],
+    );
 
     assert_eq!(rewritten[0], "/bin/sh");
     assert_eq!(rewritten[1], "-c");
@@ -145,8 +165,13 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_trailing_args() {
         "arg1".to_string(),
     ];
 
-    let rewritten =
-        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path(), &HashMap::new());
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &[],
+    );
 
     assert!(
         rewritten[2]
@@ -171,8 +196,13 @@ fn maybe_wrap_shell_lc_with_snapshot_skips_when_cwd_mismatch() {
         "echo hello".to_string(),
     ];
 
-    let rewritten =
-        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, &command_cwd, &HashMap::new());
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &command_cwd,
+        &HashMap::new(),
+        &[],
+    );
 
     assert_eq!(rewritten, command);
 }
@@ -195,8 +225,13 @@ fn maybe_wrap_shell_lc_with_snapshot_accepts_dot_alias_cwd() {
     ];
     let command_cwd = dir.path().join(".");
 
-    let rewritten =
-        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, &command_cwd, &HashMap::new());
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        &command_cwd,
+        &HashMap::new(),
+        &[],
+    );
 
     assert_eq!(rewritten[0], "/bin/zsh");
     assert_eq!(rewritten[1], "-c");
@@ -231,6 +266,7 @@ fn maybe_wrap_shell_lc_with_snapshot_restores_explicit_override_precedence() {
         &session_shell,
         dir.path(),
         &explicit_env_overrides,
+        &[],
     );
     let output = Command::new(&rewritten[0])
         .args(&rewritten[1..])
@@ -265,8 +301,13 @@ fn maybe_wrap_shell_lc_with_snapshot_keeps_snapshot_path_without_override() {
         "-lc".to_string(),
         "printf '%s' \"$PATH\"".to_string(),
     ];
-    let rewritten =
-        maybe_wrap_shell_lc_with_snapshot(&command, &session_shell, dir.path(), &HashMap::new());
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &[],
+    );
     let output = Command::new(&rewritten[0])
         .args(&rewritten[1..])
         .output()
@@ -302,6 +343,7 @@ fn maybe_wrap_shell_lc_with_snapshot_applies_explicit_path_override() {
         &session_shell,
         dir.path(),
         &explicit_env_overrides,
+        &[],
     );
     let output = Command::new(&rewritten[0])
         .args(&rewritten[1..])
@@ -342,6 +384,7 @@ fn maybe_wrap_shell_lc_with_snapshot_does_not_embed_override_values_in_argv() {
         &session_shell,
         dir.path(),
         &explicit_env_overrides,
+        &[],
     );
 
     assert!(!rewritten[2].contains("super-secret-value"));
@@ -386,6 +429,7 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_unset_override_variables() {
         &session_shell,
         dir.path(),
         &explicit_env_overrides,
+        &[],
     );
 
     let output = Command::new(&rewritten[0])
@@ -395,4 +439,46 @@ fn maybe_wrap_shell_lc_with_snapshot_preserves_unset_override_variables() {
         .expect("run rewritten command");
     assert!(output.status.success(), "command failed: {output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "unset");
+}
+
+#[test]
+fn maybe_wrap_shell_lc_with_snapshot_appends_runtime_git_config_after_snapshot() {
+    let dir = tempdir().expect("create temp dir");
+    let snapshot_path = dir.path().join("snapshot.sh");
+    std::fs::write(
+        &snapshot_path,
+        "# Snapshot file\nexport GIT_CONFIG_COUNT='1'\nexport GIT_CONFIG_KEY_0='user.name'\nexport GIT_CONFIG_VALUE_0='Pavel'\n",
+    )
+    .expect("write snapshot");
+    let session_shell = shell_with_snapshot(
+        ShellType::Bash,
+        "/bin/bash",
+        snapshot_path,
+        dir.path().to_path_buf(),
+    );
+    let command = vec![
+        "/bin/bash".to_string(),
+        "-lc".to_string(),
+        "printf '%s|%s|%s|%s|%s' \"$GIT_CONFIG_COUNT\" \"$GIT_CONFIG_KEY_0\" \"$GIT_CONFIG_VALUE_0\" \"$GIT_CONFIG_KEY_1\" \"$GIT_CONFIG_VALUE_1\"".to_string(),
+    ];
+    let runtime_git_config_overrides =
+        vec![("core.hooksPath".to_string(), "/codex/hooks".to_string())];
+    let rewritten = maybe_wrap_shell_lc_with_snapshot(
+        &command,
+        &session_shell,
+        dir.path(),
+        &HashMap::new(),
+        &runtime_git_config_overrides,
+    );
+
+    let output = Command::new(&rewritten[0])
+        .args(&rewritten[1..])
+        .output()
+        .expect("run rewritten command");
+
+    assert!(output.status.success(), "command failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "2|user.name|Pavel|core.hooksPath|/codex/hooks"
+    );
 }

@@ -70,6 +70,7 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
     session_shell: &Shell,
     cwd: &Path,
     explicit_env_overrides: &HashMap<String, String>,
+    runtime_git_config_overrides: &[(String, String)],
 ) -> Vec<String> {
     if cfg!(windows) {
         return command.to_vec();
@@ -113,13 +114,14 @@ pub(crate) fn maybe_wrap_shell_lc_with_snapshot(
         .map(|arg| format!(" '{}'", shell_single_quote(arg)))
         .collect::<String>();
     let (override_captures, override_exports) = build_override_exports(explicit_env_overrides);
-    let rewritten_script = if override_exports.is_empty() {
+    let runtime_git_config_appends = build_runtime_git_config_appends(runtime_git_config_overrides);
+    let rewritten_script = if override_exports.is_empty() && runtime_git_config_appends.is_empty() {
         format!(
             "if . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
         )
     } else {
         format!(
-            "{override_captures}\n\nif . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{override_exports}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
+            "{override_captures}\n\nif . '{snapshot_path}' >/dev/null 2>&1; then :; fi\n\n{override_exports}{runtime_git_config_appends}\n\nexec '{original_shell}' -c '{original_script}'{trailing_args}"
         )
     };
 
@@ -159,6 +161,29 @@ fn build_override_exports(explicit_env_overrides: &HashMap<String, String>) -> (
         .join("\n");
 
     (captures, restores)
+}
+
+fn build_runtime_git_config_appends(runtime_git_config_overrides: &[(String, String)]) -> String {
+    if runtime_git_config_overrides.is_empty() {
+        return String::new();
+    }
+
+    let mut script = String::from(
+        "\ncase \"${GIT_CONFIG_COUNT:-}\" in\n  ''|*[!0-9]*) __CODEX_GIT_CONFIG_INDEX=0 ;;\n  *) __CODEX_GIT_CONFIG_INDEX=\"$GIT_CONFIG_COUNT\" ;;\nesac\n",
+    );
+
+    for (key, value) in runtime_git_config_overrides {
+        let key = shell_single_quote(key);
+        let value = shell_single_quote(value);
+        script.push_str(&format!(
+            "eval \"export GIT_CONFIG_KEY_${{__CODEX_GIT_CONFIG_INDEX}}='{key}'\"\n\
+eval \"export GIT_CONFIG_VALUE_${{__CODEX_GIT_CONFIG_INDEX}}='{value}'\"\n\
+__CODEX_GIT_CONFIG_INDEX=$((__CODEX_GIT_CONFIG_INDEX + 1))\n"
+        ));
+    }
+
+    script.push_str("export GIT_CONFIG_COUNT=\"$__CODEX_GIT_CONFIG_INDEX\"\n");
+    script
 }
 
 fn is_valid_shell_variable_name(name: &str) -> bool {

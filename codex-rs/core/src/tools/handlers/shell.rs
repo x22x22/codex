@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use crate::codex::TurnContext;
 use crate::commit_attribution::configure_git_hooks_env_for_config;
-use crate::commit_attribution::injected_git_config_env;
 use crate::exec::ExecParams;
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
@@ -326,9 +325,11 @@ impl ShellHandler {
         } = args;
 
         let mut exec_params = exec_params;
-        if session.features().enabled(Feature::CodexGitCommit) {
-            configure_git_hooks_env_for_config(&mut exec_params.env, turn.config.as_ref());
-        }
+        let runtime_git_config_overrides = if session.features().enabled(Feature::CodexGitCommit) {
+            configure_git_hooks_env_for_config(&mut exec_params.env, turn.config.as_ref())
+        } else {
+            Vec::new()
+        };
         let dependency_env = session.dependency_env().await;
         if !dependency_env.is_empty() {
             exec_params.env.extend(dependency_env.clone());
@@ -340,10 +341,6 @@ impl ShellHandler {
                 explicit_env_overrides.insert(key.clone(), value.clone());
             }
         }
-        for (key, value) in injected_git_config_env(&exec_params.env) {
-            explicit_env_overrides.insert(key, value);
-        }
-
         let exec_permission_approvals_enabled =
             session.features().enabled(Feature::ExecPermissionApprovals);
         let requested_additional_permissions = additional_permissions.clone();
@@ -443,6 +440,7 @@ impl ShellHandler {
             timeout_ms: exec_params.expiration.timeout_ms(),
             env: exec_params.env.clone(),
             explicit_env_overrides,
+            runtime_git_config_overrides,
             network: exec_params.network.clone(),
             sandbox_permissions: effective_additional_permissions.sandbox_permissions,
             additional_permissions: normalized_additional_permissions,

@@ -130,6 +130,7 @@ pub(crate) async fn execute_user_shell_command(
         session_shell.as_ref(),
         turn_context.cwd.as_path(),
         &turn_context.shell_environment_policy.r#set,
+        &[],
     );
 
     let call_id = Uuid::new_v4().to_string();

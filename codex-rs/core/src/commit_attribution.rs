@@ -22,30 +22,28 @@ const COMMIT_HOOK_NAMES: &[&str] = &[
 pub(crate) fn configure_git_hooks_env_for_config(
     env: &mut HashMap<String, String>,
     config: &Config,
-) {
+) -> Vec<(String, String)> {
     configure_git_hooks_env(
         env,
         config.codex_home.as_path(),
         config.commit_attribution.as_deref(),
-    );
+    )
 }
 
 pub(crate) fn configure_git_hooks_env(
     env: &mut HashMap<String, String>,
     codex_home: &Path,
     config_attribution: Option<&str>,
-) {
-    let Some(value) = resolve_attribution_value(config_attribution) else {
-        return;
+) -> Vec<(String, String)> {
+    let Some((key, value)) = git_hooks_runtime_config(codex_home, config_attribution) else {
+        return Vec::new();
     };
 
-    let Ok(hooks_path) = ensure_codex_hook_scripts(codex_home, &value) else {
-        return;
-    };
-
-    set_git_runtime_config(env, "core.hooksPath", hooks_path.to_string_lossy().as_ref());
+    set_git_runtime_config(env, &key, &value);
+    vec![(key, value)]
 }
 
+#[cfg(test)]
 pub(crate) fn injected_git_config_env(env: &HashMap<String, String>) -> Vec<(String, String)> {
     let mut pairs = env
         .iter()
@@ -72,6 +70,18 @@ fn resolve_attribution_value(config_attribution: Option<&str>) -> Option<String>
         }
         None => Some(DEFAULT_ATTRIBUTION_VALUE.to_string()),
     }
+}
+
+fn git_hooks_runtime_config(
+    codex_home: &Path,
+    config_attribution: Option<&str>,
+) -> Option<(String, String)> {
+    let value = resolve_attribution_value(config_attribution)?;
+    let hooks_path = ensure_codex_hook_scripts(codex_home, &value).ok()?;
+    Some((
+        "core.hooksPath".to_string(),
+        hooks_path.to_string_lossy().into_owned(),
+    ))
 }
 
 fn ensure_codex_hook_scripts(codex_home: &Path, value: &str) -> std::io::Result<PathBuf> {
@@ -105,14 +115,48 @@ fn build_hook_script(hook_name: &str, value: &str) -> String {
     let escaped_value = value.replace('\'', "'\"'\"'");
     let prepare_commit_msg_body = if hook_name == PREPARE_COMMIT_MSG_HOOK_NAME {
         format!(
-            "\nmsg_file=\"${{1:-}}\"\nif [[ -n \"$msg_file\" && -f \"$msg_file\" ]]; then\n  git interpret-trailers \\\n    --in-place \\\n    --if-exists doNothing \\\n    --if-missing add \\\n    --trailer 'Co-authored-by={escaped_value}' \\\n    \"$msg_file\" || true\nfi\n"
+            r#"
+msg_file="${{1:-}}"
+if [[ -n "$msg_file" && -f "$msg_file" ]]; then
+  git interpret-trailers \
+    --in-place \
+    --if-exists doNothing \
+    --if-missing add \
+    --trailer 'Co-authored-by={escaped_value}' \
+    "$msg_file" || true
+fi
+"#
         )
     } else {
         String::new()
     };
 
     format!(
-        "#!/usr/bin/env bash\nset -euo pipefail\n\nunset GIT_CONFIG_COUNT\nwhile IFS='=' read -r name _; do\n  case \"$name\" in\n    GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) unset \"$name\" ;;\n  esac\ndone < <(env)\n\nexisting_hooks_path=\"$(git config --path core.hooksPath 2>/dev/null || true)\"\nif [[ -z \"$existing_hooks_path\" ]]; then\n  git_dir=\"$(git rev-parse --git-common-dir 2>/dev/null || git rev-parse --git-dir 2>/dev/null || true)\"\n  if [[ -n \"$git_dir\" ]]; then\n    existing_hooks_path=\"$git_dir/hooks\"\n  fi\nfi\n\nif [[ -n \"$existing_hooks_path\" ]]; then\n  existing_hook=\"$existing_hooks_path/{hook_name}\"\n  if [[ -x \"$existing_hook\" && \"$existing_hook\" != \"$0\" ]]; then\n    \"$existing_hook\" \"$@\"\n  fi\nfi\n{prepare_commit_msg_body}"
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+
+unset GIT_CONFIG_COUNT
+while IFS='=' read -r name _; do
+  case "$name" in
+    GIT_CONFIG_KEY_*|GIT_CONFIG_VALUE_*) unset "$name" ;;
+  esac
+done < <(env)
+
+existing_hooks_path="$(git config --path core.hooksPath 2>/dev/null || true)"
+if [[ -z "$existing_hooks_path" ]]; then
+  git_dir="$(git rev-parse --git-common-dir 2>/dev/null || git rev-parse --git-dir 2>/dev/null || true)"
+  if [[ -n "$git_dir" ]]; then
+    existing_hooks_path="$git_dir/hooks"
+  fi
+fi
+
+if [[ -n "$existing_hooks_path" ]]; then
+  existing_hook="$existing_hooks_path/{hook_name}"
+  if [[ -x "$existing_hook" && "$existing_hook" != "$0" ]]; then
+    "$existing_hook" "$@"
+  fi
+fi
+{prepare_commit_msg_body}"#
     )
 }
 
