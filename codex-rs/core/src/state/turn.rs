@@ -107,6 +107,13 @@ impl ApprovalOutcomeMetadata {
             approval_source,
         }
     }
+
+    pub(crate) fn policy() -> Self {
+        Self {
+            review_decision: None,
+            approval_source: ApprovalSourceMetadata::Policy,
+        }
+    }
 }
 
 impl ActiveTurn {
