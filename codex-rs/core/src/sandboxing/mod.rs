@@ -9,6 +9,7 @@ ready‑to‑spawn environment.
 pub(crate) mod macos_permissions;
 
 use crate::exec::ExecExpiration;
+use crate::exec::ExecStdin;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::ExecToolCallOutputBytes;
 use crate::exec::SandboxType;
@@ -68,6 +69,7 @@ pub struct ExecRequest {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
+    pub stdin: ExecStdin,
     pub expiration: ExecExpiration,
     pub sandbox: SandboxType,
     pub windows_sandbox_level: WindowsSandboxLevel,
@@ -708,6 +710,7 @@ impl SandboxManager {
             cwd: spec.cwd,
             env,
             network: network.cloned(),
+            stdin: ExecStdin::Closed,
             expiration: spec.expiration,
             sandbox,
             windows_sandbox_level,

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsCommand {
     ReadFile { path: PathBuf },
+    WriteFile { path: PathBuf },
 }
 
 pub fn parse_command_from_args(
@@ -27,8 +28,9 @@ pub fn parse_command_from_args(
     let path = PathBuf::from(path);
     match operation {
         "read" => Ok(FsCommand::ReadFile { path }),
+        "write" => Ok(FsCommand::WriteFile { path }),
         _ => Err(format!(
-            "unsupported filesystem operation `{operation}`; expected `read`"
+            "unsupported filesystem operation `{operation}`; expected `read` or `write`"
         )),
     }
 }
