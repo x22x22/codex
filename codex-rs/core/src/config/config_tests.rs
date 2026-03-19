@@ -118,11 +118,11 @@ nickname_candidates = ["Scout", "Builder", "Reviewer"]
         agents_with_nickname_candidates_cfg
             .agents
             .and_then(|agents| agents.nickname_candidates),
-        Some(vec![
+        Some(AgentNicknameCandidatesToml::Candidates(vec![
             "Scout".to_string(),
             "Builder".to_string(),
             "Reviewer".to_string()
-        ])
+        ]))
     );
 
     let memories = r#"
@@ -1704,6 +1704,46 @@ trust_level = "trusted"
     Ok(())
 }
 
+#[tokio::test]
+async fn selected_agents_nickname_pack_is_used() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    let workspace = TempDir::new()?;
+    let workspace_key = workspace.path().to_string_lossy().replace('\\', "\\\\");
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        format!(
+            r#"
+[agents]
+nickname_candidates = "succession"
+
+[agents.nickname_packs]
+succession = ["Shiv", " Roman ", "", "Kendall", "Shiv"]
+the_office = ["Pam", "Jim"]
+
+[projects."{workspace_key}"]
+trust_level = "trusted"
+"#
+        ),
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(workspace.path().to_path_buf()))
+        .build()
+        .await?;
+
+    assert_eq!(
+        config.agent_nickname_candidates,
+        vec![
+            "Shiv".to_string(),
+            "Roman".to_string(),
+            "Kendall".to_string()
+        ]
+    );
+
+    Ok(())
+}
+
 #[test]
 fn profile_sandbox_mode_overrides_base() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
@@ -3190,6 +3230,7 @@ fn load_config_rejects_missing_agent_role_config_file() -> std::io::Result<()> {
             max_depth: None,
             job_max_runtime_seconds: None,
             nickname_candidates: None,
+            nickname_packs: BTreeMap::new(),
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4056,6 +4097,7 @@ fn load_config_normalizes_agent_role_nickname_candidates() -> std::io::Result<()
             max_depth: None,
             job_max_runtime_seconds: None,
             nickname_candidates: None,
+            nickname_packs: BTreeMap::new(),
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4098,6 +4140,7 @@ fn load_config_rejects_empty_agent_role_nickname_candidates() -> std::io::Result
             max_depth: None,
             job_max_runtime_seconds: None,
             nickname_candidates: None,
+            nickname_packs: BTreeMap::new(),
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4134,6 +4177,7 @@ fn load_config_rejects_duplicate_agent_role_nickname_candidates() -> std::io::Re
             max_depth: None,
             job_max_runtime_seconds: None,
             nickname_candidates: None,
+            nickname_packs: BTreeMap::new(),
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {
@@ -4170,6 +4214,7 @@ fn load_config_rejects_unsafe_agent_role_nickname_candidates() -> std::io::Resul
             max_depth: None,
             job_max_runtime_seconds: None,
             nickname_candidates: None,
+            nickname_packs: BTreeMap::new(),
             roles: BTreeMap::from([(
                 "researcher".to_string(),
                 AgentRoleToml {

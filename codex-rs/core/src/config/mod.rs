@@ -1675,8 +1675,22 @@ pub struct AgentsToml {
     /// ```toml
     /// [agents]
     /// nickname_candidates = ["Scout", "Builder", "Reviewer"]
+    ///
+    /// # Or select a named pack:
+    /// nickname_candidates = "succession"
+    ///
+    /// [agents.nickname_packs]
+    /// succession = ["Shiv", "Roman", "Kendall"]
     /// ```
-    pub nickname_candidates: Option<Vec<String>>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_optional_agent_nickname_candidates"
+    )]
+    pub nickname_candidates: Option<AgentNicknameCandidatesToml>,
+
+    /// Named global fallback nickname candidate packs keyed by pack name.
+    #[serde(default)]
+    pub nickname_packs: BTreeMap<String, Vec<String>>,
 
     /// User-defined role declarations keyed by role name.
     ///
@@ -1689,6 +1703,22 @@ pub struct AgentsToml {
     /// ```
     #[serde(default, flatten)]
     pub roles: BTreeMap<String, AgentRoleToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum AgentNicknameCandidatesToml {
+    Candidates(Vec<String>),
+    Pack(String),
+}
+
+fn deserialize_optional_agent_nickname_candidates<'de, D>(
+    deserializer: D,
+) -> Result<Option<AgentNicknameCandidatesToml>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<AgentNicknameCandidatesToml>::deserialize(deserializer)
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -2454,12 +2484,41 @@ impl Config {
                 "agents.job_max_runtime_seconds must fit within a 64-bit signed integer",
             ));
         }
-        let agent_nickname_candidates = agent_roles::normalize_global_agent_nickname_candidates(
-            "agents.nickname_candidates",
-            cfg.agents
-                .as_ref()
-                .and_then(|agents| agents.nickname_candidates.as_deref()),
-        )?
+        let agent_nickname_candidates = {
+            let candidates = match cfg.agents.as_ref().and_then(|agents| {
+                agents.nickname_candidates.as_ref().map(|nickname_candidates| {
+                    (nickname_candidates, &agents.nickname_packs)
+                })
+            }) {
+                Some((AgentNicknameCandidatesToml::Candidates(candidates), _)) => {
+                    Some(candidates.as_slice())
+                }
+                Some((AgentNicknameCandidatesToml::Pack(pack), nickname_packs)) => {
+                    let selected_pack = pack.trim();
+                    if selected_pack.is_empty() {
+                        None
+                    } else {
+                        match nickname_packs.get(selected_pack) {
+                            Some(candidates) => Some(candidates.as_slice()),
+                            None => {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidInput,
+                                    format!(
+                                        "agents.nickname_candidates references unknown nickname pack `{selected_pack}`"
+                                    ),
+                                ));
+                            }
+                        }
+                    }
+                }
+                None => None,
+            };
+
+            agent_roles::normalize_global_agent_nickname_candidates(
+                "agents.nickname_candidates",
+                candidates,
+            )?
+        }
         .unwrap_or_default();
         let background_terminal_max_timeout = cfg
             .background_terminal_max_timeout
