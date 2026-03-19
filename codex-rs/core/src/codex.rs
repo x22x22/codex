@@ -4293,7 +4293,6 @@ impl Session {
             None => Err(()),
         }
     }
-
     pub async fn has_pending_input(&self) -> bool {
         let active = self.active_turn.lock().await;
         match active.as_ref() {
