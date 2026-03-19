@@ -23,7 +23,6 @@ class CodexAppServerHost(
     private val control: GenieSessionControl,
     private val bridgeClient: AgentBridgeClient,
     private val runtimeStatus: CodexAgentBridge.RuntimeStatus,
-    private val targetAppContext: TargetAppContext?,
 ) : Closeable {
     companion object {
         private const val TAG = "CodexAppServerHost"
@@ -241,10 +240,8 @@ class CodexAppServerHost(
         val toolName = params.optString("tool").trim()
         val arguments = params.optJSONObject("arguments") ?: JSONObject()
         val toolExecutor = AndroidGenieToolExecutor(
-            context = context,
             callback = callback,
             sessionId = request.sessionId,
-            defaultTargetPackage = request.targetPackage,
         )
         val observation = runCatching {
             toolExecutor.execute(toolName, arguments)
@@ -467,7 +464,8 @@ class CodexAppServerHost(
             You are Codex acting as a child Android Genie bound to ${request.targetPackage}.
             The user interacts only with the supervising Agent.
             Decide your own local plan and choose tools yourself.
-            Prefer the Android dynamic tools for observing and driving the target app.
+            Use normal Android shell commands for package discovery, activity launch, input injection, UI dumping, and screenshots whenever those commands are available.
+            Use Android dynamic tools only for framework-only detached target operations that do not have equivalent shell commands.
             If you need clarification or a decision from the supervising Agent, call request_user_input with concise free-form question text.
             Do not use hidden control protocols.
             Finish with a normal assistant message describing what you accomplished or what blocked you.
@@ -477,97 +475,22 @@ class CodexAppServerHost(
     }
 
     private fun buildDelegatedPrompt(): String {
-        val targetSection = targetAppContext?.renderPromptSection()
-            ?: "Target app inspection:\n- unavailable"
         return """
+            Target package:
+            ${request.targetPackage}
+
             Delegated objective:
             ${request.prompt}
-
-            $targetSection
         """.trimIndent()
     }
 
     private fun buildDynamicToolSpecs(): JSONArray {
         return JSONArray()
-            .put(
-                dynamicToolSpec(
-                    name = "android.package.inspect",
-                    description = "Inspect package metadata for the paired Android target app.",
-                    inputSchema = objectSchema(
-                        properties = mapOf(
-                            "packageName" to stringSchema("Optional package name override."),
-                        ),
-                    ),
-                ),
-            )
-            .put(
-                dynamicToolSpec(
-                    name = "android.intent.launch",
-                    description = "Launch the target app or an explicit target activity/intent.",
-                    inputSchema = objectSchema(
-                        properties = mapOf(
-                            "packageName" to stringSchema("Optional package name override."),
-                            "action" to stringSchema("Optional Android intent action."),
-                            "component" to stringSchema("Optional flattened component name."),
-                        ),
-                    ),
-                ),
-            )
             .put(dynamicToolSpec("android.target.show", "Show the detached target window.", emptyObjectSchema()))
             .put(dynamicToolSpec("android.target.hide", "Hide the detached target window.", emptyObjectSchema()))
             .put(dynamicToolSpec("android.target.attach", "Reattach the detached target back to the main display.", emptyObjectSchema()))
             .put(dynamicToolSpec("android.target.close", "Close the detached target window.", emptyObjectSchema()))
             .put(dynamicToolSpec("android.target.capture_frame", "Capture the detached target window as an image.", emptyObjectSchema()))
-            .put(dynamicToolSpec("android.ui.dump", "Dump the current UI hierarchy via uiautomator.", emptyObjectSchema()))
-            .put(
-                dynamicToolSpec(
-                    name = "android.input.tap",
-                    description = "Inject a tap at absolute screen coordinates.",
-                    inputSchema = objectSchema(
-                        properties = mapOf(
-                            "x" to numberSchema("Absolute X coordinate."),
-                            "y" to numberSchema("Absolute Y coordinate."),
-                        ),
-                        required = listOf("x", "y"),
-                    ),
-                ),
-            )
-            .put(
-                dynamicToolSpec(
-                    name = "android.input.text",
-                    description = "Inject text into the focused field.",
-                    inputSchema = objectSchema(
-                        properties = mapOf(
-                            "text" to stringSchema("Text to type."),
-                        ),
-                        required = listOf("text"),
-                    ),
-                ),
-            )
-            .put(
-                dynamicToolSpec(
-                    name = "android.input.key",
-                    description = "Inject an Android keyevent by name or keycode token.",
-                    inputSchema = objectSchema(
-                        properties = mapOf(
-                            "key" to stringSchema("Android keyevent token, for example ENTER or BACK."),
-                        ),
-                        required = listOf("key"),
-                    ),
-                ),
-            )
-            .put(
-                dynamicToolSpec(
-                    name = "android.wait",
-                    description = "Pause briefly to let the UI settle.",
-                    inputSchema = objectSchema(
-                        properties = mapOf(
-                            "millis" to numberSchema("Milliseconds to sleep (1-10000)."),
-                        ),
-                        required = listOf("millis"),
-                    ),
-                ),
-            )
     }
 
     private fun dynamicToolSpec(
@@ -596,18 +519,6 @@ class CodexAppServerHost(
             .put("properties", propertiesJson)
             .put("required", JSONArray(required))
             .put("additionalProperties", false)
-    }
-
-    private fun stringSchema(description: String): JSONObject {
-        return JSONObject()
-            .put("type", "string")
-            .put("description", description)
-    }
-
-    private fun numberSchema(description: String): JSONObject {
-        return JSONObject()
-            .put("type", "number")
-            .put("description", description)
     }
 
     private fun buildDynamicToolContentItems(observation: GenieToolObservation): JSONArray {

@@ -49,22 +49,8 @@ class CodexGenieService : GenieService() {
             )
             callback.publishTrace(
                 sessionId,
-                "Genie is headless. It hosts codex app-server locally, routes model traffic through the Agent Binder bridge, and exposes Android tooling as dynamic tools.",
+                "Genie is headless. It hosts codex app-server locally, routes model traffic through the Agent Binder bridge, uses normal Android shell commands for package/app driving, and reserves dynamic tools for framework-only target controls.",
             )
-
-            val targetAppContext = runCatching { TargetAppInspector.inspect(this, request.targetPackage) }
-            targetAppContext.onSuccess { targetApp ->
-                callback.publishTrace(
-                    sessionId,
-                    "Inspected target app inside the paired sandbox: ${targetApp.describeForTrace()}",
-                )
-            }
-            targetAppContext.onFailure { err ->
-                callback.publishTrace(
-                    sessionId,
-                    "Target app inspection failed for ${request.targetPackage}: ${err.message}",
-                )
-            }
 
             if (request.isDetachedModeAllowed) {
                 callback.requestLaunchDetachedTargetHidden(sessionId)
@@ -94,7 +80,6 @@ class CodexGenieService : GenieService() {
                     control = control,
                     bridgeClient = bridgeClient,
                     runtimeStatus = runtimeStatus,
-                    targetAppContext = targetAppContext.getOrNull(),
                 ).use { host ->
                     host.run()
                 }

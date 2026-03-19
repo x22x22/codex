@@ -33,9 +33,9 @@ The current repo now contains these implementation slices:
 - Direct child-session launch now runs through a dedicated hosted Agent
   framework-session bridge, with Kotlin reduced to the framework/session host
   layer.
-- The Genie runtime inspects the paired target package from inside the
-  target-app sandbox and feeds package metadata plus launcher intent details
-  into the delegated Codex prompt.
+- The Genie runtime now relies on the hosted Codex shell/tool path for target
+  package inspection, activity launch, input injection, and UI dumping instead
+  of host-side Kotlin wrappers for those operations.
 - The hosted `codex app-server` process now talks to a **Genie-local loopback
   HTTP proxy** inside the Genie app. That proxy forwards HTTP traffic to the
   Agent over Binder/AIDL, keeping network/auth Agent-owned without assuming the
@@ -43,9 +43,9 @@ The current repo now contains these implementation slices:
 - The Binder bridge now exposes a **narrow Responses transport** owned by the
   Agent app itself, so Genie model traffic no longer depends on the legacy
   `codexd` socket service.
-- The Genie runtime still exposes Android-specific capabilities that are not
-  ordinary shell tools through host dynamic tools, but standard Android shell
-  and device commands stay in the normal Codex tool path.
+- The Genie runtime now keeps host dynamic tools limited to framework-only
+  detached-target controls and frame capture, while standard Android shell and
+  device commands stay in the normal Codex tool path.
 - Non-bridge Genie questions surface through AgentSDK question flow by mapping
   `request_user_input` back into Agent-managed questions and answers.
 - The Agent also attempts to answer Genie questions through its hosted Codex
@@ -143,8 +143,7 @@ foreground-service auth/status surface while this refactor proceeds.
 - Exported Binder bridge request handling in `CodexAgentBridgeService`
 - Binder bridge request issuance in `CodexGenieService`
 - Agent-hosted runtime metadata for Genie bootstrap
-- Target-app package metadata and launcher-intent inspection from the Genie
-  sandbox, with that context included in the delegated Codex prompt
+- Shell-first Genie execution for package inspection, activity launch, input injection, and UI dumping
 - Hosted `codex app-server` inside Genie, with model traffic routed through a
   Genie-local proxy backed by the Agent Binder bridge
 - Agent-owned `/v1/responses` proxying in
@@ -192,8 +191,8 @@ foreground-service auth/status surface while this refactor proceeds.
 - `android/genie/src/main/java/com/openai/codex/genie/CodexGenieService.kt`
   - Genie lifecycle host for the embedded `codex app-server`
 - `android/genie/src/main/java/com/openai/codex/genie/CodexAppServerHost.kt`
-  - stdio JSON-RPC host for `codex app-server`, dynamic tools, and
-    `request_user_input` bridging
+  - stdio JSON-RPC host for `codex app-server`, framework-only dynamic tools,
+    and `request_user_input` bridging
 - `android/genie/src/main/java/com/openai/codex/genie/GenieLocalCodexProxy.kt`
   - Genie-local loopback HTTP proxy that forwards hosted `codex` HTTP traffic to
     the Agent Binder bridge
