@@ -57,6 +57,7 @@ use codex_core::auth::ExternalAuthTokens;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
+use codex_core::default_client::DEFAULT_ORIGINATOR;
 use codex_core::default_client::SetOriginatorError;
 use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
@@ -77,6 +78,7 @@ use toml::Value as TomlValue;
 use tracing::Instrument;
 
 const EXTERNAL_AUTH_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+const TUI_APP_SERVER_CLIENT_NAME: &str = "codex-tui";
 
 #[derive(Clone)]
 struct ExternalAuthRefreshBridge {
@@ -550,7 +552,12 @@ impl MessageProcessor {
                 } = params.client_info;
                 session.app_server_client_name = Some(name.clone());
                 session.client_version = Some(version.clone());
-                if let Err(error) = set_default_originator(name.clone()) {
+                let originator = if name.eq_ignore_ascii_case(TUI_APP_SERVER_CLIENT_NAME) {
+                    DEFAULT_ORIGINATOR.to_string()
+                } else {
+                    name.clone()
+                };
+                if let Err(error) = set_default_originator(originator) {
                     match error {
                         SetOriginatorError::InvalidHeaderValue => {
                             let error = JSONRPCErrorError {

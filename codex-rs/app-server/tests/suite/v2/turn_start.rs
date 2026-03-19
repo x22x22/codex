@@ -45,6 +45,7 @@ use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput as V2UserInput;
 use codex_core::config::ConfigToml;
+use codex_core::default_client::DEFAULT_ORIGINATOR;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_core::personality_migration::PERSONALITY_MIGRATION_FILENAME;
@@ -70,6 +71,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 #[cfg(not(windows))]
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const TEST_ORIGINATOR: &str = "codex_vscode";
+const TUI_APP_SERVER_CLIENT_NAME: &str = "codex-tui";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
 
 fn body_contains(req: &wiremock::Request, text: &str) -> bool {
@@ -148,6 +150,81 @@ async fn turn_start_sends_originator_header() -> Result<()> {
             .get("originator")
             .expect("originator header missing");
         assert_eq!(originator.to_str()?, TEST_ORIGINATOR);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn turn_start_sends_cli_originator_header_for_codex_tui() -> Result<()> {
+    let responses = vec![create_final_assistant_message_sse_response("Done")?];
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+
+    let codex_home = TempDir::new()?;
+    create_config_toml(
+        codex_home.path(),
+        &server.uri(),
+        "never",
+        &BTreeMap::from([(Feature::Personality, true)]),
+    )?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: TUI_APP_SERVER_CLIENT_NAME.to_string(),
+            title: Some("Codex TUI".to_string()),
+            version: "0.1.0".to_string(),
+        }),
+    )
+    .await??;
+
+    let thread_req = mcp
+        .send_thread_start_request(ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(thread_req)),
+    )
+    .await??;
+    let ThreadStartResponse { thread, .. } = to_response::<ThreadStartResponse>(thread_resp)?;
+
+    let turn_req = mcp
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![V2UserInput::Text {
+                text: "Hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(turn_req)),
+    )
+    .await??;
+
+    timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("failed to fetch received requests");
+    assert!(!requests.is_empty());
+    for request in requests {
+        let originator = request
+            .headers
+            .get("originator")
+            .expect("originator header missing");
+        assert_eq!(originator.to_str()?, DEFAULT_ORIGINATOR);
     }
 
     Ok(())

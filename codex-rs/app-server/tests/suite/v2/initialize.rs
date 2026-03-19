@@ -14,6 +14,7 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_app_server_protocol::UserInput as V2UserInput;
+use codex_core::default_client::DEFAULT_ORIGINATOR;
 use codex_utils_cargo_bin::cargo_bin;
 use core_test_support::fs_wait;
 use pretty_assertions::assert_eq;
@@ -24,6 +25,7 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const TUI_APP_SERVER_CLIENT_NAME: &str = "codex-tui";
 
 #[tokio::test]
 async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
@@ -53,6 +55,39 @@ async fn initialize_uses_client_info_name_as_originator() -> Result<()> {
     } = to_response::<InitializeResponse>(response)?;
 
     assert!(user_agent.starts_with("codex_vscode/"));
+    assert_eq!(platform_family, std::env::consts::FAMILY);
+    assert_eq!(platform_os, std::env::consts::OS);
+    Ok(())
+}
+
+#[tokio::test]
+async fn initialize_keeps_codex_tui_on_cli_originator() -> Result<()> {
+    let responses = Vec::new();
+    let server = create_mock_responses_server_sequence_unchecked(responses).await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri(), "never")?;
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+
+    let message = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.initialize_with_client_info(ClientInfo {
+            name: TUI_APP_SERVER_CLIENT_NAME.to_string(),
+            title: Some("Codex TUI".to_string()),
+            version: "0.1.0".to_string(),
+        }),
+    )
+    .await??;
+
+    let JSONRPCMessage::Response(response) = message else {
+        anyhow::bail!("expected initialize response, got {message:?}");
+    };
+    let InitializeResponse {
+        user_agent,
+        platform_family,
+        platform_os,
+    } = to_response::<InitializeResponse>(response)?;
+
+    assert!(user_agent.starts_with(&format!("{DEFAULT_ORIGINATOR}/")));
     assert_eq!(platform_family, std::env::consts::FAMILY);
     assert_eq!(platform_os, std::env::consts::OS);
     Ok(())
