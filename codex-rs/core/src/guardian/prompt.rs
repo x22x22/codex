@@ -87,6 +87,29 @@ pub(crate) async fn build_guardian_prompt_items(
 
     let (transcript_entries, omission_note) =
         render_guardian_transcript_entries(transcript_entries.as_slice());
+    Ok(assemble_guardian_prompt_items(
+        transcript_entries,
+        omission_note,
+        retry_reason,
+        planned_action_json,
+    ))
+}
+
+pub(crate) fn build_guardian_prewarm_prompt_items() -> Vec<UserInput> {
+    assemble_guardian_prompt_items(
+        vec![GUARDIAN_PREWARM_TRANSCRIPT_PLACEHOLDER.to_string()],
+        None,
+        None,
+        GUARDIAN_PREWARM_ACTION_PLACEHOLDER.to_string(),
+    )
+}
+
+fn assemble_guardian_prompt_items(
+    transcript_entries: Vec<String>,
+    omission_note: Option<String>,
+    retry_reason: Option<String>,
+    planned_action_json: String,
+) -> Vec<UserInput> {
     let mut items = Vec::new();
     let mut push_text = |text: String| {
         items.push(UserInput::Text {
@@ -116,31 +139,7 @@ pub(crate) async fn build_guardian_prompt_items(
     push_text(format!("{planned_action_json}\n"));
     push_text(GUARDIAN_APPROVAL_REQUEST_END.to_string());
     push_text(GUARDIAN_OUTPUT_SCHEMA_INSTRUCTIONS.to_string());
-    Ok(items)
-}
-
-pub(crate) fn build_guardian_prewarm_prompt_items() -> Vec<UserInput> {
-    [
-        GUARDIAN_TRANSCRIPT_INTRO,
-        GUARDIAN_TRANSCRIPT_START,
-        GUARDIAN_PREWARM_TRANSCRIPT_PLACEHOLDER,
-        "\n",
-        GUARDIAN_TRANSCRIPT_END,
-        GUARDIAN_ACTION_INTRO,
-        GUARDIAN_APPROVAL_REQUEST_START,
-        GUARDIAN_ACTION_ASSESSMENT_INSTRUCTIONS,
-        GUARDIAN_PLANNED_ACTION_JSON_LABEL,
-        GUARDIAN_PREWARM_ACTION_PLACEHOLDER,
-        "\n",
-        GUARDIAN_APPROVAL_REQUEST_END,
-        GUARDIAN_OUTPUT_SCHEMA_INSTRUCTIONS,
-    ]
-    .into_iter()
-    .map(|text| UserInput::Text {
-        text: text.to_string(),
-        text_elements: Vec::new(),
-    })
-    .collect()
+    items
 }
 
 /// Keeps all user turns plus a bounded amount of recent assistant/tool context.

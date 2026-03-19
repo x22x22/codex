@@ -140,7 +140,7 @@ async fn guardian_prewarm_prompt_matches_review_request_prefix() -> anyhow::Resu
     let (session, _turn) = guardian_test_session_and_turn(&server).await;
     let review_prompt = build_guardian_prompt_items(
         session.as_ref(),
-        Some("Retry because the previous attempt lost connectivity.".to_string()),
+        None,
         GuardianApprovalRequest::Shell {
             id: "shell-1".to_string(),
             command: vec!["git".to_string(), "push".to_string()],
@@ -154,13 +154,12 @@ async fn guardian_prewarm_prompt_matches_review_request_prefix() -> anyhow::Resu
     let review_prompt = prompt_item_texts(review_prompt);
     let prewarm_prompt = prompt_item_texts(build_guardian_prewarm_prompt_items());
 
-    assert_eq!(prewarm_prompt[0], review_prompt[0]);
-    assert_eq!(prewarm_prompt[1], review_prompt[1]);
-    assert!(
-        prewarm_prompt
-            .iter()
-            .any(|item| item.contains("guardian_prewarm"))
-    );
+    assert_eq!(prewarm_prompt.len(), review_prompt.len());
+    for index in [0, 1, 3, 4, 5, 6, 7, 9, 10] {
+        assert_eq!(prewarm_prompt[index], review_prompt[index]);
+    }
+    assert!(prewarm_prompt[2].contains("guardian prewarm placeholder"));
+    assert!(prewarm_prompt[8].contains("guardian_prewarm"));
 
     Ok(())
 }
