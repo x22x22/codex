@@ -1,6 +1,6 @@
 # codex-exec-server
 
-`codex-exec-server` is a small standalone stdio JSON-RPC server for spawning
+`codex-exec-server` is a small standalone WebSocket JSON-RPC server for spawning
 and controlling subprocesses through `codex-utils-pty`.
 
 This PR intentionally lands only the standalone binary, client, wire protocol,
@@ -18,11 +18,7 @@ unified-exec in this PR; it is only the standalone transport layer.
 
 ## Transport
 
-The server speaks newline-delimited JSON-RPC 2.0 over stdio.
-
-- `stdin`: one JSON-RPC message per line
-- `stdout`: one JSON-RPC message per line
-- `stderr`: reserved for logs / process errors
+The server speaks JSON-RPC 2.0 over WebSockets.
 
 Like the app-server transport, messages on the wire omit the `"jsonrpc":"2.0"`
 field and use the shared `codex-app-server-protocol` envelope types.
@@ -249,7 +245,7 @@ The crate exports:
 - protocol structs such as `ExecParams`, `ExecResponse`,
   `WriteParams`, `TerminateParams`, `ExecOutputDeltaNotification`, and
   `ExecExitedNotification`
-- `run_main()` for embedding the stdio server in a binary
+- `run_main()` for embedding the WebSocket server in a binary
 
 ## Example session
 

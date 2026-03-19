@@ -17,8 +17,6 @@ use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCNotification;
 use serde_json::Value;
-use tokio::io::AsyncRead;
-use tokio::io::AsyncWrite;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -201,22 +199,6 @@ impl ExecServerClient {
         let client = Self { inner };
         client.initialize(options).await?;
         Ok(client)
-    }
-
-    pub async fn connect_stdio<R, W>(
-        stdin: W,
-        stdout: R,
-        options: ExecServerClientConnectOptions,
-    ) -> Result<Self, ExecServerError>
-    where
-        R: AsyncRead + Unpin + Send + 'static,
-        W: AsyncWrite + Unpin + Send + 'static,
-    {
-        Self::connect(
-            JsonRpcConnection::from_stdio(stdout, stdin, "exec-server stdio".to_string()),
-            options,
-        )
-        .await
     }
 
     pub async fn connect_websocket(
