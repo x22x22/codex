@@ -171,12 +171,8 @@ class MainActivity : Activity() {
     }
 
     fun startDirectAgentSession(@Suppress("UNUSED_PARAMETER") view: View) {
-        val targetPackage = findViewById<EditText>(R.id.agent_target_package).text.toString().trim()
+        val targetPackageOverride = findViewById<EditText>(R.id.agent_target_package).text.toString().trim()
         val prompt = findViewById<EditText>(R.id.agent_prompt).text.toString().trim()
-        if (targetPackage.isEmpty()) {
-            showToast("Enter a target package")
-            return
-        }
         if (prompt.isEmpty()) {
             showToast("Enter a prompt")
             return
@@ -184,9 +180,13 @@ class MainActivity : Activity() {
         ensureCodexdRunningForAgent()
         thread {
             val result = runCatching {
+                val plan = AgentTaskPlanner.plan(
+                    context = this,
+                    userObjective = prompt,
+                    targetPackageOverride = targetPackageOverride.ifBlank { null },
+                )
                 agentSessionController.startDirectSession(
-                    targetPackage = targetPackage,
-                    prompt = prompt,
+                    plan = plan,
                     allowDetachedMode = true,
                 )
             }
@@ -195,8 +195,9 @@ class MainActivity : Activity() {
                 refreshAgentSessions()
             }
             result.onSuccess { sessionStart ->
-                focusedFrameworkSessionId = sessionStart.childSessionId
-                showToast("Started ${sessionStart.childSessionId} via ${sessionStart.geniePackage}")
+                focusedFrameworkSessionId = sessionStart.childSessionIds.firstOrNull()
+                val targetSummary = sessionStart.plannedTargets.joinToString(", ")
+                showToast("Started ${sessionStart.childSessionIds.size} Genie session(s) for $targetSummary via ${sessionStart.geniePackage}")
                 refreshAgentSessions()
             }
         }

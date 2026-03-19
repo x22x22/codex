@@ -81,8 +81,7 @@ class AgentSessionController(context: Context) {
     }
 
     fun startDirectSession(
-        targetPackage: String,
-        prompt: String,
+        plan: AgentDelegationPlan,
         allowDetachedMode: Boolean,
     ): SessionStartResult {
         val manager = requireAgentManager()
@@ -93,23 +92,29 @@ class AgentSessionController(context: Context) {
         try {
             manager.publishTrace(
                 parentSession.sessionId,
-                "Starting Codex direct session for $targetPackage.",
+                "Starting Codex direct session for objective: ${plan.originalObjective}",
             )
-            val childSession = manager.createChildSession(parentSession.sessionId, targetPackage)
-            childSessionIds += childSession.sessionId
-            manager.publishTrace(
-                parentSession.sessionId,
-                "Created child session ${childSession.sessionId} for $targetPackage.",
-            )
-            manager.startGenieSession(
-                childSession.sessionId,
-                geniePackage,
-                prompt,
-                allowDetachedMode,
-            )
+            plan.rationale?.let { rationale ->
+                manager.publishTrace(parentSession.sessionId, "Planning rationale: $rationale")
+            }
+            plan.targets.forEach { target ->
+                val childSession = manager.createChildSession(parentSession.sessionId, target.packageName)
+                childSessionIds += childSession.sessionId
+                manager.publishTrace(
+                    parentSession.sessionId,
+                    "Created child session ${childSession.sessionId} for ${target.packageName}.",
+                )
+                manager.startGenieSession(
+                    childSession.sessionId,
+                    geniePackage,
+                    target.objective,
+                    allowDetachedMode,
+                )
+            }
             return SessionStartResult(
                 parentSessionId = parentSession.sessionId,
-                childSessionId = childSession.sessionId,
+                childSessionIds = childSessionIds,
+                plannedTargets = plan.targets.map(AgentDelegationTarget::packageName),
                 geniePackage = geniePackage,
             )
         } catch (err: RuntimeException) {
@@ -315,7 +320,8 @@ data class AgentSessionDetails(
 
 data class SessionStartResult(
     val parentSessionId: String,
-    val childSessionId: String,
+    val childSessionIds: List<String>,
+    val plannedTargets: List<String>,
     val geniePackage: String,
 )
 

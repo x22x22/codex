@@ -12,6 +12,7 @@ The current repo now contains the first implementation slice:
 - `android/genie` is a buildable **Genie** app scaffold.
 - The Agent app can:
   - register `AgentService`
+  - plan target packages for a user objective
   - launch direct parent + child framework sessions
   - start a Genie session for a target package
   - display framework session state and event timelines
@@ -57,6 +58,9 @@ existing network/auth bridge while this refactor proceeds.
   - Agent -> Genie: free-form objective / instructions
   - Genie -> Agent: free-form result / progress / follow-up question
   - Agent decides whether to answer directly or escalate to the user
+- The user interacts only with the **Agent**.
+- The Agent decides which target package(s) should receive child Genie sessions.
+- Each child Genie decides its own local tool usage inside the paired sandbox.
 - The Agent is the only runtime that owns:
   - auth
   - outbound network access
@@ -77,6 +81,8 @@ existing network/auth bridge while this refactor proceeds.
   - `HANDLE_SESSION` activity
   - session orchestration via `AgentManager`
 - Responsible for:
+  - user interaction
+  - task planning and target-package selection
   - direct parent session creation
   - child session creation per target app
   - starting Genie sessions
@@ -108,6 +114,8 @@ existing network/auth bridge while this refactor proceeds.
 - Agent app manifest/service wiring
 - Genie app manifest/service wiring
 - Direct session launcher in the Agent UI
+- Agent-side target-package planning from installed launchable apps, with an
+  optional package override
 - Framework session inspection UI in the Agent app
 - Question answering and detached-target attach controls
 - Exported Binder bridge request handling in `CodexAgentBridgeService`

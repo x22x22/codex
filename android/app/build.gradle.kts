@@ -110,4 +110,6 @@ tasks.named("preBuild").configure {
 dependencies {
     implementation(project(":bridge"))
     compileOnly(files(extractedAgentPlatformJar))
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

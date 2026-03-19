@@ -44,15 +44,14 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:paddingTop="12dp"
-            android:text="Target package" />
+            android:text="Target package override (optional)" />
 
         <EditText
             android:id="@+id/agent_target_package"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:hint="com.android.deskclock"
-            android:inputType="textUri"
-            android:text="com.android.deskclock" />
+            android:inputType="textUri" />
 
         <TextView
             android:layout_width="wrap_content"
@@ -65,10 +64,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:gravity="top|start"
-            android:hint="Open the target app, inspect its UI, and continue the task."
+            android:hint="Start a 5-minute timer."
             android:inputType="textMultiLine|textCapSentences"
             android:minLines="3"
-            android:text="Open the target app, inspect its UI, and continue the task." />
+            android:text="Start a 5-minute timer." />
 
         <Button
             android:id="@+id/agent_start_button"
@@ -76,7 +75,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:onClick="startDirectAgentSession"
-            android:text="Start Direct Agent Session" />
+            android:text="Plan And Start Agent Session" />
 
         <Button
             android:id="@+id/agent_refresh_button"
