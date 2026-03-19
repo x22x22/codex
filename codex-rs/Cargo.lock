@@ -1557,6 +1557,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
+ "codex-fs-ops",
  "codex-linux-sandbox",
  "codex-shell-escalation",
  "codex-utils-home-dir",
@@ -1846,6 +1847,7 @@ dependencies = [
  "codex-exec-server",
  "codex-execpolicy",
  "codex-file-search",
+ "codex-fs-ops",
  "codex-git",
  "codex-hooks",
  "codex-keyring-store",
@@ -2085,6 +2087,14 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "codex-fs-ops"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "tempfile",
 ]
 
 [[package]]
