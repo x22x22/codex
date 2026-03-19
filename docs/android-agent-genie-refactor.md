@@ -22,8 +22,11 @@ The current repo now contains the first implementation slice:
 - The first Agent<->Genie bridge now uses **framework question/answer events**
   for internal machine-to-machine RPC.
 - The current bridge shape carries small request/response envelopes, and the
-  Genie placeholder already uses it to fetch the Agent-owned
-  `/internal/auth/status` response from the embedded `codexd`.
+  Genie runtime already uses it to fetch Agent-owned runtime metadata from the
+  embedded `codexd`, including auth status and the effective model/provider.
+- The Genie scaffold now issues one real **non-streaming `/v1/responses`**
+  request through that bridge after the user answer, proving that model traffic
+  can stay Agent-owned even while the Genie runs inside the target-app sandbox.
 - This is intentional: runtime testing on the emulator showed that a Genie
   execution runs inside the paired target app's sandbox/UID, so ordinary
   cross-app Android service/provider IPC to the Agent app is not a reliable
@@ -98,7 +101,10 @@ existing network/auth bridge while this refactor proceeds.
 - Framework-mediated internal bridge request handling in `CodexAgentService`
 - Framework-mediated internal bridge request issuance in `CodexGenieService`
 - Generic small HTTP request/response envelopes over the internal bridge, with
-  the auth-status probe using the real `codexd` HTTP response body
+  the Genie using the real `codexd` HTTP response bodies
+- Agent-owned `/internal/runtime/status` metadata for Genie bootstrap
+- One real non-streaming proxied `/v1/responses` request from Genie through the
+  Agent-owned bridge after the user answer
 - Abstract-unix-socket support in the legacy Rust bridge via `@name` or
   `abstract:name`, so the compatibility transport can move off app-private
   filesystem sockets when Agent<->Genie traffic is introduced

@@ -13,6 +13,8 @@ import java.util.UUID
 class CodexGenieService : GenieService() {
     companion object {
         private const val TAG = "CodexGenieService"
+        private const val MAX_BRIDGE_PROMPT_CHARS = 240
+        private const val MAX_BRIDGE_ANSWER_CHARS = 120
     }
 
     private val sessionControls = ConcurrentHashMap<String, SessionControl>()
@@ -53,20 +55,20 @@ class CodexGenieService : GenieService() {
             )
             callback.publishTrace(
                 sessionId,
-                "Genie is headless and uses the Agent-owned bridge for auth/network reachability checks.",
+                "Genie is headless and routes model/backend traffic through the Agent-owned bridge.",
             )
-            val bridgeStatus = runCatching { requestAgentAuthStatus(sessionId, callback, control) }
-            bridgeStatus.onSuccess { status ->
+            val runtimeStatus = runCatching { requestAgentRuntimeStatus(sessionId, callback, control) }
+            runtimeStatus.onSuccess { status ->
                 val accountSuffix = status.accountEmail?.let { " (${it})" } ?: ""
                 callback.publishTrace(
                     sessionId,
-                    "Reached Agent bridge through framework orchestration; authenticated=${status.authenticated}${accountSuffix}, clients=${status.clientCount}.",
+                    "Reached Agent bridge through framework orchestration; authenticated=${status.authenticated}${accountSuffix}, provider=${status.modelProviderId}, model=${status.effectiveModel ?: "unknown"}, clients=${status.clientCount}.",
                 )
             }
-            bridgeStatus.onFailure { err ->
+            runtimeStatus.onFailure { err ->
                 callback.publishTrace(
                     sessionId,
-                    "Agent bridge probe failed: ${err.message}",
+                    "Agent runtime probe failed: ${err.message}",
                 )
             }
 
@@ -90,10 +92,49 @@ class CodexGenieService : GenieService() {
             val answer = waitForUserResponse(control)
             callback.updateState(sessionId, AgentSessionInfo.STATE_RUNNING)
             callback.publishTrace(sessionId, "Received user response: $answer")
-            callback.publishResult(
-                sessionId,
-                "Placeholder Genie result for ${request.targetPackage}. Replace this with Codex-driven Android tool execution.",
-            )
+            val runtime = runtimeStatus.getOrNull()
+            val modelResponse = runtime?.takeIf { status ->
+                status.authenticated && !status.effectiveModel.isNullOrBlank()
+            }?.let { status ->
+                callback.publishTrace(
+                    sessionId,
+                    "Requesting a non-streaming /v1/responses call through the Agent using ${status.effectiveModel}.",
+                )
+                runCatching {
+                    requestModelNextStep(sessionId, request, answer, status, callback, control)
+                }
+            }
+
+            when {
+                modelResponse == null && runtime == null -> {
+                    callback.publishResult(
+                        sessionId,
+                        "Reached the framework-managed Agent bridge, but runtime status was unavailable. Replace this scaffold with a real Codex-driven Genie executor.",
+                    )
+                }
+                modelResponse == null -> {
+                    callback.publishResult(
+                        sessionId,
+                        "Reached the Agent bridge, but the Agent runtime was not authenticated or did not expose an effective model for ${request.targetPackage}.",
+                    )
+                }
+                modelResponse.isSuccess -> {
+                    callback.publishResult(
+                        sessionId,
+                        modelResponse.getOrThrow(),
+                    )
+                }
+                else -> {
+                    callback.publishTrace(
+                        sessionId,
+                        "Agent-mediated /v1/responses request failed: ${modelResponse.exceptionOrNull()?.message}",
+                    )
+                    callback.publishResult(
+                        sessionId,
+                        "Reached the Agent bridge for ${request.targetPackage}, but the proxied model request failed. Replace this scaffold with a real Codex-driven Genie executor.",
+                    )
+                }
+            }
             callback.updateState(sessionId, AgentSessionInfo.STATE_COMPLETED)
         } catch (err: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -107,17 +148,41 @@ class CodexGenieService : GenieService() {
         }
     }
 
-    private fun requestAgentAuthStatus(
+    private fun requestAgentRuntimeStatus(
         sessionId: String,
         callback: Callback,
         control: SessionControl,
-    ): CodexAgentBridge.AuthStatus {
+    ): CodexAgentBridge.RuntimeStatus {
         val requestId = UUID.randomUUID().toString()
-        callback.publishQuestion(sessionId, CodexAgentBridge.buildAuthStatusRequest(requestId))
+        callback.publishQuestion(sessionId, CodexAgentBridge.buildRuntimeStatusRequest(requestId))
         callback.updateState(sessionId, AgentSessionInfo.STATE_WAITING_FOR_USER)
         val response = waitForBridgeResponse(control, requestId)
         callback.updateState(sessionId, AgentSessionInfo.STATE_RUNNING)
-        return CodexAgentBridge.parseAuthStatusResponse(response, requestId)
+        return CodexAgentBridge.parseRuntimeStatusResponse(response, requestId)
+    }
+
+    private fun requestModelNextStep(
+        sessionId: String,
+        request: GenieRequest,
+        answer: String,
+        runtimeStatus: CodexAgentBridge.RuntimeStatus,
+        callback: Callback,
+        control: SessionControl,
+    ): String {
+        val model = checkNotNull(runtimeStatus.effectiveModel) { "missing effective model" }
+        val requestId = UUID.randomUUID().toString()
+        callback.publishQuestion(
+            sessionId,
+            CodexAgentBridge.buildResponsesRequest(
+                requestId = requestId,
+                model = model,
+                prompt = buildModelPrompt(request, answer),
+            ),
+        )
+        callback.updateState(sessionId, AgentSessionInfo.STATE_WAITING_FOR_USER)
+        val response = waitForBridgeResponse(control, requestId)
+        callback.updateState(sessionId, AgentSessionInfo.STATE_RUNNING)
+        return CodexAgentBridge.parseResponsesOutputText(response, requestId)
     }
 
     private fun waitForBridgeResponse(control: SessionControl, requestId: String): String {
@@ -143,6 +208,25 @@ class CodexGenieService : GenieService() {
             }
         }
         throw IOException("Cancelled while waiting for user response")
+    }
+
+    private fun buildModelPrompt(request: GenieRequest, answer: String): String {
+        val objective = abbreviate(request.prompt, MAX_BRIDGE_PROMPT_CHARS)
+        val userAnswer = abbreviate(answer, MAX_BRIDGE_ANSWER_CHARS)
+        return """
+            You are Codex acting as an Android Genie for the target package ${request.targetPackage}.
+            Original objective: $objective
+            The user answered the current question with: $userAnswer
+
+            Reply with one short sentence describing the next automation step you would take in the target app.
+        """.trimIndent()
+    }
+
+    private fun abbreviate(value: String, maxChars: Int): String {
+        if (value.length <= maxChars) {
+            return value
+        }
+        return value.take(maxChars - 1) + "…"
     }
 
     private class SessionControl {

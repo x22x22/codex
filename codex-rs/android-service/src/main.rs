@@ -15,11 +15,16 @@ use anyhow::Result;
 use bytes::Bytes;
 use clap::Parser;
 use clap::ValueEnum;
+use codex_core::ModelProviderInfo;
 use codex_core::auth::AuthCredentialsStoreMode;
 use codex_core::auth::AuthManager;
 use codex_core::auth::CodexAuth;
+use codex_core::config::ConfigBuilder;
 use codex_core::config::find_codex_home;
 use codex_core::default_client::build_reqwest_client;
+use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
+use codex_core::models_manager::manager::ModelsManager;
+use codex_core::models_manager::manager::RefreshStrategy;
 use codex_login::CLIENT_ID;
 use codex_login::DeviceCode;
 use codex_login::ServerOptions;
@@ -262,6 +267,21 @@ struct AuthStatus {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct RuntimeStatus {
+    authenticated: bool,
+    auth_mode: Option<String>,
+    account_id: Option<String>,
+    account_email: Option<String>,
+    client_count: usize,
+    clients: Vec<ClientStats>,
+    model_provider_id: String,
+    configured_model: Option<String>,
+    effective_model: Option<String>,
+    upstream_base_url: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ClientStats {
     id: String,
     active_connections: usize,
@@ -425,6 +445,9 @@ async fn handle_request(
     state: Arc<ServiceState>,
 ) -> Result<Response<BoxedBody>, Infallible> {
     let path = req.uri().path();
+    if path == "/internal/runtime/status" {
+        return Ok(handle_runtime_status(req, &state).await);
+    }
     if path == "/internal/auth/status" {
         return Ok(handle_auth_status(req, &state).await);
     }
@@ -458,6 +481,39 @@ async fn handle_auth_status(req: Request<Incoming>, state: &ServiceState) -> Res
         account_email: auth.as_ref().and_then(CodexAuth::get_account_email),
         client_count: active_client_count,
         clients,
+    };
+
+    json_response(StatusCode::OK, &status)
+}
+
+async fn handle_runtime_status(
+    req: Request<Incoming>,
+    state: &ServiceState,
+) -> Response<BoxedBody> {
+    if req.method() != Method::GET {
+        return empty_response(StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    let auth = state.auth_manager.auth().await;
+    let clients = state.client_registry.clients_snapshot().await;
+    let active_client_count = clients
+        .iter()
+        .filter(|client| client.active_connections > 0)
+        .count();
+    let runtime_model = resolve_runtime_model(state).await;
+    let status = RuntimeStatus {
+        authenticated: auth.is_some(),
+        auth_mode: auth
+            .as_ref()
+            .map(|active_auth| api_auth_mode_label(active_auth).to_string()),
+        account_id: auth.as_ref().and_then(CodexAuth::get_account_id),
+        account_email: auth.as_ref().and_then(CodexAuth::get_account_email),
+        client_count: active_client_count,
+        clients,
+        model_provider_id: runtime_model.model_provider_id,
+        configured_model: runtime_model.configured_model,
+        effective_model: runtime_model.effective_model,
+        upstream_base_url: state.upstream_base(auth.as_ref()).to_string(),
     };
 
     json_response(StatusCode::OK, &status)
@@ -654,6 +710,54 @@ fn api_auth_mode_label(auth: &CodexAuth) -> &'static str {
         CodexAuth::ApiKey(_) => "api_key",
         CodexAuth::Chatgpt(_) => "chatgpt",
         CodexAuth::ChatgptAuthTokens(_) => "chatgpt_auth_tokens",
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeModelStatus {
+    model_provider_id: String,
+    configured_model: Option<String>,
+    effective_model: Option<String>,
+}
+
+async fn resolve_runtime_model(state: &ServiceState) -> RuntimeModelStatus {
+    let fallback_provider_id = "openai".to_string();
+    let fallback_provider = ModelProviderInfo::create_openai_provider(/* base_url */ None);
+    let runtime_config = ConfigBuilder::default()
+        .codex_home(state.codex_home.clone())
+        .fallback_cwd(Some(state.codex_home.clone()))
+        .build()
+        .await;
+
+    let (model_provider_id, configured_model, model_provider) = match runtime_config {
+        Ok(config) => (
+            config.model_provider_id,
+            config.model,
+            config.model_provider,
+        ),
+        Err(err) => {
+            eprintln!(
+                "failed to load runtime config from {}: {err}",
+                state.codex_home.display()
+            );
+            (fallback_provider_id, None, fallback_provider)
+        }
+    };
+    let models_manager = ModelsManager::new_with_provider(
+        state.codex_home.clone(),
+        state.auth_manager.clone(),
+        None,
+        CollaborationModesConfig::default(),
+        model_provider,
+    );
+    let effective_model = models_manager
+        .get_default_model(&configured_model, RefreshStrategy::Offline)
+        .await;
+
+    RuntimeModelStatus {
+        model_provider_id,
+        configured_model,
+        effective_model: (!effective_model.is_empty()).then_some(effective_model),
     }
 }
 
