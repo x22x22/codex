@@ -4400,18 +4400,21 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
         content: vec![ContentItem::InputText {
             text: "blocked queued prompt".to_string(),
         }],
+        metadata: None,
     };
     let later = ResponseInputItem::Message {
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: "later queued prompt".to_string(),
         }],
+        metadata: None,
     };
     let newer = ResponseInputItem::Message {
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: "newer queued prompt".to_string(),
         }],
+        metadata: None,
     };
 
     sess.inject_response_items(vec![blocked.clone(), later.clone()])
