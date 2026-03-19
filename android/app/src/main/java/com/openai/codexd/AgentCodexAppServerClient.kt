@@ -42,14 +42,20 @@ object AgentCodexAppServerClient {
         context: Context,
         instructions: String,
         prompt: String,
+        dynamicTools: JSONArray? = null,
+        toolCallHandler: ((String, JSONObject) -> JSONObject)? = null,
     ): String = synchronized(lifecycleLock) {
         ensureStarted(context.applicationContext)
         activeRequests.incrementAndGet()
         try {
             notifications.clear()
-            val threadId = startThread(context.applicationContext, instructions)
+            val threadId = startThread(
+                context = context.applicationContext,
+                instructions = instructions,
+                dynamicTools = dynamicTools,
+            )
             startTurn(threadId, prompt)
-            waitForTurnCompletion()
+            waitForTurnCompletion(toolCallHandler)
         } finally {
             activeRequests.decrementAndGet()
         }
@@ -134,16 +140,21 @@ object AgentCodexAppServerClient {
     private fun startThread(
         context: Context,
         instructions: String,
+        dynamicTools: JSONArray?,
     ): String {
+        val params = JSONObject()
+            .put("approvalPolicy", "never")
+            .put("sandbox", "read-only")
+            .put("ephemeral", true)
+            .put("cwd", context.filesDir.absolutePath)
+            .put("serviceName", "android_agent")
+            .put("baseInstructions", instructions)
+        if (dynamicTools != null) {
+            params.put("dynamicTools", dynamicTools)
+        }
         val result = request(
             method = "thread/start",
-            params = JSONObject()
-                .put("approvalPolicy", "never")
-                .put("sandbox", "read-only")
-                .put("ephemeral", true)
-                .put("cwd", context.filesDir.absolutePath)
-                .put("serviceName", "android_agent")
-                .put("baseInstructions", instructions),
+            params = params,
         )
         return result.getJSONObject("thread").getString("id")
     }
@@ -167,7 +178,9 @@ object AgentCodexAppServerClient {
         )
     }
 
-    private fun waitForTurnCompletion(): String {
+    private fun waitForTurnCompletion(
+        toolCallHandler: ((String, JSONObject) -> JSONObject)?,
+    ): String {
         val streamedAgentMessages = mutableMapOf<String, StringBuilder>()
         var finalAgentMessage: String? = null
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(REQUEST_TIMEOUT_MS)
@@ -182,7 +195,7 @@ object AgentCodexAppServerClient {
                 continue
             }
             if (notification.has("id") && notification.has("method")) {
-                rejectUnsupportedServerRequest(notification)
+                handleServerRequest(notification, toolCallHandler)
                 continue
             }
             val params = notification.optJSONObject("params") ?: JSONObject()
@@ -222,17 +235,67 @@ object AgentCodexAppServerClient {
         }
     }
 
-    private fun rejectUnsupportedServerRequest(message: JSONObject) {
+    private fun handleServerRequest(
+        message: JSONObject,
+        toolCallHandler: ((String, JSONObject) -> JSONObject)?,
+    ) {
         val requestId = message.opt("id") ?: return
         val method = message.optString("method", "unknown")
+        if (method != "item/tool/call") {
+            sendError(
+                requestId = requestId,
+                code = -32601,
+                message = "Unsupported Agent app-server request: $method",
+            )
+            return
+        }
+        if (toolCallHandler == null) {
+            sendError(
+                requestId = requestId,
+                code = -32601,
+                message = "No Agent tool handler registered for $method",
+            )
+            return
+        }
+        val params = message.optJSONObject("params") ?: JSONObject()
+        val toolName = params.optString("tool").trim()
+        val arguments = params.optJSONObject("arguments") ?: JSONObject()
+        val result = runCatching { toolCallHandler(toolName, arguments) }
+            .getOrElse { err ->
+                sendError(
+                    requestId = requestId,
+                    code = -32000,
+                    message = err.message ?: "Agent tool call failed",
+                )
+                return
+            }
+        sendResult(requestId, result)
+    }
+
+    private fun sendResult(
+        requestId: Any,
+        result: JSONObject,
+    ) {
+        sendMessage(
+            JSONObject()
+                .put("id", requestId)
+                .put("result", result),
+        )
+    }
+
+    private fun sendError(
+        requestId: Any,
+        code: Int,
+        message: String,
+    ) {
         sendMessage(
             JSONObject()
                 .put("id", requestId)
                 .put(
                     "error",
                     JSONObject()
-                        .put("code", -32601)
-                        .put("message", "Unsupported Agent app-server request: $method"),
+                        .put("code", code)
+                        .put("message", message),
                 ),
         )
     }

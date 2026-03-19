@@ -26,6 +26,8 @@ The current repo now contains these implementation slices:
 - The current Binder bridge exposes small fixed-form calls, and the Genie
   runtime already uses it to fetch Agent-owned runtime metadata from the
   hosted Agent Codex runtime, including auth status and configured model/provider.
+- Target-package planning now runs through a hosted Agent Codex tool call for
+  launchable-app discovery instead of a Kotlin-built app list prompt.
 - The Genie runtime inspects the paired target package from inside the
   target-app sandbox and feeds package metadata plus launcher intent details
   into the delegated Codex prompt.
@@ -127,6 +129,7 @@ foreground-service auth/status surface while this refactor proceeds.
 - Direct session launcher in the Agent UI
 - Agent-side target-package planning from installed launchable apps, with an
   optional package override
+- Hosted Agent planning tools for launchable-app discovery
 - Framework session inspection UI in the Agent app
 - Question answering and detached-target attach controls
 - Exported Binder bridge request handling in `CodexAgentBridgeService`
@@ -191,7 +194,7 @@ foreground-service auth/status surface while this refactor proceeds.
 - `android/genie/src/main/java/com/openai/codex/genie/AgentBridgeClient.kt`
   - Genie-side Binder client for the Agent bridge service
 - `android/app/src/main/java/com/openai/codexd/AgentCodexAppServerClient.kt`
-  - hosted Agent `codex app-server` client for planning, auto-answering, and runtime metadata
+  - hosted Agent `codex app-server` client for planning, auto-answering, runtime metadata, and narrow Agent tool calls
 - `android/app/src/main/java/com/openai/codexd/CodexdLocalClient.kt`
   - Agent-local client for the legacy `codexd` foreground-service surface
 

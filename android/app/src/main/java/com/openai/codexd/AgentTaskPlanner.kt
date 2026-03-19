@@ -22,15 +22,17 @@ data class AgentDelegationPlan(
 
 object AgentTaskPlanner {
     private const val MAX_LAUNCHABLE_APPS = 80
+    private const val LIST_LAUNCHABLE_APPS_TOOL = "android.apps.list_launchable"
     private val PLANNER_INSTRUCTIONS =
         """
         You are Codex acting as the Android Agent planner.
         The user interacts only with the Agent. Decide which installed Android packages should receive delegated Genie sessions.
+        Use the available Android app-list tool before selecting targets.
         Choose the fewest packages needed to complete the request.
         Return exactly one JSON object with this shape:
         {"targets":[{"packageName":"com.example.app","objective":"free-form delegated objective"}],"reason":"short explanation"}
         Rules:
-        - Use only package names from the provided installed-app list.
+        - Use only package names returned by the Android app-list tool.
         - `targets` must be non-empty.
         - Each delegated `objective` should be written for the child Genie, not the user.
         - Do not include markdown or code fences.
@@ -62,7 +64,11 @@ object AgentTaskPlanner {
         val planText = AgentCodexAppServerClient.requestText(
             context = context,
             instructions = PLANNER_INSTRUCTIONS,
-            prompt = buildPlannerPrompt(userObjective, launchableApps),
+            prompt = buildPlannerPrompt(userObjective),
+            dynamicTools = buildDynamicToolSpecs(),
+            toolCallHandler = { toolName, _ ->
+                handleToolCall(toolName, launchableApps)
+            },
         )
         return parsePlanResponse(
             responseText = planText,
@@ -106,20 +112,51 @@ object AgentTaskPlanner {
         )
     }
 
-    private fun buildPlannerPrompt(
-        userObjective: String,
-        launchableApps: List<InstalledLaunchableApp>,
-    ): String {
-        val appList = launchableApps.joinToString(separator = "\n") { app ->
-            "- ${app.label} (${app.packageName})"
-        }
+    private fun buildPlannerPrompt(userObjective: String): String {
         return """
             User objective:
             $userObjective
-
-            Installed launchable apps:
-            $appList
         """.trimIndent()
+    }
+
+    private fun buildDynamicToolSpecs(): JSONArray {
+        return JSONArray().put(
+            JSONObject()
+                .put("name", LIST_LAUNCHABLE_APPS_TOOL)
+                .put(
+                    "description",
+                    "List the launchable Android packages currently installed on this device.",
+                )
+                .put(
+                    "inputSchema",
+                    JSONObject()
+                        .put("type", "object")
+                        .put("properties", JSONObject())
+                        .put("additionalProperties", false),
+                ),
+        )
+    }
+
+    private fun handleToolCall(
+        toolName: String,
+        launchableApps: List<InstalledLaunchableApp>,
+    ): JSONObject {
+        if (toolName != LIST_LAUNCHABLE_APPS_TOOL) {
+            throw IOException("Unsupported Agent planning tool: $toolName")
+        }
+        val appList = launchableApps.joinToString(separator = "\n") { app ->
+            "- ${app.label} (${app.packageName})"
+        }
+        return JSONObject()
+            .put("success", true)
+            .put(
+                "contentItems",
+                JSONArray().put(
+                    JSONObject()
+                        .put("type", "inputText")
+                        .put("text", "Launchable Android apps:\n$appList"),
+                ),
+            )
     }
 
     private fun extractJsonObject(responseText: String): JSONObject {
