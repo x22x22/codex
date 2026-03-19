@@ -267,11 +267,14 @@ mod agent {
         let mut agent_config = config.as_ref().clone();
 
         agent_config.cwd = root;
+        // Consolidation threads must never feed back into phase-1 memory generation.
+        agent_config.memories.generate_memories = false;
         // Approval policy
         agent_config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
         // Consolidation runs as an internal sub-agent and must not recursively delegate.
         let _ = agent_config.features.disable(Feature::SpawnCsv);
         let _ = agent_config.features.disable(Feature::Collab);
+        let _ = agent_config.features.disable(Feature::MemoryTool);
 
         // Sandbox policy
         let mut writable_roots = Vec::new();
@@ -378,7 +381,7 @@ mod agent {
             // Fire and forget close of the agent.
             if !matches!(final_status, AgentStatus::Shutdown | AgentStatus::NotFound) {
                 tokio::spawn(async move {
-                    if let Err(err) = agent_control.shutdown_agent(thread_id).await {
+                    if let Err(err) = agent_control.shutdown_live_agent(thread_id).await {
                         warn!(
                             "failed to auto-close global memory consolidation agent {thread_id}: {err}"
                         );

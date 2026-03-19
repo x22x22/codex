@@ -46,7 +46,12 @@ pub struct Prompt {
 
 impl Prompt {
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
-        let mut input = self.input.clone();
+        let mut input: Vec<ResponseItem> = self
+            .input
+            .clone()
+            .into_iter()
+            .map(ResponseItem::with_generated_metadata_uuid)
+            .collect();
 
         // when using the *Freeform* apply_patch tool specifically, tool outputs
         // should be structured text, not json. Do NOT reserialize when using
@@ -89,8 +94,12 @@ fn reserialize_shell_outputs(items: &mut [ResponseItem]) {
         {
             shell_call_ids.insert(call_id.clone());
         }
-        ResponseItem::FunctionCallOutput { call_id, output }
-        | ResponseItem::CustomToolCallOutput { call_id, output } => {
+        ResponseItem::FunctionCallOutput {
+            call_id, output, ..
+        }
+        | ResponseItem::CustomToolCallOutput {
+            call_id, output, ..
+        } => {
             if shell_call_ids.remove(call_id)
                 && let Some(structured) = output
                     .text_content()
