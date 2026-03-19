@@ -2058,7 +2058,7 @@ fn create_upload_file_tool() -> ToolSpec {
         "path".to_string(),
         JsonSchema::String {
             description: Some(
-                "Path to a local file to upload. May be relative to the current working directory or absolute. Directories are not allowed."
+                "Path to a local file to upload. May be relative to the current working directory or absolute. Directories are not allowed. Use this when a Codex Apps MCP tool explicitly expects an `openai-file://` URI rather than raw file contents or a local path."
                     .to_string(),
             ),
         },
@@ -2066,7 +2066,7 @@ fn create_upload_file_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "upload_file".to_string(),
-        description: "Uploads a local sandboxed file to OpenAI file storage and returns an `openai-file://v1/{file_id}` URI.".to_string(),
+        description: "Uploads a local sandboxed file to OpenAI file storage for use with Codex Apps MCP tools that explicitly accept `openai-file://` URIs, and returns an `openai-file://v1/{file_id}` URI.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
@@ -2084,7 +2084,7 @@ fn create_download_file_tool() -> ToolSpec {
             "file_id".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "File id to download. Accepts either a bare id or `openai-file://v1/{file_id}`."
+                    "File id to download. Accepts either a bare id or `openai-file://v1/{file_id}`. Use this for files returned by Codex Apps MCP tools in `openai-file://` form."
                         .to_string(),
                 ),
             },
@@ -2102,7 +2102,7 @@ fn create_download_file_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "download_file".to_string(),
-        description: "Downloads an OpenAI file into the local sandbox using strict `cp` destination semantics.".to_string(),
+        description: "Downloads an OpenAI file, typically one returned by a Codex Apps MCP tool as an `openai-file://` URI, into the local sandbox using strict `cp` destination semantics.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
