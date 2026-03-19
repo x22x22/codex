@@ -41,11 +41,12 @@ use codex_app_server_protocol::TurnInterruptResponse;
 use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStartResponse;
 use codex_arg0::Arg0DispatchPaths;
+use codex_client::set_default_client_residency_requirement;
+use codex_client::set_default_originator;
 use codex_cloud_requirements::cloud_requirements_loader;
 use codex_core::AuthManager;
 use codex_core::LMSTUDIO_OSS_PROVIDER_ID;
 use codex_core::OLLAMA_OSS_PROVIDER_ID;
-use codex_core::auth::AuthConfig;
 use codex_core::auth::enforce_login_restrictions;
 use codex_core::check_execpolicy_for_warnings;
 use codex_core::config::Config;
@@ -99,8 +100,6 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use codex_client::set_default_client_residency_requirement;
-use codex_client::set_default_originator;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 
@@ -382,12 +381,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
 
     set_default_client_residency_requirement(config.enforce_residency.value());
 
-    if let Err(err) = enforce_login_restrictions(&AuthConfig {
-        codex_home: config.codex_home.clone(),
-        auth_credentials_store_mode: config.cli_auth_credentials_store_mode,
-        forced_login_method: config.forced_login_method,
-        forced_chatgpt_workspace_id: config.forced_chatgpt_workspace_id.clone(),
-    }) {
+    if let Err(err) = enforce_login_restrictions(&config) {
         eprintln!("{err}");
         std::process::exit(1);
     }
