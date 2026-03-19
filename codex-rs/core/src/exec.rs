@@ -12,6 +12,7 @@ use std::time::Instant;
 use async_channel::Sender;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
 use tokio_util::sync::CancellationToken;
@@ -80,11 +81,19 @@ pub struct ExecParams {
     pub expiration: ExecExpiration,
     pub env: HashMap<String, String>,
     pub network: Option<NetworkProxy>,
+    pub stdin: ExecStdin,
     pub sandbox_permissions: SandboxPermissions,
     pub windows_sandbox_level: codex_protocol::config_types::WindowsSandboxLevel,
     pub windows_sandbox_private_desktop: bool,
     pub justification: Option<String>,
     pub arg0: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub enum ExecStdin {
+    #[default]
+    Closed,
+    Bytes(Vec<u8>),
 }
 
 fn select_process_exec_tool_sandbox_type(
@@ -231,6 +240,7 @@ pub fn build_exec_request(
         mut env,
         expiration,
         network,
+        stdin: _stdin,
         sandbox_permissions,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -291,6 +301,7 @@ pub(crate) async fn execute_exec_request(
         cwd,
         env,
         network,
+        stdin,
         expiration,
         sandbox,
         windows_sandbox_level,
@@ -310,6 +321,7 @@ pub(crate) async fn execute_exec_request(
         expiration,
         env,
         network: network.clone(),
+        stdin,
         sandbox_permissions,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -343,6 +355,7 @@ pub(crate) async fn execute_exec_request_bytes(
         cwd,
         env,
         network,
+        stdin,
         expiration,
         sandbox,
         windows_sandbox_level,
@@ -362,6 +375,7 @@ pub(crate) async fn execute_exec_request_bytes(
         expiration,
         env,
         network: network.clone(),
+        stdin,
         sandbox_permissions,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -465,6 +479,7 @@ async fn exec_windows_sandbox(
         cwd,
         mut env,
         network,
+        stdin,
         expiration,
         windows_sandbox_level,
         windows_sandbox_private_desktop,
@@ -501,6 +516,10 @@ async fn exec_windows_sandbox(
                 command,
                 &cwd,
                 env,
+                match stdin {
+                    ExecStdin::Closed => None,
+                    ExecStdin::Bytes(bytes) => Some(bytes),
+                },
                 timeout_ms,
                 windows_sandbox_private_desktop,
             )
@@ -512,6 +531,10 @@ async fn exec_windows_sandbox(
                 command,
                 &cwd,
                 env,
+                match stdin {
+                    ExecStdin::Closed => None,
+                    ExecStdin::Bytes(bytes) => Some(bytes),
+                },
                 timeout_ms,
                 windows_sandbox_private_desktop,
             )
@@ -917,6 +940,7 @@ async fn exec(
         mut env,
         network,
         arg0,
+        stdin,
         expiration,
         windows_sandbox_level: _,
         ..
@@ -944,12 +968,13 @@ async fn exec(
         network: None,
         stdio_policy: StdioPolicy::RedirectForShellTool,
         env,
+        stdin_open: matches!(stdin, ExecStdin::Bytes(_)),
     })
     .await?;
     if let Some(after_spawn) = after_spawn {
         after_spawn();
     }
-    consume_truncated_output(child, expiration, stdout_stream).await
+    consume_truncated_output(child, stdin, expiration, stdout_stream).await
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -1007,9 +1032,18 @@ fn windows_restricted_token_sandbox_support(
 /// use as the output of a `shell` tool call. Also enforces specified timeout.
 async fn consume_truncated_output(
     mut child: Child,
+    stdin: ExecStdin,
     expiration: ExecExpiration,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
+    let stdin_task = match (child.stdin.take(), stdin) {
+        (Some(mut child_stdin), ExecStdin::Bytes(bytes)) => Some(tokio::spawn(async move {
+            child_stdin.write_all(&bytes).await?;
+            child_stdin.shutdown().await
+        })),
+        _ => None,
+    };
+
     // Both stdout and stderr were configured with `Stdio::piped()`
     // above, therefore `take()` should normally return `Some`.  If it doesn't
     // we treat it as an exceptional I/O error
@@ -1089,6 +1123,13 @@ async fn consume_truncated_output(
         Duration::from_millis(IO_DRAIN_TIMEOUT_MS),
     )
     .await?;
+    if let Some(stdin_task) = stdin_task {
+        match stdin_task.await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => return Err(CodexErr::Io(err)),
+            Err(join_err) => return Err(CodexErr::Io(io::Error::other(join_err))),
+        }
+    }
     let aggregated_output = aggregate_output(&stdout, &stderr);
 
     Ok(RawExecToolCallOutput {
