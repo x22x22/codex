@@ -20,10 +20,14 @@ The current repo now contains the first implementation slice:
 - The Genie app currently validates framework lifecycle, detached-target
   requests, question flow, and result publication with a placeholder executor.
 - The first Agent<->Genie bridge now uses **framework question/answer events**
-  for internal machine-to-machine RPC. This is intentional: runtime testing on
-  the emulator showed that a Genie execution runs inside the paired target
-  app's sandbox/UID, so ordinary cross-app Android service/provider IPC to the
-  Agent app is not a reliable transport.
+  for internal machine-to-machine RPC.
+- The current bridge shape carries small request/response envelopes, and the
+  Genie placeholder already uses it to fetch the Agent-owned
+  `/internal/auth/status` response from the embedded `codexd`.
+- This is intentional: runtime testing on the emulator showed that a Genie
+  execution runs inside the paired target app's sandbox/UID, so ordinary
+  cross-app Android service/provider IPC to the Agent app is not a reliable
+  transport.
 
 The Rust `codexd` service/client split remains in place and is still the
 existing network/auth bridge while this refactor proceeds.
@@ -46,7 +50,8 @@ existing network/auth bridge while this refactor proceeds.
   the Rust runtime can migrate incrementally.
 - Internal Agent<->Genie coordination must use a transport that survives the
   target-app sandbox boundary. The current working bootstrap path is
-  AgentSDK-mediated internal question/answer exchange.
+  AgentSDK-mediated internal request/response exchange over question/answer
+  events.
 
 ## Runtime Model
 
@@ -92,6 +97,8 @@ existing network/auth bridge while this refactor proceeds.
 - Question answering and detached-target attach controls
 - Framework-mediated internal bridge request handling in `CodexAgentService`
 - Framework-mediated internal bridge request issuance in `CodexGenieService`
+- Generic small HTTP request/response envelopes over the internal bridge, with
+  the auth-status probe using the real `codexd` HTTP response body
 - Abstract-unix-socket support in the legacy Rust bridge via `@name` or
   `abstract:name`, so the compatibility transport can move off app-private
   filesystem sockets when Agent<->Genie traffic is introduced
@@ -100,8 +107,9 @@ existing network/auth bridge while this refactor proceeds.
 
 - Replacing the placeholder Genie executor with a real Codex runtime
 - Moving network/auth mediation from `codexd` into the Agent runtime
-- Replacing the temporary internal question/answer bridge with a transport that
-  supports richer request/response and eventually streaming semantics
+- Replacing the temporary internal bridge with a transport that supports richer
+  request/response and eventually streaming semantics without surfacing as
+  framework question events
 - Wiring Android-native target-driving tools into the Genie runtime
 - Making the Agent the default product surface instead of the legacy service app
 

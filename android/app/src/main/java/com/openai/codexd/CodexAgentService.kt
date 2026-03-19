@@ -15,6 +15,7 @@ class CodexAgentService : AgentService() {
         private const val BRIDGE_REQUEST_PREFIX = "__codex_bridge__ "
         private const val BRIDGE_RESPONSE_PREFIX = "__codex_bridge_result__ "
         private const val METHOD_GET_AUTH_STATUS = "get_auth_status"
+        private const val METHOD_HTTP_REQUEST = "http_request"
     }
 
     private val handledBridgeRequests = ConcurrentHashMap.newKeySet<String>()
@@ -70,9 +71,38 @@ class CodexAgentService : AgentService() {
                             JSONObject()
                                 .put("requestId", requestId)
                                 .put("ok", false)
-                                .put("error", err.message ?: err::class.java.simpleName)
-                        },
-                    )
+                            .put("error", err.message ?: err::class.java.simpleName)
+                    },
+                )
+                METHOD_HTTP_REQUEST -> {
+                    val httpMethod = requestJson.optString("httpMethod")
+                    val path = requestJson.optString("path")
+                    val body = if (requestJson.isNull("body")) null else requestJson.optString("body")
+                    if (httpMethod.isBlank() || path.isBlank()) {
+                        JSONObject()
+                            .put("requestId", requestId)
+                            .put("ok", false)
+                            .put("error", "Missing httpMethod or path")
+                    } else {
+                        runCatching {
+                            CodexdLocalClient.waitForResponse(this, httpMethod, path, body)
+                        }.fold(
+                            onSuccess = { httpResponse ->
+                                JSONObject()
+                                    .put("requestId", requestId)
+                                    .put("ok", true)
+                                    .put("statusCode", httpResponse.statusCode)
+                                    .put("body", httpResponse.body)
+                            },
+                            onFailure = { err ->
+                                JSONObject()
+                                    .put("requestId", requestId)
+                                    .put("ok", false)
+                                    .put("error", err.message ?: err::class.java.simpleName)
+                            },
+                        )
+                    }
+                }
                 else -> JSONObject()
                     .put("requestId", requestId)
                     .put("ok", false)
