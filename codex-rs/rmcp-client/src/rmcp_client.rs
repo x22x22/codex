@@ -20,6 +20,7 @@ use reqwest::header::AUTHORIZATION;
 use reqwest::header::CONTENT_TYPE;
 use reqwest::header::HeaderMap;
 use reqwest::header::WWW_AUTHENTICATE;
+use rmcp::model::CallToolRequest;
 use rmcp::model::CallToolRequestParams;
 use rmcp::model::CallToolResult;
 use rmcp::model::ClientNotification;
@@ -713,7 +714,7 @@ impl RmcpClient {
             }
             None => None,
         };
-        let meta = match meta {
+        let request_meta = match meta {
             Some(Value::Object(map)) => Some(rmcp::model::Meta(map)),
             Some(other) => {
                 return Err(anyhow!(
@@ -723,7 +724,7 @@ impl RmcpClient {
             None => None,
         };
         let rmcp_params = CallToolRequestParams {
-            meta,
+            meta: None,
             name: name.into(),
             arguments,
             task: None,
@@ -731,7 +732,30 @@ impl RmcpClient {
         let result = self
             .run_service_operation("tools/call", timeout, move |service| {
                 let rmcp_params = rmcp_params.clone();
-                async move { service.call_tool(rmcp_params).await }.boxed()
+                let request_meta = request_meta.clone();
+                async move {
+                    let result = service
+                        .peer()
+                        .send_request_with_option(
+                            ClientRequest::CallToolRequest(CallToolRequest {
+                                method: Default::default(),
+                                params: rmcp_params,
+                                extensions: Default::default(),
+                            }),
+                            rmcp::service::PeerRequestOptions {
+                                timeout: None,
+                                meta: request_meta,
+                            },
+                        )
+                        .await?
+                        .await_response()
+                        .await?;
+                    match result {
+                        ServerResult::CallToolResult(result) => Ok(result),
+                        _ => Err(rmcp::service::ServiceError::UnexpectedResponse),
+                    }
+                }
+                .boxed()
             })
             .await?;
         self.persist_oauth_tokens().await;
