@@ -338,21 +338,17 @@ pub fn normalize_remote_addr(addr: &str) -> color_eyre::Result<String> {
 }
 
 async fn connect_remote_app_server(websocket_url: String) -> color_eyre::Result<AppServerClient> {
-    let app_server = RemoteAppServerClient::connect(remote_app_server_connect_args(websocket_url))
-        .await
-        .wrap_err("failed to connect to remote app server")?;
-    Ok(AppServerClient::Remote(app_server))
-}
-
-fn remote_app_server_connect_args(websocket_url: String) -> RemoteAppServerConnectArgs {
-    RemoteAppServerConnectArgs {
+    let app_server = RemoteAppServerClient::connect(RemoteAppServerConnectArgs {
         websocket_url,
         client_name: DEFAULT_ORIGINATOR.to_string(),
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-    }
+    })
+    .await
+    .wrap_err("failed to connect to remote app server")?;
+    Ok(AppServerClient::Remote(app_server))
 }
 
 async fn start_app_server(
@@ -428,30 +424,7 @@ where
             range: None,
         })
         .collect();
-    let client = start_client(in_process_client_start_args(
-        arg0_paths,
-        config,
-        cli_kv_overrides,
-        loader_overrides,
-        cloud_requirements,
-        feedback,
-        config_warnings,
-    ))
-    .await
-    .wrap_err("failed to start embedded app server")?;
-    Ok(client)
-}
-
-fn in_process_client_start_args(
-    arg0_paths: Arg0DispatchPaths,
-    config: Config,
-    cli_kv_overrides: Vec<(String, toml::Value)>,
-    loader_overrides: LoaderOverrides,
-    cloud_requirements: CloudRequirementsLoader,
-    feedback: codex_feedback::CodexFeedback,
-    config_warnings: Vec<ConfigWarningNotification>,
-) -> InProcessClientStartArgs {
-    InProcessClientStartArgs {
+    let client = start_client(InProcessClientStartArgs {
         arg0_paths,
         config: Arc::new(config),
         cli_overrides: cli_kv_overrides,
@@ -466,7 +439,10 @@ fn in_process_client_start_args(
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-    }
+    })
+    .await
+    .wrap_err("failed to start embedded app server")?;
+    Ok(client)
 }
 
 async fn shutdown_app_server_if_present(app_server: Option<AppServerSession>) {

@@ -102,14 +102,6 @@ impl ToolHandler for ToolSuggestHandler {
                 "tool suggestions currently support only action_type=\"install\"".to_string(),
             ));
         }
-        if args.tool_type == DiscoverableToolType::Plugin
-            && turn.app_server_client_name.as_deref() == Some("codex-tui")
-        {
-            return Err(FunctionCallError::RespondToModel(
-                "plugin tool suggestions are not available in codex-tui yet".to_string(),
-            ));
-        }
-
         let auth = session.services.auth_manager.auth().await;
         let manager = session.services.mcp_connection_manager.read().await;
         let mcp_tools = manager.list_all_tools().await;
