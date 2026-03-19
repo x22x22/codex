@@ -124,6 +124,7 @@ mod model_migration;
 mod multi_agents;
 mod notifications;
 pub mod onboarding;
+mod osc8;
 mod oss_selection;
 mod pager_overlay;
 pub mod public_widgets;
