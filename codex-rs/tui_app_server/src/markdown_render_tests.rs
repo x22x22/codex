@@ -654,7 +654,6 @@ fn link() {
     let text = render_markdown_text("[Link](https://example.com)");
     let expected = Text::from(Line::from_iter([
         osc8_hyperlink("https://example.com", "Link")
-            .cyan()
             .underlined(),
         " (".into(),
         osc8_hyperlink("https://example.com", "https://example.com")
@@ -786,7 +785,6 @@ fn url_link_renders_clickable_label_with_destination() {
     let text = render_markdown_text("[docs](https://example.com/docs)");
     let expected = Text::from(Line::from_iter([
         osc8_hyperlink("https://example.com/docs", "docs")
-            .cyan()
             .underlined(),
         " (".into(),
         osc8_hyperlink("https://example.com/docs", "https://example.com/docs")

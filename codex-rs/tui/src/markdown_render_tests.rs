@@ -654,7 +654,6 @@ fn link() {
     let text = render_markdown_text("[Link](https://example.com)");
     let expected = Text::from(Line::from_iter([
         osc8_hyperlink("https://example.com", "Link")
-            .cyan()
             .underlined(),
         " (".into(),
         osc8_hyperlink("https://example.com", "https://example.com")

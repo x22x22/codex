@@ -43,7 +43,8 @@ struct MarkdownStyles {
     strikethrough: Style,
     ordered_list_marker: Style,
     unordered_list_marker: Style,
-    link: Style,
+    link_label: Style,
+    link_destination: Style,
     blockquote: Style,
 }
 
@@ -64,7 +65,8 @@ impl Default for MarkdownStyles {
             strikethrough: Style::new().crossed_out(),
             ordered_list_marker: Style::new().light_blue(),
             unordered_list_marker: Style::new(),
-            link: Style::new().cyan().underlined(),
+            link_label: Style::new().underlined(),
+            link_destination: Style::new().cyan().underlined(),
             blockquote: Style::new().green(),
         }
     }
@@ -276,7 +278,7 @@ where
             Tag::Link { dest_url, .. } => {
                 self.push_link(dest_url.to_string());
                 if self.remote_link_destination().is_some() {
-                    self.push_inline_style(self.styles.link);
+                    self.push_inline_style(self.styles.link_label);
                 }
             }
             Tag::HtmlBlock
@@ -612,7 +614,7 @@ where
                 self.push_span(" (".into());
                 self.push_span(Span::styled(
                     osc8_hyperlink(&link.destination, &link.destination),
-                    self.styles.link,
+                    self.styles.link_destination,
                 ));
                 self.push_span(")".into());
             } else if let Some(local_target_display) = link.local_target_display {
