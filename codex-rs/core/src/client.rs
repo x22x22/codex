@@ -1493,21 +1493,21 @@ impl ModelClientSession {
         service_tier: Option<ServiceTier>,
         turn_metadata_header: Option<&str>,
     ) -> Result<ResponseStream> {
-        if self.delegated_transport_enabled() {
-            return self
-                .stream_delegated(
-                    prompt,
-                    model_info,
-                    effort,
-                    summary,
-                    service_tier,
-                    turn_metadata_header,
-                )
-                .await;
-        }
         let wire_api = self.client.state.provider.wire_api;
         match wire_api {
             WireApi::Responses => {
+                if self.delegated_transport_enabled() {
+                    return self
+                        .stream_delegated(
+                            prompt,
+                            model_info,
+                            effort,
+                            summary,
+                            service_tier,
+                            turn_metadata_header,
+                        )
+                        .await;
+                }
                 if self.client.responses_websocket_enabled() {
                     let request_trace = current_span_w3c_trace_context();
                     match self
