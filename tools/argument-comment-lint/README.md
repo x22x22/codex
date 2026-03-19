@@ -73,6 +73,38 @@ GitHub releases also publish a DotSlash file named
 x64. The published package contains a small runner executable, a bundled
 `cargo-dylint`, and the prebuilt lint library.
 
+The checked-in DotSlash file lives at `tools/argument-comment-lint/argument-comment-lint`.
+`run.sh` resolves that file via `dotslash` and is the path used by
+`just clippy`, `just argument-comment-lint`, and the Rust CI job. The
+source-build path remains available in `run-from-source.sh` for people
+iterating on the lint crate itself.
+
+The Unix archive layout is:
+
+```text
+argument-comment-lint/
+  bin/
+    argument-comment-lint
+    cargo-dylint
+  lib/
+    libargument_comment_lint@nightly-2025-09-18-<target>.dylib|so
+```
+
+On Windows the same layout is published as a `.zip`, with `.exe` and `.dll`
+filenames instead.
+
+DotSlash resolves the package entrypoint to `argument-comment-lint/bin/argument-comment-lint`
+(or `.exe` on Windows). That runner then finds the sibling bundled
+`cargo-dylint` binary and the single packaged Dylint library under `lib/`, and
+invokes `cargo-dylint dylint --lib-path <that-library>` with the repo's default
+`DYLINT_RUSTFLAGS` and `CARGO_INCREMENTAL=0` settings.
+
+If you are changing the lint crate itself, use the source-build wrapper:
+
+```bash
+./tools/argument-comment-lint/run-from-source.sh -p codex-core
+```
+
 Run the lint against `codex-rs` from the repo root:
 
 ```bash
