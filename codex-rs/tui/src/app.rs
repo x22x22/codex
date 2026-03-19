@@ -57,6 +57,7 @@ use codex_app_server_protocol::RequestId;
 use codex_arg0::Arg0DispatchPaths;
 use codex_core::AuthManager;
 use codex_core::CodexAuth;
+use codex_core::ForkSnapshotMode;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
@@ -2507,6 +2508,7 @@ impl App {
                         target_session.path.clone(),
                         /*persist_extended_history*/ false,
                         /*parent_trace*/ None,
+                        ForkSnapshotMode::Committed,
                     )
                     .await
                     .wrap_err_with(|| {
@@ -2930,6 +2932,7 @@ impl App {
                                 path.clone(),
                                 /*persist_extended_history*/ false,
                                 /*parent_trace*/ None,
+                                ForkSnapshotMode::Committed,
                             )
                             .await
                         {
