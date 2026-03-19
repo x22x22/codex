@@ -25,10 +25,13 @@ class AndroidGenieToolExecutor(
         private const val MAX_UI_XML_CHARS = 8_000
     }
 
-    fun execute(toolCall: GenieModelTurn.ToolCall): GenieToolObservation {
-        return when (toolCall.name) {
-            "android.package.inspect" -> inspectPackage(toolCall.arguments)
-            "android.intent.launch" -> launchIntent(toolCall.arguments)
+    fun execute(
+        toolName: String,
+        arguments: JSONObject,
+    ): GenieToolObservation {
+        return when (toolName) {
+            "android.package.inspect" -> inspectPackage(arguments)
+            "android.intent.launch" -> launchIntent(arguments)
             "android.target.show" -> requestTargetVisibility(
                 action = "show",
                 request = callback::requestShowDetachedTarget,
@@ -47,11 +50,11 @@ class AndroidGenieToolExecutor(
             )
             "android.target.capture_frame" -> captureDetachedTargetFrame()
             "android.ui.dump" -> dumpUiHierarchy()
-            "android.input.tap" -> tap(toolCall.arguments)
-            "android.input.text" -> inputText(toolCall.arguments)
-            "android.input.key" -> inputKey(toolCall.arguments)
-            "android.wait" -> waitFor(toolCall.arguments)
-            else -> throw IOException("Unknown tool: ${toolCall.name}")
+            "android.input.tap" -> tap(arguments)
+            "android.input.text" -> inputText(arguments)
+            "android.input.key" -> inputKey(arguments)
+            "android.wait" -> waitFor(arguments)
+            else -> throw IOException("Unknown tool: $toolName")
         }
     }
 

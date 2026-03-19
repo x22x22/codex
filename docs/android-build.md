@@ -32,13 +32,16 @@ stub SDK:
 
 ```bash
 export ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP=/path/to/android-agent-platform-stub-sdk.zip
+just android-build
 just android-service-build
 cd android
 ./gradlew :genie:assembleDebug :app:assembleDebug
 ```
 The Agent/Genie prototype modules require
 `ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP` (or `-PagentPlatformStubSdkZip=...`) so
-Gradle can compile against the stub SDK jar.
+Gradle can compile against the stub SDK jar. The Genie APK now also packages
+the Android `codex` binary as `libcodex.so`, so `just android-build` must run
+before `:genie:assembleDebug`.
 If `cargo-ndk` cannot find your NDK, set:
 
 ```bash
