@@ -5,6 +5,7 @@ use crate::RolloutRecorder;
 use crate::agent::AgentControl;
 use crate::analytics_client::AnalyticsEventsClient;
 use crate::client::ModelClient;
+#[cfg(unix)]
 use crate::config::NetworkProxySpec;
 use crate::config::StartedNetworkProxy;
 use crate::exec_policy::ExecPolicyManager;
@@ -58,6 +59,7 @@ pub(crate) struct SessionServices {
     pub(crate) mcp_manager: Arc<McpManager>,
     pub(crate) file_watcher: Arc<FileWatcher>,
     pub(crate) agent_control: AgentControl,
+    #[cfg(unix)]
     pub(crate) network_proxy_spec: Option<Arc<NetworkProxySpec>>,
     pub(crate) network_proxy: Option<StartedNetworkProxy>,
     pub(crate) skill_network_proxy_cache: Arc<SkillNetworkProxyCache>,

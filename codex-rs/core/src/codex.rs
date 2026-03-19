@@ -1219,6 +1219,7 @@ impl Session {
         Ok((network_proxy, session_network_proxy))
     }
 
+    #[cfg(unix)]
     fn shared_skill_network_proxy_spec(
         &self,
         skill: &SkillMetadata,
@@ -1228,6 +1229,9 @@ impl Session {
         Some(base_spec.with_skill_managed_network_override(managed_network_override))
     }
 
+    /// Unix-only because shared skill-managed network proxies are only used by
+    /// the zsh-fork/execve escalation path in the Unix shell runtime.
+    #[cfg(unix)]
     pub(crate) async fn get_or_start_skill_network_proxy(
         self: &Arc<Self>,
         skill: &SkillMetadata,
@@ -1251,9 +1255,9 @@ impl Session {
                 // disabled, and audit metadata falls back to the empty default.
                 spec.start_proxy(
                     &sandbox_policy,
-                    None,
-                    None,
-                    false,
+                    /*policy_decider*/ None,
+                    /*blocked_request_observer*/ None,
+                    /*enable_network_approval_flow*/ false,
                     NetworkProxyAuditMetadata::default(),
                 )
                 .await
@@ -1858,6 +1862,7 @@ impl Session {
             mcp_manager: Arc::clone(&mcp_manager),
             file_watcher,
             agent_control,
+            #[cfg(unix)]
             network_proxy_spec: config.permissions.network.clone().map(Arc::new),
             network_proxy,
             skill_network_proxy_cache,

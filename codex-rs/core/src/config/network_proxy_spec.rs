@@ -1,4 +1,5 @@
 use crate::config_loader::NetworkConstraints;
+#[cfg(any(unix, test))]
 use crate::skills::model::SkillManagedNetworkOverride;
 use async_trait::async_trait;
 use codex_execpolicy::Policy;
@@ -21,6 +22,7 @@ use codex_protocol::protocol::SandboxPolicy;
 use std::collections::HashSet;
 use std::sync::Arc;
 
+#[cfg(any(unix, test))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct SkillNetworkProxyKey(String);
 
@@ -88,6 +90,7 @@ impl NetworkProxySpec {
         self.config.network.enable_socks5
     }
 
+    #[cfg(any(unix, test))]
     pub(crate) fn with_skill_managed_network_override(
         &self,
         managed_network_override: &SkillManagedNetworkOverride,
@@ -104,6 +107,7 @@ impl NetworkProxySpec {
         spec
     }
 
+    #[cfg(any(unix, test))]
     pub(crate) fn shared_skill_proxy_key(&self) -> SkillNetworkProxyKey {
         let mut normalized = self.clone();
         sort_string_list(&mut normalized.config.network.allowed_domains);
@@ -363,10 +367,12 @@ fn upsert_network_domains(
     target.extend(deduped_hosts);
 }
 
+#[cfg(any(unix, test))]
 fn sort_string_list(values: &mut [String]) {
     values.sort_unstable();
 }
 
+#[cfg(any(unix, test))]
 fn sort_option_string_list(values: &mut Option<Vec<String>>) {
     if let Some(values) = values.as_mut() {
         sort_string_list(values);

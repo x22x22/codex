@@ -1,12 +1,19 @@
+#[cfg(unix)]
 use crate::config::SkillNetworkProxyKey;
+#[cfg(unix)]
 use crate::config::StartedNetworkProxy;
+#[cfg(unix)]
 use std::collections::HashMap;
+#[cfg(unix)]
 use std::future::Future;
+#[cfg(unix)]
 use std::sync::Arc;
+#[cfg(unix)]
 use tokio::sync::Mutex;
 
 #[derive(Default)]
 pub(crate) struct SkillNetworkProxyCache {
+    #[cfg(unix)]
     proxies: Mutex<HashMap<SkillNetworkProxyKey, Arc<StartedNetworkProxy>>>,
 }
 
@@ -15,6 +22,7 @@ impl SkillNetworkProxyCache {
         Self::default()
     }
 
+    #[cfg(unix)]
     pub(crate) async fn get_or_start<F, Fut>(
         &self,
         key: SkillNetworkProxyKey,
