@@ -19,6 +19,15 @@ pub struct Environment {
     executor: Arc<dyn ExecProcess>,
 }
 
+impl Default for Environment {
+    fn default() -> Self {
+        Self {
+            experimental_exec_server_url: None,
+            executor: Arc::new(LocalProcess::default()),
+        }
+    }
+}
+
 impl std::fmt::Debug for Environment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Environment")

@@ -13,11 +13,11 @@ use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
 
 #[derive(Clone)]
-pub(crate) struct ProcessHandler {
+pub(crate) struct ExecServerProcess {
     process: LocalProcess,
 }
 
-impl ProcessHandler {
+impl ExecServerProcess {
     pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
         Self {
             process: LocalProcess::new(notifications),

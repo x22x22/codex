@@ -25,17 +25,17 @@ use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 use crate::rpc::RpcNotificationSender;
 use crate::server::filesystem::ExecServerFileSystem;
-use crate::server::process_handler::ProcessHandler;
+use crate::server::process_handler::ExecServerProcess;
 
 pub(crate) struct ExecServerHandler {
-    process: ProcessHandler,
+    process: ExecServerProcess,
     file_system: ExecServerFileSystem,
 }
 
 impl ExecServerHandler {
     pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
         Self {
-            process: ProcessHandler::new(notifications),
+            process: ExecServerProcess::new(notifications),
             file_system: ExecServerFileSystem::default(),
         }
     }
