@@ -180,6 +180,15 @@ impl FileTransferConfig {
         Ok(headers)
     }
 
+    fn download_headers(&self) -> Result<HeaderMap> {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_str(&self.user_agent).context("invalid user agent header")?,
+        );
+        Ok(headers)
+    }
+
     fn files_api_url(&self) -> String {
         let base_url = normalize_base_url(&self.base_url);
         if base_url.contains("/backend-api") {
@@ -420,7 +429,7 @@ async fn download_file(
     };
     let response = client
         .get(download_url)
-        .headers(config.headers()?)
+        .headers(config.download_headers()?)
         .send()
         .await
         .context("failed to fetch downloaded file bytes")?;
@@ -764,6 +773,8 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/backend-api/files/download/file-456"))
+            .and(header(AUTHORIZATION.as_str(), "Bearer token"))
+            .and(header("chatgpt-account-id", "acct"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "status": "success",
                 "download_url": format!("{}/content/file-456", server.uri()),
@@ -774,6 +785,7 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/content/file-456"))
+            .and(header(USER_AGENT.as_str(), "codex-test"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header(CONTENT_TYPE.as_str(), "text/plain")
@@ -806,6 +818,20 @@ mod tests {
                 http_status_code: None,
             }
         );
+        let requests = server.received_requests().await.unwrap_or_default();
+        let content_request = requests
+            .iter()
+            .find(|request| request.url.path() == "/content/file-456")
+            .context("expected blob download request")?;
+        assert_eq!(
+            content_request
+                .headers
+                .get(USER_AGENT.as_str())
+                .and_then(|value| value.to_str().ok()),
+            Some("codex-test")
+        );
+        assert_eq!(content_request.headers.get(AUTHORIZATION.as_str()), None);
+        assert_eq!(content_request.headers.get("chatgpt-account-id"), None);
         Ok(())
     }
 
