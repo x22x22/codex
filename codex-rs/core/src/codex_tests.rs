@@ -2279,6 +2279,46 @@ async fn session_configuration_apply_rederives_legacy_file_system_policy_on_cwd_
 }
 
 #[tokio::test]
+async fn new_turn_with_sub_id_consumes_next_turn_metadata_once() {
+    let (session, _) = make_session_and_context().await;
+    let next_turn_metadata = std::collections::BTreeMap::from([(
+        "parentTurnId".to_string(),
+        "parent-turn-123".to_string(),
+    )]);
+
+    session
+        .update_settings(SessionSettingsUpdate {
+            next_turn_metadata: Some(next_turn_metadata.clone()),
+            ..Default::default()
+        })
+        .await
+        .expect("test setup should allow updating next turn metadata");
+
+    let first_turn_context = session
+        .new_turn_with_sub_id("turn-1".to_string(), SessionSettingsUpdate::default())
+        .await
+        .expect("first turn should be created");
+    assert_eq!(
+        first_turn_context.turn_metadata_state.metadata(),
+        &next_turn_metadata
+    );
+    let state = session.state.lock().await;
+    assert!(state.session_configuration.next_turn_metadata.is_empty());
+    drop(state);
+
+    let second_turn_context = session
+        .new_turn_with_sub_id("turn-2".to_string(), SessionSettingsUpdate::default())
+        .await
+        .expect("second turn should be created");
+    assert!(
+        second_turn_context
+            .turn_metadata_state
+            .metadata()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
