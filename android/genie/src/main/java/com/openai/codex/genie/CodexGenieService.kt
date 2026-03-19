@@ -39,10 +39,11 @@ class CodexGenieService : GenieService() {
         val control = sessionControls[sessionId] ?: return
         if (CodexAgentBridge.isBridgeResponse(response)) {
             control.bridgeResponses.offer(response)
+            Log.i(TAG, "Received bridge response for $sessionId")
         } else {
             control.userResponses.offer(response)
+            Log.i(TAG, "Received user response for $sessionId")
         }
-        Log.i(TAG, "Received user response for $sessionId")
     }
 
     private fun runSession(request: GenieRequest, callback: Callback, control: SessionControl) {

@@ -4,6 +4,7 @@ import android.app.agent.AgentManager
 import android.app.agent.AgentService
 import android.app.agent.AgentSessionEvent
 import android.app.agent.AgentSessionInfo
+import android.os.Process
 import android.util.Log
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
@@ -12,6 +13,8 @@ import kotlin.concurrent.thread
 class CodexAgentService : AgentService() {
     companion object {
         private const val TAG = "CodexAgentService"
+        private const val BRIDGE_ANSWER_RETRY_COUNT = 10
+        private const val BRIDGE_ANSWER_RETRY_DELAY_MS = 50L
         private const val BRIDGE_REQUEST_PREFIX = "__codex_bridge__ "
         private const val BRIDGE_RESPONSE_PREFIX = "__codex_bridge_result__ "
         private const val METHOD_GET_AUTH_STATUS = "get_auth_status"
@@ -110,10 +113,25 @@ class CodexAgentService : AgentService() {
             }
 
             runCatching {
-                manager.answerQuestion(sessionId, "$BRIDGE_RESPONSE_PREFIX$response")
+                answerBridgeQuestion(manager, sessionId, "$BRIDGE_RESPONSE_PREFIX$response")
             }.onFailure { err ->
                 handledBridgeRequests.remove(requestKey)
                 Log.w(TAG, "Failed to answer bridge question for $sessionId", err)
+            }
+        }
+    }
+
+    private fun answerBridgeQuestion(manager: AgentManager, sessionId: String, response: String) {
+        repeat(BRIDGE_ANSWER_RETRY_COUNT) { attempt ->
+            runCatching {
+                manager.answerQuestion(sessionId, response)
+            }.onSuccess {
+                return
+            }.onFailure { err ->
+                if (attempt == BRIDGE_ANSWER_RETRY_COUNT - 1 || !isBridgeQuestionPending(manager, sessionId, err)) {
+                    throw err
+                }
+                Thread.sleep(BRIDGE_ANSWER_RETRY_DELAY_MS)
             }
         }
     }
@@ -131,5 +149,21 @@ class CodexAgentService : AgentService() {
                 JSONObject(message.removePrefix(BRIDGE_RESPONSE_PREFIX)).optString("requestId")
             }.getOrNull() == requestId
         }
+    }
+
+    private fun isSessionWaitingForUser(manager: AgentManager, sessionId: String): Boolean {
+        return manager.getSessions(Process.myUid() / 100000).any { session ->
+            session.sessionId == sessionId &&
+                session.state == AgentSessionInfo.STATE_WAITING_FOR_USER
+        }
+    }
+
+    private fun isBridgeQuestionPending(
+        manager: AgentManager,
+        sessionId: String,
+        err: Throwable,
+    ): Boolean {
+        return err.message?.contains("not waiting for user input", ignoreCase = true) == true ||
+            !isSessionWaitingForUser(manager, sessionId)
     }
 }
