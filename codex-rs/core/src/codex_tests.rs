@@ -4554,7 +4554,19 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
         .expect("inject initial pending input into active turn");
 
     let drained = sess.get_pending_input_with_metadata().await;
-    assert_eq!(drained, vec![(blocked, None), (later.clone(), None)]);
+    assert_eq!(
+        drained,
+        vec![
+            (
+                blocked,
+                Some(codex_protocol::models::UserMessageType::PromptQueued),
+            ),
+            (
+                later.clone(),
+                Some(codex_protocol::models::UserMessageType::PromptQueued),
+            ),
+        ]
+    );
 
     sess.inject_response_items(vec![newer.clone()])
         .await
@@ -4568,7 +4580,16 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
 
     assert_eq!(
         sess.get_pending_input_with_metadata().await,
-        vec![(later, None), (newer, None)]
+        vec![
+            (
+                later,
+                Some(codex_protocol::models::UserMessageType::PromptQueued),
+            ),
+            (
+                newer,
+                Some(codex_protocol::models::UserMessageType::PromptQueued),
+            ),
+        ]
     );
 }
 
