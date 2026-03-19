@@ -223,9 +223,33 @@ impl ExecPolicyManager {
         self.policy.load_full()
     }
 
+    #[cfg(test)]
     pub(crate) async fn create_exec_approval_requirement_for_command(
         &self,
         req: ExecApprovalRequest<'_>,
+    ) -> ExecApprovalRequirement {
+        self.create_exec_approval_requirement_for_command_impl(
+            req, /*enhanced_exec_policy_suggestions*/ false,
+        )
+        .await
+    }
+
+    pub(crate) async fn create_exec_approval_requirement_for_command_with_enhanced_suggestions(
+        &self,
+        req: ExecApprovalRequest<'_>,
+        enhanced_exec_policy_suggestions: bool,
+    ) -> ExecApprovalRequirement {
+        self.create_exec_approval_requirement_for_command_impl(
+            req,
+            enhanced_exec_policy_suggestions,
+        )
+        .await
+    }
+
+    async fn create_exec_approval_requirement_for_command_impl(
+        &self,
+        req: ExecApprovalRequest<'_>,
+        enhanced_exec_policy_suggestions: bool,
     ) -> ExecApprovalRequirement {
         let ExecApprovalRequest {
             command,
@@ -288,6 +312,7 @@ impl ExecPolicyManager {
                                 try_derive_execpolicy_amendment_for_prompt_rules(
                                     &evaluation.matched_rules,
                                     &commands,
+                                    enhanced_exec_policy_suggestions,
                                 )
                             } else {
                                 None
@@ -305,6 +330,7 @@ impl ExecPolicyManager {
                     try_derive_execpolicy_amendment_for_allow_rules(
                         &evaluation.matched_rules,
                         &commands,
+                        enhanced_exec_policy_suggestions,
                     )
                 } else {
                     None
@@ -644,13 +670,15 @@ fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
 /// - Examples:
 /// - execpolicy: empty. Command: `["python"]`. Heuristics prompt -> `Some(vec!["python"])`.
 /// - execpolicy: empty. Command: `["bash", "-c", "cd /some/folder && prog1 --option1 arg1 && prog2 --option2 arg2"]`.
-///   Parsed commands include `cd /some/folder`, `prog1 --option1 arg1`, and `prog2 --option2 arg2`. For multi-command scripts,
-///   we derive the suggestion from the first parsed segment, so this returns `Some(vec!["cd", "/some/folder"])`.
+///   Parsed commands include `cd /some/folder`, `prog1 --option1 arg1`, and `prog2 --option2 arg2`. In enhanced mode for
+///   multi-command scripts, we derive the suggestion from the first parsed segment, so this returns
+///   `Some(vec!["cd", "/some/folder"])`.
 /// - execpolicy: contains a `prompt for prefix ["prog2"]` rule. For the same command as above,
 ///   we return `None` because an execpolicy prompt still applies even if we amend execpolicy to allow ["cd", "/some/folder"].
 fn try_derive_execpolicy_amendment_for_prompt_rules(
     matched_rules: &[RuleMatch],
     commands: &[Vec<String>],
+    enhanced_exec_policy_suggestions: bool,
 ) -> Option<ExecPolicyAmendment> {
     if matched_rules
         .iter()
@@ -659,8 +687,11 @@ fn try_derive_execpolicy_amendment_for_prompt_rules(
         return None;
     }
 
-    if commands.len() > 1 {
-        return auto_derived_execpolicy_amendment(&commands[0]);
+    if enhanced_exec_policy_suggestions && commands.len() > 1 {
+        return auto_derived_execpolicy_amendment_for_mode(
+            &commands[0],
+            /*enhanced_exec_policy_suggestions*/ true,
+        );
     }
 
     matched_rules
@@ -669,7 +700,10 @@ fn try_derive_execpolicy_amendment_for_prompt_rules(
             RuleMatch::HeuristicsRuleMatch {
                 command,
                 decision: Decision::Prompt,
-            } => auto_derived_execpolicy_amendment(command),
+            } => auto_derived_execpolicy_amendment_for_mode(
+                command,
+                enhanced_exec_policy_suggestions,
+            ),
             _ => None,
         })
 }
@@ -680,13 +714,17 @@ fn try_derive_execpolicy_amendment_for_prompt_rules(
 fn try_derive_execpolicy_amendment_for_allow_rules(
     matched_rules: &[RuleMatch],
     commands: &[Vec<String>],
+    enhanced_exec_policy_suggestions: bool,
 ) -> Option<ExecPolicyAmendment> {
     if matched_rules.iter().any(is_policy_match) {
         return None;
     }
 
-    if commands.len() > 1 {
-        return auto_derived_execpolicy_amendment(&commands[0]);
+    if enhanced_exec_policy_suggestions && commands.len() > 1 {
+        return auto_derived_execpolicy_amendment_for_mode(
+            &commands[0],
+            /*enhanced_exec_policy_suggestions*/ true,
+        );
     }
 
     matched_rules
@@ -695,18 +733,32 @@ fn try_derive_execpolicy_amendment_for_allow_rules(
             RuleMatch::HeuristicsRuleMatch {
                 command,
                 decision: Decision::Allow,
-            } => auto_derived_execpolicy_amendment(command),
+            } => auto_derived_execpolicy_amendment_for_mode(
+                command,
+                enhanced_exec_policy_suggestions,
+            ),
             _ => None,
         })
 }
 
-/// Keep generated execpolicy suggestions broad enough to cover similar
-/// invocations, but stop before the first flag so we do not bake incidental
-/// option values into a persisted allow rule.
+/// In enhanced mode, keep generated execpolicy suggestions broad enough to
+/// cover similar invocations, but stop before the first flag so we do not bake
+/// incidental option values into a persisted allow rule.
 ///
 /// If truncating before the first flag would leave fewer than two tokens, fall
 /// back to the whole command segment.
-fn auto_derived_execpolicy_amendment(command: &[String]) -> Option<ExecPolicyAmendment> {
+fn auto_derived_execpolicy_amendment_for_mode(
+    command: &[String],
+    enhanced_exec_policy_suggestions: bool,
+) -> Option<ExecPolicyAmendment> {
+    if command.is_empty() {
+        return None;
+    }
+
+    if !enhanced_exec_policy_suggestions {
+        return Some(ExecPolicyAmendment::from(command.to_vec()));
+    }
+
     let prefix: Vec<String> = command
         .iter()
         .take_while(|token| !token.starts_with('-'))
@@ -717,11 +769,7 @@ fn auto_derived_execpolicy_amendment(command: &[String]) -> Option<ExecPolicyAme
         return Some(ExecPolicyAmendment::from(prefix));
     }
 
-    if !command.is_empty() {
-        return Some(ExecPolicyAmendment::from(command.to_vec()));
-    }
-
-    None
+    Some(ExecPolicyAmendment::from(command.to_vec()))
 }
 
 fn derive_requested_execpolicy_amendment_from_prefix_rule(
