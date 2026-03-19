@@ -84,6 +84,7 @@ pub(crate) struct GuardianReviewSessionManager {
 #[derive(Default)]
 struct GuardianReviewSessionState {
     trunk: Option<Arc<GuardianReviewSession>>,
+    shutdown_started: bool,
 }
 
 #[derive(Clone)]
@@ -336,6 +337,9 @@ impl GuardianReviewSessionManager {
         let mut stale_trunk_to_shutdown = None;
         let trunk_candidate = {
             let mut state = self.state.lock().await;
+            if state.shutdown_started {
+                return;
+            }
             if let Some(trunk) = state.trunk.as_ref()
                 && trunk.reuse_key != next_reuse_key
                 && trunk.review_lock.try_lock().is_ok()
@@ -376,7 +380,11 @@ impl GuardianReviewSessionManager {
     }
 
     pub(crate) async fn shutdown(&self) {
-        let review_session = self.state.lock().await.trunk.take();
+        let review_session = {
+            let mut state = self.state.lock().await;
+            state.shutdown_started = true;
+            state.trunk.take()
+        };
         let active_forks = self.fork_pool.take_all().await;
         if let Some(review_session) = review_session {
             review_session.shutdown().await;
@@ -402,6 +410,9 @@ impl GuardianReviewSessionManager {
             .await
             {
                 Ok(mut state) => {
+                    if state.shutdown_started {
+                        return GuardianReviewSessionOutcome::Aborted;
+                    }
                     if let Some(trunk) = state.trunk.as_ref()
                         && trunk.reuse_key != next_reuse_key
                         && trunk.review_lock.try_lock().is_ok()
