@@ -107,13 +107,12 @@ impl EventProcessorWithHumanOutput {
             ThreadItem::Reasoning {
                 summary, content, ..
             } => {
-                if self.show_agent_reasoning {
-                    if let Some(text) =
+                if self.show_agent_reasoning
+                    && let Some(text) =
                         reasoning_text(&summary, &content, self.show_raw_agent_reasoning)
-                        && !text.trim().is_empty()
-                    {
-                        eprintln!("{}", text.style(self.dimmed));
-                    }
+                    && !text.trim().is_empty()
+                {
+                    eprintln!("{}", text.style(self.dimmed));
                 }
             }
             ThreadItem::CommandExecution {
