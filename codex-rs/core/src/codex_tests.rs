@@ -4502,8 +4502,12 @@ fn sandbox_policy_metadata_mapping_is_stable() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enabled() {
+async fn setup_tool_call_metadata_runtime_test() -> (
+    Arc<Session>,
+    Arc<TurnContext>,
+    async_channel::Receiver<Event>,
+    codex_protocol::models::SandboxPolicyMetadata,
+) {
     let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
     let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
     Arc::get_mut(&mut sess)
@@ -4525,6 +4529,51 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
     )
     .await;
     while rx.try_recv().is_ok() {}
+
+    (sess, tc, rx, expected_sandbox_policy)
+}
+
+fn function_call_item(call_id: &str) -> ResponseItem {
+    ResponseItem::FunctionCall {
+        id: None,
+        name: "shell".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        call_id: call_id.to_string(),
+        metadata: None,
+    }
+}
+
+async fn assert_next_emitted_function_call_metadata(
+    rx: &async_channel::Receiver<Event>,
+    expected_sandbox_policy: codex_protocol::models::SandboxPolicyMetadata,
+    expected_escalated: bool,
+    expected_review_decision: Option<codex_protocol::models::ReviewDecisionMetadata>,
+    expected_approval_source: Option<codex_protocol::models::ApprovalSourceMetadata>,
+) {
+    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+        .await
+        .expect("expected raw response item event")
+        .expect("channel open");
+    assert!(matches!(
+        event.msg,
+        EventMsg::RawResponseItem(ref ev)
+            if matches!(
+                &ev.item,
+                ResponseItem::FunctionCall {
+                    metadata: Some(metadata),
+                    ..
+                } if metadata.is_tool_call_escalated == Some(expected_escalated)
+                    && metadata.review_decision == expected_review_decision
+                    && metadata.approval_source == expected_approval_source
+                    && metadata.sandbox_policy == Some(expected_sandbox_policy)
+            )
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enabled() {
+    let (sess, tc, rx, expected_sandbox_policy) = setup_tool_call_metadata_runtime_test().await;
 
     sess.record_call_approval_outcome(
         "call-1".to_string(),
@@ -4534,121 +4583,31 @@ async fn tool_call_metadata_stamps_escalated_review_decision_when_feature_enable
         ),
     )
     .await;
-    sess.record_response_item_and_emit_turn_item(
-        tc.as_ref(),
-        ResponseItem::FunctionCall {
-            id: None,
-            name: "shell".to_string(),
-            namespace: None,
-            arguments: "{}".to_string(),
-            call_id: "call-1".to_string(),
-            metadata: None,
-        },
+    sess.record_response_item_and_emit_turn_item(tc.as_ref(), function_call_item("call-1"))
+        .await;
+    assert_next_emitted_function_call_metadata(
+        &rx,
+        expected_sandbox_policy,
+        true,
+        Some(codex_protocol::models::ReviewDecisionMetadata::Denied),
+        Some(codex_protocol::models::ApprovalSourceMetadata::User),
     )
     .await;
-
-    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
-        .expect("expected raw response item event")
-        .expect("channel open");
-    assert!(matches!(
-        event.msg,
-        EventMsg::RawResponseItem(ref ev)
-            if matches!(
-                &ev.item,
-                ResponseItem::FunctionCall {
-                    metadata: Some(metadata),
-                    ..
-                } if metadata.is_tool_call_escalated == Some(true)
-                    && metadata.review_decision
-                        == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
-                    && metadata.approval_source
-                        == Some(codex_protocol::models::ApprovalSourceMetadata::User)
-                    && metadata.sandbox_policy == Some(expected_sandbox_policy)
-            )
-    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
-    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
-    let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
-    Arc::get_mut(&mut sess)
-        .expect("session should be uniquely owned in this test")
-        .features
-        .enable(crate::features::Feature::ItemMetadata)
-        .expect("feature flag should be enabled for this test");
+    let (sess, tc, rx, expected_sandbox_policy) = setup_tool_call_metadata_runtime_test().await;
 
-    sess.spawn_task(
-        Arc::clone(&tc),
-        vec![UserInput::Text {
-            text: "start".to_string(),
-            text_elements: Vec::new(),
-        }],
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
-    while rx.try_recv().is_ok() {}
-
-    sess.record_response_item_and_emit_turn_item(
-        tc.as_ref(),
-        ResponseItem::FunctionCall {
-            id: None,
-            name: "shell".to_string(),
-            namespace: None,
-            arguments: "{}".to_string(),
-            call_id: "call-2".to_string(),
-            metadata: None,
-        },
-    )
-    .await;
-
-    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
-        .expect("expected raw response item event")
-        .expect("channel open");
-    assert!(matches!(
-        event.msg,
-        EventMsg::RawResponseItem(ref ev)
-            if matches!(
-                &ev.item,
-                ResponseItem::FunctionCall {
-                    metadata: Some(metadata),
-                    ..
-                } if metadata.is_tool_call_escalated == Some(false)
-                    && metadata.review_decision.is_none()
-                    && metadata.approval_source.is_none()
-                    && metadata.sandbox_policy == Some(expected_sandbox_policy)
-            )
-    ));
+    sess.record_response_item_and_emit_turn_item(tc.as_ref(), function_call_item("call-2"))
+        .await;
+    assert_next_emitted_function_call_metadata(&rx, expected_sandbox_policy, false, None, None)
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_call_metadata_stamps_guardian_direct_review_when_feature_enabled() {
-    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
-    let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
-    Arc::get_mut(&mut sess)
-        .expect("session should be uniquely owned in this test")
-        .features
-        .enable(crate::features::Feature::ItemMetadata)
-        .expect("feature flag should be enabled for this test");
-
-    sess.spawn_task(
-        Arc::clone(&tc),
-        vec![UserInput::Text {
-            text: "start".to_string(),
-            text_elements: Vec::new(),
-        }],
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
-    while rx.try_recv().is_ok() {}
+    let (sess, tc, rx, expected_sandbox_policy) = setup_tool_call_metadata_runtime_test().await;
 
     sess.record_call_approval_outcome(
         "call-guardian-runtime-1".to_string(),
@@ -4660,62 +4619,22 @@ async fn tool_call_metadata_stamps_guardian_direct_review_when_feature_enabled()
     .await;
     sess.record_response_item_and_emit_turn_item(
         tc.as_ref(),
-        ResponseItem::FunctionCall {
-            id: None,
-            name: "shell".to_string(),
-            namespace: None,
-            arguments: "{}".to_string(),
-            call_id: "call-guardian-runtime-1".to_string(),
-            metadata: None,
-        },
+        function_call_item("call-guardian-runtime-1"),
     )
     .await;
-
-    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
-        .expect("expected raw response item event")
-        .expect("channel open");
-    assert!(matches!(
-        event.msg,
-        EventMsg::RawResponseItem(ref ev)
-            if matches!(
-                &ev.item,
-                ResponseItem::FunctionCall {
-                    metadata: Some(metadata),
-                    ..
-                } if metadata.is_tool_call_escalated == Some(true)
-                    && metadata.review_decision
-                        == Some(codex_protocol::models::ReviewDecisionMetadata::Denied)
-                    && metadata.approval_source
-                        == Some(codex_protocol::models::ApprovalSourceMetadata::Guardian)
-                    && metadata.sandbox_policy == Some(expected_sandbox_policy)
-            )
-    ));
+    assert_next_emitted_function_call_metadata(
+        &rx,
+        expected_sandbox_policy,
+        true,
+        Some(codex_protocol::models::ReviewDecisionMetadata::Denied),
+        Some(codex_protocol::models::ApprovalSourceMetadata::Guardian),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tool_call_metadata_stamps_policy_source_without_review_decision_when_feature_enabled() {
-    let (mut sess, tc, rx) = make_session_and_context_with_rx().await;
-    let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
-    Arc::get_mut(&mut sess)
-        .expect("session should be uniquely owned in this test")
-        .features
-        .enable(crate::features::Feature::ItemMetadata)
-        .expect("feature flag should be enabled for this test");
-
-    sess.spawn_task(
-        Arc::clone(&tc),
-        vec![UserInput::Text {
-            text: "start".to_string(),
-            text_elements: Vec::new(),
-        }],
-        NeverEndingTask {
-            kind: TaskKind::Regular,
-            listen_to_cancellation_token: false,
-        },
-    )
-    .await;
-    while rx.try_recv().is_ok() {}
+    let (sess, tc, rx, expected_sandbox_policy) = setup_tool_call_metadata_runtime_test().await;
 
     sess.record_call_approval_outcome(
         "call-policy-runtime-1".to_string(),
@@ -4727,36 +4646,17 @@ async fn tool_call_metadata_stamps_policy_source_without_review_decision_when_fe
     .await;
     sess.record_response_item_and_emit_turn_item(
         tc.as_ref(),
-        ResponseItem::FunctionCall {
-            id: None,
-            name: "shell".to_string(),
-            namespace: None,
-            arguments: "{}".to_string(),
-            call_id: "call-policy-runtime-1".to_string(),
-            metadata: None,
-        },
+        function_call_item("call-policy-runtime-1"),
     )
     .await;
-
-    let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
-        .await
-        .expect("expected raw response item event")
-        .expect("channel open");
-    assert!(matches!(
-        event.msg,
-        EventMsg::RawResponseItem(ref ev)
-            if matches!(
-                &ev.item,
-                ResponseItem::FunctionCall {
-                    metadata: Some(metadata),
-                    ..
-                } if metadata.is_tool_call_escalated == Some(true)
-                    && metadata.review_decision.is_none()
-                    && metadata.approval_source
-                        == Some(codex_protocol::models::ApprovalSourceMetadata::Policy)
-                    && metadata.sandbox_policy == Some(expected_sandbox_policy)
-            )
-    ));
+    assert_next_emitted_function_call_metadata(
+        &rx,
+        expected_sandbox_policy,
+        true,
+        None,
+        Some(codex_protocol::models::ApprovalSourceMetadata::Policy),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
