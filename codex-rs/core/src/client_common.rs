@@ -14,6 +14,8 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 
+mod tools_json;
+
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
 
@@ -43,6 +45,8 @@ pub struct Prompt {
     /// Optional the output schema for the model's response.
     pub output_schema: Option<Value>,
 }
+
+pub(crate) use tools_json::create_tools_json_for_responses_api;
 
 impl Prompt {
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {

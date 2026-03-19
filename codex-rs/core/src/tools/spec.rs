@@ -2240,17 +2240,15 @@ pub(crate) struct ApplyPatchToolArgs {
 /// Returns JSON values that are compatible with Function Calling in the
 /// Responses API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
+///
+/// API stability: this helper remains available from `crate::tools::spec`, but
+/// its implementation moved under `client_common` so the model client can
+/// serialize tool payloads without depending on the full tool registry builder.
+#[allow(dead_code)] // Kept for internal tests and legacy in-crate call sites.
 pub fn create_tools_json_for_responses_api(
     tools: &[ToolSpec],
 ) -> crate::error::Result<Vec<serde_json::Value>> {
-    let mut tools_json = Vec::new();
-
-    for tool in tools {
-        let json = serde_json::to_value(tool)?;
-        tools_json.push(json);
-    }
-
-    Ok(tools_json)
+    crate::client_common::create_tools_json_for_responses_api(tools)
 }
 
 fn push_tool_spec(
