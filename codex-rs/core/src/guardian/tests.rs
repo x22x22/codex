@@ -124,6 +124,47 @@ fn guardian_snapshot_options() -> ContextSnapshotOptions {
         .strip_agents_md_user_context()
 }
 
+fn prompt_item_texts(items: Vec<codex_protocol::user_input::UserInput>) -> Vec<String> {
+    items
+        .into_iter()
+        .map(|item| match item {
+            codex_protocol::user_input::UserInput::Text { text, .. } => text,
+            other => panic!("unexpected guardian prompt item: {other:?}"),
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn guardian_prewarm_prompt_matches_review_request_prefix() -> anyhow::Result<()> {
+    let server = start_mock_server().await;
+    let (session, _turn) = guardian_test_session_and_turn(&server).await;
+    let review_prompt = build_guardian_prompt_items(
+        session.as_ref(),
+        Some("Retry because the previous attempt lost connectivity.".to_string()),
+        GuardianApprovalRequest::Shell {
+            id: "shell-1".to_string(),
+            command: vec!["git".to_string(), "push".to_string()],
+            cwd: PathBuf::from("/repo/codex-rs/core"),
+            sandbox_permissions: crate::sandboxing::SandboxPermissions::UseDefault,
+            additional_permissions: None,
+            justification: Some("Need to push the docs fix.".to_string()),
+        },
+    )
+    .await?;
+    let review_prompt = prompt_item_texts(review_prompt);
+    let prewarm_prompt = prompt_item_texts(build_guardian_prewarm_prompt_items());
+
+    assert_eq!(prewarm_prompt[0], review_prompt[0]);
+    assert_eq!(prewarm_prompt[1], review_prompt[1]);
+    assert!(
+        prewarm_prompt
+            .iter()
+            .any(|item| item.contains("guardian_prewarm"))
+    );
+
+    Ok(())
+}
+
 #[test]
 fn build_guardian_transcript_keeps_original_numbering() {
     let entries = [

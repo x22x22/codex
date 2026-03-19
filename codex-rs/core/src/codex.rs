@@ -4380,6 +4380,7 @@ mod handlers {
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
+    use crate::guardian::routes_approval_to_guardian;
 
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
@@ -4452,7 +4453,7 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let (items, updates) = match op {
+        let (items, updates, should_schedule_guardian_prewarm) = match op {
             Op::UserTurn {
                 cwd,
                 approval_policy,
@@ -4491,6 +4492,7 @@ mod handlers {
                         personality,
                         app_server_client_name: None,
                     },
+                    true,
                 )
             }
             Op::UserInput {
@@ -4502,6 +4504,7 @@ mod handlers {
                     final_output_json_schema: Some(final_output_json_schema),
                     ..Default::default()
                 },
+                false,
             ),
             _ => unreachable!(),
         };
@@ -4510,6 +4513,11 @@ mod handlers {
             // new_turn_with_sub_id already emits the error event.
             return;
         };
+        if should_schedule_guardian_prewarm && routes_approval_to_guardian(current_context.as_ref())
+        {
+            sess.guardian_review_session
+                .schedule_prewarm(Arc::clone(sess), Arc::clone(&current_context));
+        }
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
         current_context.session_telemetry.user_prompt(&items);

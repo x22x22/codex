@@ -1,12 +1,17 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::anyhow;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -23,6 +28,8 @@ use tracing::warn;
 use crate::codex::Codex;
 use crate::codex::Session;
 use crate::codex::TurnContext;
+use crate::codex::build_prompt;
+use crate::codex::built_tools;
 use crate::codex_delegate::run_codex_thread_interactive;
 use crate::config::Config;
 use crate::config::Constrained;
@@ -37,6 +44,8 @@ use crate::rollout::recorder::RolloutRecorder;
 
 use super::GUARDIAN_REVIEW_TIMEOUT;
 use super::GUARDIAN_REVIEWER_NAME;
+use super::prompt::build_guardian_prewarm_prompt_items;
+use super::prompt::guardian_output_schema;
 use super::prompt::guardian_policy_prompt;
 
 const GUARDIAN_INTERRUPT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -61,7 +70,13 @@ pub(crate) struct GuardianReviewSessionParams {
     pub(crate) external_cancel: Option<CancellationToken>,
 }
 
-#[derive(Default)]
+pub(crate) struct GuardianResolvedReviewConfig {
+    pub(crate) spawn_config: Config,
+    pub(crate) model: String,
+    pub(crate) reasoning_effort: Option<ReasoningEffortConfig>,
+}
+
+#[derive(Clone, Default)]
 pub(crate) struct GuardianReviewSessionManager {
     state: Arc<Mutex<GuardianReviewSessionState>>,
 }
@@ -78,6 +93,7 @@ struct GuardianReviewSession {
     reuse_key: GuardianReviewSessionReuseKey,
     review_lock: Mutex<()>,
     last_committed_rollout_items: Mutex<Option<Vec<RolloutItem>>>,
+    prompt_prewarmed: AtomicBool,
 }
 
 struct EphemeralReviewCleanup {
@@ -175,6 +191,16 @@ impl GuardianReviewSession {
                 warn!("failed to refresh guardian trunk rollout snapshot: {err}");
             }
         }
+    }
+
+    fn mark_prompt_prewarmed(&self) {
+        self.prompt_prewarmed.store(true, Ordering::Relaxed);
+    }
+
+    fn try_start_prompt_prewarm(&self) -> bool {
+        self.prompt_prewarmed
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
     }
 }
 
@@ -333,6 +359,67 @@ impl GuardianReviewSessionManager {
         }
     }
 
+    pub(crate) fn schedule_prewarm(
+        &self,
+        parent_session: Arc<Session>,
+        parent_turn: Arc<TurnContext>,
+    ) {
+        let manager = self.clone();
+        drop(tokio::spawn(async move {
+            manager.prewarm(parent_session, parent_turn).await;
+        }));
+    }
+
+    async fn prewarm(self, parent_session: Arc<Session>, parent_turn: Arc<TurnContext>) {
+        let resolved =
+            match resolve_guardian_review_config(parent_session.as_ref(), parent_turn.as_ref())
+                .await
+            {
+                Ok(resolved) => resolved,
+                Err(err) => {
+                    warn!("failed to resolve guardian prewarm config: {err}");
+                    return;
+                }
+            };
+        let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(&resolved.spawn_config);
+        let params = GuardianReviewSessionParams {
+            parent_session,
+            parent_turn: Arc::clone(&parent_turn),
+            spawn_config: resolved.spawn_config,
+            prompt_items: Vec::new(),
+            schema: guardian_output_schema(),
+            model: resolved.model.clone(),
+            reasoning_effort: resolved.reasoning_effort,
+            reasoning_summary: parent_turn.reasoning_summary,
+            personality: parent_turn.personality,
+            external_cancel: None,
+        };
+        let trunk = match self.ensure_trunk_session(&params, reuse_key).await {
+            Ok(Some(trunk)) => trunk,
+            Ok(None) => return,
+            Err(err) => {
+                warn!("failed to prepare guardian prewarm trunk: {err}");
+                return;
+            }
+        };
+
+        if !trunk.try_start_prompt_prewarm() {
+            return;
+        }
+
+        if let Err(err) = prewarm_guardian_review_prompt(
+            trunk.as_ref(),
+            resolved.model.as_str(),
+            resolved.reasoning_effort,
+            parent_turn.reasoning_summary,
+            parent_turn.personality,
+        )
+        .await
+        {
+            warn!("guardian prompt prewarm failed: {err}");
+        }
+    }
+
     #[cfg(test)]
     pub(crate) async fn cache_for_test(&self, codex: Codex) {
         let reuse_key = GuardianReviewSessionReuseKey::from_spawn_config(
@@ -344,6 +431,7 @@ impl GuardianReviewSessionManager {
             cancel_token: CancellationToken::new(),
             review_lock: Mutex::new(()),
             last_committed_rollout_items: Mutex::new(None),
+            prompt_prewarmed: AtomicBool::new(false),
         }));
     }
 
@@ -362,7 +450,72 @@ impl GuardianReviewSessionManager {
                 cancel_token: CancellationToken::new(),
                 review_lock: Mutex::new(()),
                 last_committed_rollout_items: Mutex::new(None),
+                prompt_prewarmed: AtomicBool::new(false),
             }));
+    }
+
+    async fn ensure_trunk_session(
+        &self,
+        params: &GuardianReviewSessionParams,
+        reuse_key: GuardianReviewSessionReuseKey,
+    ) -> anyhow::Result<Option<Arc<GuardianReviewSession>>> {
+        let (existing_trunk, should_spawn, stale_trunk_to_shutdown) = {
+            let mut state = self.state.lock().await;
+            let stale_trunk_to_shutdown = if let Some(trunk) = state.trunk.as_ref()
+                && trunk.reuse_key != reuse_key
+                && trunk.review_lock.try_lock().is_ok()
+            {
+                state.trunk.take()
+            } else {
+                None
+            };
+            let existing_trunk = state.trunk.as_ref().cloned();
+            let should_spawn = existing_trunk.is_none();
+            (existing_trunk, should_spawn, stale_trunk_to_shutdown)
+        };
+
+        if let Some(review_session) = stale_trunk_to_shutdown {
+            review_session.shutdown_in_background();
+        }
+
+        if let Some(trunk) = existing_trunk {
+            return if trunk.reuse_key == reuse_key {
+                Ok(Some(trunk))
+            } else {
+                Ok(None)
+            };
+        }
+
+        if !should_spawn {
+            return Ok(None);
+        }
+
+        let spawn_cancel_token = CancellationToken::new();
+        let spawned_trunk = Arc::new(
+            spawn_guardian_review_session(
+                params,
+                params.spawn_config.clone(),
+                reuse_key.clone(),
+                spawn_cancel_token.clone(),
+                /*initial_history*/ None,
+            )
+            .await?,
+        );
+        let trunk = {
+            let mut state = self.state.lock().await;
+            match state.trunk.as_ref() {
+                Some(existing) => Arc::clone(existing),
+                None => {
+                    state.trunk = Some(Arc::clone(&spawned_trunk));
+                    Arc::clone(&spawned_trunk)
+                }
+            }
+        };
+        if !Arc::ptr_eq(&trunk, &spawned_trunk) {
+            spawned_trunk.shutdown_in_background();
+        }
+
+        Ok(Some(trunk))
     }
 
     async fn remove_trunk_if_current(
@@ -468,6 +621,7 @@ async fn spawn_guardian_review_session(
         reuse_key,
         review_lock: Mutex::new(()),
         last_committed_rollout_items: Mutex::new(None),
+        prompt_prewarmed: AtomicBool::new(false),
     })
 }
 
@@ -518,8 +672,129 @@ async fn run_review_on_session(
             false,
         );
     }
+    review_session.mark_prompt_prewarmed();
 
     wait_for_guardian_review(review_session, deadline, params.external_cancel.as_ref()).await
+}
+
+pub(super) async fn resolve_guardian_review_config(
+    session: &Session,
+    turn: &TurnContext,
+) -> anyhow::Result<GuardianResolvedReviewConfig> {
+    let live_network_config = match session.services.network_proxy.as_ref() {
+        Some(network_proxy) => Some(network_proxy.proxy().current_cfg().await?),
+        None => None,
+    };
+    let available_models = session
+        .services
+        .models_manager
+        .list_models(crate::models_manager::manager::RefreshStrategy::Offline)
+        .await;
+    let preferred_reasoning_effort = |supports_low: bool, fallback| {
+        if supports_low {
+            Some(codex_protocol::openai_models::ReasoningEffort::Low)
+        } else {
+            fallback
+        }
+    };
+    let preferred_model = available_models
+        .iter()
+        .find(|preset| preset.model == super::GUARDIAN_PREFERRED_MODEL);
+    let (guardian_model, guardian_reasoning_effort) = if let Some(preset) = preferred_model {
+        let reasoning_effort = preferred_reasoning_effort(
+            preset
+                .supported_reasoning_efforts
+                .iter()
+                .any(|effort| effort.effort == codex_protocol::openai_models::ReasoningEffort::Low),
+            Some(preset.default_reasoning_effort),
+        );
+        (
+            super::GUARDIAN_PREFERRED_MODEL.to_string(),
+            reasoning_effort,
+        )
+    } else {
+        let reasoning_effort = preferred_reasoning_effort(
+            turn.model_info
+                .supported_reasoning_levels
+                .iter()
+                .any(|preset| preset.effort == codex_protocol::openai_models::ReasoningEffort::Low),
+            turn.reasoning_effort
+                .or(turn.model_info.default_reasoning_level),
+        );
+        (turn.model_info.slug.clone(), reasoning_effort)
+    };
+    let spawn_config = build_guardian_review_session_config(
+        turn.config.as_ref(),
+        live_network_config,
+        guardian_model.as_str(),
+        guardian_reasoning_effort,
+    )?;
+
+    Ok(GuardianResolvedReviewConfig {
+        spawn_config,
+        model: guardian_model,
+        reasoning_effort: guardian_reasoning_effort,
+    })
+}
+
+async fn prewarm_guardian_review_prompt(
+    review_session: &GuardianReviewSession,
+    model: &str,
+    reasoning_effort: Option<ReasoningEffortConfig>,
+    reasoning_summary: ReasoningSummaryConfig,
+    personality: Option<Personality>,
+) -> anyhow::Result<()> {
+    let cancellation_token = review_session.cancel_token.child_token();
+    let prompt_input = response_items_for_user_input(build_guardian_prewarm_prompt_items());
+    let prewarm_turn_context = review_session
+        .codex
+        .session
+        .new_default_turn_with_sub_id("guardian-prewarm".to_string())
+        .await;
+    let router = built_tools(
+        review_session.codex.session.as_ref(),
+        prewarm_turn_context.as_ref(),
+        &prompt_input,
+        &HashSet::new(),
+        /*skills_outcome*/ None,
+        &cancellation_token,
+    )
+    .await?;
+    let mut prompt = build_prompt(
+        prompt_input,
+        router.as_ref(),
+        prewarm_turn_context.as_ref(),
+        review_session.codex.session.get_base_instructions().await,
+    );
+    prompt.personality = personality;
+    prompt.output_schema = Some(guardian_output_schema());
+    let turn_metadata_header = prewarm_turn_context
+        .turn_metadata_state
+        .current_header_value();
+    let mut client_session = review_session
+        .codex
+        .session
+        .services
+        .model_client
+        .new_session();
+    client_session
+        .prewarm_websocket(
+            &prompt,
+            &prewarm_turn_context.model_info,
+            &prewarm_turn_context.session_telemetry,
+            reasoning_effort,
+            reasoning_summary,
+            prewarm_turn_context.config.service_tier,
+            turn_metadata_header.as_deref(),
+        )
+        .await?;
+    tracing::debug!(guardian_model = model, "completed guardian prompt prewarm");
+    Ok(())
+}
+
+fn response_items_for_user_input(items: Vec<UserInput>) -> Vec<ResponseItem> {
+    let input_for_turn: ResponseInputItem = ResponseInputItem::from(items);
+    vec![input_for_turn.into()]
 }
 
 async fn load_rollout_items_for_fork(
