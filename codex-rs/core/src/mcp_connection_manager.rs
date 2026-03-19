@@ -636,6 +636,40 @@ impl McpConnectionManager {
         Self::new_uninitialized(approval_policy)
     }
 
+    #[cfg(test)]
+    pub(crate) fn register_test_server_for_request_headers(&mut self, server_name: &str) {
+        let failed_client = futures::future::ready::<Result<ManagedClient, StartupOutcomeError>>(
+            Err(StartupOutcomeError::Failed {
+                error: "test request headers stub".to_string(),
+            }),
+        )
+        .boxed()
+        .shared();
+        self.clients.insert(
+            server_name.to_string(),
+            AsyncManagedClient {
+                client: failed_client,
+                request_headers: Arc::new(StdMutex::new(None)),
+                startup_snapshot: None,
+                startup_complete: Arc::new(AtomicBool::new(true)),
+                tool_plugin_provenance: Arc::new(ToolPluginProvenance::default()),
+            },
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn request_headers_for_server(
+        &self,
+        server_name: &str,
+    ) -> Option<reqwest::header::HeaderMap> {
+        let client = self.clients.get(server_name)?;
+        client
+            .request_headers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     pub(crate) fn has_servers(&self) -> bool {
         !self.clients.is_empty()
     }

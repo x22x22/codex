@@ -3945,6 +3945,12 @@ impl Session {
         arguments: Option<serde_json::Value>,
         meta: Option<serde_json::Value>,
     ) -> anyhow::Result<CallToolResult> {
+        if server == CODEX_APPS_MCP_SERVER_NAME
+            && let Some((turn_context, _)) = self.active_turn_context_and_cancellation_token().await
+        {
+            self.sync_mcp_request_headers_for_turn(turn_context.as_ref())
+                .await;
+        }
         self.services
             .mcp_connection_manager
             .read()
