@@ -279,6 +279,7 @@ use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
 use codex_utils_json_to_toml::json_to_toml;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -5974,6 +5975,13 @@ impl CodexMessageProcessor {
             .map(V2UserInput::into_core)
             .collect();
 
+        if let Some(metadata) = params.metadata.clone()
+            && let Err(error) = Self::set_next_turn_metadata(thread.as_ref(), metadata).await
+        {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
         let has_any_overrides = params.cwd.is_some()
             || params.approval_policy.is_some()
             || params.approvals_reviewer.is_some()
@@ -6018,7 +6026,6 @@ impl CodexMessageProcessor {
                 Op::UserInput {
                     items: mapped_items,
                     final_output_json_schema: params.output_schema,
-                    metadata: params.metadata,
                 },
             )
             .await;
@@ -6056,6 +6063,20 @@ impl CodexMessageProcessor {
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("failed to set app server client name: {err}"),
+                data: None,
+            })
+    }
+
+    async fn set_next_turn_metadata(
+        thread: &CodexThread,
+        metadata: BTreeMap<String, String>,
+    ) -> Result<(), JSONRPCErrorError> {
+        thread
+            .set_next_turn_metadata(metadata)
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INVALID_PARAMS_ERROR_CODE,
+                message: err.to_string(),
                 data: None,
             })
     }

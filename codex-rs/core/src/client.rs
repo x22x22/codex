@@ -470,9 +470,6 @@ impl ModelClient {
         extra_headers
     }
 
-    fn build_session_request_headers(&self) -> ApiHeaderMap {
-        self.build_subagent_headers()
-    }
     /// Builds request telemetry for unary API calls (e.g., Compact endpoint).
     fn build_request_telemetry(
         session_telemetry: &SessionTelemetry,

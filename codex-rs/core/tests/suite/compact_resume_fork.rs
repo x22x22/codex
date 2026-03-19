@@ -651,8 +651,6 @@ async fn user_turn(conversation: &Arc<CodexThread>, text: &str) {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-
-            metadata: None,
         })
         .await
         .expect("submit user turn");

@@ -91,8 +91,6 @@ async fn resume_includes_initial_messages_from_rollout_events() -> Result<()> {
                 text_elements: text_elements.clone(),
             }],
             final_output_json_schema: None,
-
-            metadata: None,
         })
         .await?;
 
@@ -178,8 +176,6 @@ async fn resume_includes_initial_messages_from_reasoning_events() -> Result<()> 
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-
-            metadata: None,
         })
         .await?;
 
@@ -269,8 +265,6 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-
-            metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -311,8 +305,6 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-
-            metadata: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {
@@ -328,8 +320,6 @@ async fn resume_switches_models_preserves_base_instructions() -> Result<()> {
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-
-            metadata: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {
@@ -400,8 +390,6 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-
-            metadata: None,
         })
         .await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnComplete(_))).await;
@@ -445,8 +433,6 @@ async fn resume_model_switch_is_not_duplicated_after_pre_turn_override() -> Resu
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-
-            metadata: None,
         })
         .await?;
     wait_for_event(&resumed.codex, |event| {

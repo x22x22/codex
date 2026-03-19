@@ -33,7 +33,6 @@ use crate::protocol::McpInvocation;
 use crate::protocol::McpToolCallBeginEvent;
 use crate::protocol::McpToolCallEndEvent;
 use crate::state_db;
-use crate::turn_metadata::extend_known_request_headers;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::openai_models::InputModality;
 use codex_protocol::protocol::AskForApproval;

@@ -614,9 +614,8 @@ async fn responses_stream_includes_parent_headers_from_turn_metadata() {
         provider,
         session_source,
         config.model_verbosity,
-        false,
-        false,
-        false,
+        /*enable_request_compression*/ false,
+        /*include_timing_metrics*/ false,
         None,
     );
     let mut client_session = client.new_session();

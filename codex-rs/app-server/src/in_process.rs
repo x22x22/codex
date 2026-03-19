@@ -730,6 +730,7 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use app_test_support::create_mock_responses_server_repeating_assistant;
     use codex_app_server_protocol::ClientInfo;
     use codex_app_server_protocol::ConfigRequirementsReadResponse;
     use codex_app_server_protocol::SessionSource as ApiSessionSource;
@@ -737,9 +738,13 @@ mod tests {
     use codex_app_server_protocol::ThreadStartResponse;
     use codex_app_server_protocol::Turn;
     use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnStartParams;
+    use codex_app_server_protocol::TurnStartResponse;
     use codex_app_server_protocol::TurnStatus;
+    use codex_app_server_protocol::UserInput;
     use codex_core::config::ConfigBuilder;
     use pretty_assertions::assert_eq;
+    use tempfile::TempDir;
 
     async fn build_test_config() -> Config {
         match ConfigBuilder::default().build().await {

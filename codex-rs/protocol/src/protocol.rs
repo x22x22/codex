@@ -3,7 +3,6 @@
 //! Uses a SQ (Submission Queue) / EQ (Event Queue) pattern to asynchronously communicate
 //! between user and agent.
 
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsStr;
@@ -239,9 +238,6 @@ pub enum Op {
         /// Optional JSON Schema used to constrain the final assistant message for this turn.
         #[serde(skip_serializing_if = "Option::is_none")]
         final_output_json_schema: Option<Value>,
-        /// Optional metadata attached only to this turn.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        metadata: Option<BTreeMap<String, String>>,
     },
 
     /// Similar to [`Op::UserInput`], but contains additional context required
@@ -4260,7 +4256,6 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: None,
-            metadata: None,
         };
 
         let json_op = serde_json::to_value(op)?;
@@ -4278,7 +4273,6 @@ mod tests {
             Op::UserInput {
                 items: Vec::new(),
                 final_output_json_schema: None,
-                metadata: None,
             }
         );
 
@@ -4298,7 +4292,6 @@ mod tests {
         let op = Op::UserInput {
             items: Vec::new(),
             final_output_json_schema: Some(schema.clone()),
-            metadata: None,
         };
 
         let json_op = serde_json::to_value(op)?;

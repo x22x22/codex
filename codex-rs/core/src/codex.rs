@@ -717,6 +717,18 @@ impl Codex {
             .await
     }
 
+    pub(crate) async fn set_next_turn_metadata(
+        &self,
+        metadata: BTreeMap<String, String>,
+    ) -> ConstraintResult<()> {
+        self.session
+            .update_settings(SessionSettingsUpdate {
+                next_turn_metadata: Some(metadata),
+                ..Default::default()
+            })
+            .await
+    }
+
     pub(crate) async fn agent_status(&self) -> AgentStatus {
         self.agent_status.borrow().clone()
     }
@@ -2046,7 +2058,6 @@ impl Session {
                     text_elements: Vec::new(),
                 }],
                 final_output_json_schema: None,
-                metadata: None,
             },
         )
         .await;
@@ -4513,12 +4524,10 @@ mod handlers {
             Op::UserInput {
                 items,
                 final_output_json_schema,
-                metadata,
             } => (
                 items,
                 SessionSettingsUpdate {
                     final_output_json_schema: Some(final_output_json_schema),
-                    next_turn_metadata: Some(metadata.unwrap_or_default()),
                     ..Default::default()
                 },
             ),
