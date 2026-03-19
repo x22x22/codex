@@ -168,6 +168,11 @@ impl TurnMetadataState {
         Some(self.base_header.clone())
     }
 
+    pub(crate) fn current_meta_value(&self) -> Option<serde_json::Value> {
+        self.current_header_value()
+            .and_then(|header| serde_json::from_str(&header).ok())
+    }
+
     pub(crate) fn spawn_git_enrichment_task(&self) {
         if self.repo_root.is_none() {
             return;
