@@ -31,13 +31,19 @@ pub fn run_from_args(
 
 pub fn execute(
     command: FsCommand,
-    _stdin: &mut impl Read,
+    stdin: &mut impl Read,
     stdout: &mut impl Write,
 ) -> Result<(), FsError> {
     match command {
         FsCommand::ReadFile { path } => {
             let mut file = std::fs::File::open(path).map_err(FsError::from)?;
             std::io::copy(&mut file, stdout)
+                .map(|_| ())
+                .map_err(FsError::from)
+        }
+        FsCommand::WriteFile { path } => {
+            let mut file = std::fs::File::create(path).map_err(FsError::from)?;
+            std::io::copy(stdin, &mut file)
                 .map(|_| ())
                 .map_err(FsError::from)
         }
