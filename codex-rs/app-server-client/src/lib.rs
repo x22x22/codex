@@ -311,7 +311,7 @@ struct ChatgptAuthRefreshContext {
 impl ChatgptAuthRefreshContext {
     fn resolve_refresh_response(
         &self,
-        params: &ChatgptAuthTokensRefreshParams,
+        _params: &ChatgptAuthTokensRefreshParams,
     ) -> Result<ChatgptAuthTokensRefreshResponse, String> {
         let auth = load_auth_dot_json(&self.codex_home, self.auth_credentials_store_mode)
             .map_err(|err| format!("failed to load local auth: {err}"))?
@@ -356,7 +356,7 @@ impl InProcessAppServerClient {
         let channel_capacity = args.channel_capacity.max(1);
         let auto_handle_chatgpt_auth_refresh = args.auto_handle_chatgpt_auth_refresh;
         let auth_refresh_context = ChatgptAuthRefreshContext {
-            codex_home: args.config.codex_home.clone().into(),
+            codex_home: args.config.codex_home.clone(),
             auth_credentials_store_mode: args.config.cli_auth_credentials_store_mode,
             forced_chatgpt_workspace_id: args.config.forced_chatgpt_workspace_id.clone(),
         };
