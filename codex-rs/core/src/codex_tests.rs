@@ -4387,6 +4387,37 @@ async fn steer_input_returns_active_turn_id() {
 }
 
 #[tokio::test]
+async fn record_into_history_generates_message_metadata_uuid_when_item_metadata_enabled() {
+    let (mut sess, tc) = make_session_and_context().await;
+    let _ = sess.features.enable(crate::features::Feature::ItemMetadata);
+
+    let item = ResponseItem::Message {
+        id: Some("msg_123".to_string()),
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: "hello".to_string(),
+        }],
+        metadata: None,
+        end_turn: None,
+        phase: None,
+    };
+
+    sess.record_into_history(std::slice::from_ref(&item), &tc)
+        .await;
+
+    let history = sess.state.lock().await.clone_history();
+    let [ResponseItem::Message { metadata, .. }] = history.raw_items() else {
+        panic!("expected a single message item in history");
+    };
+
+    let uuid = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.uuid.as_deref())
+        .expect("uuid should be generated when item metadata is enabled");
+    uuid::Uuid::parse_str(uuid).expect("uuid should be valid");
+}
+
+#[tokio::test]
 async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
     let (sess, tc, _rx) = make_session_and_context_with_rx().await;
     let input = vec![UserInput::Text {

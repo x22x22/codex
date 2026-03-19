@@ -3259,18 +3259,37 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        let items: Vec<ResponseItem> = items
-            .iter()
-            .cloned()
-            .map(ResponseItem::with_generated_metadata_uuid)
-            .collect();
-        self.record_into_history(&items, turn_context).await;
+        let items = self.prepare_history_items(items);
+        self.record_into_history_prepared(&items, turn_context)
+            .await;
         self.persist_rollout_response_items(&items).await;
         self.send_raw_response_items(turn_context, &items).await;
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
     pub(crate) async fn record_into_history(
+        &self,
+        items: &[ResponseItem],
+        turn_context: &TurnContext,
+    ) {
+        let items = self.prepare_history_items(items);
+        self.record_into_history_prepared(&items, turn_context)
+            .await;
+    }
+
+    fn prepare_history_items(&self, items: &[ResponseItem]) -> Vec<ResponseItem> {
+        if self.enabled(Feature::ItemMetadata) {
+            items
+                .iter()
+                .cloned()
+                .map(ResponseItem::with_generated_metadata_uuid)
+                .collect()
+        } else {
+            items.to_vec()
+        }
+    }
+
+    async fn record_into_history_prepared(
         &self,
         items: &[ResponseItem],
         turn_context: &TurnContext,
