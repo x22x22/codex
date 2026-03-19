@@ -1896,10 +1896,9 @@ impl ChatWidget {
         &mut self,
         category: crate::app_event::FeedbackCategory,
         include_logs: bool,
-        app_server_request_handle: codex_app_server_client::AppServerRequestHandle,
     ) {
         let snapshot = self.feedback.snapshot(self.thread_id);
-        self.show_feedback_note(category, include_logs, snapshot, app_server_request_handle);
+        self.show_feedback_note(category, include_logs, snapshot);
     }
 
     fn show_feedback_note(
@@ -1907,12 +1906,16 @@ impl ChatWidget {
         category: crate::app_event::FeedbackCategory,
         include_logs: bool,
         snapshot: codex_feedback::FeedbackSnapshot,
-        app_server_request_handle: codex_app_server_client::AppServerRequestHandle,
     ) {
+        let rollout = if include_logs {
+            self.current_rollout_path.clone()
+        } else {
+            None
+        };
         let view = crate::bottom_pane::FeedbackNoteView::new(
             category,
             snapshot,
-            Some(app_server_request_handle),
+            rollout,
             self.app_event_tx.clone(),
             include_logs,
             self.feedback_audience,
@@ -1927,17 +1930,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn open_feedback_consent(
-        &mut self,
-        category: crate::app_event::FeedbackCategory,
-        guardian_rollout_path: Option<PathBuf>,
-    ) {
+    pub(crate) fn open_feedback_consent(&mut self, category: crate::app_event::FeedbackCategory) {
         let snapshot = self.feedback.snapshot(self.thread_id);
         let params = crate::bottom_pane::feedback_upload_consent_params(
             self.app_event_tx.clone(),
             category,
             self.current_rollout_path.clone(),
-            guardian_rollout_path,
             snapshot.feedback_diagnostics(),
         );
         self.bottom_pane.show_selection_view(params);
