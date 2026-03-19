@@ -1,5 +1,4 @@
 use crate::ExecServerClient;
-use crate::ExecServerClientConnectOptions;
 use crate::ExecServerError;
 use crate::ExecServerEvent;
 use crate::ExecProcess;
@@ -14,17 +13,30 @@ use crate::protocol::WriteResponse;
 use crate::fs;
 use crate::fs::ExecutorFileSystem;
 use async_trait::async_trait;
+use std::sync::Arc;
 use tokio::sync::broadcast;
-
-#[derive(Debug)]
-struct UnavailableExecProcess;
-
-static UNAVAILABLE_EXEC_PROCESS: UnavailableExecProcess = UnavailableExecProcess;
+use tokio::sync::OnceCell;
 
 #[derive(Clone, Default)]
+struct LocalExecProcess {
+    client: Arc<OnceCell<ExecServerClient>>,
+}
+
+#[derive(Clone)]
 pub struct Environment {
     experimental_exec_server_url: Option<String>,
-    exec_server_client: Option<ExecServerClient>,
+    remote_exec_server_client: Option<ExecServerClient>,
+    local_exec_process: LocalExecProcess,
+}
+
+impl Default for Environment {
+    fn default() -> Self {
+        Self {
+            experimental_exec_server_url: None,
+            remote_exec_server_client: None,
+            local_exec_process: LocalExecProcess::default(),
+        }
+    }
 }
 
 impl std::fmt::Debug for Environment {
@@ -35,8 +47,8 @@ impl std::fmt::Debug for Environment {
                 &self.experimental_exec_server_url,
             )
             .field(
-                "has_exec_server_client",
-                &self.exec_server_client.is_some(),
+                "has_remote_exec_server_client",
+                &self.remote_exec_server_client.is_some(),
             )
             .finish()
     }
@@ -46,22 +58,23 @@ impl Environment {
     pub async fn create(
         experimental_exec_server_url: Option<String>,
     ) -> Result<Self, ExecServerError> {
-        let exec_server_client = Some(
+        let remote_exec_server_client =
             if let Some(websocket_url) = experimental_exec_server_url.as_deref() {
-                ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
+                Some(
+                    ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
                     websocket_url.to_string(),
                     "codex-core".to_string(),
                 ))
-                .await?
+                    .await?,
+                )
             } else {
-                ExecServerClient::connect_in_process(ExecServerClientConnectOptions::default())
-                    .await?
-            },
-        );
+                None
+            };
 
         Ok(Self {
             experimental_exec_server_url,
-            exec_server_client,
+            remote_exec_server_client,
+            local_exec_process: LocalExecProcess::default(),
         })
     }
 
@@ -70,17 +83,13 @@ impl Environment {
     }
 
     pub fn remote_exec_server_client(&self) -> Option<&ExecServerClient> {
-        if self.experimental_exec_server_url.is_some() {
-            self.exec_server_client.as_ref()
-        } else {
-            None
-        }
+        self.remote_exec_server_client.as_ref()
     }
 
     pub fn process(&self) -> &(dyn ExecProcess + '_) {
-        self.exec_server_client
+        self.remote_exec_server_client
             .as_ref()
-            .map_or(&UNAVAILABLE_EXEC_PROCESS as &dyn ExecProcess, |client| client)
+            .map_or(&self.local_exec_process as &dyn ExecProcess, |client| client)
     }
 
     pub fn get_filesystem(&self) -> impl ExecutorFileSystem + use<> {
@@ -95,37 +104,45 @@ impl ExecutorEnvironment for Environment {
 }
 
 #[async_trait]
-impl ExecProcess for UnavailableExecProcess {
-    async fn start(&self, _params: ExecParams) -> Result<ExecResponse, ExecServerError> {
-        Err(unavailable_exec_process_error())
+impl ExecProcess for LocalExecProcess {
+    async fn start(&self, params: ExecParams) -> Result<ExecResponse, ExecServerError> {
+        self.client().await?.start(params).await
     }
 
-    async fn read(&self, _params: ReadParams) -> Result<ReadResponse, ExecServerError> {
-        Err(unavailable_exec_process_error())
+    async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError> {
+        self.client().await?.read(params).await
     }
 
     async fn write(
         &self,
-        _process_id: &str,
-        _chunk: Vec<u8>,
+        process_id: &str,
+        chunk: Vec<u8>,
     ) -> Result<WriteResponse, ExecServerError> {
-        Err(unavailable_exec_process_error())
+        self.client().await?.write(process_id, chunk).await
     }
 
-    async fn terminate(&self, _process_id: &str) -> Result<TerminateResponse, ExecServerError> {
-        Err(unavailable_exec_process_error())
+    async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError> {
+        self.client().await?.terminate(process_id).await
     }
 
     fn subscribe_events(&self) -> broadcast::Receiver<ExecServerEvent> {
-        let (_tx, rx) = broadcast::channel(1);
-        rx
+        if let Some(client) = self.client.get() {
+            client.event_receiver()
+        } else {
+            let (_tx, rx) = broadcast::channel(1);
+            rx
+        }
     }
 }
 
-fn unavailable_exec_process_error() -> ExecServerError {
-    ExecServerError::Protocol(
-        "exec process capability is unavailable for a local default Environment".to_string(),
-    )
+impl LocalExecProcess {
+    async fn client(&self) -> Result<&ExecServerClient, ExecServerError> {
+        self.client
+            .get_or_try_init(|| async {
+                ExecServerClient::connect_in_process(Default::default()).await
+            })
+            .await
+    }
 }
 
 #[cfg(test)]
