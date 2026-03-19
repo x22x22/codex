@@ -141,8 +141,8 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      # Speed up repeated builds across CI runs by caching compiled objects (non-Windows).
-      USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
+      # Speed up repeated builds across CI runs by caching compiled objects.
+      USE_SCCACHE: "true"
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
       # In rust-ci, representative release-profile checks use thin LTO for faster feedback.
@@ -506,8 +506,8 @@ jobs:
       run:
         working-directory: codex-rs
     env:
-      # Speed up repeated builds across CI runs by caching compiled objects (non-Windows).
-      USE_SCCACHE: ${{ startsWith(matrix.runner, 'windows') && 'false' || 'true' }}
+      # Speed up repeated builds across CI runs by caching compiled objects.
+      USE_SCCACHE: "true"
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
 
