@@ -2250,7 +2250,6 @@ pub fn create_tools_json_for_responses_api(
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     crate::client_common::create_tools_json_for_responses_api(tools)
 }
-
 fn push_tool_spec(
     builder: &mut ToolRegistryBuilder,
     spec: ToolSpec,

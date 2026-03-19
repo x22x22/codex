@@ -2777,7 +2777,7 @@ fn chat_tools_include_top_level_name() {
         output_schema: None,
     })];
 
-    let responses_json = create_tools_json_for_responses_api(&tools).unwrap();
+    let responses_json = crate::client_tools::create_tools_json_for_responses_api(&tools).unwrap();
     assert_eq!(
         responses_json,
         vec![json!({
