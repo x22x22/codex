@@ -25,9 +25,9 @@ use tokio_tungstenite::connect_async;
 use tracing::debug;
 use tracing::warn;
 
+use crate::client_api::ExecProcess;
 use crate::client_api::ExecServerClientConnectOptions;
 use crate::client_api::ExecServerEvent;
-use crate::client_api::ExecProcess;
 use crate::client_api::RemoteExecServerConnectArgs;
 use crate::connection::JsonRpcConnection;
 use crate::protocol::EXEC_EXITED_METHOD;

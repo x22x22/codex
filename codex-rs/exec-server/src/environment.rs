@@ -1,7 +1,7 @@
+use crate::ExecProcess;
 use crate::ExecServerClient;
 use crate::ExecServerClientConnectOptions;
 use crate::ExecServerError;
-use crate::ExecProcess;
 use crate::ExecutorEnvironment;
 use crate::RemoteExecServerConnectArgs;
 use crate::fs;
@@ -32,7 +32,8 @@ impl Environment {
     pub async fn create(
         experimental_exec_server_url: Option<String>,
     ) -> Result<Self, ExecServerError> {
-        let exec_server_client = if let Some(websocket_url) = experimental_exec_server_url.as_deref()
+        let exec_server_client = if let Some(websocket_url) =
+            experimental_exec_server_url.as_deref()
         {
             ExecServerClient::connect_websocket(RemoteExecServerConnectArgs::new(
                 websocket_url.to_string(),

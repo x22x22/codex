@@ -22,8 +22,8 @@ use codex_app_server_protocol::JSONRPCErrorError;
 
 use crate::CopyOptions;
 use crate::CreateDirectoryOptions;
-use crate::Environment;
 use crate::ExecutorFileSystem;
+use crate::LocalFileSystem;
 use crate::RemoveOptions;
 use crate::rpc::internal_error;
 use crate::rpc::invalid_request;
@@ -36,7 +36,7 @@ pub(crate) struct ExecServerFileSystem {
 impl Default for ExecServerFileSystem {
     fn default() -> Self {
         Self {
-            file_system: Arc::new(Environment.get_filesystem()),
+            file_system: Arc::new(LocalFileSystem),
         }
     }
 }
