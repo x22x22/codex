@@ -502,5 +502,5 @@ impl EventProcessor for EventProcessorWithJsonOutput {
 }
 
 #[cfg(test)]
-#[path = "tests/event_processor_with_jsonl_output_tests.rs"]
+#[path = "../tests/event_processor_with_jsonl_output.rs"]
 mod tests;
