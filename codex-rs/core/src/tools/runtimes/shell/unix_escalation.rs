@@ -19,6 +19,7 @@ use crate::tools::sandboxing::SandboxAttempt;
 use crate::tools::sandboxing::SandboxablePreference;
 use crate::tools::sandboxing::ToolCtx;
 use crate::tools::sandboxing::ToolError;
+use crate::powershell::extract_powershell_command;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Evaluation;
 use codex_execpolicy::MatchOptions;
@@ -52,6 +53,7 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use shlex::split as shlex_split;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -764,10 +766,16 @@ fn evaluate_intercepted_exec_policy(
         sandbox_permissions,
         enable_shell_wrapper_parsing,
     } = context;
+    let wrapper_command = join_program_and_argv(program, argv);
     let CandidateCommands {
         commands,
         used_complex_parsing,
-    } = if enable_shell_wrapper_parsing {
+    } = if let Some(command) = parse_powershell_plain_command(&wrapper_command) {
+        CandidateCommands {
+            commands: vec![command],
+            used_complex_parsing: false,
+        }
+    } else if enable_shell_wrapper_parsing {
         // In this codepath, the first argument in `commands` could be a bare
         // name like `find` instead of an absolute path like `/usr/bin/find`.
         // It could also be a shell built-in like `echo`.
@@ -776,7 +784,7 @@ fn evaluate_intercepted_exec_policy(
         // In this codepath, `commands` has a single entry where the program
         // is always an absolute path.
         CandidateCommands {
-            commands: vec![join_program_and_argv(program, argv)],
+            commands: vec![wrapper_command],
             used_complex_parsing: false,
         }
     };
@@ -819,19 +827,22 @@ fn commands_for_intercepted_exec_policy(
     program: &AbsolutePathBuf,
     argv: &[String],
 ) -> CandidateCommands {
-    if let [_, flag, script] = argv {
-        let shell_command = [
-            program.to_string_lossy().to_string(),
-            flag.clone(),
-            script.clone(),
-        ];
-        if let Some(commands) = parse_shell_lc_plain_commands(&shell_command) {
+    let wrapper_command = join_program_and_argv(program, argv);
+    if let Some(command) = parse_powershell_plain_command(&wrapper_command) {
+        return CandidateCommands {
+            commands: vec![command],
+            used_complex_parsing: false,
+        };
+    }
+
+    if argv.len() == 3 {
+        if let Some(commands) = parse_shell_lc_plain_commands(&wrapper_command) {
             return CandidateCommands {
                 commands,
                 used_complex_parsing: false,
             };
         }
-        if let Some(single_command) = parse_shell_lc_single_command_prefix(&shell_command) {
+        if let Some(single_command) = parse_shell_lc_single_command_prefix(&wrapper_command) {
             return CandidateCommands {
                 commands: vec![single_command],
                 used_complex_parsing: true,
@@ -840,9 +851,31 @@ fn commands_for_intercepted_exec_policy(
     }
 
     CandidateCommands {
-        commands: vec![join_program_and_argv(program, argv)],
+        commands: vec![wrapper_command],
         used_complex_parsing: false,
     }
+}
+
+fn parse_powershell_plain_command(command: &[String]) -> Option<Vec<String>> {
+    let (_, script) = extract_powershell_command(command)?;
+    let script = script.trim();
+    if script.is_empty() {
+        return None;
+    }
+
+    // Only normalize simple external-command wrappers. Anything that looks like
+    // actual PowerShell syntax should remain opaque and rely on the exact
+    // wrapper argv.
+    if script.chars().any(|c| {
+        matches!(
+            c,
+            '\n' | '\r' | ';' | '|' | '&' | '(' | ')' | '{' | '}' | '$' | '@' | '`' | '<' | '>'
+        )
+    }) {
+        return None;
+    }
+
+    shlex_split(script).filter(|tokens| !tokens.is_empty())
 }
 
 struct CoreShellCommandExecutor {
