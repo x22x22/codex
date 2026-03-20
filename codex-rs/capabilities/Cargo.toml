@@ -32,7 +32,6 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "rt-multi-thread", "sync", "time"] }
 toml = { workspace = true }
-toml_edit = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 url = { workspace = true }
 zip = { workspace = true }
