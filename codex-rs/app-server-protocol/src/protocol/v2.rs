@@ -3787,6 +3787,17 @@ pub struct ThreadRealtimeItemAddedNotification {
     pub item: JsonValue,
 }
 
+/// EXPERIMENTAL - flat transcript delta emitted whenever realtime
+/// transcript text changes.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct ThreadRealtimeTranscriptUpdatedNotification {
+    pub thread_id: String,
+    pub role: String,
+    pub text: String,
+}
+
 /// EXPERIMENTAL - streamed output audio emitted by thread realtime.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -4256,6 +4267,9 @@ pub enum ThreadItem {
         status: String,
         revised_prompt: Option<String>,
         result: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        saved_path: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     #[ts(rename_all = "camelCase")]
@@ -4432,6 +4446,7 @@ impl From<CoreTurnItem> for ThreadItem {
                 status: image.status,
                 revised_prompt: image.revised_prompt,
                 result: image.result,
+                saved_path: image.saved_path,
             },
             CoreTurnItem::ContextCompaction(compaction) => {
                 ThreadItem::ContextCompaction { id: compaction.id }

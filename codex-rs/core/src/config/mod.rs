@@ -39,10 +39,6 @@ use crate::config_loader::McpServerRequirement;
 use crate::config_loader::ResidencyRequirement;
 use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
-use crate::features::Feature;
-use crate::features::FeatureOverrides;
-use crate::features::Features;
-use crate::features::FeaturesToml;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::memories::memory_root;
 use crate::model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
@@ -65,6 +61,11 @@ use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_features::Feature;
+use codex_features::FeatureConfigSource;
+use codex_features::FeatureOverrides;
+use codex_features::Features;
+use codex_features::FeaturesToml;
 use codex_protocol::config_types::AltScreenMode;
 use codex_protocol::config_types::ForcedLoginMethod;
 use codex_protocol::config_types::Personality;
@@ -97,6 +98,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use crate::config::permissions::compile_permission_profile;
+use crate::config::permissions::get_readable_roots_required_for_codex_runtime;
 use crate::config::permissions::network_proxy_config_from_profile_network;
 use crate::config::profile::ConfigProfile;
 use codex_network_proxy::NetworkProxyConfig;
@@ -1917,29 +1919,6 @@ fn resolve_permission_config_syntax(
     })
 }
 
-fn add_additional_file_system_writes(
-    file_system_sandbox_policy: &mut FileSystemSandboxPolicy,
-    additional_writable_roots: &[AbsolutePathBuf],
-) {
-    for path in additional_writable_roots {
-        let exists = file_system_sandbox_policy.entries.iter().any(|entry| {
-            matches!(
-                &entry.path,
-                codex_protocol::permissions::FileSystemPath::Path { path: existing }
-                    if existing == path && entry.access == codex_protocol::permissions::FileSystemAccessMode::Write
-            )
-        });
-        if !exists {
-            file_system_sandbox_policy.entries.push(
-                codex_protocol::permissions::FileSystemSandboxEntry {
-                    path: codex_protocol::permissions::FileSystemPath::Path { path: path.clone() },
-                    access: codex_protocol::permissions::FileSystemAccessMode::Write,
-                },
-            );
-        }
-    }
-}
-
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
 pub struct ConfigOverrides {
@@ -2189,7 +2168,23 @@ impl Config {
             web_search_request: override_tools_web_search_request,
         };
 
-        let configured_features = Features::from_config(&cfg, &config_profile, feature_overrides);
+        let configured_features = Features::from_sources(
+            FeatureConfigSource {
+                features: cfg.features.as_ref(),
+                include_apply_patch_tool: None,
+                experimental_use_freeform_apply_patch: cfg.experimental_use_freeform_apply_patch,
+                experimental_use_unified_exec_tool: cfg.experimental_use_unified_exec_tool,
+            },
+            FeatureConfigSource {
+                features: config_profile.features.as_ref(),
+                include_apply_patch_tool: config_profile.include_apply_patch_tool,
+                experimental_use_freeform_apply_patch: config_profile
+                    .experimental_use_freeform_apply_patch,
+                experimental_use_unified_exec_tool: config_profile
+                    .experimental_use_unified_exec_tool,
+            },
+            feature_overrides,
+        );
         let features = ManagedFeatures::from_configured(configured_features, feature_requirements)?;
         let windows_sandbox_mode = resolve_windows_sandbox_mode(&cfg, &config_profile);
         let windows_sandbox_private_desktop =
@@ -2292,10 +2287,8 @@ impl Config {
             let mut sandbox_policy = file_system_sandbox_policy
                 .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd)?;
             if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-                add_additional_file_system_writes(
-                    &mut file_system_sandbox_policy,
-                    &additional_writable_roots,
-                );
+                file_system_sandbox_policy = file_system_sandbox_policy
+                    .with_additional_writable_roots(&resolved_cwd, &additional_writable_roots);
                 sandbox_policy = file_system_sandbox_policy
                     .to_legacy_sandbox_policy(network_sandbox_policy, &resolved_cwd)?;
             }
@@ -2646,6 +2639,11 @@ impl Config {
         } else {
             network.enabled().then_some(network)
         };
+        let helper_readable_roots = get_readable_roots_required_for_codex_runtime(
+            &codex_home,
+            zsh_path.as_ref(),
+            main_execve_wrapper_exe.as_ref(),
+        );
         let effective_sandbox_policy = constrained_sandbox_policy.value.get().clone();
         let effective_file_system_sandbox_policy =
             if effective_sandbox_policy == original_sandbox_policy {
@@ -2656,6 +2654,8 @@ impl Config {
                     &resolved_cwd,
                 )
             };
+        let effective_file_system_sandbox_policy = effective_file_system_sandbox_policy
+            .with_additional_readable_roots(&resolved_cwd, &helper_readable_roots);
         let effective_network_sandbox_policy =
             if effective_sandbox_policy == original_sandbox_policy {
                 network_sandbox_policy
