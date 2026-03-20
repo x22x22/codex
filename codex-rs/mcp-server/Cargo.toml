@@ -21,6 +21,7 @@ codex-arg0 = { workspace = true }
 codex-core = { workspace = true }
 codex-features = { workspace = true }
 codex-protocol = { workspace = true }
+codex-sandbox = { workspace = true }
 codex-shell-command = { workspace = true }
 codex-utils-cli = { workspace = true }
 codex-utils-json-to-toml = { workspace = true }

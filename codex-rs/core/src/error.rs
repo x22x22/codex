@@ -193,6 +193,47 @@ impl From<CancelErr> for CodexErr {
     }
 }
 
+impl From<codex_sandbox::error::SandboxErr> for SandboxErr {
+    fn from(err: codex_sandbox::error::SandboxErr) -> Self {
+        match err {
+            codex_sandbox::error::SandboxErr::Denied { output } => SandboxErr::Denied {
+                output,
+                network_policy_decision: None,
+            },
+            #[cfg(target_os = "linux")]
+            codex_sandbox::error::SandboxErr::SeccompInstall(err) => {
+                SandboxErr::SeccompInstall(err)
+            }
+            #[cfg(target_os = "linux")]
+            codex_sandbox::error::SandboxErr::SeccompBackend(err) => {
+                SandboxErr::SeccompBackend(err)
+            }
+            codex_sandbox::error::SandboxErr::Timeout { output } => SandboxErr::Timeout { output },
+            codex_sandbox::error::SandboxErr::Signal(signal) => SandboxErr::Signal(signal),
+            codex_sandbox::error::SandboxErr::LandlockRestrict => SandboxErr::LandlockRestrict,
+        }
+    }
+}
+
+impl From<codex_sandbox::error::CodexErr> for CodexErr {
+    fn from(err: codex_sandbox::error::CodexErr) -> Self {
+        match err {
+            codex_sandbox::error::CodexErr::Sandbox(err) => CodexErr::Sandbox(err.into()),
+            codex_sandbox::error::CodexErr::LandlockSandboxExecutableNotProvided => {
+                CodexErr::LandlockSandboxExecutableNotProvided
+            }
+            codex_sandbox::error::CodexErr::UnsupportedOperation(message) => {
+                CodexErr::UnsupportedOperation(message)
+            }
+            codex_sandbox::error::CodexErr::Io(err) => CodexErr::Io(err),
+            #[cfg(target_os = "linux")]
+            codex_sandbox::error::CodexErr::LandlockRuleset(err) => CodexErr::LandlockRuleset(err),
+            #[cfg(target_os = "linux")]
+            codex_sandbox::error::CodexErr::LandlockPathFd(err) => CodexErr::LandlockPathFd(err),
+        }
+    }
+}
+
 impl CodexErr {
     pub fn is_retryable(&self) -> bool {
         match self {
