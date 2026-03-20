@@ -1,5 +1,5 @@
 use super::*;
-use crate::RolloutConfig;
+use crate::test_support::test_rollout_config;
 use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::Timelike;
@@ -17,20 +17,9 @@ use codex_state::ThreadMetadataBuilder;
 use pretty_assertions::assert_eq;
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
 use std::path::PathBuf;
 use tempfile::tempdir;
 use uuid::Uuid;
-
-fn test_rollout_config(codex_home: &Path) -> RolloutConfig {
-    RolloutConfig::new(
-        codex_home.to_path_buf(),
-        codex_home.to_path_buf(),
-        codex_home.to_path_buf(),
-        "test-provider".to_string(),
-        false,
-    )
-}
 
 #[tokio::test]
 async fn extract_metadata_from_rollout_uses_session_meta() {

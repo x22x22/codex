@@ -14,11 +14,11 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_core::config::Config;
 use codex_core::path_utils;
-use codex_core::state_db::get_state_db;
+use codex_core::rollout_config;
+use codex_core::state_runtime::get_state_db;
 use codex_protocol::ThreadId;
 use codex_rollout::Cursor;
 use codex_rollout::INTERACTIVE_SESSION_SOURCES;
-use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::ThreadItem;
 use codex_rollout::ThreadSortKey;
@@ -96,16 +96,6 @@ struct PageLoadRequest {
 }
 
 type PageLoader = Arc<dyn Fn(PageLoadRequest) + Send + Sync>;
-
-fn rollout_config(config: &Config) -> RolloutConfig {
-    RolloutConfig::new(
-        config.codex_home.clone(),
-        config.sqlite_home.clone(),
-        config.cwd.clone(),
-        config.model_provider_id.clone(),
-        config.memories.generate_memories,
-    )
-}
 
 enum BackgroundEvent {
     PageLoaded {

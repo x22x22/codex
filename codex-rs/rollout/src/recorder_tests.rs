@@ -1,5 +1,5 @@
 use super::*;
-use crate::RolloutConfig;
+use crate::test_support::test_rollout_config;
 use chrono::TimeZone;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::protocol::AgentMessageEvent;
@@ -17,16 +17,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
 use uuid::Uuid;
-
-fn test_rollout_config(codex_home: &Path) -> RolloutConfig {
-    RolloutConfig::new(
-        codex_home.to_path_buf(),
-        codex_home.to_path_buf(),
-        codex_home.to_path_buf(),
-        "test-provider".to_string(),
-        false,
-    )
-}
 
 fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<PathBuf> {
     let day_dir = root.join("sessions/2025/01/03");

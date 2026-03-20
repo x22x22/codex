@@ -37,7 +37,7 @@ use codex_core::config_loader::format_config_error_with_source;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
-use codex_core::state_db::get_state_db;
+use codex_core::state_runtime::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
@@ -878,7 +878,7 @@ pub async fn run_main(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db_layer = codex_core::state_db::get_state_db(&config)
+    let log_db_layer = get_state_db(&config)
         .await
         .map(|db| log_db::start(db).with_filter(env_filter()));
 

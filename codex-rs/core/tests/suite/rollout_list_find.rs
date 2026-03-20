@@ -5,11 +5,11 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 use codex_core::config::ConfigBuilder;
+use codex_core::rollout_config;
 use codex_protocol::ThreadId;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::protocol::SessionSource;
 use codex_rollout::EventPersistenceMode;
-use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::RolloutRecorderParams;
 use codex_rollout::find_archived_thread_path_by_id_str;
@@ -49,16 +49,6 @@ fn write_minimal_rollout_with_id_in_subdir(codex_home: &Path, subdir: &str, id: 
     .unwrap();
 
     file
-}
-
-fn rollout_config(config: &codex_core::config::Config) -> RolloutConfig {
-    RolloutConfig::new(
-        config.codex_home.clone(),
-        config.sqlite_home.clone(),
-        config.cwd.clone(),
-        config.model_provider_id.clone(),
-        config.memories.generate_memories,
-    )
 }
 
 /// Create sessions/YYYY/MM/DD and write a minimal rollout file containing the

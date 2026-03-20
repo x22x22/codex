@@ -72,7 +72,6 @@ use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::Submission;
 use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout::EventPersistenceMode;
-use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::RolloutRecorderParams;
 use core_test_support::tracing::install_test_tracing;
@@ -83,17 +82,8 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::rollout_config;
 use codex_protocol::mcp::CallToolResult as McpCallToolResult;
-
-fn rollout_config(config: &Config) -> RolloutConfig {
-    RolloutConfig::new(
-        config.codex_home.clone(),
-        config.sqlite_home.clone(),
-        config.cwd.clone(),
-        config.model_provider_id.clone(),
-        config.memories.generate_memories,
-    )
-}
 use pretty_assertions::assert_eq;
 use rmcp::model::JsonObject;
 use rmcp::model::Tool;

@@ -446,3 +446,7 @@ pub(crate) async fn touch_thread_updated_at(
             false
         })
 }
+
+#[cfg(test)]
+#[path = "state_db_tests.rs"]
+mod tests;

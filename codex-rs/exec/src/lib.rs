@@ -59,7 +59,8 @@ use codex_core::config_loader::LoaderOverrides;
 use codex_core::config_loader::format_config_error_with_source;
 use codex_core::format_exec_policy_error_with_source;
 use codex_core::git_info::get_git_repo_root;
-use codex_core::state_db::get_state_db;
+use codex_core::rollout_config;
+use codex_core::state_runtime::get_state_db;
 use codex_feedback::CodexFeedback;
 use codex_otel::set_parent_from_context;
 use codex_otel::traceparent_context_from_env;
@@ -73,7 +74,6 @@ use codex_protocol::protocol::ReviewTarget;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::user_input::UserInput;
-use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::ThreadSortKey;
 use codex_rollout::find_thread_path_by_id_str;
@@ -160,16 +160,6 @@ fn exec_root_span() -> tracing::Span {
         otel.kind = "internal",
         thread.id = field::Empty,
         turn.id = field::Empty,
-    )
-}
-
-fn rollout_config(config: &Config) -> RolloutConfig {
-    RolloutConfig::new(
-        config.codex_home.clone(),
-        config.sqlite_home.clone(),
-        config.cwd.clone(),
-        config.model_provider_id.clone(),
-        config.memories.generate_memories,
     )
 }
 

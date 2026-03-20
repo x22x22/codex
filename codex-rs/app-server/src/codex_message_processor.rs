@@ -218,9 +218,10 @@ use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
 use codex_core::plugins::load_plugin_apps;
 use codex_core::plugins::load_plugin_mcp_servers;
+use codex_core::rollout_config;
 use codex_core::sandboxing::SandboxPermissions;
-use codex_core::state_db::StateDbHandle;
-use codex_core::state_db::get_state_db;
+use codex_core::state_runtime::StateDbHandle;
+use codex_core::state_runtime::get_state_db;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
@@ -265,7 +266,6 @@ use codex_protocol::user_input::UserInput as CoreInputItem;
 use codex_rmcp_client::perform_oauth_login_return_url;
 use codex_rollout::ARCHIVED_SESSIONS_SUBDIR;
 use codex_rollout::Cursor as RolloutCursor;
-use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::SESSIONS_SUBDIR;
 use codex_rollout::ThreadItem as RolloutThreadItem;
@@ -328,16 +328,6 @@ use crate::thread_state::ThreadStateManager;
 
 const THREAD_LIST_DEFAULT_LIMIT: usize = 25;
 const THREAD_LIST_MAX_LIMIT: usize = 100;
-
-fn rollout_config(config: &Config) -> RolloutConfig {
-    RolloutConfig::new(
-        config.codex_home.clone(),
-        config.sqlite_home.clone(),
-        config.cwd.clone(),
-        config.model_provider_id.clone(),
-        config.memories.generate_memories,
-    )
-}
 
 struct ThreadListFilters {
     model_providers: Option<Vec<String>>,

@@ -200,16 +200,6 @@ pub(crate) struct PreviousTurnSettings {
     pub(crate) realtime_active: Option<bool>,
 }
 
-fn rollout_config(config: &Config, cwd: PathBuf) -> RolloutConfig {
-    RolloutConfig::new(
-        config.codex_home.clone(),
-        config.sqlite_home.clone(),
-        cwd,
-        config.model_provider_id.clone(),
-        config.memories.generate_memories,
-    )
-}
-
 use crate::exec_policy::ExecPolicyUpdateError;
 use crate::feedback_tags;
 use crate::file_watcher::FileWatcher;
@@ -279,6 +269,7 @@ use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WarningEvent;
+use crate::rollout_config_with_cwd;
 use crate::session_startup_prewarm::SessionStartupPrewarmHandle;
 use crate::shell;
 use crate::shell_snapshot::ShellSnapshot;
@@ -297,7 +288,7 @@ use crate::skills::resolve_skill_dependencies_for_turn;
 use crate::state::ActiveTurn;
 use crate::state::SessionServices;
 use crate::state::SessionState;
-use crate::state_db;
+use crate::state_runtime;
 use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
@@ -339,7 +330,6 @@ use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::user_input::UserInput;
 use codex_rollout::EventPersistenceMode;
-use codex_rollout::RolloutConfig;
 use codex_rollout::RolloutRecorder;
 use codex_rollout::RolloutRecorderParams;
 use codex_rollout::build_thread_metadata_builder;
@@ -550,9 +540,13 @@ impl Codex {
             };
             match thread_id {
                 Some(thread_id) => {
-                    let state_db_ctx = state_db::get_state_db(&config).await;
-                    state_db::get_dynamic_tools(state_db_ctx.as_deref(), thread_id, "codex_spawn")
-                        .await
+                    let state_db_ctx = state_runtime::get_state_db(&config).await;
+                    state_runtime::get_dynamic_tools(
+                        state_db_ctx.as_deref(),
+                        thread_id,
+                        "codex_spawn",
+                    )
+                    .await
                 }
                 None => None,
             }
@@ -738,7 +732,7 @@ impl Codex {
         state.session_configuration.thread_config_snapshot()
     }
 
-    pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
+    pub(crate) fn state_db(&self) -> Option<state_runtime::StateDbHandle> {
         self.session.state_db()
     }
 
@@ -1473,7 +1467,7 @@ impl Session {
             ),
             InitialHistory::New | InitialHistory::Forked(_) => None,
         };
-        let rollout_config = rollout_config(&config, session_configuration.cwd.clone());
+        let rollout_config = rollout_config_with_cwd(&config, session_configuration.cwd.clone());
 
         // Kick off independent async setup tasks in parallel to reduce startup latency.
         //
@@ -1484,7 +1478,7 @@ impl Session {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>((None, None))
             } else {
-                let state_db_ctx = state_db::init(&config).await;
+                let state_db_ctx = state_runtime::init(&config).await;
                 spawn_backfill_if_needed(state_db_ctx.clone(), &rollout_config).await;
                 let rollout_recorder = RolloutRecorder::new(
                     &rollout_config,
@@ -2019,7 +2013,7 @@ impl Session {
         self.tx_event.clone()
     }
 
-    pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
+    pub(crate) fn state_db(&self) -> Option<state_runtime::StateDbHandle> {
         self.services.state_db.clone()
     }
 

@@ -13,7 +13,7 @@ use crate::mcp_connection_manager::McpConnectionManager;
 use crate::models_manager::manager::ModelsManager;
 use crate::plugins::PluginsManager;
 use crate::skills::SkillsManager;
-use crate::state_db::StateDbHandle;
+use crate::state_runtime::StateDbHandle;
 use crate::tools::code_mode::CodeModeService;
 use crate::tools::network_approval::NetworkApprovalService;
 use crate::tools::runtimes::ExecveSessionApproval;
