@@ -7,6 +7,7 @@ import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.EOFException
+import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -17,22 +18,27 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class GenieLocalCodexProxy(
     private val sessionId: String,
+    socketDirectory: File,
     private val requestForwarder: CodexResponsesRequestForwarder,
 ) : Closeable {
     companion object {
         private const val TAG = "GenieLocalProxy"
     }
 
-    private val socketName = "codex_${UUID.randomUUID().toString().replace("-", "").take(12)}"
+    private val socketFile = File(
+        socketDirectory,
+        "codex_${UUID.randomUUID().toString().replace("-", "").take(12)}.sock",
+    )
     private val boundSocket = LocalSocket().apply {
-        bind(LocalSocketAddress(socketName, LocalSocketAddress.Namespace.ABSTRACT))
+        socketFile.delete()
+        bind(LocalSocketAddress(socketFile.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM))
     }
     private val serverSocket = LocalServerSocket(boundSocket.fileDescriptor)
     private val closed = AtomicBoolean(false)
     private val clientSockets = Collections.synchronizedSet(mutableSetOf<LocalSocket>())
     private val acceptThread = Thread(::acceptLoop, "GenieLocalProxy-$sessionId")
 
-    val socketPath: String = "@$socketName"
+    val socketPath: String = socketFile.absolutePath
 
     fun start() {
         acceptThread.start()
@@ -49,6 +55,7 @@ class GenieLocalCodexProxy(
             clientSockets.forEach { socket -> runCatching { socket.close() } }
             clientSockets.clear()
         }
+        runCatching { socketFile.delete() }
         acceptThread.interrupt()
     }
 

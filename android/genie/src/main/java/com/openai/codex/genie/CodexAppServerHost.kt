@@ -79,6 +79,7 @@ class CodexAppServerHost(
         }
         val proxy = GenieLocalCodexProxy(
             sessionId = request.sessionId,
+            socketDirectory = context.cacheDir,
             requestForwarder = bridgeClient,
         )
         proxy.start()
@@ -95,9 +96,8 @@ class CodexAppServerHost(
         )
         val env = processBuilder.environment()
         env["CODEX_HOME"] = codexHome.absolutePath
-        env["CODEX_USE_AGENT_AUTH_PROXY"] = "1"
         env["CODEX_OPENAI_UNIX_SOCKET"] = proxy.socketPath
-        env["RUST_LOG"] = "info"
+        env["RUST_LOG"] = "warn"
         process = processBuilder.start()
         control.process = process
         writer = process.outputStream.bufferedWriter()
@@ -130,8 +130,12 @@ class CodexAppServerHost(
         stderrThread = Thread {
             process.errorStream.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
-                    if (line.isNotBlank()) {
-                        Log.i(TAG, line)
+                    if (line.isBlank()) {
+                        return@forEach
+                    }
+                    when {
+                        line.contains(" ERROR ") -> Log.e(TAG, line)
+                        line.contains(" WARN ") || line.startsWith("WARNING:") -> Log.w(TAG, line)
                     }
                 }
             }
@@ -530,10 +534,11 @@ class CodexAppServerHost(
             You are Codex acting as a child Android Genie bound to ${request.targetPackage}.
             The user interacts only with the supervising Agent.
             Decide your own local plan and choose tools yourself.
-            Prefer direct Android shell commands and intents first: for example `cmd package`, `pm`, `am start`, `am broadcast`, and other commands that can satisfy the objective without UI-driving.
-            Use normal Android shell commands for package discovery, activity launch, input injection, UI dumping, and screenshots whenever those commands are available.
+            Prefer direct Android shell commands and intents first when they are valid in the paired app sandbox: for example `cmd package`, `pm`, `am broadcast`, and other commands that can satisfy the objective without UI-driving.
+            Use normal Android shell commands for package discovery, input injection, UI dumping, and screenshots whenever those commands are available.
             If a direct command or intent clearly accomplishes the objective, stop and report success instead of continuing exploratory UI actions.
-            The framework already launches the target app hidden when detached mode is allowed. If shell launch commands fail with permission-denied, unsupported-operation, or com.android.shell package-mismatch errors, do not keep retrying launch. Instead, use detached-target dynamic tools to show or inspect the already-running target, then continue with whatever shell input or inspection surfaces still work.
+            Do not use `am start` to launch the paired target app. In this sandbox it fails with a com.android.shell package-mismatch permission error. The Genie must request target launch through the framework callback and then use detached-target tools plus any working shell inspection/input surfaces.
+            The framework launches the target app hidden after you request detached launch. If shell launch commands fail with permission-denied, unsupported-operation, or com.android.shell package-mismatch errors, do not keep retrying launch. Instead, use detached-target dynamic tools to show or inspect the already-running target, then continue with whatever shell input or inspection surfaces still work.
             Use Android dynamic tools only for framework-only detached target operations that do not have a working shell equivalent in the paired app sandbox.
             If you need clarification or a decision from the supervising Agent, call request_user_input with concise free-form question text.
             Do not use hidden control protocols.

@@ -104,7 +104,13 @@ class AgentBridgeClient(
 
     private fun tryBindBridgeService(): ICodexAgentBridgeService? {
         val intent = Intent().setClassName(AGENT_PACKAGE, AGENT_BRIDGE_SERVICE)
-        if (!appContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)) {
+        val boundService = runCatching {
+            appContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+        }.getOrElse { err ->
+            Log.w(TAG, "Binder Agent bridge transport unavailable", err)
+            return null
+        }
+        if (!boundService) {
             return null
         }
         bound = true
