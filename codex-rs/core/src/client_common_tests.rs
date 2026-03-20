@@ -5,7 +5,7 @@ use codex_api::create_text_param_for_request;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
-use codex_protocol::models::ResponseItemMetadata;
+use codex_protocol::models::ResponseItemMessageMetadata;
 use codex_protocol::models::UserMessageType;
 use pretty_assertions::assert_eq;
 
@@ -202,7 +202,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
 }
 
 #[test]
-fn formatted_input_does_not_generate_message_metadata_uuid_when_disabled() {
+fn formatted_input_preserves_message_metadata_id_when_disabled() {
     let prompt = Prompt {
         input: vec![ResponseItem::Message {
             id: Some("msg_123".to_string()),
@@ -210,41 +210,9 @@ fn formatted_input_does_not_generate_message_metadata_uuid_when_disabled() {
             content: vec![ContentItem::InputText {
                 text: "hello".to_string(),
             }],
-            metadata: Some(ResponseItemMetadata {
+            metadata: Some(ResponseItemMessageMetadata {
                 user_message_type: Some(UserMessageType::Prompt),
-                uuid: None,
-            }),
-            end_turn: None,
-            phase: None,
-        }],
-        ..Default::default()
-    };
-
-    let formatted = prompt.get_formatted_input();
-    assert_eq!(formatted.len(), 1);
-
-    match &formatted[0] {
-        ResponseItem::Message { metadata, .. } => {
-            let metadata = metadata.as_ref().expect("metadata should be present");
-            assert_eq!(metadata.user_message_type, Some(UserMessageType::Prompt));
-            assert_eq!(metadata.uuid, None);
-        }
-        other => panic!("expected message item, got {other:?}"),
-    }
-}
-
-#[test]
-fn formatted_input_preserves_existing_message_metadata_uuid() {
-    let prompt = Prompt {
-        input: vec![ResponseItem::Message {
-            id: Some("msg_123".to_string()),
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: "hello".to_string(),
-            }],
-            metadata: Some(ResponseItemMetadata {
-                user_message_type: Some(UserMessageType::Prompt),
-                uuid: Some("2585a800-7d93-4f52-8648-d9cb39f413d2".to_string()),
+                metadata_id: "2585a800-7d93-4f52-8648-d9cb39f413d2".to_string(),
             }),
             end_turn: None,
             phase: None,
@@ -260,7 +228,42 @@ fn formatted_input_preserves_existing_message_metadata_uuid() {
             let metadata = metadata.as_ref().expect("metadata should be present");
             assert_eq!(metadata.user_message_type, Some(UserMessageType::Prompt));
             assert_eq!(
-                metadata.uuid.as_deref(),
+                metadata.metadata_id,
+                "2585a800-7d93-4f52-8648-d9cb39f413d2".to_string()
+            );
+        }
+        other => panic!("expected message item, got {other:?}"),
+    }
+}
+
+#[test]
+fn formatted_input_preserves_existing_message_metadata_id() {
+    let prompt = Prompt {
+        input: vec![ResponseItem::Message {
+            id: Some("msg_123".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            metadata: Some(ResponseItemMessageMetadata {
+                user_message_type: Some(UserMessageType::Prompt),
+                metadata_id: "2585a800-7d93-4f52-8648-d9cb39f413d2".to_string(),
+            }),
+            end_turn: None,
+            phase: None,
+        }],
+        ..Default::default()
+    };
+
+    let formatted = prompt.get_formatted_input();
+    assert_eq!(formatted.len(), 1);
+
+    match &formatted[0] {
+        ResponseItem::Message { metadata, .. } => {
+            let metadata = metadata.as_ref().expect("metadata should be present");
+            assert_eq!(metadata.user_message_type, Some(UserMessageType::Prompt));
+            assert_eq!(
+                Some(metadata.metadata_id.as_str()),
                 Some("2585a800-7d93-4f52-8648-d9cb39f413d2")
             );
         }

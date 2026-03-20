@@ -4506,7 +4506,7 @@ async fn steer_input_returns_active_turn_id() {
 }
 
 #[tokio::test]
-async fn record_into_history_generates_message_metadata_uuid_when_item_metadata_enabled() {
+async fn record_into_history_generates_message_metadata_id_when_item_metadata_enabled() {
     let (mut sess, tc) = make_session_and_context().await;
     let _ = sess.features.enable(Feature::ItemMetadata);
 
@@ -4529,11 +4529,11 @@ async fn record_into_history_generates_message_metadata_uuid_when_item_metadata_
         panic!("expected a single message item in history");
     };
 
-    let uuid = metadata
+    let metadata_id = metadata
         .as_ref()
-        .and_then(|metadata| metadata.uuid.as_deref())
-        .expect("uuid should be generated when item metadata is enabled");
-    uuid::Uuid::parse_str(uuid).expect("uuid should be valid");
+        .map(|metadata| metadata.metadata_id.as_str())
+        .expect("metadata_id should be generated when item metadata is enabled");
+    uuid::Uuid::parse_str(metadata_id).expect("metadata_id should be valid");
 }
 
 #[tokio::test]
