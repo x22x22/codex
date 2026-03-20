@@ -4040,7 +4040,7 @@ impl CodexMessageProcessor {
         } = match self
             .thread_manager
             .fork_thread(
-                ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
+                ForkSnapshot::Interrupted,
                 config,
                 rollout_path.clone(),
                 persist_extended_history,
@@ -6509,7 +6509,7 @@ impl CodexMessageProcessor {
         } = self
             .thread_manager
             .fork_thread(
-                ForkSnapshot::TruncateBeforeNthUserMessage(usize::MAX),
+                ForkSnapshot::Interrupted,
                 config,
                 rollout_path,
                 /*persist_extended_history*/ false,
