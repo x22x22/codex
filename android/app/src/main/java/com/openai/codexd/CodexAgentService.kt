@@ -4,6 +4,7 @@ import android.app.agent.AgentManager
 import android.app.agent.AgentService
 import android.app.agent.AgentSessionEvent
 import android.app.agent.AgentSessionInfo
+import android.os.Process
 import android.util.Log
 import java.io.IOException
 import kotlin.concurrent.thread
@@ -24,6 +25,7 @@ class CodexAgentService : AgentService() {
         private val pendingGenieQuestions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val pendingQuestionLoads = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val handledBridgeRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        private val pendingParentRollups = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     }
 
     private sealed class AutoAnswerResult {
@@ -43,6 +45,7 @@ class CodexAgentService : AgentService() {
 
     override fun onSessionChanged(session: AgentSessionInfo) {
         Log.i(TAG, "onSessionChanged $session")
+        maybeRollUpParentSession(session)
         agentManager?.let { manager ->
             if (shouldServeSessionBridge(session)) {
                 AgentSessionBridgeServer.ensureStarted(this, manager, session.sessionId)
@@ -73,6 +76,79 @@ class CodexAgentService : AgentService() {
         handledGenieQuestions.removeIf { it.startsWith("$sessionId:") }
         handledBridgeRequests.removeIf { it.startsWith("$sessionId:") }
         pendingGenieQuestions.removeIf { it.startsWith("$sessionId:") }
+    }
+
+    private fun maybeRollUpParentSession(session: AgentSessionInfo) {
+        val parentSessionId = when {
+            !session.parentSessionId.isNullOrBlank() -> session.parentSessionId
+            isDirectParentSession(session) -> session.sessionId
+            else -> null
+        } ?: return
+        if (!pendingParentRollups.add(parentSessionId)) {
+            return
+        }
+        thread(name = "CodexAgentParentRollup-$parentSessionId") {
+            try {
+                runCatching {
+                    rollUpParentSession(parentSessionId)
+                }.onFailure { err ->
+                    Log.w(TAG, "Parent session roll-up failed for $parentSessionId", err)
+                }
+            } finally {
+                pendingParentRollups.remove(parentSessionId)
+            }
+        }
+    }
+
+    private fun rollUpParentSession(parentSessionId: String) {
+        val manager = agentManager ?: return
+        val sessions = manager.getSessions(currentUserId())
+        val parentSession = sessions.firstOrNull { it.sessionId == parentSessionId } ?: return
+        if (!isDirectParentSession(parentSession)) {
+            return
+        }
+        val childSessions = sessions.filter { it.parentSessionId == parentSessionId }
+        if (childSessions.isEmpty()) {
+            return
+        }
+        val rollup = AgentParentSessionAggregator.rollup(
+            childSessions.map { childSession ->
+                val events = manager.getSessionEvents(childSession.sessionId)
+                ParentSessionChildSummary(
+                    sessionId = childSession.sessionId,
+                    targetPackage = childSession.targetPackage,
+                    state = childSession.state,
+                    latestResult = findLastEventMessage(events, AgentSessionEvent.TYPE_RESULT),
+                    latestError = findLastEventMessage(events, AgentSessionEvent.TYPE_ERROR),
+                )
+            },
+        )
+        if (parentSession.state != rollup.state) {
+            runCatching {
+                manager.updateSessionState(parentSessionId, rollup.state)
+            }.onFailure { err ->
+                Log.w(TAG, "Failed to update parent session state for $parentSessionId", err)
+            }
+        }
+        val parentEvents = if (rollup.resultMessage != null || rollup.errorMessage != null) {
+            manager.getSessionEvents(parentSessionId)
+        } else {
+            emptyList()
+        }
+        if (rollup.resultMessage != null && findLastEventMessage(parentEvents, AgentSessionEvent.TYPE_RESULT) == null) {
+            runCatching {
+                manager.publishResult(parentSessionId, rollup.resultMessage)
+            }.onFailure { err ->
+                Log.w(TAG, "Failed to publish parent result for $parentSessionId", err)
+            }
+        }
+        if (rollup.errorMessage != null && findLastEventMessage(parentEvents, AgentSessionEvent.TYPE_ERROR) == null) {
+            runCatching {
+                manager.publishError(parentSessionId, rollup.errorMessage)
+            }.onFailure { err ->
+                Log.w(TAG, "Failed to publish parent error for $parentSessionId", err)
+            }
+        }
     }
 
     private fun shouldServeSessionBridge(session: AgentSessionInfo): Boolean {
@@ -260,6 +336,12 @@ class CodexAgentService : AgentService() {
         }?.message
     }
 
+    private fun findLastEventMessage(events: List<AgentSessionEvent>, type: Int): String? {
+        return events.lastOrNull { event ->
+            event.type == type && !event.message.isNullOrBlank()
+        }?.message
+    }
+
     private fun isBridgeQuestion(question: String): Boolean {
         return question.startsWith(BRIDGE_REQUEST_PREFIX)
     }
@@ -358,5 +440,15 @@ class CodexAgentService : AgentService() {
             }
         }
         return "$sessionId:$question"
+    }
+
+    private fun isDirectParentSession(session: AgentSessionInfo): Boolean {
+        return session.anchor == AgentSessionInfo.ANCHOR_AGENT &&
+            session.parentSessionId == null &&
+            session.targetPackage == null
+    }
+
+    private fun currentUserId(): Int {
+        return Process.myUid() / 100000
     }
 }

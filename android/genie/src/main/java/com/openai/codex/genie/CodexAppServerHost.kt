@@ -9,6 +9,7 @@ import java.io.BufferedWriter
 import java.io.Closeable
 import java.io.File
 import java.io.IOException
+import java.io.InterruptedIOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -107,17 +108,25 @@ class CodexAppServerHost(
 
     private fun startStdoutPump() {
         stdoutThread = Thread {
-            process.inputStream.bufferedReader().useLines { lines ->
-                lines.forEach { line ->
-                    if (line.isBlank()) {
-                        return@forEach
-                    }
-                    val message = runCatching { JSONObject(line) }
-                        .getOrElse { err ->
-                            Log.w(TAG, "Failed to parse codex app-server stdout line", err)
+            try {
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        if (line.isBlank()) {
                             return@forEach
                         }
-                    routeInbound(message)
+                        val message = runCatching { JSONObject(line) }
+                            .getOrElse { err ->
+                                Log.w(TAG, "Failed to parse codex app-server stdout line", err)
+                                return@forEach
+                            }
+                        routeInbound(message)
+                    }
+                }
+            } catch (_: InterruptedIOException) {
+                // Expected when the hosted app-server exits and the stream closes underneath the reader.
+            } catch (err: IOException) {
+                if (!control.cancelled && process.isAlive) {
+                    Log.w(TAG, "Stdout pump failed for ${request.sessionId}", err)
                 }
             }
         }.also {
@@ -128,15 +137,23 @@ class CodexAppServerHost(
 
     private fun startStderrPump() {
         stderrThread = Thread {
-            process.errorStream.bufferedReader().useLines { lines ->
-                lines.forEach { line ->
-                    if (line.isBlank()) {
-                        return@forEach
+            try {
+                process.errorStream.bufferedReader().useLines { lines ->
+                    lines.forEach { line ->
+                        if (line.isBlank()) {
+                            return@forEach
+                        }
+                        when {
+                            line.contains(" ERROR ") -> Log.e(TAG, line)
+                            line.contains(" WARN ") || line.startsWith("WARNING:") -> Log.w(TAG, line)
+                        }
                     }
-                    when {
-                        line.contains(" ERROR ") -> Log.e(TAG, line)
-                        line.contains(" WARN ") || line.startsWith("WARNING:") -> Log.w(TAG, line)
-                    }
+                }
+            } catch (_: InterruptedIOException) {
+                // Expected when the hosted app-server exits and the stream closes underneath the reader.
+            } catch (err: IOException) {
+                if (!control.cancelled && process.isAlive) {
+                    Log.w(TAG, "Stderr pump failed for ${request.sessionId}", err)
                 }
             }
         }.also {
