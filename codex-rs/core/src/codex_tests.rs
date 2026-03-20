@@ -4402,6 +4402,7 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn record_response_item_stamps_session_source_on_all_supported_variants() {
     let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
@@ -4589,7 +4590,10 @@ async fn record_response_item_stamps_session_source_on_all_supported_variants() 
             | ResponseItem::Compaction {
                 metadata: Some(metadata),
                 ..
-            } => metadata.session_source == Some(expected_session_source.clone()),
+            } => {
+                metadata.session_source == Some(expected_session_source.clone())
+                    && metadata.sandbox_policy == Some(expected_sandbox_policy.clone())
+            }
             _ => false,
         })
         .count();
@@ -4815,6 +4819,7 @@ async fn tool_call_metadata_stamps_non_escalated_false_when_feature_enabled() {
 async fn handle_output_item_done_stamps_tool_call_metadata_when_feature_enabled() {
     let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
     let expected_sandbox_policy = sandbox_policy_to_metadata(tc.sandbox_policy.get());
+    let expected_session_source = session_source_to_metadata(&tc.session_source);
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
@@ -4865,6 +4870,7 @@ async fn handle_output_item_done_stamps_tool_call_metadata_when_feature_enabled(
                 && metadata.is_tool_call_escalated == Some(false)
                 && metadata.review_decision.is_none()
                 && metadata.sandbox_policy == Some(expected_sandbox_policy.clone())
+                && metadata.session_source == Some(expected_session_source.clone())
         )
     }));
 }

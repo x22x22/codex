@@ -36,6 +36,7 @@ use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::RawResponseItemEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
 use codex_protocol::protocol::SessionMeta;
@@ -58,6 +59,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use dunce::canonicalize as normalize_path;
 use futures::StreamExt;
 use pretty_assertions::assert_eq;
@@ -88,6 +90,33 @@ fn message_input_texts(item: &serde_json::Value) -> Vec<&str> {
         .iter()
         .filter_map(|entry| entry.get("text").and_then(|text| text.as_str()))
         .collect()
+}
+
+#[expect(clippy::unwrap_used)]
+fn assistant_message_item_by_text<'a>(
+    input: &'a [serde_json::Value],
+    text: &str,
+) -> &'a serde_json::Value {
+    input
+        .iter()
+        .find(|item| {
+            if item.get("type").and_then(serde_json::Value::as_str) != Some("message")
+                || item.get("role").and_then(serde_json::Value::as_str) != Some("assistant")
+            {
+                return false;
+            }
+            item.get("content")
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|content| {
+                    content.iter().any(|entry| {
+                        entry.get("type").and_then(serde_json::Value::as_str) == Some("output_text")
+                            && entry.get("text").and_then(serde_json::Value::as_str) == Some(text)
+                    })
+                })
+        })
+        .unwrap_or_else(|| {
+            panic!("submitted assistant message input item not found for text: {text}")
+        })
 }
 
 /// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
@@ -634,7 +663,14 @@ async fn includes_conversation_id_and_model_headers_in_request() {
     )
     .await;
 
-    let mut builder = test_codex().with_auth(CodexAuth::from_api_key("Test API Key"));
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ItemMetadata)
+                .expect("feature flag should be enabled for this test");
+        });
     let test = builder
         .build(&server)
         .await
@@ -2572,7 +2608,14 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
 
     let request_log = mount_sse_sequence(&server, vec![sse1.clone(), sse1.clone(), sse1]).await;
 
-    let mut builder = test_codex().with_auth(CodexAuth::from_api_key("Test API Key"));
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ItemMetadata)
+                .expect("feature flag should be enabled for this test");
+        });
     let codex = builder
         .build(&server)
         .await
@@ -2668,4 +2711,103 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
         r3_tail_expected,
         "request 3 tail mismatch",
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replayed_output_item_keeps_uuid_across_turns() {
+    skip_if_no_network!();
+
+    let server = MockServer::start().await;
+    let sse_raw = r##"[
+        {"type":"response.output_item.added", "item":{
+            "type":"message", "role":"assistant",
+            "content":[{"type":"output_text","text":""}]
+        }},
+        {"type":"response.output_text.delta", "delta":"Hey "},
+        {"type":"response.output_text.delta", "delta":"there"},
+        {"type":"response.output_text.delta", "delta":"!\n"},
+        {"type":"response.output_item.done", "item":{
+            "type":"message", "role":"assistant",
+            "content":[{"type":"output_text","text":"Hey there!\n"}]
+        }},
+        {"type":"response.completed", "response": {"id": "__ID__"}}
+    ]"##;
+    let sse1 = core_test_support::load_sse_fixture_with_id_from_str(sse_raw, "resp1");
+    let request_log = mount_sse_sequence(&server, vec![sse1.clone(), sse1]).await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::from_api_key("Test API Key"))
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::ItemMetadata)
+                .expect("feature flag should be enabled for this test");
+        });
+    let codex = builder
+        .build(&server)
+        .await
+        .expect("create new conversation")
+        .codex;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U1".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+
+    let original_uuid = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::RawResponseItem(RawResponseItemEvent {
+            item:
+                ResponseItem::Message {
+                    role,
+                    content,
+                    metadata: Some(metadata),
+                    ..
+                },
+        }) if role == "assistant"
+            && *content
+                == vec![ContentItem::OutputText {
+                    text: "Hey there!\n".to_string(),
+                }] =>
+        {
+            metadata.uuid.clone()
+        }
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "U2".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let requests = request_log.requests();
+    assert_eq!(requests.len(), 2, "expected 2 requests (one per turn)");
+    let request_2_input = requests[1]
+        .body_json()
+        .get("input")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .expect("request 2 missing input array");
+    let replayed_uuid = assistant_message_item_by_text(&request_2_input, "Hey there!\n")
+        .get("metadata")
+        .and_then(serde_json::Value::as_object)
+        .and_then(|metadata| metadata.get("uuid"))
+        .and_then(serde_json::Value::as_str)
+        .expect("replayed assistant message should carry a uuid");
+
+    assert_eq!(replayed_uuid, original_uuid);
 }

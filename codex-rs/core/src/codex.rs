@@ -1071,6 +1071,17 @@ fn session_source_metadata_patch(session_source: &SessionSource) -> ResponseItem
     }
 }
 
+fn base_item_metadata_patch(turn_context: &TurnContext) -> ResponseItemMetadata {
+    let mut patch = ResponseItemMetadata {
+        sandbox_policy: Some(sandbox_policy_to_metadata(
+            turn_context.sandbox_policy.get(),
+        )),
+        ..ResponseItemMetadata::default()
+    };
+    patch.merge_from(session_source_metadata_patch(&turn_context.session_source));
+    patch
+}
+
 fn response_item_tool_call_id(item: &ResponseItem) -> Option<&str> {
     match item {
         ResponseItem::LocalShellCall {
@@ -1146,7 +1157,6 @@ struct ToolApprovalMetadataSnapshot {
 }
 
 fn stamp_tool_approval_metadata_with_snapshot(
-    turn_context: &TurnContext,
     response_item: ResponseItem,
     snapshot: Option<&ToolApprovalMetadataSnapshot>,
 ) -> ResponseItem {
@@ -1164,9 +1174,6 @@ fn stamp_tool_approval_metadata_with_snapshot(
         Some(metadata) => metadata,
         None => return response_item,
     };
-    metadata.sandbox_policy = Some(sandbox_policy_to_metadata(
-        turn_context.sandbox_policy.get(),
-    ));
 
     match outcome {
         Some(outcome) => {
@@ -3458,7 +3465,7 @@ impl Session {
 
     pub(crate) async fn stamp_tool_approval_metadata(
         &self,
-        turn_context: &TurnContext,
+        _turn_context: &TurnContext,
         response_item: ResponseItem,
     ) -> ResponseItem {
         if !self.enabled(Feature::ItemMetadata) {
@@ -3477,12 +3484,12 @@ impl Session {
                 pending_approval_call_ids,
             }
         };
-        stamp_tool_approval_metadata_with_snapshot(turn_context, response_item, Some(&snapshot))
+        stamp_tool_approval_metadata_with_snapshot(response_item, Some(&snapshot))
     }
 
     pub(crate) async fn stamp_tool_approval_metadata_on_items(
         &self,
-        turn_context: &TurnContext,
+        _turn_context: &TurnContext,
         response_items: Vec<ResponseItem>,
     ) -> Vec<ResponseItem> {
         if !self.enabled(Feature::ItemMetadata) {
@@ -3504,9 +3511,7 @@ impl Session {
 
         response_items
             .into_iter()
-            .map(|item| {
-                stamp_tool_approval_metadata_with_snapshot(turn_context, item, Some(&snapshot))
-            })
+            .map(|item| stamp_tool_approval_metadata_with_snapshot(item, Some(&snapshot)))
             .collect()
     }
 
@@ -3548,7 +3553,7 @@ impl Session {
         turn_context: &TurnContext,
         items: &[ResponseItem],
     ) {
-        let items = self.prepare_history_items(items);
+        let items = self.prepare_history_items(items, turn_context);
         self.record_into_history_prepared(&items, turn_context)
             .await;
         self.persist_rollout_response_items(&items).await;
@@ -3561,17 +3566,25 @@ impl Session {
         items: &[ResponseItem],
         turn_context: &TurnContext,
     ) {
-        let items = self.prepare_history_items(items);
+        let items = self.prepare_history_items(items, turn_context);
         self.record_into_history_prepared(&items, turn_context)
             .await;
     }
 
-    fn prepare_history_items(&self, items: &[ResponseItem]) -> Vec<ResponseItem> {
+    fn prepare_history_items(
+        &self,
+        items: &[ResponseItem],
+        turn_context: &TurnContext,
+    ) -> Vec<ResponseItem> {
         if self.enabled(Feature::ItemMetadata) {
+            let metadata_patch = base_item_metadata_patch(turn_context);
             items
                 .iter()
                 .cloned()
                 .map(ResponseItem::with_generated_metadata_uuid)
+                .map(|item| {
+                    stamp_response_item_metadata_on_response_item(item, metadata_patch.clone())
+                })
                 .collect()
         } else {
             items.to_vec()
@@ -4043,14 +4056,6 @@ impl Session {
         turn_context: &TurnContext,
         response_item: ResponseItem,
     ) {
-        let response_item = if self.enabled(Feature::ItemMetadata) {
-            stamp_response_item_metadata_on_response_item(
-                response_item,
-                session_source_metadata_patch(&turn_context.session_source),
-            )
-        } else {
-            response_item
-        };
         let response_item = self
             .stamp_tool_approval_metadata(turn_context, response_item)
             .await;
@@ -4074,12 +4079,7 @@ impl Session {
         message_metadata: Option<ResponseItemMetadata>,
     ) {
         let metadata_patch = if self.enabled(Feature::ItemMetadata) {
-            let mut patch = message_metadata.unwrap_or_default();
-            patch.sandbox_policy = Some(sandbox_policy_to_metadata(
-                turn_context.sandbox_policy.get(),
-            ));
-            patch.merge_from(session_source_metadata_patch(&turn_context.session_source));
-            Some(patch)
+            Some(message_metadata.unwrap_or_default())
         } else {
             None
         };
