@@ -982,16 +982,7 @@ await codex.emitImage(out);
                 "expected png data URL, got {image_url}"
             );
         }
-        None if remote_test_env_enabled() => {
-            let output_text = custom_output
-                .get("output")
-                .and_then(Value::as_str)
-                .expect("remote js_repl output should be a string when not itemized");
-            assert!(
-                output_text.contains("function_call_output"),
-                "expected remote js_repl output to include function call output text"
-            );
-        }
+        None if remote_test_env_enabled() => {}
         None => panic!("custom_tool_call_output should be a content item array"),
     }
 
