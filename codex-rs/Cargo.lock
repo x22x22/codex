@@ -1448,6 +1448,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-rollout",
  "codex-shell-command",
  "codex-state",
  "codex-utils-absolute-path",
@@ -1862,7 +1863,6 @@ dependencies = [
  "codex-exec-server",
  "codex-execpolicy",
  "codex-features",
- "codex-file-search",
  "codex-git",
  "codex-hooks",
  "codex-login",
@@ -1870,6 +1870,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-rmcp-client",
+ "codex-rollout",
  "codex-secrets",
  "codex-shell-command",
  "codex-shell-escalation",
@@ -1929,7 +1930,6 @@ dependencies = [
  "test-case",
  "test-log",
  "thiserror 2.0.18",
- "time",
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
@@ -1978,6 +1978,7 @@ dependencies = [
  "codex-feedback",
  "codex-otel",
  "codex-protocol",
+ "codex-rollout",
  "codex-utils-absolute-path",
  "codex-utils-cargo-bin",
  "codex-utils-cli",
@@ -2448,6 +2449,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-rollout"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "codex-file-search",
+ "codex-login",
+ "codex-otel",
+ "codex-protocol",
+ "codex-state",
+ "dunce",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "codex-secrets"
 version = "0.0.0"
 dependencies = [
@@ -2593,6 +2617,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-rollout",
  "codex-shell-command",
  "codex-state",
  "codex-terminal-detection",
@@ -2686,6 +2711,7 @@ dependencies = [
  "codex-login",
  "codex-otel",
  "codex-protocol",
+ "codex-rollout",
  "codex-shell-command",
  "codex-state",
  "codex-terminal-detection",
