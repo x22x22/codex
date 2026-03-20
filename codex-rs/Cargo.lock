@@ -410,6 +410,7 @@ dependencies = [
  "codex-app-server-protocol",
  "codex-core",
  "codex-features",
+ "codex-models",
  "codex-protocol",
  "codex-utils-cargo-bin",
  "core_test_support",
