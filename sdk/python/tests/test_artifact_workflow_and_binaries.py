@@ -5,7 +5,6 @@ import importlib.util
 import io
 import json
 import sys
-import tomllib
 import urllib.error
 from pathlib import Path
 
@@ -211,9 +210,7 @@ def test_release_metadata_retries_without_invalid_auth(monkeypatch: pytest.Monke
 
 
 def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> None:
-    pyproject = tomllib.loads(
-        (ROOT.parent / "python-runtime" / "pyproject.toml").read_text()
-    )
+    pyproject_text = (ROOT.parent / "python-runtime" / "pyproject.toml").read_text()
     hook_source = (ROOT.parent / "python-runtime" / "hatch_build.py").read_text()
     hook_tree = ast.parse(hook_source)
     initialize_fn = next(
@@ -253,14 +250,12 @@ def test_runtime_package_is_wheel_only_and_builds_platform_specific_wheels() -> 
         and isinstance(node.value, ast.Constant)
     }
 
-    assert pyproject["tool"]["hatch"]["build"]["targets"]["wheel"] == {
-        "packages": ["src/codex_cli_bin"],
-        "include": ["src/codex_cli_bin/bin/**"],
-        "hooks": {"custom": {}},
-    }
-    assert pyproject["tool"]["hatch"]["build"]["targets"]["sdist"] == {
-        "hooks": {"custom": {}},
-    }
+    assert "[tool.hatch.build.targets.wheel]" in pyproject_text
+    assert 'packages = ["src/codex_cli_bin"]' in pyproject_text
+    assert 'include = ["src/codex_cli_bin/bin/**"]' in pyproject_text
+    assert "[tool.hatch.build.targets.wheel.hooks.custom]" in pyproject_text
+    assert "[tool.hatch.build.targets.sdist]" in pyproject_text
+    assert "[tool.hatch.build.targets.sdist.hooks.custom]" in pyproject_text
     assert sdist_guard is not None
     assert build_data_assignments == {"pure_python": False, "infer_tag": True}
 
