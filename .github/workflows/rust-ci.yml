@@ -103,11 +103,13 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
       - uses: dtolnay/rust-toolchain@1.93.0
+        if: ${{ needs.changed.outputs.argument_comment_lint_package == 'true' || github.event_name == 'push' }}
         with:
           toolchain: nightly-2025-09-18
           components: llvm-tools-preview, rustc-dev, rust-src
       - name: Cache cargo-dylint tooling
         id: cargo_dylint_cache
+        if: ${{ needs.changed.outputs.argument_comment_lint_package == 'true' || github.event_name == 'push' }}
         uses: actions/cache@v5
         with:
           path: |
@@ -118,16 +120,18 @@ jobs:
             ~/.cargo/git/db
           key: argument-comment-lint-${{ runner.os }}-${{ hashFiles('tools/argument-comment-lint/Cargo.lock', 'tools/argument-comment-lint/rust-toolchain', '.github/workflows/rust-ci.yml') }}
       - name: Install cargo-dylint tooling
-        if: ${{ steps.cargo_dylint_cache.outputs.cache-hit != 'true' }}
+        if: ${{ (needs.changed.outputs.argument_comment_lint_package == 'true' || github.event_name == 'push') && steps.cargo_dylint_cache.outputs.cache-hit != 'true' }}
         run: cargo install --locked cargo-dylint dylint-link
+      - uses: facebook/install-dotslash@v2
       - name: Test argument comment lint package
         if: ${{ needs.changed.outputs.argument_comment_lint_package == 'true' || github.event_name == 'push' }}
         working-directory: tools/argument-comment-lint
         run: cargo test
       - name: Run argument comment lint on codex-rs
         run: |
+          bash -n tools/argument-comment-lint/run-prebuilt-linter.sh
           bash -n tools/argument-comment-lint/run.sh
-          ./tools/argument-comment-lint/run.sh
+          ./tools/argument-comment-lint/run-prebuilt-linter.sh
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build:
