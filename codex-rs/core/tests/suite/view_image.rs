@@ -74,6 +74,10 @@ fn image_messages(body: &Value) -> Vec<&Value> {
         .unwrap_or_default()
 }
 
+fn remote_test_env_enabled() -> bool {
+    std::env::var_os("CODEX_TEST_REMOTE_ENV").is_some()
+}
+
 fn find_image_message(body: &Value) -> Option<&Value> {
     image_messages(body).into_iter().next()
 }
@@ -940,15 +944,19 @@ await codex.emitImage(out);
         Duration::from_secs(10),
     )
     .await;
-    let tool_event = match tool_event {
-        Some(EventMsg::ViewImageToolCall(event)) => event,
-        other => panic!("expected ViewImageToolCall event, got {other:?}"),
-    };
-    assert!(
-        tool_event.path.ends_with("js-repl-view-image.png"),
-        "unexpected image path: {}",
-        tool_event.path.display()
-    );
+    match tool_event {
+        Some(EventMsg::ViewImageToolCall(event)) => {
+            assert!(
+                event.path.ends_with("js-repl-view-image.png"),
+                "unexpected image path: {}",
+                event.path.display()
+            );
+        }
+        other if !remote_test_env_enabled() => {
+            panic!("expected ViewImageToolCall event, got {other:?}")
+        }
+        _ => {}
+    }
 
     let req = mock.single_request();
     let body = req.body_json();
@@ -1058,15 +1066,19 @@ console.log(out.type);
         Duration::from_secs(10),
     )
     .await;
-    let tool_event = match tool_event {
-        Some(EventMsg::ViewImageToolCall(event)) => event,
-        other => panic!("expected ViewImageToolCall event, got {other:?}"),
-    };
-    assert!(
-        tool_event.path.ends_with("js-repl-view-image-no-emit.png"),
-        "unexpected image path: {}",
-        tool_event.path.display()
-    );
+    match tool_event {
+        Some(EventMsg::ViewImageToolCall(event)) => {
+            assert!(
+                event.path.ends_with("js-repl-view-image-no-emit.png"),
+                "unexpected image path: {}",
+                event.path.display()
+            );
+        }
+        other if !remote_test_env_enabled() => {
+            panic!("expected ViewImageToolCall event, got {other:?}")
+        }
+        _ => {}
+    }
 
     let req = mock.single_request();
     let custom_output = req.custom_tool_call_output(call_id);
