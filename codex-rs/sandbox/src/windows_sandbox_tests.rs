@@ -138,8 +138,7 @@ fn resolve_windows_sandbox_private_desktop_prefers_profile_windows() {
 #[test]
 fn resolve_windows_sandbox_private_desktop_defaults_to_true() {
     assert!(resolve_windows_sandbox_private_desktop(
-        /*profile_private_desktop*/ None,
-        /*cfg_private_desktop*/ None,
+        /*profile_private_desktop*/ None, /*cfg_private_desktop*/ None,
     ));
 }
 
