@@ -520,6 +520,51 @@ fn evaluate_intercepted_exec_policy_matches_inner_shell_commands_when_enabled() 
 }
 
 #[test]
+fn evaluate_intercepted_exec_policy_matches_simple_powershell_wrapped_commands() {
+    let policy_src = r#"prefix_rule(pattern = ["git", "add"], decision = "allow")"#;
+    let mut parser = PolicyParser::new();
+    parser.parse("test.rules", policy_src).unwrap();
+    let policy = parser.build();
+    let program = AbsolutePathBuf::try_from(if cfg!(windows) {
+        r"C:\Program Files\PowerShell\7\pwsh.exe".to_string()
+    } else {
+        "/usr/local/bin/pwsh".to_string()
+    })
+    .unwrap();
+
+    let evaluation = evaluate_intercepted_exec_policy(
+        &policy,
+        &program,
+        &[
+            "pwsh".to_string(),
+            "-NoProfile".to_string(),
+            "-Command".to_string(),
+            "git add -A".to_string(),
+        ],
+        InterceptedExecPolicyContext {
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            enable_shell_wrapper_parsing: false,
+        },
+    );
+
+    assert_eq!(
+        evaluation,
+        Evaluation {
+            decision: Decision::Allow,
+            matched_rules: vec![RuleMatch::PrefixRuleMatch {
+                matched_prefix: vec!["git".to_string(), "add".to_string()],
+                decision: Decision::Allow,
+                resolved_program: None,
+                justification: None,
+            }],
+        }
+    );
+}
+
+#[test]
 fn intercepted_exec_policy_uses_host_executable_mappings() {
     let git_path = host_absolute_path(&["usr", "bin", "git"]);
     let git_path_literal = starlark_string(&git_path);
