@@ -554,6 +554,9 @@ class CodexAppServerHost(
             Prefer direct self-targeted Android shell commands and intents first when they can satisfy the objective without UI-driving.
             In this platform build, an active Genie session may use self-targeted shell surfaces such as `am start --user 0`, `cmd activity start-activity --user 0`, `cmd package resolve-activity`, `cmd package query-activities --user 0`, `input`, `uiautomator dump`, `screencap`, and `screenrecord`.
             When using `am start`, `cmd activity start-activity`, or `cmd package query-activities`, pass `--user 0`; omitting it can fail with cross-user permission errors.
+            Android shell `date` is not GNU coreutils `date`; do not rely on `date -d "+5 minutes"` or similar relative-date parsing because it fails on this platform.
+            When you must convert a relative request like “in 5 minutes” into wall-clock alarm fields, compute it with shell arithmetic from `date +%H` and `date +%M`, for example: `h=$(date +%H); m=$(date +%M); total=$((10#${'$'}h * 60 + 10#${'$'}m + 5)); hour=$(((total / 60) % 24)); minute=$((total % 60))`, then pass `hour` and `minute` as integers to `am start`.
+            When the objective is a timer duration rather than a wall-clock alarm, prefer direct duration-based intents like `android.intent.action.SET_TIMER` with a length in seconds instead of computing a future clock time.
             Avoid `dumpsys` and `cmd package dump` for package/activity inspection because they require `android.permission.DUMP` in the paired app UID and will not help you complete the task.
             If a direct command or intent clearly accomplishes the objective, stop and report success instead of continuing exploratory UI actions.
             The Genie may request detached target launch through the framework callback, and after that it may use supported self-targeted shell commands to drive the target app.

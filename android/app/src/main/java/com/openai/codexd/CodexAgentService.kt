@@ -49,7 +49,7 @@ class CodexAgentService : AgentService() {
         agentManager?.let { manager ->
             if (shouldServeSessionBridge(session)) {
                 AgentSessionBridgeServer.ensureStarted(this, manager, session.sessionId)
-            } else {
+            } else if (isTerminalSessionState(session.state)) {
                 AgentSessionBridgeServer.closeSession(session.sessionId)
             }
         }
@@ -155,15 +155,16 @@ class CodexAgentService : AgentService() {
         if (session.targetPackage.isNullOrBlank()) {
             return false
         }
-        if (session.geniePackage.isNullOrBlank()) {
-            return false
-        }
-        return when (session.state) {
+        return !isTerminalSessionState(session.state)
+    }
+
+    private fun isTerminalSessionState(state: Int): Boolean {
+        return when (state) {
             AgentSessionInfo.STATE_COMPLETED,
             AgentSessionInfo.STATE_CANCELLED,
             AgentSessionInfo.STATE_FAILED,
-            -> false
-            else -> true
+            -> true
+            else -> false
         }
     }
 
