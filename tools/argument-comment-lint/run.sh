@@ -3,15 +3,12 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-lint_path="$repo_root/tools/argument-comment-lint"
 manifest_path="$repo_root/codex-rs/Cargo.toml"
-strict_lint="uncommented-anonymous-literal-argument"
-noise_lint="unknown_lints"
+dotslash_manifest="$repo_root/tools/argument-comment-lint/argument-comment-lint"
 
 has_manifest_path=false
 has_package_selection=false
 has_no_deps=false
-has_library_selection=false
 expect_value=""
 
 for arg in "$@"; do
@@ -22,9 +19,6 @@ for arg in "$@"; do
                 ;;
             package_selection)
                 has_package_selection=true
-                ;;
-            library_selection)
-                has_library_selection=true
                 ;;
         esac
         expect_value=""
@@ -53,39 +47,19 @@ for arg in "$@"; do
         --no-deps)
             has_no_deps=true
             ;;
-        --lib|--lib-path)
-            expect_value="library_selection"
-            ;;
-        --lib=*|--lib-path=*)
-            has_library_selection=true
-            ;;
     esac
 done
 
-cmd=(cargo dylint --path "$lint_path")
-if [[ "$has_library_selection" == false ]]; then
-    cmd+=(--all)
-fi
+lint_args=()
 if [[ "$has_manifest_path" == false ]]; then
-    cmd+=(--manifest-path "$manifest_path")
+    lint_args+=(--manifest-path "$manifest_path")
 fi
 if [[ "$has_package_selection" == false ]]; then
-    cmd+=(--workspace)
+    lint_args+=(--workspace)
 fi
 if [[ "$has_no_deps" == false ]]; then
-    cmd+=(--no-deps)
+    lint_args+=(--no-deps)
 fi
-cmd+=("$@")
+lint_args+=("$@")
 
-if [[ "${DYLINT_RUSTFLAGS:-}" != *"$strict_lint"* ]]; then
-    export DYLINT_RUSTFLAGS="${DYLINT_RUSTFLAGS:+${DYLINT_RUSTFLAGS} }-D $strict_lint"
-fi
-if [[ "${DYLINT_RUSTFLAGS:-}" != *"$noise_lint"* ]]; then
-    export DYLINT_RUSTFLAGS="${DYLINT_RUSTFLAGS:+${DYLINT_RUSTFLAGS} }-A $noise_lint"
-fi
-
-if [[ -z "${CARGO_INCREMENTAL:-}" ]]; then
-    export CARGO_INCREMENTAL=0
-fi
-
-exec "${cmd[@]}"
+exec "$dotslash_manifest" "${lint_args[@]}"

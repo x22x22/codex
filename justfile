@@ -30,8 +30,9 @@ fmt:
 fix *args:
     cargo clippy --fix --tests --allow-dirty "$@"
 
-clippy:
+clippy *args:
     cargo clippy --tests "$@"
+    ../tools/argument-comment-lint/run.sh "$@"
 
 install:
     rustup show active-toolchain
@@ -90,6 +91,10 @@ write-hooks-schema:
 [no-cd]
 argument-comment-lint *args:
     ./tools/argument-comment-lint/run.sh "$@"
+
+[no-cd]
+argument-comment-lint-from-source *args:
+    ./tools/argument-comment-lint/run-from-source.sh "$@"
 
 # Tail logs from the state SQLite database
 log *args:
