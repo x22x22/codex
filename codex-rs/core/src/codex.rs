@@ -208,12 +208,6 @@ use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::guardian::GuardianReviewSessionManager;
-use crate::hook_runtime::PendingInputHookDisposition;
-use crate::hook_runtime::inspect_pending_input;
-use crate::hook_runtime::record_additional_contexts;
-use crate::hook_runtime::record_pending_input;
-use crate::hook_runtime::run_pending_session_start_hooks;
-use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::guardian::routes_approval_to_guardian;
 use crate::hook_runtime::PendingInputHookDisposition;
 use crate::hook_runtime::inspect_pending_input;
@@ -3427,11 +3421,6 @@ impl Session {
         )
         .await;
     }
-
-    pub async fn record_policy_outcome(&self, call_id: &str) {
-        self.record_call_approval_outcome(call_id.to_string(), ApprovalOutcomeMetadata::policy())
-        .await;
-    }
     pub(crate) async fn record_call_approval_outcome(
         &self,
         call_id: String,
@@ -4274,25 +4263,6 @@ impl Session {
         }
     }
 
-    pub(crate) async fn prepend_pending_input_with_metadata(
-        &self,
-        input: Vec<(ResponseInputItem, Option<ResponseItemMetadata>)>,
-    ) -> Result<(), ()> {
-        let mut active = self.active_turn.lock().await;
-        match active.as_mut() {
-            Some(at) => {
-                let mut ts = at.turn_state.lock().await;
-                ts.prepend_pending_input(
-                    input
-                        .into_iter()
-                        .map(|(input, metadata)| crate::state::PendingInputItem { input, metadata })
-                        .collect(),
-                );
-                Ok(())
-            }
-            None => Err(()),
-        }
-    }
     pub async fn has_pending_input(&self) -> bool {
         let active = self.active_turn.lock().await;
         match active.as_ref() {

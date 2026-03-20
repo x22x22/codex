@@ -303,15 +303,6 @@ impl TurnState {
         }
     }
 
-    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<PendingInputItem>) {
-        if input.is_empty() {
-            return;
-        }
-
-        input.append(&mut self.pending_input);
-        self.pending_input = input;
-    }
-
     pub(crate) fn has_pending_input(&self) -> bool {
         !self.pending_input.is_empty()
     }
