@@ -1,6 +1,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use anyhow::Result;
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
 use codex_features::Feature;
@@ -79,10 +81,6 @@ fn text_item(items: &[Value], index: usize) -> &str {
         .get("text")
         .and_then(Value::as_str)
         .expect("content item should be input_text")
-}
-
-fn remote_test_env_enabled() -> bool {
-    std::env::var_os("CODEX_TEST_REMOTE_ENV").is_some()
 }
 
 fn extract_running_cell_id(text: &str) -> String {
@@ -259,11 +257,6 @@ text(JSON.stringify(await tools.exec_command({ cmd: "printf code_mode_exec_marke
 
     let req = second_mock.single_request();
     let items = custom_tool_output_items(&req, "call-1");
-    if remote_test_env_enabled() && items.len() == 1 {
-        // In remote-executor mode, nested view_image output can be omitted from
-        // code_mode image helper output while the script still succeeds.
-        return Ok(());
-    }
     assert_eq!(items.len(), 2);
     assert_regex_match(
         concat!(
@@ -1813,15 +1806,18 @@ async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
             let _ = config.features.enable(Feature::CodeMode);
             let _ = config.features.enable(Feature::ImageDetailOriginal);
         });
-    let test = builder.build_remote_aware(&server).await?;
+    let test = builder.build(&server).await?;
 
+    let image_bytes = BASE64_STANDARD.decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+    )?;
+    let image_path = test.cwd_path().join("code_mode_view_image.png");
+    fs::write(&image_path, image_bytes)?;
+
+    let image_path_json = serde_json::to_string(&image_path.to_string_lossy().to_string())?;
     let code = format!(
         r#"
-const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
-await tools.exec_command({{
-  cmd: "printf '%s' '" + pngBase64 + "' | base64 --decode > code_mode_view_image.png"
-}});
-const out = await tools.view_image({{ path: "code_mode_view_image.png", detail: "original" }});
+const out = await tools.view_image({{ path: {image_path_json}, detail: "original" }});
 image(out);
 "#
     );
@@ -1856,11 +1852,6 @@ image(out);
         Some(false),
         "code_mode view_image call failed unexpectedly"
     );
-    if remote_test_env_enabled() && items.len() == 1 {
-        // In remote-executor mode, nested view_image output can be omitted from
-        // code_mode image helper output while the script still succeeds.
-        return Ok(());
-    }
     assert_eq!(items.len(), 2);
     assert_regex_match(
         concat!(

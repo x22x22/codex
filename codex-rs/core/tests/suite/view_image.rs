@@ -74,10 +74,6 @@ fn image_messages(body: &Value) -> Vec<&Value> {
         .unwrap_or_default()
 }
 
-fn remote_test_env_enabled() -> bool {
-    std::env::var_os("CODEX_TEST_REMOTE_ENV").is_some()
-}
-
 fn find_image_message(body: &Value) -> Option<&Value> {
     image_messages(body).into_iter().next()
 }
@@ -877,22 +873,23 @@ async fn js_repl_emit_image_attaches_local_image() -> anyhow::Result<()> {
             .enable(Feature::JsRepl)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        config,
+        cwd,
         session_configured,
         ..
-    } = &test;
+    } = builder.build(&server).await?;
 
     let call_id = "js-repl-view-image";
     let js_input = r#"
+const fs = await import("node:fs/promises");
 const path = await import("node:path");
-const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
-const imagePath = path.join(codex.cwd, "js-repl-view-image.png");
-await codex.tool("shell_command", {
-  command: `mkdir -p ${JSON.stringify(path.dirname(imagePath))} && printf '%s' '${pngBase64}' | base64 --decode > ${JSON.stringify(imagePath)}`,
-});
+const imagePath = path.join(codex.tmpDir, "js-repl-view-image.png");
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+  "base64"
+);
+await fs.writeFile(imagePath, png);
 const out = await codex.tool("view_image", { path: imagePath });
 await codex.emitImage(out);
 "#;
@@ -918,7 +915,7 @@ await codex.emitImage(out);
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: config.cwd.clone(),
+            cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
@@ -932,7 +929,7 @@ await codex.emitImage(out);
 
     let mut tool_event = None;
     wait_for_event_with_timeout(
-        codex,
+        &codex,
         |event| match event {
             EventMsg::ViewImageToolCall(_) => {
                 tool_event = Some(event.clone());
@@ -944,19 +941,15 @@ await codex.emitImage(out);
         Duration::from_secs(10),
     )
     .await;
-    match tool_event {
-        Some(EventMsg::ViewImageToolCall(event)) => {
-            assert!(
-                event.path.ends_with("js-repl-view-image.png"),
-                "unexpected image path: {}",
-                event.path.display()
-            );
-        }
-        other if !remote_test_env_enabled() => {
-            panic!("expected ViewImageToolCall event, got {other:?}")
-        }
-        _ => {}
-    }
+    let tool_event = match tool_event {
+        Some(EventMsg::ViewImageToolCall(event)) => event,
+        other => panic!("expected ViewImageToolCall event, got {other:?}"),
+    };
+    assert!(
+        tool_event.path.ends_with("js-repl-view-image.png"),
+        "unexpected image path: {}",
+        tool_event.path.display()
+    );
 
     let req = mock.single_request();
     let body = req.body_json();
@@ -967,24 +960,22 @@ await codex.emitImage(out);
     );
 
     let custom_output = req.custom_tool_call_output(call_id);
-    match custom_output.get("output").and_then(Value::as_array) {
-        Some(output_items) => {
-            let image_url = output_items
-                .iter()
-                .find_map(|item| {
-                    (item.get("type").and_then(Value::as_str) == Some("input_image"))
-                        .then(|| item.get("image_url").and_then(Value::as_str))
-                        .flatten()
-                })
-                .expect("image_url present in js_repl custom tool output");
-            assert!(
-                image_url.starts_with("data:image/png;base64,"),
-                "expected png data URL, got {image_url}"
-            );
-        }
-        None if remote_test_env_enabled() => {}
-        None => panic!("custom_tool_call_output should be a content item array"),
-    }
+    let output_items = custom_output
+        .get("output")
+        .and_then(Value::as_array)
+        .expect("custom_tool_call_output should be a content item array");
+    let image_url = output_items
+        .iter()
+        .find_map(|item| {
+            (item.get("type").and_then(Value::as_str) == Some("input_image"))
+                .then(|| item.get("image_url").and_then(Value::as_str))
+                .flatten()
+        })
+        .expect("image_url present in js_repl custom tool output");
+    assert!(
+        image_url.starts_with("data:image/png;base64,"),
+        "expected png data URL, got {image_url}"
+    );
 
     Ok(())
 }
@@ -1001,22 +992,23 @@ async fn js_repl_view_image_requires_explicit_emit() -> anyhow::Result<()> {
             .enable(Feature::JsRepl)
             .expect("test config should allow feature update");
     });
-    let test = builder.build_remote_aware(&server).await?;
     let TestCodex {
         codex,
-        config,
+        cwd,
         session_configured,
         ..
-    } = &test;
+    } = builder.build(&server).await?;
 
     let call_id = "js-repl-view-image-no-emit";
     let js_input = r#"
+const fs = await import("node:fs/promises");
 const path = await import("node:path");
-const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
-const imagePath = path.join(codex.cwd, "js-repl-view-image-no-emit.png");
-await codex.tool("shell_command", {
-  command: `mkdir -p ${JSON.stringify(path.dirname(imagePath))} && printf '%s' '${pngBase64}' | base64 --decode > ${JSON.stringify(imagePath)}`,
-});
+const imagePath = path.join(codex.tmpDir, "js-repl-view-image-no-emit.png");
+const png = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
+  "base64"
+);
+await fs.writeFile(imagePath, png);
 const out = await codex.tool("view_image", { path: imagePath });
 console.log(out.type);
 "#;
@@ -1042,7 +1034,7 @@ console.log(out.type);
                 text_elements: Vec::new(),
             }],
             final_output_json_schema: None,
-            cwd: config.cwd.clone(),
+            cwd: cwd.path().to_path_buf(),
             approval_policy: AskForApproval::Never,
             sandbox_policy: SandboxPolicy::DangerFullAccess,
             model: session_model,
@@ -1056,7 +1048,7 @@ console.log(out.type);
 
     let mut tool_event = None;
     wait_for_event_with_timeout(
-        codex,
+        &codex,
         |event| match event {
             EventMsg::ViewImageToolCall(_) => {
                 tool_event = Some(event.clone());
@@ -1068,19 +1060,15 @@ console.log(out.type);
         Duration::from_secs(10),
     )
     .await;
-    match tool_event {
-        Some(EventMsg::ViewImageToolCall(event)) => {
-            assert!(
-                event.path.ends_with("js-repl-view-image-no-emit.png"),
-                "unexpected image path: {}",
-                event.path.display()
-            );
-        }
-        other if !remote_test_env_enabled() => {
-            panic!("expected ViewImageToolCall event, got {other:?}")
-        }
-        _ => {}
-    }
+    let tool_event = match tool_event {
+        Some(EventMsg::ViewImageToolCall(event)) => event,
+        other => panic!("expected ViewImageToolCall event, got {other:?}"),
+    };
+    assert!(
+        tool_event.path.ends_with("js-repl-view-image-no-emit.png"),
+        "unexpected image path: {}",
+        tool_event.path.display()
+    );
 
     let req = mock.single_request();
     let custom_output = req.custom_tool_call_output(call_id);
