@@ -308,7 +308,7 @@ async fn run_windows_sandbox_setup_impl(request: WindowsSandboxSetupRequest) -> 
     let codex_home = request.codex_home;
     let setup_codex_home = codex_home.clone();
 
-    let setup_result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         match mode {
             WindowsSandboxSetupMode::Elevated => {
                 if !sandbox_setup_is_complete(setup_codex_home.as_path()) {
@@ -334,9 +334,7 @@ async fn run_windows_sandbox_setup_impl(request: WindowsSandboxSetupRequest) -> 
         Ok(())
     })
     .await
-    .map_err(|join_err| anyhow::anyhow!("windows sandbox setup task failed: {join_err}"))?;
-
-    setup_result
+    .map_err(|join_err| anyhow::anyhow!("windows sandbox setup task failed: {join_err}"))?
 }
 
 fn emit_windows_sandbox_setup_success_metrics(
