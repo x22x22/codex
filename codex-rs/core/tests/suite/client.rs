@@ -92,7 +92,6 @@ fn message_input_texts(item: &serde_json::Value) -> Vec<&str> {
         .collect()
 }
 
-#[expect(clippy::unwrap_used)]
 fn assistant_message_item_by_text<'a>(
     input: &'a [serde_json::Value],
     text: &str,
