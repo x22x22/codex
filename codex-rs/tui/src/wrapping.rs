@@ -32,10 +32,9 @@ use std::borrow::Cow;
 use std::ops::Range;
 use textwrap::Options;
 
-use crate::osc8::osc8_hyperlink;
-use crate::osc8::parse_osc8_hyperlink;
-use crate::osc8::strip_osc8_hyperlinks;
 use crate::render::line_utils::push_owned_lines;
+use crate::terminal_wrappers::parse_zero_width_terminal_wrapper;
+use crate::terminal_wrappers::strip_zero_width_terminal_wrappers;
 
 /// Returns byte-ranges into `text` for each wrapped line, including
 /// trailing whitespace and a +1 sentinel byte. Used by the textarea
@@ -195,7 +194,7 @@ pub(crate) fn line_has_mixed_url_and_non_url_tokens(line: &Line<'_>) -> bool {
 fn visible_line_text(line: &Line<'_>) -> String {
     line.spans
         .iter()
-        .map(|span| strip_osc8_hyperlinks(span.content.as_ref()))
+        .map(|span| strip_zero_width_terminal_wrappers(span.content.as_ref()))
         .collect::<Vec<_>>()
         .join("")
 }
@@ -640,20 +639,24 @@ pub(crate) fn word_wrap_line<'a, O>(line: &'a Line<'a>, width_or_options: O) -> 
 where
     O: Into<RtOptions<'a>>,
 {
-    // Flatten the line and record span byte ranges.
+    // Flatten the line to visible text and record the original span bounds.
+    // Zero-width terminal wrappers stay out of `flat` so textwrap sees only
+    // display cells, but we keep their exact prefix/suffix bytes for
+    // rewrapping each sliced fragment later.
     let mut flat = String::new();
     let mut span_bounds = Vec::new();
     let mut acc = 0usize;
     for s in &line.spans {
-        let parsed = parse_osc8_hyperlink(s.content.as_ref());
-        let text = parsed.map_or_else(|| s.content.as_ref(), |link| link.text);
+        let parsed = parse_zero_width_terminal_wrapper(s.content.as_ref());
+        let text = parsed.map_or_else(|| s.content.as_ref(), |wrapper| wrapper.text);
         let start = acc;
         flat.push_str(text);
         acc += text.len();
         span_bounds.push(SpanBound {
             range: start..acc,
             style: s.style,
-            osc8_destination: parsed.map(|link| link.destination),
+            wrapper_prefix: parsed.map(|wrapper| wrapper.prefix),
+            wrapper_suffix: parsed.map(|wrapper| wrapper.suffix),
         });
     }
 
@@ -893,7 +896,8 @@ fn slice_line_spans<'a>(
 struct SpanBound<'a> {
     range: Range<usize>,
     style: ratatui::style::Style,
-    osc8_destination: Option<&'a str>,
+    wrapper_prefix: Option<&'a str>,
+    wrapper_suffix: Option<&'a str>,
 }
 
 fn slice_span_content<'a>(
@@ -902,11 +906,14 @@ fn slice_span_content<'a>(
     local_start: usize,
     local_end: usize,
 ) -> Cow<'a, str> {
-    if let Some(destination) = bound.osc8_destination {
-        if let Some(parsed) = parse_osc8_hyperlink(content) {
-            Cow::Owned(osc8_hyperlink(
-                destination,
-                &parsed.text[local_start..local_end],
+    // If the original span was wrapped in a zero-width terminal control
+    // sequence, re-emit that wrapper around the visible slice instead of
+    // cutting through the escape payload.
+    if let (Some(prefix), Some(suffix)) = (bound.wrapper_prefix, bound.wrapper_suffix) {
+        if let Some(parsed) = parse_zero_width_terminal_wrapper(content) {
+            Cow::Owned(format!(
+                "{prefix}{}{suffix}",
+                &parsed.text[local_start..local_end]
             ))
         } else {
             Cow::Borrowed(&content[local_start..local_end])
@@ -919,10 +926,10 @@ fn slice_span_content<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::osc8::ParsedOsc8;
     use crate::osc8::osc8_hyperlink;
-    use crate::osc8::parse_osc8_hyperlink;
-    use crate::osc8::strip_osc8_hyperlinks;
+    use crate::terminal_wrappers::ParsedTerminalWrapper;
+    use crate::terminal_wrappers::parse_zero_width_terminal_wrapper;
+    use crate::terminal_wrappers::strip_zero_width_terminal_wrappers;
     use itertools::Itertools as _;
     use pretty_assertions::assert_eq;
     use ratatui::style::Color;
@@ -1016,22 +1023,49 @@ mod tests {
         let first = concat_line(&out[0]);
         let second = concat_line(&out[1]);
 
-        assert_eq!(strip_osc8_hyperlinks(&first), "abcde");
-        assert_eq!(strip_osc8_hyperlinks(&second), "fghij");
+        assert_eq!(strip_zero_width_terminal_wrappers(&first), "abcde");
+        assert_eq!(strip_zero_width_terminal_wrappers(&second), "fghij");
         assert_eq!(
-            parse_osc8_hyperlink(&first).expect("first line should stay hyperlinked"),
-            ParsedOsc8 {
-                destination: url,
+            parse_zero_width_terminal_wrapper(&first).expect("first line should stay hyperlinked"),
+            ParsedTerminalWrapper {
+                prefix: "\u{1b}]8;;https://example.com/docs\u{7}",
                 text: "abcde",
+                suffix: "\u{1b}]8;;\u{7}",
             }
         );
         assert_eq!(
-            parse_osc8_hyperlink(&second).expect("second line should stay hyperlinked"),
-            ParsedOsc8 {
-                destination: url,
+            parse_zero_width_terminal_wrapper(&second)
+                .expect("second line should stay hyperlinked"),
+            ParsedTerminalWrapper {
+                prefix: "\u{1b}]8;;https://example.com/docs\u{7}",
                 text: "fghij",
+                suffix: "\u{1b}]8;;\u{7}",
             }
         );
+    }
+
+    #[test]
+    fn osc8_wrapper_with_params_and_st_is_preserved_across_wraps() {
+        let line = Line::from(vec![
+            "x".into(),
+            Span::from("\u{1b}]8;id=abc;https://example.com\u{1b}\\docs\u{1b}]8;;\u{1b}\\")
+                .underlined(),
+        ]);
+
+        let out = word_wrap_line(&line, 3);
+
+        let expected = vec![
+            Line::from(vec![
+                "x".into(),
+                Span::from("\u{1b}]8;id=abc;https://example.com\u{1b}\\do\u{1b}]8;;\u{1b}\\")
+                    .underlined(),
+            ]),
+            Line::from(vec![
+                Span::from("\u{1b}]8;id=abc;https://example.com\u{1b}\\cs\u{1b}]8;;\u{1b}\\")
+                    .underlined(),
+            ]),
+        ];
+        assert_eq!(out, expected);
     }
 
     #[test]

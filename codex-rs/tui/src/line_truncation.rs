@@ -1,11 +1,11 @@
 use ratatui::text::Line;
 use ratatui::text::Span;
-use unicode_width::UnicodeWidthChar;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use crate::osc8::osc8_hyperlink;
-use crate::osc8::parse_osc8_hyperlink;
-use crate::osc8::strip_osc8_hyperlinks;
+use crate::terminal_wrappers::parse_zero_width_terminal_wrapper;
+use crate::terminal_wrappers::strip_zero_width_terminal_wrappers;
+use crate::terminal_wrappers::visible_width as wrapped_visible_width;
 
 pub(crate) fn line_width(line: &Line<'_>) -> usize {
     line.iter()
@@ -46,24 +46,29 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
 
         let style = span.style;
         let text = span.content.as_ref();
-        let parsed_link = parse_osc8_hyperlink(text);
-        let visible_text =
-            parsed_link.map_or_else(|| strip_osc8_hyperlinks(text), |link| link.text.to_string());
+        let parsed_wrapper = parse_zero_width_terminal_wrapper(text);
+        let visible_text = parsed_wrapper.map_or_else(
+            || strip_zero_width_terminal_wrappers(text),
+            |wrapper| wrapper.text.to_string(),
+        );
+        // Truncate by visible grapheme clusters, not scalar values. This keeps
+        // multi-codepoint emoji intact and lets zero-width wrappers stay
+        // attached to the truncated visible prefix.
         let mut end_idx = 0usize;
-        for (idx, ch) in visible_text.char_indices() {
-            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if used + ch_width > max_width {
+        for grapheme in UnicodeSegmentation::graphemes(visible_text.as_str(), true) {
+            let grapheme_width = UnicodeWidthStr::width(grapheme);
+            if used + grapheme_width > max_width {
                 break;
             }
-            end_idx = idx + ch.len_utf8();
-            used += ch_width;
+            end_idx += grapheme.len();
+            used += grapheme_width;
         }
 
         if end_idx > 0 {
             let truncated_text = &visible_text[..end_idx];
-            let content = parsed_link.map_or_else(
+            let content = parsed_wrapper.map_or_else(
                 || truncated_text.to_string(),
-                |link| osc8_hyperlink(link.destination, truncated_text),
+                |wrapper| format!("{}{}{}", wrapper.prefix, truncated_text, wrapper.suffix),
             );
             spans_out.push(Span::styled(content, style));
         }
@@ -79,10 +84,7 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
 }
 
 fn visible_width(text: &str) -> usize {
-    parse_osc8_hyperlink(text).map_or_else(
-        || UnicodeWidthStr::width(strip_osc8_hyperlinks(text).as_str()),
-        |link| UnicodeWidthStr::width(link.text),
-    )
+    wrapped_visible_width(text)
 }
 
 /// Truncate a styled line to `max_width` and append an ellipsis on overflow.
@@ -124,6 +126,8 @@ mod tests {
     use ratatui::style::Stylize;
     use ratatui::text::Line;
     use ratatui::text::Span;
+
+    use crate::osc8::osc8_hyperlink;
 
     use super::*;
 
@@ -190,5 +194,53 @@ mod tests {
             "…".underlined(),
         ]);
         assert_eq!(truncated, expected);
+    }
+
+    #[test]
+    fn truncate_line_to_width_preserves_st_terminated_wrapper_with_params() {
+        let wrapped = "\u{1b}]8;id=abc;https://example.com\u{1b}\\docs\u{1b}]8;;\u{1b}\\";
+        let line = Line::from(vec!["See ".into(), Span::from(wrapped).cyan().underlined()]);
+
+        let truncated = truncate_line_to_width(line, 6);
+
+        let expected = Line::from(vec![
+            "See ".into(),
+            Span::from("\u{1b}]8;id=abc;https://example.com\u{1b}\\do\u{1b}]8;;\u{1b}\\")
+                .cyan()
+                .underlined(),
+        ]);
+        assert_eq!(truncated, expected);
+    }
+
+    #[test]
+    fn truncate_line_to_width_cuts_by_grapheme_not_scalar_value() {
+        let line = Line::from(vec![
+            Span::from(osc8_hyperlink(
+                "https://example.com/docs",
+                "👨\u{200d}👩\u{200d}👧\u{200d}👦x",
+            ))
+            .underlined(),
+        ]);
+
+        let truncated = truncate_line_to_width(line, 2);
+
+        let expected = Line::from(vec![
+            Span::from(osc8_hyperlink(
+                "https://example.com/docs",
+                "👨\u{200d}👩\u{200d}👧\u{200d}👦",
+            ))
+            .underlined(),
+        ]);
+        assert_eq!(truncated, expected);
+    }
+
+    #[test]
+    fn truncate_line_to_width_preserves_malformed_unterminated_wrapper_verbatim_until_limit() {
+        let malformed = "See \u{1b}]8;;https://example.com\u{7}docs";
+        let line = Line::from(malformed);
+
+        let truncated = truncate_line_to_width(line, 7);
+
+        assert_eq!(truncated, Line::from("See \u{1b}]"));
     }
 }
