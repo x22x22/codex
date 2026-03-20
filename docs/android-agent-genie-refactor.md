@@ -56,6 +56,12 @@ The current repo now contains these implementation slices:
   is reachable from Genie execution for the current bootstrap calls, while
   direct cross-app access to the Agent-owned abstract socket is not a valid
   assumption.
+- Runtime testing on the emulator also shows that headless Genie runtimes
+  cannot directly launch activities via `startActivity` or shell `am start`
+  under the paired app UID. The viable path is to treat the target as
+  framework-launched hidden state, then use detached-target controls and frame
+  capture while keeping shell commands for discovery and any input surfaces
+  that still work inside the paired sandbox.
 
 The Rust `codexd` service/client split remains in place only for the legacy
 foreground-service auth/status surface while this refactor proceeds.

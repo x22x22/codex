@@ -335,15 +335,21 @@ class CodexAppServerHost(
         if (item == null) {
             return
         }
-        Log.i(TAG, "item/started type=${item.optString("type")} tool=${item.optString("tool")}")
+        val command = commandForItem(item)
+        Log.i(
+            TAG,
+            "item/started type=${item.optString("type")} tool=${item.optString("tool")} command=${command ?: ""}",
+        )
         when (item.optString("type")) {
             "dynamicToolCall" -> {
                 val tool = item.optString("tool")
                 callback.publishTrace(request.sessionId, "Codex requested dynamic tool $tool.")
             }
             "commandExecution" -> {
-                val command = item.optJSONArray("command")?.join(" ") ?: "command"
-                callback.publishTrace(request.sessionId, "Codex started command execution: $command")
+                callback.publishTrace(
+                    request.sessionId,
+                    "Codex started command execution: ${command ?: "command"}",
+                )
             }
         }
     }
@@ -352,9 +358,17 @@ class CodexAppServerHost(
         if (item == null) {
             return
         }
+        val command = commandForItem(item)
+        val errorDetail = item.optString("aggregatedOutput").ifBlank {
+            item.optString("stderr").ifBlank {
+                item.optString("output").ifBlank {
+                    item.optString("error")
+                }
+            }
+        }.trim()
         Log.i(
             TAG,
-            "item/completed type=${item.optString("type")} status=${item.optString("status")} tool=${item.optString("tool")}",
+            "item/completed type=${item.optString("type")} status=${item.optString("status")} tool=${item.optString("tool")} command=${command ?: ""} error=${errorDetail.take(200)}",
         )
         when (item.optString("type")) {
             "agentMessage" -> {
@@ -367,27 +381,29 @@ class CodexAppServerHost(
                 }
             }
             "commandExecution" -> {
-                val command = item.optJSONArray("command")?.join(" ") ?: "command"
                 val status = item.optString("status")
                 val exitCode = if (item.has("exitCode")) item.opt("exitCode") else null
-                val failureDetail = item.optString("stderr").ifBlank {
-                    item.optString("output").ifBlank {
-                        item.optString("error")
-                    }
-                }.trim()
+                val resolvedCommand = command ?: "command"
                 if (status == "failed") {
-                    val detailSuffix = failureDetail
+                    Log.i(TAG, "Failed command item=${item}")
+                    val detailSuffix = errorDetail
                         .takeIf(String::isNotBlank)
                         ?.let { " Details: ${it.take(240)}" }
                         .orEmpty()
                     callback.publishTrace(
                         request.sessionId,
-                        "Command failed: $command (status=$status, exitCode=${exitCode ?: "unknown"}).$detailSuffix",
+                        "Command failed: $resolvedCommand (status=$status, exitCode=${exitCode ?: "unknown"}).$detailSuffix",
                     )
+                    if (errorDetail.contains("package=com.android.shell does not belong to uid=")) {
+                        callback.publishTrace(
+                            request.sessionId,
+                            "This shell command requires com.android.shell privileges. The target is already running hidden; use detached-target dynamic tools to show or inspect it instead of retrying the same shell launch surface.",
+                        )
+                    }
                 } else {
                     callback.publishTrace(
                         request.sessionId,
-                        "Command completed: $command (status=$status, exitCode=${exitCode ?: "unknown"}).",
+                        "Command completed: $resolvedCommand (status=$status, exitCode=${exitCode ?: "unknown"}).",
                     )
                 }
             }
@@ -397,6 +413,12 @@ class CodexAppServerHost(
                 callback.publishTrace(request.sessionId, "Dynamic tool $tool completed with status=$status.")
             }
         }
+    }
+
+    private fun commandForItem(item: JSONObject): String? {
+        return item.optString("command")
+            .takeIf(String::isNotBlank)
+            ?: item.optJSONArray("command")?.join(" ")
     }
 
     private fun finishTurn(params: JSONObject) {
@@ -511,8 +533,8 @@ class CodexAppServerHost(
             Prefer direct Android shell commands and intents first: for example `cmd package`, `pm`, `am start`, `am broadcast`, and other commands that can satisfy the objective without UI-driving.
             Use normal Android shell commands for package discovery, activity launch, input injection, UI dumping, and screenshots whenever those commands are available.
             If a direct command or intent clearly accomplishes the objective, stop and report success instead of continuing exploratory UI actions.
-            If a shell command fails with permission-denied or unsupported-operation errors, treat that as a signal to switch strategy instead of retrying the same class of command.
-            Use Android dynamic tools only for framework-only detached target operations that do not have equivalent shell commands.
+            The framework already launches the target app hidden when detached mode is allowed. If shell launch commands fail with permission-denied, unsupported-operation, or com.android.shell package-mismatch errors, do not keep retrying launch. Instead, use detached-target dynamic tools to show or inspect the already-running target, then continue with whatever shell input or inspection surfaces still work.
+            Use Android dynamic tools only for framework-only detached target operations that do not have a working shell equivalent in the paired app sandbox.
             If you need clarification or a decision from the supervising Agent, call request_user_input with concise free-form question text.
             Do not use hidden control protocols.
             Finish with a normal assistant message describing what you accomplished or what blocked you.
