@@ -10,7 +10,7 @@ pub mod api_bridge;
 mod apply_patch;
 mod apps;
 mod arc_monitor;
-pub mod auth;
+pub use codex_login as auth;
 mod auth_env_telemetry;
 mod client;
 mod client_common;
@@ -44,6 +44,7 @@ mod file_watcher;
 mod flags;
 pub mod git_info;
 mod guardian;
+mod hook_runtime;
 pub mod instructions;
 pub mod landlock;
 pub mod mcp;
@@ -62,7 +63,7 @@ mod mcp_tool_call;
 mod memories;
 pub mod mention_syntax;
 mod mentions;
-mod message_history;
+pub mod message_history;
 mod model_provider_info;
 pub mod path_utils;
 pub mod personality_migration;
@@ -75,7 +76,7 @@ mod shell_detect;
 mod stream_events_utils;
 pub mod test_support;
 mod text_encoding;
-pub mod token_data;
+pub use codex_login::token_data;
 mod truncate;
 mod unified_exec;
 pub mod windows_sandbox;
@@ -109,7 +110,15 @@ pub type CodexConversation = CodexThread;
 pub use analytics_client::AnalyticsEventsClient;
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
-pub mod default_client;
+mod default_client_forwarding;
+
+/// Default Codex HTTP client headers and reqwest construction.
+///
+/// Implemented in [`codex_login::default_client`]; this module re-exports that API for crates
+/// that import `codex_core::default_client`.
+pub mod default_client {
+    pub use super::default_client_forwarding::*;
+}
 pub mod project_doc;
 mod rollout;
 pub(crate) mod safety;
@@ -119,7 +128,6 @@ pub mod shell_snapshot;
 pub mod skills;
 pub mod spawn;
 pub mod state_db;
-pub mod terminal;
 mod tools;
 pub mod turn_diff_tracker;
 mod turn_metadata;

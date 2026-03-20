@@ -3,6 +3,7 @@ use crate::compact::InitialContextInjection;
 use crate::config_loader::ConfigLayerEntry;
 use crate::config_loader::ConfigRequirements;
 use crate::config_loader::ConfigRequirementsToml;
+use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecParams;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::Feature;
@@ -124,6 +125,7 @@ async fn guardian_allows_shell_additional_permissions_requests_past_policy_valid
         },
         cwd: turn_context.cwd.clone(),
         expiration: expiration_ms.into(),
+        capture_policy: ExecCapturePolicy::ShellTool,
         env: HashMap::new(),
         network: None,
         sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
@@ -452,6 +454,7 @@ async fn guardian_subagent_does_not_inherit_parent_exec_policy_rules() {
         persist_extended_history: false,
         metrics_service_name: None,
         inherited_shell_snapshot: None,
+        inherited_exec_policy: Some(Arc::new(parent_exec_policy)),
         user_shell_override: None,
         parent_trace: None,
     })

@@ -587,6 +587,12 @@ fn create_request_permissions_schema() -> JsonSchema {
     }
 }
 
+fn windows_destructive_filesystem_guidance() -> &'static str {
+    r#"Windows safety rules:
+- Do not compose destructive filesystem commands across shells. Do not enumerate paths in PowerShell and then pass them to `cmd /c`, batch builtins, or another shell for deletion or moving. Use one shell end-to-end, prefer native PowerShell cmdlets such as `Remove-Item` / `Move-Item` with `-LiteralPath`, and avoid string-built shell commands for file operations.
+- Before any recursive delete or move on Windows, verify the resolved absolute target paths stay within the intended workspace or explicitly named target directory. Never issue a recursive delete or move against a computed path if the final target has not been checked."#
+}
+
 fn create_approval_parameters(
     exec_permission_approvals_enabled: bool,
 ) -> BTreeMap<String, JsonSchema> {
@@ -709,9 +715,15 @@ fn create_exec_command_tool(
 
     ToolSpec::Function(ResponsesApiTool {
         name: "exec_command".to_string(),
-        description:
+        description: if cfg!(windows) {
+            format!(
+                "Runs a command in a PTY, returning output or a session ID for ongoing interaction.\n\n{}",
+                windows_destructive_filesystem_guidance()
+            )
+        } else {
             "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
-                .to_string(),
+                .to_string()
+        },
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
@@ -848,22 +860,28 @@ fn create_shell_tool(exec_permission_approvals_enabled: bool) -> ToolSpec {
         exec_permission_approvals_enabled,
     ));
 
-    let description  = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
+    let description = if cfg!(windows) {
+        format!(
+            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
 
 Examples of valid command strings:
 
 - ls -a (show hidden): ["powershell.exe", "-Command", "Get-ChildItem -Force"]
 - recursive find by name: ["powershell.exe", "-Command", "Get-ChildItem -Recurse -Filter *.py"]
 - recursive grep: ["powershell.exe", "-Command", "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"]
-- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
+- ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"]
 - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
-- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
+- running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]
+
+{}"#,
+            windows_destructive_filesystem_guidance()
+        )
     } else {
         r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
 - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-    }.to_string();
+            .to_string()
+    };
 
     ToolSpec::Function(ResponsesApiTool {
         name: "shell".to_string(),
@@ -921,20 +939,26 @@ fn create_shell_command_tool(
     ));
 
     let description = if cfg!(windows) {
-        r#"Runs a Powershell command (Windows) and returns its output.
+        format!(
+            r#"Runs a Powershell command (Windows) and returns its output.
 
 Examples of valid command strings:
 
 - ls -a (show hidden): "Get-ChildItem -Force"
 - recursive find by name: "Get-ChildItem -Recurse -Filter *.py"
 - recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
-- ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
+- ps aux | grep python: "Get-Process | Where-Object {{ $_.ProcessName -like '*python*' }}"
 - setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"
+
+{}"#,
+            windows_destructive_filesystem_guidance()
+        )
     } else {
         r#"Runs a shell command and returns its output.
 - Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#
-    }.to_string();
+            .to_string()
+    };
 
     ToolSpec::Function(ResponsesApiTool {
         name: "shell_command".to_string(),
@@ -980,7 +1004,21 @@ fn create_view_image_tool(can_request_original_image_detail: bool) -> ToolSpec {
             required: Some(vec!["path".to_string()]),
             additional_properties: Some(false.into()),
         },
-        output_schema: None,
+        output_schema: Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "image_url": {
+                    "type": "string",
+                    "description": "Data URL for the loaded image."
+                },
+                "detail": {
+                    "type": ["string", "null"],
+                    "description": "Image detail hint returned by view_image. Returns `original` when original resolution is preserved, otherwise `null`."
+                }
+            },
+            "required": ["image_url", "detail"],
+            "additionalProperties": false
+        })),
     })
 }
 
@@ -1526,7 +1564,7 @@ fn create_close_agent_tool() -> ToolSpec {
 
     ToolSpec::Function(ResponsesApiTool {
         name: "close_agent".to_string(),
-        description: "Close an agent when it is no longer needed and return its previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
+        description: "Close an agent and any open descendants when they are no longer needed, and return the target agent's previous status before shutdown was requested. Don't keep agents open for too long if they are not needed anymore.".to_string(),
         strict: false,
         defer_loading: None,
         parameters: JsonSchema::Object {
@@ -2061,7 +2099,7 @@ plain_source: PLAIN_JS_SOURCE
 
 js_source: JS_SOURCE
 
-PRAGMA_LINE: /[ \t]*\/\/ codex-artifacts:[^\r\n]*/ | /[ \t]*\/\/ codex-artifact-tool:[^\r\n]*/
+PRAGMA_LINE: /[ \t]*\/\/ codex-artifact-tool:[^\r\n]*/
 NEWLINE: /\r?\n/
 PLAIN_JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
 JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
@@ -2069,7 +2107,7 @@ JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
 
     ToolSpec::Freeform(FreeformTool {
         name: "artifacts".to_string(),
-        description: "Runs raw JavaScript against the preinstalled Codex @oai/artifact-tool runtime for creating presentations or spreadsheets. This is plain JavaScript executed by a local Node-compatible runtime with top-level await, not TypeScript: do not use type annotations, `interface`, `type`, or `import type`. Author code the same way you would for `import { Presentation, Workbook, PresentationFile, SpreadsheetFile, FileBlob, ... } from \"@oai/artifact-tool\"`, but omit that import line because the package surface is already preloaded. Named exports are available directly on `globalThis`, and the full module is available as `globalThis.artifactTool` (also aliased as `globalThis.artifacts` and `globalThis.codexArtifacts`). Node built-ins such as `node:fs/promises` may still be imported when needed for saving preview bytes. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-artifacts: timeout_ms=15000` or `// codex-artifact-tool: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
+        description: "Runs raw JavaScript against the installed `@oai/artifact-tool` package for creating presentations or spreadsheets. This is plain JavaScript executed by a local Node-compatible runtime with top-level await, not TypeScript: do not use type annotations, `interface`, `type`, or `import type`. Author code the same way you would for `import { Presentation, Workbook, PresentationFile, SpreadsheetFile, FileBlob, ... } from \"@oai/artifact-tool\"`, but omit that import line because the package is preloaded before your code runs. Named exports are copied onto `globalThis`, and the full module namespace is available as `globalThis.artifactTool`. This matches the upstream library-first API: create with `Presentation.create()` / `Workbook.create()`, preview with `presentation.export(...)` or `slide.export(...)`, and save files with `PresentationFile.exportPptx(...)` or `SpreadsheetFile.exportXlsx(...)`. Node built-ins such as `node:fs/promises` may still be imported when needed for saving preview bytes. This is a freeform tool: send raw JavaScript source text, optionally with a first-line pragma like `// codex-artifact-tool: timeout_ms=15000`; do not send JSON/quotes/markdown fences."
             .to_string(),
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),

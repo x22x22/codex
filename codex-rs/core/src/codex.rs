@@ -49,7 +49,6 @@ use crate::stream_events_utils::handle_output_item_done;
 use crate::stream_events_utils::last_assistant_message_from_item;
 use crate::stream_events_utils::raw_assistant_output_text_from_item;
 use crate::stream_events_utils::record_completed_response_item;
-use crate::terminal;
 use crate::truncate::TruncationPolicy;
 use crate::turn_metadata::TurnMetadataState;
 use crate::util::error_or_panic;
@@ -59,7 +58,7 @@ use chrono::Local;
 use chrono::Utc;
 use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
-use codex_environment::Environment;
+use codex_exec_server::Environment;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookPayload;
@@ -87,6 +86,7 @@ use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
@@ -116,6 +116,7 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_terminal_detection::user_agent;
 use codex_utils_stream_parser::AssistantTextChunk;
 use codex_utils_stream_parser::AssistantTextStreamParser;
 use codex_utils_stream_parser::ProposedPlanSegment;
@@ -205,6 +206,12 @@ use crate::file_watcher::FileWatcher;
 use crate::file_watcher::FileWatcherEvent;
 use crate::git_info::get_git_repo_root;
 use crate::guardian::GuardianReviewSessionManager;
+use crate::hook_runtime::PendingInputHookDisposition;
+use crate::hook_runtime::inspect_pending_input;
+use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_pending_input;
+use crate::hook_runtime::run_pending_session_start_hooks;
+use crate::hook_runtime::run_user_prompt_submit_hooks;
 use crate::instructions::UserInstructions;
 use crate::mcp::CODEX_APPS_MCP_SERVER_NAME;
 use crate::mcp::McpManager;
@@ -370,6 +377,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) persist_extended_history: bool,
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    pub(crate) inherited_exec_policy: Option<Arc<ExecPolicyManager>>,
     pub(crate) user_shell_override: Option<shell::Shell>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
 }
@@ -423,6 +431,7 @@ impl Codex {
             metrics_service_name,
             inherited_shell_snapshot,
             user_shell_override,
+            inherited_exec_policy,
             parent_trace: _,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -479,11 +488,15 @@ impl Codex {
             // Guardian review should rely on the built-in shell safety checks,
             // not on caller-provided exec-policy rules that could shape the
             // reviewer or silently auto-approve commands.
-            ExecPolicyManager::default()
+            Arc::new(ExecPolicyManager::default())
+        } else if let Some(exec_policy) = &inherited_exec_policy {
+            Arc::clone(exec_policy)
         } else {
-            ExecPolicyManager::load(&config.config_layer_stack)
-                .await
-                .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?
+            Arc::new(
+                ExecPolicyManager::load(&config.config_layer_stack)
+                    .await
+                    .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
+            )
         };
 
         let config = Arc::new(config);
@@ -1273,6 +1286,7 @@ impl Session {
 
     #[allow(clippy::too_many_arguments)]
     fn make_turn_context(
+        conversation_id: ThreadId,
         auth_manager: Option<Arc<AuthManager>>,
         session_telemetry: &SessionTelemetry,
         provider: ModelProviderInfo,
@@ -1323,6 +1337,7 @@ impl Session {
 
         let cwd = session_configuration.cwd.clone();
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
+            conversation_id.to_string(),
             sub_id.clone(),
             cwd.clone(),
             session_configuration.sandbox_policy.get(),
@@ -1380,7 +1395,7 @@ impl Session {
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
-        exec_policy: ExecPolicyManager,
+        exec_policy: Arc<ExecPolicyManager>,
         tx_event: Sender<Event>,
         agent_status: watch::Sender<AgentStatus>,
         initial_history: InitialHistory,
@@ -1568,7 +1583,7 @@ impl Session {
         let account_id = auth.and_then(CodexAuth::get_account_id);
         let account_email = auth.and_then(CodexAuth::get_account_email);
         let originator = crate::default_client::originator().value;
-        let terminal_type = terminal::user_agent();
+        let terminal_type = user_agent();
         let session_model = session_configuration.collaboration_mode.model().to_string();
         let auth_env_telemetry = collect_auth_env_telemetry(
             &session_configuration.provider,
@@ -1813,7 +1828,9 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: Arc::new(Environment),
+            environment: Arc::new(
+                Environment::create(config.experimental_exec_server_url.clone()).await?,
+            ),
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -2379,6 +2396,7 @@ impl Session {
                 .skills_for_config(&per_turn_config),
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
+            self.conversation_id,
             Some(Arc::clone(&self.services.auth_manager)),
             &self.services.session_telemetry,
             session_configuration.provider.clone(),
@@ -3850,6 +3868,18 @@ impl Session {
         }
     }
 
+    pub async fn prepend_pending_input(&self, input: Vec<ResponseInputItem>) -> Result<(), ()> {
+        let mut active = self.active_turn.lock().await;
+        match active.as_mut() {
+            Some(at) => {
+                let mut ts = at.turn_state.lock().await;
+                ts.prepend_pending_input(input);
+                Ok(())
+            }
+            None => Err(()),
+        }
+    }
+
     pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
@@ -3972,6 +4002,11 @@ impl Session {
             guard.clone()
         };
         recorder.map(|recorder| recorder.rollout_path().to_path_buf())
+    }
+
+    pub(crate) async fn hook_transcript_path(&self) -> Option<PathBuf> {
+        self.ensure_rollout_materialized().await;
+        self.current_rollout_path().await
     }
 
     pub(crate) async fn take_pending_session_start_source(
@@ -4752,9 +4787,12 @@ mod handlers {
         };
 
         let skills_manager = &sess.services.skills_manager;
+        let config = sess.get_config().await;
         let mut skills = Vec::new();
         for cwd in cwds {
-            let outcome = skills_manager.skills_for_cwd(&cwd, force_reload).await;
+            let outcome = skills_manager
+                .skills_for_cwd(&cwd, config.as_ref(), force_reload)
+                .await;
             let errors = super::errors_to_info(&outcome.errors);
             let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);
             skills.push(SkillsListEntry {
@@ -5185,6 +5223,7 @@ async fn spawn_review_thread(
     let per_turn_config = Arc::new(per_turn_config);
     let review_turn_id = sub_id.to_string();
     let turn_metadata_state = Arc::new(TurnMetadataState::new(
+        sess.conversation_id.to_string(),
         review_turn_id.clone(),
         parent_turn_context.cwd.clone(),
         parent_turn_context.sandbox_policy.get(),
@@ -5486,6 +5525,26 @@ pub(crate) async fn run_turn(
             invocation_type: Some(InvocationType::Explicit),
         })
         .collect::<Vec<_>>();
+
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
+    let response_item: ResponseItem = initial_input_for_turn.clone().into();
+    let mut last_agent_message: Option<String> = None;
+    if run_pending_session_start_hooks(&sess, &turn_context).await {
+        return last_agent_message;
+    }
+    let user_prompt_submit_outcome =
+        run_user_prompt_submit_hooks(&sess, &turn_context, UserMessageItem::new(&input).message())
+            .await;
+    if user_prompt_submit_outcome.should_stop {
+        record_additional_contexts(
+            &sess,
+            &turn_context,
+            user_prompt_submit_outcome.additional_contexts,
+        )
+        .await;
+        return last_agent_message;
+    }
+    let additional_contexts = user_prompt_submit_outcome.additional_contexts;
     sess.services
         .analytics_events_client
         .track_app_mentioned(tracking.clone(), mentioned_app_invocations);
@@ -5496,11 +5555,9 @@ pub(crate) async fn run_turn(
     }
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
-
-    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input.clone());
-    let response_item: ResponseItem = initial_input_for_turn.clone().into();
     sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
         .await;
+    record_additional_contexts(&sess, &turn_context, additional_contexts).await;
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
     // model/realtime injections.
@@ -5521,7 +5578,6 @@ pub(crate) async fn run_turn(
 
     sess.maybe_start_ghost_snapshot(Arc::clone(&turn_context), cancellation_token.child_token())
         .await;
-    let mut last_agent_message: Option<String> = None;
     let mut stop_hook_active = false;
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
@@ -5534,83 +5590,53 @@ pub(crate) async fn run_turn(
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
 
     loop {
-        if let Some(session_start_source) = sess.take_pending_session_start_source().await {
-            let session_start_permission_mode = match turn_context.approval_policy.value() {
-                AskForApproval::Never => "bypassPermissions",
-                AskForApproval::UnlessTrusted
-                | AskForApproval::OnFailure
-                | AskForApproval::OnRequest
-                | AskForApproval::Granular(_) => "default",
-            }
-            .to_string();
-            let session_start_request = codex_hooks::SessionStartRequest {
-                session_id: sess.conversation_id,
-                cwd: turn_context.cwd.clone(),
-                transcript_path: sess.current_rollout_path().await,
-                model: turn_context.model_info.slug.clone(),
-                permission_mode: session_start_permission_mode,
-                source: session_start_source,
-            };
-            for run in sess.hooks().preview_session_start(&session_start_request) {
-                sess.send_event(
-                    &turn_context,
-                    EventMsg::HookStarted(crate::protocol::HookStartedEvent {
-                        turn_id: Some(turn_context.sub_id.clone()),
-                        run,
-                    }),
-                )
-                .await;
-            }
-            let session_start_outcome = sess
-                .hooks()
-                .run_session_start(session_start_request, Some(turn_context.sub_id.clone()))
-                .await;
-            for completed in session_start_outcome.hook_events {
-                sess.send_event(&turn_context, EventMsg::HookCompleted(completed))
-                    .await;
-            }
-            if session_start_outcome.should_stop {
-                break;
-            }
-            if let Some(additional_context) = session_start_outcome.additional_context {
-                let developer_message: ResponseItem =
-                    DeveloperInstructions::new(additional_context).into();
-                sess.record_conversation_items(
-                    &turn_context,
-                    std::slice::from_ref(&developer_message),
-                )
-                .await;
-            }
+        if run_pending_session_start_hooks(&sess, &turn_context).await {
+            break;
         }
 
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_response_items = sess
-            .get_pending_input()
-            .await
-            .into_iter()
-            .map(ResponseItem::from)
-            .collect::<Vec<ResponseItem>>();
+        let pending_input = sess.get_pending_input().await;
 
-        if !pending_response_items.is_empty() {
-            for response_item in pending_response_items {
-                if let Some(TurnItem::UserMessage(user_message)) = parse_turn_item(&response_item) {
-                    // todo(aibrahim): move pending input to be UserInput only to keep TextElements. context: https://github.com/openai/codex/pull/10656#discussion_r2765522480
-                    sess.record_user_prompt_and_emit_turn_item(
-                        turn_context.as_ref(),
-                        &user_message.content,
-                        response_item,
-                    )
-                    .await;
-                } else {
-                    sess.record_conversation_items(
-                        &turn_context,
-                        std::slice::from_ref(&response_item),
-                    )
-                    .await;
+        let mut blocked_pending_input = false;
+        let mut blocked_pending_input_contexts = Vec::new();
+        let mut requeued_pending_input = false;
+        let mut accepted_pending_input = Vec::new();
+        if !pending_input.is_empty() {
+            let mut pending_input_iter = pending_input.into_iter();
+            while let Some(pending_input_item) = pending_input_iter.next() {
+                match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
+                    PendingInputHookDisposition::Accepted(pending_input) => {
+                        accepted_pending_input.push(*pending_input);
+                    }
+                    PendingInputHookDisposition::Blocked {
+                        additional_contexts,
+                    } => {
+                        let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
+                        if !remaining_pending_input.is_empty() {
+                            let _ = sess.prepend_pending_input(remaining_pending_input).await;
+                            requeued_pending_input = true;
+                        }
+                        blocked_pending_input_contexts = additional_contexts;
+                        blocked_pending_input = true;
+                        break;
+                    }
                 }
             }
+        }
+
+        let has_accepted_pending_input = !accepted_pending_input.is_empty();
+        for pending_input in accepted_pending_input {
+            record_pending_input(&sess, &turn_context, pending_input).await;
+        }
+        record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
+
+        if blocked_pending_input && !has_accepted_pending_input {
+            if requeued_pending_input {
+                continue;
+            }
+            break;
         }
 
         // Construct the input that we will send to the model.
@@ -5693,7 +5719,7 @@ pub(crate) async fn run_turn(
                         session_id: sess.conversation_id,
                         turn_id: turn_context.sub_id.clone(),
                         cwd: turn_context.cwd.clone(),
-                        transcript_path: sess.current_rollout_path().await,
+                        transcript_path: sess.hook_transcript_path().await,
                         model: turn_context.model_info.slug.clone(),
                         permission_mode: stop_hook_permission_mode,
                         stop_hook_active,
@@ -5715,13 +5741,12 @@ pub(crate) async fn run_turn(
                             .await;
                     }
                     if stop_outcome.should_block {
-                        if let Some(continuation_prompt) = stop_outcome.continuation_prompt.clone()
+                        if let Some(hook_prompt_message) =
+                            build_hook_prompt_message(&stop_outcome.continuation_fragments)
                         {
-                            let developer_message: ResponseItem =
-                                DeveloperInstructions::new(continuation_prompt).into();
                             sess.record_conversation_items(
                                 &turn_context,
-                                std::slice::from_ref(&developer_message),
+                                std::slice::from_ref(&hook_prompt_message),
                             )
                             .await;
                             stop_hook_active = true;
@@ -6840,6 +6865,7 @@ async fn emit_agent_message_in_plan_mode(
                     id: agent_message_id.clone(),
                     content: Vec::new(),
                     phase: None,
+                    memory_citation: None,
                 })
             });
         sess.emit_turn_item_started(turn_context, &start_item).await;

@@ -1549,6 +1549,42 @@
       },
       "type": "object"
     },
+    "ToolSuggestConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "discoverables": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ToolSuggestDiscoverable"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ToolSuggestDiscoverable": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/ToolSuggestDiscoverableType"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ToolSuggestDiscoverableType": {
+      "enum": [
+        "connector",
+        "plugin"
+      ],
+      "type": "string"
+    },
     "ToolsToml": {
       "additionalProperties": false,
       "properties": {
@@ -1629,6 +1665,14 @@
         "status_line": {
           "default": null,
           "description": "Ordered list of status line item identifiers.\n\nWhen set, the TUI renders the selected items as the status line. When unset, the TUI defaults to: `model-with-reasoning`, `context-remaining`, and `current-dir`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "terminal_title": {
+          "default": null,
+          "description": "Ordered list of terminal title item identifiers.\n\nWhen set, the TUI renders the selected items into the terminal window/tab title. When unset, the TUI defaults to: `spinner` and `project`.",
           "items": {
             "type": "string"
           },
@@ -1858,6 +1902,10 @@
     },
     "experimental_compact_prompt_file": {
       "$ref": "#/definitions/AbsolutePathBuf"
+    },
+    "experimental_exec_server_url": {
+      "description": "Experimental / do not use. Overrides the URL used when connecting to a remote exec server.",
+      "type": "string"
     },
     "experimental_realtime_start_instructions": {
       "description": "Experimental / do not use. Replaces the built-in realtime start instructions inserted into developer messages when realtime becomes active.",
@@ -2430,6 +2478,14 @@
       "format": "uint",
       "minimum": 0.0,
       "type": "integer"
+    },
+    "tool_suggest": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ToolSuggestConfig"
+        }
+      ],
+      "description": "Additional discoverable tools that can be suggested for installation."
     },
     "tools": {
       "allOf": [
