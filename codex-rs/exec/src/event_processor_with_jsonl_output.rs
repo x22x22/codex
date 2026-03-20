@@ -134,16 +134,9 @@ impl EventProcessorWithJsonOutput {
             ThreadItem::AgentMessage { text, .. } => {
                 ThreadItemDetails::AgentMessage(AgentMessageItem { text })
             }
-            ThreadItem::Reasoning {
-                summary, content, ..
-            } => {
-                let text = if content.is_empty() {
-                    summary.join("\n")
-                } else {
-                    content.join("\n")
-                };
-                ThreadItemDetails::Reasoning(ReasoningItem { text })
-            }
+            ThreadItem::Reasoning { summary, .. } => ThreadItemDetails::Reasoning(ReasoningItem {
+                text: summary.join("\n"),
+            }),
             ThreadItem::CommandExecution {
                 command,
                 aggregated_output,

@@ -195,6 +195,37 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
 }
 
 #[test]
+fn reasoning_items_emit_summary_not_raw_content() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let collected =
+        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::Reasoning {
+                id: "reasoning-1".to_string(),
+                summary: vec!["safe summary".to_string()],
+                content: vec!["raw reasoning".to_string()],
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "reasoning-1".to_string(),
+                    details: ThreadItemDetails::Reasoning(crate::exec_events::ReasoningItem {
+                        text: "safe summary".to_string(),
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
 fn web_search_completion_preserves_query_and_action() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
