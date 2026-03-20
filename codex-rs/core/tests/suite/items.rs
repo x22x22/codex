@@ -1,7 +1,7 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Ok;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;

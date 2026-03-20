@@ -15,6 +15,7 @@ use crate::models_manager::model_info;
 use crate::shell::default_user_shell;
 use crate::tools::format_exec_output_str;
 
+use codex_features::Feature;
 use codex_features::Features;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputBody;
@@ -4334,7 +4335,7 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
     Arc::get_mut(&mut sess)
         .expect("session should be uniquely owned in this test")
         .features
-        .enable(crate::features::Feature::ItemMetadata)
+        .enable(Feature::ItemMetadata)
         .expect("feature flag should be enabled for this test");
 
     let input = vec![UserInput::Text {
@@ -4507,7 +4508,7 @@ async fn steer_input_returns_active_turn_id() {
 #[tokio::test]
 async fn record_into_history_generates_message_metadata_uuid_when_item_metadata_enabled() {
     let (mut sess, tc) = make_session_and_context().await;
-    let _ = sess.features.enable(crate::features::Feature::ItemMetadata);
+    let _ = sess.features.enable(Feature::ItemMetadata);
 
     let item = ResponseItem::Message {
         id: Some("msg_123".to_string()),
