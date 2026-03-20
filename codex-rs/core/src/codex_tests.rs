@@ -4438,7 +4438,7 @@ async fn record_into_history_generates_message_metadata_id_when_item_metadata_en
 
     let metadata_id = metadata
         .as_ref()
-        .and_then(|metadata| metadata.metadata_id.as_deref())
+        .map(|metadata| metadata.metadata_id.as_str())
         .expect("metadata_id should be generated when item metadata is enabled");
     uuid::Uuid::parse_str(metadata_id).expect("metadata_id should be valid");
 }

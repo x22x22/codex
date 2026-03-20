@@ -330,6 +330,7 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ResponseItemMessageMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -3298,7 +3299,26 @@ impl Session {
             items
                 .iter()
                 .cloned()
-                .map(ResponseItem::with_generated_metadata_id)
+                .map(|item| match item {
+                    ResponseItem::Message {
+                        id,
+                        role,
+                        content,
+                        metadata,
+                        end_turn,
+                        phase,
+                    } => ResponseItem::Message {
+                        id,
+                        role,
+                        content,
+                        metadata: Some(
+                            metadata.unwrap_or_else(|| ResponseItemMessageMetadata::new(None)),
+                        ),
+                        end_turn,
+                        phase,
+                    },
+                    other => other,
+                })
                 .collect()
         } else {
             items.to_vec()

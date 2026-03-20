@@ -202,7 +202,7 @@ fn reserializes_shell_outputs_for_function_and_custom_tool_calls() {
 }
 
 #[test]
-fn formatted_input_does_not_generate_message_metadata_id_when_disabled() {
+fn formatted_input_preserves_message_metadata_id_when_disabled() {
     let prompt = Prompt {
         input: vec![ResponseItem::Message {
             id: Some("msg_123".to_string()),
@@ -212,7 +212,7 @@ fn formatted_input_does_not_generate_message_metadata_id_when_disabled() {
             }],
             metadata: Some(ResponseItemMessageMetadata {
                 user_message_type: Some(UserMessageType::Prompt),
-                metadata_id: None,
+                metadata_id: "2585a800-7d93-4f52-8648-d9cb39f413d2".to_string(),
             }),
             end_turn: None,
             phase: None,
@@ -227,7 +227,10 @@ fn formatted_input_does_not_generate_message_metadata_id_when_disabled() {
         ResponseItem::Message { metadata, .. } => {
             let metadata = metadata.as_ref().expect("metadata should be present");
             assert_eq!(metadata.user_message_type, Some(UserMessageType::Prompt));
-            assert_eq!(metadata.metadata_id, None);
+            assert_eq!(
+                metadata.metadata_id,
+                "2585a800-7d93-4f52-8648-d9cb39f413d2".to_string()
+            );
         }
         other => panic!("expected message item, got {other:?}"),
     }
@@ -244,7 +247,7 @@ fn formatted_input_preserves_existing_message_metadata_id() {
             }],
             metadata: Some(ResponseItemMessageMetadata {
                 user_message_type: Some(UserMessageType::Prompt),
-                metadata_id: Some("2585a800-7d93-4f52-8648-d9cb39f413d2".to_string()),
+                metadata_id: "2585a800-7d93-4f52-8648-d9cb39f413d2".to_string(),
             }),
             end_turn: None,
             phase: None,
@@ -260,7 +263,7 @@ fn formatted_input_preserves_existing_message_metadata_id() {
             let metadata = metadata.as_ref().expect("metadata should be present");
             assert_eq!(metadata.user_message_type, Some(UserMessageType::Prompt));
             assert_eq!(
-                metadata.metadata_id.as_deref(),
+                Some(metadata.metadata_id.as_str()),
                 Some("2585a800-7d93-4f52-8648-d9cb39f413d2")
             );
         }
