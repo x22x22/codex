@@ -967,22 +967,33 @@ await codex.emitImage(out);
     );
 
     let custom_output = req.custom_tool_call_output(call_id);
-    let output_items = custom_output
-        .get("output")
-        .and_then(Value::as_array)
-        .expect("custom_tool_call_output should be a content item array");
-    let image_url = output_items
-        .iter()
-        .find_map(|item| {
-            (item.get("type").and_then(Value::as_str) == Some("input_image"))
-                .then(|| item.get("image_url").and_then(Value::as_str))
-                .flatten()
-        })
-        .expect("image_url present in js_repl custom tool output");
-    assert!(
-        image_url.starts_with("data:image/png;base64,"),
-        "expected png data URL, got {image_url}"
-    );
+    match custom_output.get("output").and_then(Value::as_array) {
+        Some(output_items) => {
+            let image_url = output_items
+                .iter()
+                .find_map(|item| {
+                    (item.get("type").and_then(Value::as_str) == Some("input_image"))
+                        .then(|| item.get("image_url").and_then(Value::as_str))
+                        .flatten()
+                })
+                .expect("image_url present in js_repl custom tool output");
+            assert!(
+                image_url.starts_with("data:image/png;base64,"),
+                "expected png data URL, got {image_url}"
+            );
+        }
+        None if remote_test_env_enabled() => {
+            let output_text = custom_output
+                .get("output")
+                .and_then(Value::as_str)
+                .expect("remote js_repl output should be a string when not itemized");
+            assert!(
+                output_text.contains("data:image/png;base64,"),
+                "expected remote js_repl output to include image data URL"
+            );
+        }
+        None => panic!("custom_tool_call_output should be a content item array"),
+    }
 
     Ok(())
 }
