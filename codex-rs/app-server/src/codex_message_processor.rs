@@ -7212,16 +7212,18 @@ impl CodexMessageProcessor {
                         codex_home: codex_home.clone(),
                         originator_tag: Some(originator().value),
                     };
-                    run_windows_sandbox_setup(setup_request).await?;
-                    ConfigEditsBuilder::new(codex_home.as_path())
-                        .with_profile(active_profile.as_deref())
-                        .set_windows_sandbox_mode(windows_sandbox_mode_tag(mode))
-                        .clear_legacy_windows_sandbox_keys()
-                        .apply()
-                        .await
-                        .map_err(|err| {
-                            anyhow::anyhow!("failed to persist windows sandbox mode: {err}")
-                        })
+                    match run_windows_sandbox_setup(setup_request).await {
+                        Ok(()) => ConfigEditsBuilder::new(codex_home.as_path())
+                            .with_profile(active_profile.as_deref())
+                            .set_windows_sandbox_mode(windows_sandbox_mode_tag(mode))
+                            .clear_legacy_windows_sandbox_keys()
+                            .apply()
+                            .await
+                            .map_err(|err| {
+                                anyhow::anyhow!("failed to persist windows sandbox mode: {err}")
+                            }),
+                        Err(err) => Err(err),
+                    }
                 }
                 Err(err) => Err(err.into()),
             };
