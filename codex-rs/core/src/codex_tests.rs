@@ -5065,7 +5065,11 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
 
     let mut drained_iter = drained.into_iter();
     let _blocked = drained_iter.next().expect("blocked prompt should exist");
-    sess.prepend_pending_input_with_metadata(drained_iter.collect())
+    sess.prepend_pending_input_with_metadata(
+        drained_iter
+            .map(|(input, metadata)| crate::state::PendingInputItem { input, metadata })
+            .collect(),
+    )
         .await
         .expect("requeue later pending input at the front of the queue");
 
