@@ -1,11 +1,21 @@
 use std::path::PathBuf;
 
+use codex_app_server_protocol::CollabAgentState as ApiCollabAgentState;
+use codex_app_server_protocol::CollabAgentStatus as ApiCollabAgentStatus;
+use codex_app_server_protocol::CollabAgentTool;
+use codex_app_server_protocol::CollabAgentToolCallStatus as ApiCollabAgentToolCallStatus;
 use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus as ApiCommandExecutionStatus;
 use codex_app_server_protocol::ErrorNotification;
+use codex_app_server_protocol::FileUpdateChange;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
+use codex_app_server_protocol::McpToolCallError;
+use codex_app_server_protocol::McpToolCallResult;
+use codex_app_server_protocol::McpToolCallStatus as ApiMcpToolCallStatus;
+use codex_app_server_protocol::PatchApplyStatus as ApiPatchApplyStatus;
+use codex_app_server_protocol::PatchChangeKind as ApiPatchChangeKind;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TokenUsageBreakdown;
@@ -23,6 +33,7 @@ use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use pretty_assertions::assert_eq;
+use serde_json::json;
 
 use super::CollectedThreadEvents;
 use super::EventProcessorWithJsonOutput;
@@ -265,6 +276,537 @@ fn web_search_completion_preserves_query_and_action() {
 }
 
 #[test]
+fn web_search_start_and_completion_reuse_item_id() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let started =
+        processor.collect_thread_events(TypedExecEvent::ItemStarted(ItemStartedNotification {
+            item: ThreadItem::WebSearch {
+                id: "search-1".to_string(),
+                query: String::new(),
+                action: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+    let completed =
+        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::WebSearch {
+                id: "search-1".to_string(),
+                query: "rust async await".to_string(),
+                action: Some(ApiWebSearchAction::Search {
+                    query: Some("rust async await".to_string()),
+                    queries: None,
+                }),
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+    assert_eq!(
+        started,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+                item: ExecThreadItem {
+                    id: "search-1".to_string(),
+                    details: ThreadItemDetails::WebSearch(WebSearchItem {
+                        id: "search-1".to_string(),
+                        query: String::new(),
+                        action: WebSearchAction::Other,
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+    assert_eq!(
+        completed,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "search-1".to_string(),
+                    details: ThreadItemDetails::WebSearch(WebSearchItem {
+                        id: "search-1".to_string(),
+                        query: "rust async await".to_string(),
+                        action: WebSearchAction::Search {
+                            query: Some("rust async await".to_string()),
+                            queries: None,
+                        },
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn mcp_tool_call_begin_and_end_emit_item_events() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let started =
+        processor.collect_thread_events(TypedExecEvent::ItemStarted(ItemStartedNotification {
+            item: ThreadItem::McpToolCall {
+                id: "mcp-1".to_string(),
+                server: "server_a".to_string(),
+                tool: "tool_x".to_string(),
+                status: ApiMcpToolCallStatus::InProgress,
+                arguments: json!({ "key": "value" }),
+                result: None,
+                error: None,
+                duration_ms: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+    let completed =
+        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::McpToolCall {
+                id: "mcp-1".to_string(),
+                server: "server_a".to_string(),
+                tool: "tool_x".to_string(),
+                status: ApiMcpToolCallStatus::Completed,
+                arguments: json!({ "key": "value" }),
+                result: Some(McpToolCallResult {
+                    content: Vec::new(),
+                    structured_content: None,
+                }),
+                error: None,
+                duration_ms: Some(1_000),
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+    assert_eq!(
+        started,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+                item: ExecThreadItem {
+                    id: "mcp-1".to_string(),
+                    details: ThreadItemDetails::McpToolCall(crate::exec_events::McpToolCallItem {
+                        server: "server_a".to_string(),
+                        tool: "tool_x".to_string(),
+                        arguments: json!({ "key": "value" }),
+                        result: None,
+                        error: None,
+                        status: crate::exec_events::McpToolCallStatus::InProgress,
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+    assert_eq!(
+        completed,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "mcp-1".to_string(),
+                    details: ThreadItemDetails::McpToolCall(crate::exec_events::McpToolCallItem {
+                        server: "server_a".to_string(),
+                        tool: "tool_x".to_string(),
+                        arguments: json!({ "key": "value" }),
+                        result: Some(crate::exec_events::McpToolCallItemResult {
+                            content: Vec::new(),
+                            structured_content: None,
+                        }),
+                        error: None,
+                        status: crate::exec_events::McpToolCallStatus::Completed,
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn mcp_tool_call_failure_sets_failed_status() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let collected =
+        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::McpToolCall {
+                id: "mcp-2".to_string(),
+                server: "server_b".to_string(),
+                tool: "tool_y".to_string(),
+                status: ApiMcpToolCallStatus::Failed,
+                arguments: json!({ "param": 42 }),
+                result: None,
+                error: Some(McpToolCallError {
+                    message: "tool exploded".to_string(),
+                }),
+                duration_ms: Some(5),
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "mcp-2".to_string(),
+                    details: ThreadItemDetails::McpToolCall(crate::exec_events::McpToolCallItem {
+                        server: "server_b".to_string(),
+                        tool: "tool_y".to_string(),
+                        arguments: json!({ "param": 42 }),
+                        result: None,
+                        error: Some(crate::exec_events::McpToolCallItemError {
+                            message: "tool exploded".to_string(),
+                        }),
+                        status: crate::exec_events::McpToolCallStatus::Failed,
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let started =
+        processor.collect_thread_events(TypedExecEvent::ItemStarted(ItemStartedNotification {
+            item: ThreadItem::McpToolCall {
+                id: "mcp-3".to_string(),
+                server: "server_c".to_string(),
+                tool: "tool_z".to_string(),
+                status: ApiMcpToolCallStatus::InProgress,
+                arguments: serde_json::Value::Null,
+                result: None,
+                error: None,
+                duration_ms: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+    let completed =
+        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::McpToolCall {
+                id: "mcp-3".to_string(),
+                server: "server_c".to_string(),
+                tool: "tool_z".to_string(),
+                status: ApiMcpToolCallStatus::Completed,
+                arguments: serde_json::Value::Null,
+                result: Some(McpToolCallResult {
+                    content: vec![json!({
+                        "type": "text",
+                        "text": "done",
+                    })],
+                    structured_content: Some(json!({ "status": "ok" })),
+                }),
+                error: None,
+                duration_ms: Some(10),
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+    assert_eq!(
+        started,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+                item: ExecThreadItem {
+                    id: "mcp-3".to_string(),
+                    details: ThreadItemDetails::McpToolCall(crate::exec_events::McpToolCallItem {
+                        server: "server_c".to_string(),
+                        tool: "tool_z".to_string(),
+                        arguments: serde_json::Value::Null,
+                        result: None,
+                        error: None,
+                        status: crate::exec_events::McpToolCallStatus::InProgress,
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+    assert_eq!(
+        completed,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "mcp-3".to_string(),
+                    details: ThreadItemDetails::McpToolCall(crate::exec_events::McpToolCallItem {
+                        server: "server_c".to_string(),
+                        tool: "tool_z".to_string(),
+                        arguments: serde_json::Value::Null,
+                        result: Some(crate::exec_events::McpToolCallItemResult {
+                            content: vec![json!({
+                                "type": "text",
+                                "text": "done",
+                            })],
+                            structured_content: Some(json!({ "status": "ok" })),
+                        }),
+                        error: None,
+                        status: crate::exec_events::McpToolCallStatus::Completed,
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn collab_spawn_begin_and_end_emit_item_events() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let started =
+        processor.collect_thread_events(TypedExecEvent::ItemStarted(ItemStartedNotification {
+            item: ThreadItem::CollabAgentToolCall {
+                id: "collab-1".to_string(),
+                tool: CollabAgentTool::SpawnAgent,
+                status: ApiCollabAgentToolCallStatus::InProgress,
+                sender_thread_id: "thread-parent".to_string(),
+                receiver_thread_ids: Vec::new(),
+                prompt: Some("draft a plan".to_string()),
+                model: Some("gpt-5".to_string()),
+                reasoning_effort: None,
+                agents_states: std::collections::HashMap::new(),
+            },
+            thread_id: "thread-parent".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+    let completed =
+        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::CollabAgentToolCall {
+                id: "collab-1".to_string(),
+                tool: CollabAgentTool::SpawnAgent,
+                status: ApiCollabAgentToolCallStatus::Completed,
+                sender_thread_id: "thread-parent".to_string(),
+                receiver_thread_ids: vec!["thread-child".to_string()],
+                prompt: Some("draft a plan".to_string()),
+                model: Some("gpt-5".to_string()),
+                reasoning_effort: None,
+                agents_states: std::collections::HashMap::from([(
+                    "thread-child".to_string(),
+                    ApiCollabAgentState {
+                        status: ApiCollabAgentStatus::Running,
+                        message: None,
+                    },
+                )]),
+            },
+            thread_id: "thread-parent".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+    assert_eq!(
+        started,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+                item: ExecThreadItem {
+                    id: "collab-1".to_string(),
+                    details: ThreadItemDetails::CollabToolCall(
+                        crate::exec_events::CollabToolCallItem {
+                            tool: crate::exec_events::CollabTool::SpawnAgent,
+                            sender_thread_id: "thread-parent".to_string(),
+                            receiver_thread_ids: Vec::new(),
+                            prompt: Some("draft a plan".to_string()),
+                            agents_states: std::collections::HashMap::new(),
+                            status: crate::exec_events::CollabToolCallStatus::InProgress,
+                        },
+                    ),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+    assert_eq!(
+        completed,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "collab-1".to_string(),
+                    details: ThreadItemDetails::CollabToolCall(
+                        crate::exec_events::CollabToolCallItem {
+                            tool: crate::exec_events::CollabTool::SpawnAgent,
+                            sender_thread_id: "thread-parent".to_string(),
+                            receiver_thread_ids: vec!["thread-child".to_string()],
+                            prompt: Some("draft a plan".to_string()),
+                            agents_states: std::collections::HashMap::from([(
+                                "thread-child".to_string(),
+                                crate::exec_events::CollabAgentState {
+                                    status: crate::exec_events::CollabAgentStatus::Running,
+                                    message: None,
+                                },
+                            )]),
+                            status: crate::exec_events::CollabToolCallStatus::Completed,
+                        },
+                    ),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn file_change_completion_maps_change_kinds() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let collected =
+        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::FileChange {
+                id: "patch-1".to_string(),
+                changes: vec![
+                    FileUpdateChange {
+                        path: "a/added.txt".to_string(),
+                        kind: ApiPatchChangeKind::Add,
+                        diff: String::new(),
+                    },
+                    FileUpdateChange {
+                        path: "b/deleted.txt".to_string(),
+                        kind: ApiPatchChangeKind::Delete,
+                        diff: String::new(),
+                    },
+                    FileUpdateChange {
+                        path: "c/modified.txt".to_string(),
+                        kind: ApiPatchChangeKind::Update { move_path: None },
+                        diff: "@@ -1 +1 @@".to_string(),
+                    },
+                ],
+                status: ApiPatchApplyStatus::Completed,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "patch-1".to_string(),
+                    details: ThreadItemDetails::FileChange(crate::exec_events::FileChangeItem {
+                        changes: vec![
+                            crate::exec_events::FileUpdateChange {
+                                path: "a/added.txt".to_string(),
+                                kind: crate::exec_events::PatchChangeKind::Add,
+                            },
+                            crate::exec_events::FileUpdateChange {
+                                path: "b/deleted.txt".to_string(),
+                                kind: crate::exec_events::PatchChangeKind::Delete,
+                            },
+                            crate::exec_events::FileUpdateChange {
+                                path: "c/modified.txt".to_string(),
+                                kind: crate::exec_events::PatchChangeKind::Update,
+                            },
+                        ],
+                        status: crate::exec_events::PatchApplyStatus::Completed,
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn file_change_declined_maps_to_failed_status() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let collected =
+        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::FileChange {
+                id: "patch-2".to_string(),
+                changes: vec![FileUpdateChange {
+                    path: "file.txt".to_string(),
+                    kind: ApiPatchChangeKind::Update { move_path: None },
+                    diff: "@@ -1 +1 @@".to_string(),
+                }],
+                status: ApiPatchApplyStatus::Declined,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "patch-2".to_string(),
+                    details: ThreadItemDetails::FileChange(crate::exec_events::FileChangeItem {
+                        changes: vec![crate::exec_events::FileUpdateChange {
+                            path: "file.txt".to_string(),
+                            kind: crate::exec_events::PatchChangeKind::Update,
+                        }],
+                        status: crate::exec_events::PatchApplyStatus::Failed,
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn agent_message_item_updates_final_message() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let collected =
+        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+            item: ThreadItem::AgentMessage {
+                id: "msg-1".to_string(),
+                text: "hello".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "msg-1".to_string(),
+                    details: ThreadItemDetails::AgentMessage(
+                        crate::exec_events::AgentMessageItem {
+                            text: "hello".to_string(),
+                        }
+                    ),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+    assert_eq!(processor.final_message.as_deref(), Some("hello"));
+}
+
+#[test]
+fn warning_event_produces_error_item() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let collected = processor.collect_thread_events(TypedExecEvent::Warning(
+        "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
+    ));
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "item_0".to_string(),
+                    details: ThreadItemDetails::Error(crate::exec_events::ErrorItem {
+                        message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
 fn plan_update_emits_started_then_updated_then_completed() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
@@ -386,6 +928,63 @@ fn plan_update_emits_started_then_updated_then_completed() {
                 }),
             ],
             status: CodexStatus::InitiateShutdown,
+        }
+    );
+}
+
+#[test]
+fn plan_update_after_completion_starts_new_todo_list_with_new_id() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let _ = processor.collect_thread_events(TypedExecEvent::TurnPlanUpdated(
+        TurnPlanUpdatedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            explanation: None,
+            plan: vec![TurnPlanStep {
+                step: "only".to_string(),
+                status: TurnPlanStepStatus::Pending,
+            }],
+        },
+    ));
+    let _ =
+        processor.collect_thread_events(TypedExecEvent::TurnCompleted(TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: Turn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: TurnStatus::Completed,
+                error: None,
+            },
+        }));
+
+    let restarted = processor.collect_thread_events(TypedExecEvent::TurnPlanUpdated(
+        TurnPlanUpdatedNotification {
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-2".to_string(),
+            explanation: None,
+            plan: vec![TurnPlanStep {
+                step: "again".to_string(),
+                status: TurnPlanStepStatus::Pending,
+            }],
+        },
+    ));
+
+    assert_eq!(
+        restarted,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
+                item: ExecThreadItem {
+                    id: "item_1".to_string(),
+                    details: ThreadItemDetails::TodoList(TodoListItem {
+                        items: vec![TodoItem {
+                            text: "again".to_string(),
+                            completed: false,
+                        }],
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
         }
     );
 }
