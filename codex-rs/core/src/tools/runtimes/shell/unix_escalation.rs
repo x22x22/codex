@@ -552,7 +552,8 @@ impl CoreShellActionProvider {
                             self.call_id.clone(),
                             ApprovalOutcomeMetadata {
                                 review_decision: None,
-                                approval_source: codex_protocol::models::ApprovalSourceMetadata::Policy,
+                                approval_source:
+                                    codex_protocol::models::ApprovalSourceMetadata::Policy,
                             },
                         )
                         .await;
