@@ -1,11 +1,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use anyhow::Result;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use codex_core::config::types::McpServerConfig;
 use codex_core::config::types::McpServerTransportConfig;
-use codex_exec_server::CreateDirectoryOptions;
 use codex_features::Feature;
 use codex_protocol::dynamic_tools::DynamicToolCallOutputContentItem;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
@@ -15,7 +12,6 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
-use codex_utils_absolute_path::AbsolutePathBuf;
 use core_test_support::assert_regex_match;
 use core_test_support::responses;
 use core_test_support::responses::ResponseMock;
@@ -1810,26 +1806,13 @@ async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
         });
     let test = builder.build_remote_aware(&server).await?;
 
-    let image_bytes = BASE64_STANDARD.decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-    )?;
-    let image_path = test.config.cwd.join("code_mode_view_image.png");
-    if let Some(parent) = image_path.parent() {
-        test.fs()
-            .create_directory(
-                &AbsolutePathBuf::try_from(parent.to_path_buf())?,
-                CreateDirectoryOptions { recursive: true },
-            )
-            .await?;
-    }
-    test.fs()
-        .write_file(&AbsolutePathBuf::try_from(image_path.clone())?, image_bytes)
-        .await?;
-
-    let image_path_json = serde_json::to_string(&image_path.to_string_lossy().to_string())?;
     let code = format!(
         r#"
-const out = await tools.view_image({{ path: {image_path_json}, detail: "original" }});
+const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+await tools.exec_command({{
+  cmd: "printf '%s' '" + pngBase64 + "' | base64 --decode > code_mode_view_image.png"
+}});
+const out = await tools.view_image({{ path: "code_mode_view_image.png", detail: "original" }});
 image(out);
 "#
     );

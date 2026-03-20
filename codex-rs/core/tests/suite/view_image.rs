@@ -146,17 +146,12 @@ async fn user_turn_with_local_image_attaches_image() -> anyhow::Result<()> {
         ..
     } = &test;
 
-    let rel_path = "user-turn/example.png";
     let original_width = 2304;
     let original_height = 864;
-    let abs_path = write_workspace_png(
-        &test,
-        rel_path,
-        original_width,
-        original_height,
-        [20u8, 40, 60, 255],
-    )
-    .await?;
+    let local_image_dir = tempfile::tempdir()?;
+    let abs_path = local_image_dir.path().join("example.png");
+    let image = ImageBuffer::from_pixel(original_width, original_height, Rgba([20u8, 40, 60, 255]));
+    image.save(&abs_path)?;
 
     let response = sse(vec![
         ev_response_created("resp-1"),
@@ -888,14 +883,12 @@ async fn js_repl_emit_image_attaches_local_image() -> anyhow::Result<()> {
 
     let call_id = "js-repl-view-image";
     let js_input = r#"
-const fs = await import("node:fs/promises");
 const path = await import("node:path");
-const imagePath = path.join(codex.tmpDir, "js-repl-view-image.png");
-const png = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-  "base64"
-);
-await fs.writeFile(imagePath, png);
+const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+const imagePath = path.join(codex.cwd, "js-repl-view-image.png");
+await codex.tool("shell_command", {
+  command: `mkdir -p ${JSON.stringify(path.dirname(imagePath))} && printf '%s' '${pngBase64}' | base64 --decode > ${JSON.stringify(imagePath)}`,
+});
 const out = await codex.tool("view_image", { path: imagePath });
 await codex.emitImage(out);
 "#;
@@ -1008,14 +1001,12 @@ async fn js_repl_view_image_requires_explicit_emit() -> anyhow::Result<()> {
 
     let call_id = "js-repl-view-image-no-emit";
     let js_input = r#"
-const fs = await import("node:fs/promises");
 const path = await import("node:path");
-const imagePath = path.join(codex.tmpDir, "js-repl-view-image-no-emit.png");
-const png = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==",
-  "base64"
-);
-await fs.writeFile(imagePath, png);
+const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+const imagePath = path.join(codex.cwd, "js-repl-view-image-no-emit.png");
+await codex.tool("shell_command", {
+  command: `mkdir -p ${JSON.stringify(path.dirname(imagePath))} && printf '%s' '${pngBase64}' | base64 --decode > ${JSON.stringify(imagePath)}`,
+});
 const out = await codex.tool("view_image", { path: imagePath });
 console.log(out.type);
 "#;
