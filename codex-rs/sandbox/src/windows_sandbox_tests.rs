@@ -77,9 +77,9 @@ fn resolve_windows_sandbox_mode_prefers_profile_windows() {
     assert_eq!(
         resolve_windows_sandbox_mode(
             Some(WindowsSandboxMode::Elevated),
-            None,
+            /*profile_features*/ None,
             Some(WindowsSandboxMode::Unelevated),
-            None,
+            /*cfg_features*/ None,
         ),
         Some(WindowsSandboxMode::Elevated)
     );
@@ -92,7 +92,12 @@ fn resolve_windows_sandbox_mode_falls_back_to_legacy_keys() {
     let cfg_features = FeaturesToml { entries };
 
     assert_eq!(
-        resolve_windows_sandbox_mode(None, None, None, Some(&cfg_features)),
+        resolve_windows_sandbox_mode(
+            /*profile_mode*/ None,
+            /*profile_features*/ None,
+            /*cfg_mode*/ None,
+            Some(&cfg_features),
+        ),
         Some(WindowsSandboxMode::Unelevated)
     );
 }
@@ -112,7 +117,12 @@ fn resolve_windows_sandbox_mode_profile_legacy_false_blocks_top_level_legacy_tru
     };
 
     assert_eq!(
-        resolve_windows_sandbox_mode(None, Some(&profile_features), None, Some(&cfg_features)),
+        resolve_windows_sandbox_mode(
+            /*profile_mode*/ None,
+            Some(&profile_features),
+            /*cfg_mode*/ None,
+            Some(&cfg_features),
+        ),
         None
     );
 }
@@ -120,17 +130,23 @@ fn resolve_windows_sandbox_mode_profile_legacy_false_blocks_top_level_legacy_tru
 #[test]
 fn resolve_windows_sandbox_private_desktop_prefers_profile_windows() {
     assert!(resolve_windows_sandbox_private_desktop(
-        Some(true),
-        Some(false)
+        /*profile_private_desktop*/ Some(true),
+        /*cfg_private_desktop*/ Some(false),
     ));
 }
 
 #[test]
 fn resolve_windows_sandbox_private_desktop_defaults_to_true() {
-    assert!(resolve_windows_sandbox_private_desktop(None, None));
+    assert!(resolve_windows_sandbox_private_desktop(
+        /*profile_private_desktop*/ None,
+        /*cfg_private_desktop*/ None,
+    ));
 }
 
 #[test]
 fn resolve_windows_sandbox_private_desktop_respects_explicit_cfg_value() {
-    assert!(!resolve_windows_sandbox_private_desktop(None, Some(false)));
+    assert!(!resolve_windows_sandbox_private_desktop(
+        /*profile_private_desktop*/ None,
+        /*cfg_private_desktop*/ Some(false),
+    ));
 }
