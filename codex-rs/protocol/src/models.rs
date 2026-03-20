@@ -2845,7 +2845,7 @@ mod tests {
         };
 
         assert_eq!(
-            ResponseItem::from(input.clone()),
+            ResponseItem::from(input),
             ResponseItem::FunctionCallOutput {
                 call_id: "call-1".to_string(),
                 output: expected_output,
@@ -2874,7 +2874,7 @@ mod tests {
         };
 
         assert_eq!(
-            ResponseItem::from(input.clone()),
+            ResponseItem::from(input),
             ResponseItem::CustomToolCallOutput {
                 call_id: "call-1".to_string(),
                 name: Some("custom_tool".to_string()),
