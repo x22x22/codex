@@ -30,6 +30,7 @@ use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
 use crate::features::maybe_push_unstable_features_warning;
+use crate::memories::prompts::build_memory_tool_developer_instructions;
 #[cfg(test)]
 use crate::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use crate::models_manager::manager::ModelsManager;
@@ -180,8 +181,11 @@ mod rollout_reconstruction;
 #[cfg(test)]
 mod rollout_reconstruction_tests;
 mod sampling;
+use sampling::SamplingRequestResult;
 pub(crate) use sampling::build_prompt;
+pub(crate) use sampling::built_tools;
 pub(crate) use sampling::get_last_assistant_message_from_turn;
+use sampling::realtime_text_for_event;
 use sampling::run_sampling_request;
 
 #[derive(Debug, PartialEq)]

@@ -1,5 +1,4 @@
 use super::*;
-use crate::memories::prompts::build_memory_tool_developer_instructions;
 
 pub(crate) fn build_prompt(
     input: Vec<ResponseItem>,
@@ -308,7 +307,7 @@ pub(crate) async fn built_tools(
 }
 
 #[derive(Debug)]
-struct SamplingRequestResult {
+pub(super) struct SamplingRequestResult {
     needs_follow_up: bool,
     last_agent_message: Option<String>,
 }
@@ -484,7 +483,7 @@ fn agent_message_text(item: &codex_protocol::items::AgentMessageItem) -> String 
         .collect()
 }
 
-fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
+pub(super) fn realtime_text_for_event(msg: &EventMsg) -> Option<String> {
     match msg {
         EventMsg::AgentMessage(event) => Some(event.message.clone()),
         EventMsg::ItemCompleted(event) => match &event.item {
