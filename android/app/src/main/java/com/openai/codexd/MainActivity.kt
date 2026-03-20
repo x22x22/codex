@@ -50,16 +50,19 @@ class MainActivity : Activity() {
     @Volatile
     private var agentRefreshInFlight = false
     @Volatile
-    private var agentRuntimeRefreshInFlight = false
-    @Volatile
     private var latestAgentRuntimeStatus: AgentCodexAppServerClient.RuntimeStatus? = null
 
     private val refreshHandler = Handler(Looper.getMainLooper())
     private val agentSessionController by lazy { AgentSessionController(this) }
     private val sessionUiLeaseToken = Binder()
+    private val runtimeStatusListener = AgentCodexAppServerClient.RuntimeStatusListener { status ->
+        latestAgentRuntimeStatus = status
+        runOnUiThread {
+            findViewById<TextView>(R.id.agent_runtime_status).text = renderAgentRuntimeStatus()
+        }
+    }
     private val refreshRunnable = object : Runnable {
         override fun run() {
-            refreshAgentRuntimeStatus()
             refreshAuthStatus()
             refreshAgentSessions()
             refreshHandler.postDelayed(this, STATUS_REFRESH_INTERVAL_MS)
@@ -105,12 +108,15 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         registerSessionListenerIfNeeded()
+        AgentCodexAppServerClient.registerRuntimeStatusListener(runtimeStatusListener)
+        AgentCodexAppServerClient.refreshRuntimeStatusAsync(this)
         refreshHandler.removeCallbacks(refreshRunnable)
         refreshHandler.post(refreshRunnable)
     }
 
     override fun onPause() {
         refreshHandler.removeCallbacks(refreshRunnable)
+        AgentCodexAppServerClient.unregisterRuntimeStatusListener(runtimeStatusListener)
         unregisterSessionListenerIfNeeded()
         updateSessionUiLease(null)
         super.onPause()
@@ -120,7 +126,7 @@ class MainActivity : Activity() {
         findViewById<TextView>(R.id.socket_path).text = defaultSocketPath()
         findViewById<TextView>(R.id.codex_home).text = defaultCodexHome()
         isServiceRunning = false
-        latestAgentRuntimeStatus = null
+        latestAgentRuntimeStatus = AgentCodexAppServerClient.currentRuntimeStatus()
         updateAuthUi("Codexd status: unknown", false, null, emptyList())
         updateAgentUi(AgentSnapshot.unavailable)
     }
@@ -369,6 +375,7 @@ class MainActivity : Activity() {
             startService(intent)
             isServiceRunning = false
             updateAuthUi("Codexd status: stopping service...", false, 0, emptyList())
+            AgentCodexAppServerClient.refreshRuntimeStatusAsync(this)
             return
         }
 
@@ -377,6 +384,7 @@ class MainActivity : Activity() {
         isServiceRunning = true
         updateAuthUi("Codexd status: starting service...", isAuthenticated, null, emptyList())
         refreshAuthStatus()
+        AgentCodexAppServerClient.refreshRuntimeStatusAsync(this)
     }
 
     fun authAction(@Suppress("UNUSED_PARAMETER") view: View) {
@@ -407,6 +415,7 @@ class MainActivity : Activity() {
                 when (deviceResponse.status) {
                     "already_authenticated" -> {
                         updateAuthUi("Codexd status: already authenticated", true, null, emptyList())
+                        AgentCodexAppServerClient.refreshRuntimeStatusAsync(this, refreshToken = true)
                         showToast("Already signed in")
                     }
                     "pending", "in_progress" -> {
@@ -447,6 +456,7 @@ class MainActivity : Activity() {
             result.onSuccess {
                 showToast("Signed out")
                 refreshAuthStatus()
+                AgentCodexAppServerClient.refreshRuntimeStatusAsync(this)
             }
         }
     }
@@ -479,22 +489,6 @@ class MainActivity : Activity() {
                 updateAuthUi(message, status.authenticated, status.clientCount, status.clients)
             }
             statusRefreshInFlight = false
-        }
-    }
-
-    private fun refreshAgentRuntimeStatus() {
-        if (agentRuntimeRefreshInFlight) {
-            return
-        }
-        agentRuntimeRefreshInFlight = true
-        thread {
-            latestAgentRuntimeStatus = runCatching {
-                AgentCodexAppServerClient.readRuntimeStatus(this)
-            }.getOrNull()
-            runOnUiThread {
-                findViewById<TextView>(R.id.agent_runtime_status).text = renderAgentRuntimeStatus()
-            }
-            agentRuntimeRefreshInFlight = false
         }
     }
 
@@ -532,6 +526,7 @@ class MainActivity : Activity() {
                     status.clientCount,
                     status.clients,
                 )
+                AgentCodexAppServerClient.refreshRuntimeStatusAsync(this, refreshToken = true)
                 showToast("Signed in")
                 return
             }
