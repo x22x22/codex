@@ -74,8 +74,6 @@ use codex_app_server_protocol::Result;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 use codex_arg0::Arg0DispatchPaths;
-use codex_core::AuthManager;
-use codex_core::ThreadManager;
 use codex_core::config::Config;
 use codex_core::config_loader::CloudRequirementsLoader;
 use codex_core::config_loader::LoaderOverrides;
@@ -124,10 +122,6 @@ pub struct InProcessStartArgs {
     pub loader_overrides: LoaderOverrides,
     /// Preloaded cloud requirements provider.
     pub cloud_requirements: CloudRequirementsLoader,
-    /// Optional prebuilt auth manager reused by an embedding caller.
-    pub auth_manager: Option<Arc<AuthManager>>,
-    /// Optional prebuilt thread manager reused by an embedding caller.
-    pub thread_manager: Option<Arc<ThreadManager>>,
     /// Feedback sink used by app-server/core telemetry and logs.
     pub feedback: CodexFeedback,
     /// Startup warnings emitted after initialize succeeds.
@@ -413,8 +407,6 @@ fn start_uninitialized(args: InProcessStartArgs) -> InProcessClientHandle {
                 cli_overrides: args.cli_overrides,
                 loader_overrides: args.loader_overrides,
                 cloud_requirements: args.cloud_requirements,
-                auth_manager: args.auth_manager,
-                thread_manager: args.thread_manager,
                 feedback: args.feedback,
                 log_db: None,
                 config_warnings: args.config_warnings,
@@ -762,8 +754,6 @@ mod tests {
             cli_overrides: Vec::new(),
             loader_overrides: LoaderOverrides::default(),
             cloud_requirements: CloudRequirementsLoader::default(),
-            auth_manager: None,
-            thread_manager: None,
             feedback: CodexFeedback::new(),
             config_warnings: Vec::new(),
             session_source,

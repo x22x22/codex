@@ -227,8 +227,6 @@ impl InProcessClientStartArgs {
             cli_overrides: self.cli_overrides,
             loader_overrides: self.loader_overrides,
             cloud_requirements: self.cloud_requirements,
-            auth_manager: None,
-            thread_manager: None,
             feedback: self.feedback,
             config_warnings: self.config_warnings,
             session_source: self.session_source,
@@ -303,6 +301,9 @@ pub enum AppServerClient {
 
 #[derive(Clone)]
 struct ChatgptAuthRefreshContext {
+    // Reconstructs the current local ChatGPT login from auth.json so the
+    // in-process client can satisfy app-server refresh requests without
+    // surfacing AuthManager above the client boundary.
     codex_home: std::path::PathBuf,
     auth_credentials_store_mode: AuthCredentialsStoreMode,
     forced_chatgpt_workspace_id: Option<String>,
@@ -1663,8 +1664,6 @@ mod tests {
         }
         .into_runtime_start_args();
 
-        assert!(runtime_args.auth_manager.is_none());
-        assert!(runtime_args.thread_manager.is_none());
         assert_eq!(runtime_args.allow_legacy_notifications, false);
         assert_eq!(runtime_args.config, config);
     }
