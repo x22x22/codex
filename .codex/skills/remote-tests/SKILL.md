@@ -13,4 +13,4 @@ Currently running remote tests is only supported on Linux, so you need to use a 
 You can list devboxes via `applied_devbox ls`, pick the one with `codex` in the name.
 Connect to devbox via `ssh <devbox_name>`.
 Reuse the same checkout of codex in `~/code/codex`. Reset files if needed. Multiple checkouts take longer to build and take up more space.
-
+Check whether the SHA and modified files are in sync between remote and local.
