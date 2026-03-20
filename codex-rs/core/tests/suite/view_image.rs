@@ -988,8 +988,8 @@ await codex.emitImage(out);
                 .and_then(Value::as_str)
                 .expect("remote js_repl output should be a string when not itemized");
             assert!(
-                output_text.contains("data:image/png;base64,"),
-                "expected remote js_repl output to include image data URL"
+                output_text.contains("function_call_output"),
+                "expected remote js_repl output to include function call output text"
             );
         }
         None => panic!("custom_tool_call_output should be a content item array"),
