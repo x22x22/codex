@@ -78,6 +78,7 @@ pub(crate) struct GuardianReviewSessionParams {
 #[derive(Clone)]
 pub(crate) struct GuardianReviewSessionManager {
     state: Arc<Mutex<GuardianReviewSessionState>>,
+    spawn_lock: Arc<Mutex<()>>,
     fork_pool: GuardianForkPool,
 }
 
@@ -288,6 +289,7 @@ impl Default for GuardianReviewSessionManager {
     fn default() -> Self {
         Self {
             state: Arc::default(),
+            spawn_lock: Arc::default(),
             fork_pool: GuardianForkPool::new(GUARDIAN_ACTIVE_FORK_CAP),
         }
     }
@@ -298,6 +300,7 @@ impl GuardianReviewSessionManager {
     pub(crate) fn new_for_test(active_fork_cap: usize) -> Self {
         Self {
             state: Arc::default(),
+            spawn_lock: Arc::default(),
             fork_pool: GuardianForkPool::new(active_fork_cap),
         }
     }
@@ -342,8 +345,7 @@ impl GuardianReviewSessionManager {
             reasoning_effort: resolved.reasoning_effort,
             external_cancel: None,
         };
-        let mut stale_trunk_to_shutdown = None;
-        let trunk_candidate = {
+        let stale_trunk_to_shutdown = {
             let mut state = self.state.lock().await;
             if state.shutdown_started {
                 return;
@@ -352,39 +354,55 @@ impl GuardianReviewSessionManager {
                 && trunk.reuse_key != next_reuse_key
                 && trunk.review_lock.try_lock().is_ok()
             {
-                stale_trunk_to_shutdown = state.trunk.take();
+                state.trunk.take()
+            } else {
+                None
             }
-
-            if state.trunk.is_none() {
-                let spawn_cancel_token = CancellationToken::new();
-                let review_session = match spawn_guardian_review_session(
-                    &params,
-                    params.spawn_config.clone(),
-                    next_reuse_key.clone(),
-                    spawn_cancel_token,
-                    /*initial_history*/ None,
-                )
-                .await
-                {
-                    Ok(review_session) => Arc::new(review_session),
-                    Err(err) => {
-                        warn!("failed to eagerly initialize guardian review session: {err}");
-                        return;
-                    }
-                };
-                state.trunk = Some(Arc::clone(&review_session));
-            }
-
-            state.trunk.as_ref().cloned()
         };
 
         if let Some(review_session) = stale_trunk_to_shutdown {
             review_session.shutdown_in_background();
         }
 
-        if trunk_candidate.is_none() {
-            warn!("guardian review session was not available after eager initialization");
+        {
+            let state = self.state.lock().await;
+            if state.shutdown_started || state.trunk.is_some() {
+                return;
+            }
         }
+
+        let _spawn_guard = self.spawn_lock.lock().await;
+        {
+            let state = self.state.lock().await;
+            if state.shutdown_started || state.trunk.is_some() {
+                return;
+            }
+        }
+
+        let spawn_cancel_token = CancellationToken::new();
+        let review_session = match spawn_guardian_review_session(
+            &params,
+            params.spawn_config.clone(),
+            next_reuse_key,
+            spawn_cancel_token,
+            /*initial_history*/ None,
+        )
+        .await
+        {
+            Ok(review_session) => Arc::new(review_session),
+            Err(err) => {
+                warn!("failed to eagerly initialize guardian review session: {err}");
+                return;
+            }
+        };
+
+        let mut state = self.state.lock().await;
+        if state.shutdown_started || state.trunk.is_some() {
+            drop(state);
+            review_session.shutdown_in_background();
+            return;
+        }
+        state.trunk = Some(review_session);
     }
 
     pub(crate) async fn shutdown(&self) {
