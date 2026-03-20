@@ -406,11 +406,8 @@ impl EventProcessorWithJsonOutput {
                 }
                 match notification.turn.status {
                     TurnStatus::Completed => {
-                        if self.final_message.is_none() {
-                            self.final_message = Self::final_message_from_turn_items(
-                                notification.turn.items.as_slice(),
-                            );
-                        }
+                        self.final_message =
+                            Self::final_message_from_turn_items(notification.turn.items.as_slice());
                         events.push(ThreadEvent::TurnCompleted(TurnCompletedEvent {
                             usage: self.usage_from_last_total(),
                         }));

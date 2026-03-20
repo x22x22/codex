@@ -313,10 +313,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             TypedExecEvent::TurnCompleted(notification) => match notification.turn.status {
                 TurnStatus::Completed => {
-                    if self.final_message.is_none() {
-                        self.final_message =
-                            final_message_from_turn_items(notification.turn.items.as_slice());
-                    }
+                    self.final_message =
+                        final_message_from_turn_items(notification.turn.items.as_slice());
                     self.print_usage();
                     CodexStatus::InitiateShutdown
                 }
@@ -535,6 +533,46 @@ mod tests {
             show_raw_agent_reasoning: false,
             last_message_path: None,
             final_message: None,
+            last_total_token_usage: None,
+        };
+
+        let status = processor.process_event(TypedExecEvent::TurnCompleted(
+            codex_app_server_protocol::TurnCompletedNotification {
+                thread_id: "thread-1".to_string(),
+                turn: Turn {
+                    id: "turn-1".to_string(),
+                    items: vec![ThreadItem::AgentMessage {
+                        id: "msg-1".to_string(),
+                        text: "final answer".to_string(),
+                        phase: None,
+                        memory_citation: None,
+                    }],
+                    status: TurnStatus::Completed,
+                    error: None,
+                },
+            },
+        ));
+
+        assert_eq!(
+            status,
+            crate::event_processor::CodexStatus::InitiateShutdown
+        );
+        assert_eq!(processor.final_message.as_deref(), Some("final answer"));
+    }
+
+    #[test]
+    fn turn_completed_overwrites_stale_final_message_from_turn_items() {
+        let mut processor = EventProcessorWithHumanOutput {
+            bold: Style::new(),
+            cyan: Style::new(),
+            dimmed: Style::new(),
+            green: Style::new(),
+            red: Style::new(),
+            yellow: Style::new(),
+            show_agent_reasoning: true,
+            show_raw_agent_reasoning: false,
+            last_message_path: None,
+            final_message: Some("stale answer".to_string()),
             last_total_token_usage: None,
         };
 

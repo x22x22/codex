@@ -483,6 +483,39 @@ fn turn_completion_recovers_final_message_from_turn_items() {
 }
 
 #[test]
+fn turn_completion_overwrites_stale_final_message_from_turn_items() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+    processor.final_message = Some("stale answer".to_string());
+
+    let completed =
+        processor.collect_thread_events(TypedExecEvent::TurnCompleted(TurnCompletedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: Turn {
+                id: "turn-1".to_string(),
+                items: vec![ThreadItem::AgentMessage {
+                    id: "msg-1".to_string(),
+                    text: "final answer".to_string(),
+                    phase: None,
+                    memory_citation: None,
+                }],
+                status: TurnStatus::Completed,
+                error: None,
+            },
+        }));
+
+    assert_eq!(
+        completed,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::TurnCompleted(TurnCompletedEvent {
+                usage: Usage::default(),
+            })],
+            status: CodexStatus::InitiateShutdown,
+        }
+    );
+    assert_eq!(processor.final_message.as_deref(), Some("final answer"));
+}
+
+#[test]
 fn turn_completion_falls_back_to_final_plan_text() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
