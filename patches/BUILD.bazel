@@ -1,5 +1,6 @@
 exports_files([
     "aws-lc-sys_memcmp_check.patch",
+    "llvm_macos_sdk_local_fallback.patch",
     "v8_bazel_rules.patch",
     "v8_module_deps.patch",
     "v8_source_portability.patch",

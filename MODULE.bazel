@@ -3,6 +3,13 @@ module(name = "codex")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "llvm", version = "0.6.7")
+single_version_override(
+    module_name = "llvm",
+    patch_strip = 1,
+    patches = [
+        "//patches:llvm_macos_sdk_local_fallback.patch",
+    ],
+)
 
 register_toolchains("@llvm//toolchain:all")
 

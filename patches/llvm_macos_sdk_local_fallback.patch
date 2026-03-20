@@ -1,0 +1,38 @@
+diff --git a/http_pkg_archive.bzl b/http_pkg_archive.bzl
+index 8822c51..a2c7f31 100644
+--- a/http_pkg_archive.bzl
++++ b/http_pkg_archive.bzl
+@@ -1,9 +1,31 @@
+ load("@bazel_tools//tools/build_defs/repo:utils.bzl", "get_auth")
+ load("@bazel_lib//lib:repo_utils.bzl", "repo_utils")
+ 
+ def _http_pkg_archive_impl(rctx):
+-    rctx.download(
+-        url = rctx.attr.urls,
++    if repo_utils.platform(rctx).startswith("macos_"):
++        host_xcrun = rctx.which("xcrun")
++        if host_xcrun == None:
++            fail("xcrun is required to locate the local macOS SDK")
++
++        res = rctx.execute([host_xcrun, "--show-sdk-path"])
++        if res.return_code != 0:
++            fail("Failed to locate local macOS SDK: {}".format(res.stderr))
++
++        sdk_path = res.stdout.strip()
++        if not sdk_path:
++            fail("xcrun --show-sdk-path returned an empty SDK path")
++
++        rctx.file(rctx.attr.dst + "/BUILD.bazel", rctx.read("//3rd_party/macos_sdk:CLTools_macOSNMOS_SDK.BUILD.bazel"))
++        rctx.symlink(sdk_path + "/System", rctx.attr.dst + "/System")
++        rctx.symlink(sdk_path + "/usr", rctx.attr.dst + "/usr")
++        rctx.symlink(sdk_path + "/Entitlements.plist", rctx.attr.dst + "/Entitlements.plist")
++        rctx.symlink(sdk_path + "/SDKSettings.json", rctx.attr.dst + "/SDKSettings.json")
++        rctx.symlink(sdk_path + "/SDKSettings.plist", rctx.attr.dst + "/SDKSettings.plist")
++
++        return rctx.repo_metadata(reproducible = False)
++
++    rctx.download(
++        url = rctx.attr.urls,
+         output = ".downloaded.pkg",
+         sha256 = rctx.attr.sha256,
+         canonical_id = " ".join(rctx.attr.urls),
