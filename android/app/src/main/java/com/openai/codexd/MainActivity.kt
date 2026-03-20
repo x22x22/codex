@@ -102,6 +102,7 @@ class MainActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        Log.i(TAG, "onNewIntent action=${intent.action}")
         setIntent(intent)
         handleSessionIntent(intent)
         refreshAgentSessions()
@@ -109,6 +110,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        handleSessionIntent(intent)
         registerSessionListenerIfNeeded()
         registerAuthStatusReceiverIfNeeded()
         AgentCodexAppServerClient.registerRuntimeStatusListener(runtimeStatusListener)
@@ -168,6 +170,7 @@ class MainActivity : Activity() {
         val prompt = intent.getStringExtra(EXTRA_DEBUG_PROMPT)?.trim().orEmpty()
         if (prompt.isEmpty()) {
             Log.w(TAG, "Ignoring debug start intent without prompt")
+            intent.action = null
             return
         }
         val targetPackageOverride = intent.getStringExtra(EXTRA_DEBUG_TARGET_PACKAGE)?.trim()
