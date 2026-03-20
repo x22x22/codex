@@ -7,14 +7,14 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_core::CodexAuth;
 use codex_core::CodexThread;
-use codex_core::ModelProviderInfo;
 use codex_core::ThreadManager;
-use codex_core::built_in_model_providers;
 use codex_core::config::Config;
-use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::shell::Shell;
 use codex_core::shell::get_shell_by_model_provided_path;
 use codex_features::Feature;
+use codex_models::CollaborationModesConfig;
+use codex_models::ModelProviderInfo;
+use codex_models::built_in_model_providers;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::openai_models::ModelsResponse;
 use codex_protocol::protocol::AskForApproval;
@@ -316,7 +316,7 @@ fn ensure_test_model_catalog(config: &mut Config) -> Result<()> {
         return Ok(());
     }
 
-    let bundled_models_path = codex_utils_cargo_bin::find_resource!("../../models.json")
+    let bundled_models_path = codex_utils_cargo_bin::find_resource!("../../../models/models.json")
         .context("bundled models.json")?;
     let bundled_models_contents =
         std::fs::read_to_string(&bundled_models_path).with_context(|| {
