@@ -50,6 +50,13 @@ android {
 }
 
 val repoRoot = rootProject.projectDir.parentFile
+val skipAndroidLto = providers
+    .gradleProperty("codexAndroidSkipLto")
+    .orElse(providers.environmentVariable("CODEX_ANDROID_SKIP_LTO"))
+    .orNull
+    ?.let { it == "1" || it.equals("true", ignoreCase = true) }
+    ?: false
+val codexCargoProfileDir = if (skipAndroidLto) "android-release-no-lto" else "release"
 val agentPlatformStubSdkZip = providers
     .gradleProperty("agentPlatformStubSdkZip")
     .orElse(providers.environmentVariable("ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP"))
@@ -86,7 +93,7 @@ val syncCodexCliJniLibs = tasks.register<Sync>("syncCodexCliJniLibs") {
     into(outputDir)
 
     codexTargets.forEach { (abi, triple) ->
-        val binary = file("${repoRoot}/codex-rs/target/android/${triple}/release/codex")
+        val binary = file("${repoRoot}/codex-rs/target/android/${triple}/${codexCargoProfileDir}/codex")
         from(binary) {
             into(abi)
             rename { "libcodex.so" }
@@ -95,10 +102,10 @@ val syncCodexCliJniLibs = tasks.register<Sync>("syncCodexCliJniLibs") {
 
     doFirst {
         codexTargets.forEach { (abi, triple) ->
-            val binary = file("${repoRoot}/codex-rs/target/android/${triple}/release/codex")
+            val binary = file("${repoRoot}/codex-rs/target/android/${triple}/${codexCargoProfileDir}/codex")
             if (!binary.exists()) {
                 throw GradleException(
-                    "Missing codex binary for ${abi} at ${binary}. Run `just android-build` from the repo root."
+                    "Missing codex binary for ${abi} at ${binary}. Run `just android-build` from the repo root with CODEX_ANDROID_SKIP_LTO=${if (skipAndroidLto) "1" else "0"}."
                 )
             }
         }
@@ -110,7 +117,7 @@ val syncCodexdJniLibs = tasks.register<Sync>("syncCodexdJniLibs") {
     into(outputDir)
 
     codexdTargets.forEach { (abi, triple) ->
-        val binary = file("${repoRoot}/codex-rs/target/android/${triple}/release/codexd")
+        val binary = file("${repoRoot}/codex-rs/target/android/${triple}/${codexCargoProfileDir}/codexd")
         from(binary) {
             into(abi)
             rename { "libcodexd.so" }
@@ -119,10 +126,10 @@ val syncCodexdJniLibs = tasks.register<Sync>("syncCodexdJniLibs") {
 
     doFirst {
         codexdTargets.forEach { (abi, triple) ->
-            val binary = file("${repoRoot}/codex-rs/target/android/${triple}/release/codexd")
+            val binary = file("${repoRoot}/codex-rs/target/android/${triple}/${codexCargoProfileDir}/codexd")
             if (!binary.exists()) {
                 throw GradleException(
-                    "Missing codexd binary for ${abi} at ${binary}. Run `just android-service-build` from the repo root."
+                    "Missing codexd binary for ${abi} at ${binary}. Run `just android-service-build` from the repo root with CODEX_ANDROID_SKIP_LTO=${if (skipAndroidLto) "1" else "0"}."
                 )
             }
         }

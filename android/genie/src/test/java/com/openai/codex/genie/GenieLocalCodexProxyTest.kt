@@ -27,11 +27,16 @@ class GenieLocalCodexProxyTest {
             input = ByteArrayInputStream(request.toByteArray(StandardCharsets.UTF_8)),
             output = responseBytes,
             requestForwarder = object : CodexResponsesRequestForwarder {
-                override fun sendResponsesRequest(body: String): CodexAgentBridge.HttpResponse {
+                override fun openResponsesStream(body: String): ByteArrayInputStream {
                     forwardedRequestBody.set(body)
-                    return CodexAgentBridge.HttpResponse(
-                        statusCode = 200,
-                        body = """{"ok":true}""",
+                    return ByteArrayInputStream(
+                        (
+                            "HTTP/1.1 200 OK\r\n" +
+                                "Content-Type: application/json; charset=utf-8\r\n" +
+                                "Connection: close\r\n" +
+                                "\r\n" +
+                                """{"ok":true}"""
+                            ).toByteArray(StandardCharsets.UTF_8),
                     )
                 }
             },

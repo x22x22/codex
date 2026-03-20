@@ -7,7 +7,6 @@ import android.util.Log
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.EOFException
-import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -18,30 +17,22 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class GenieLocalCodexProxy(
     private val sessionId: String,
-    socketDirectory: File,
     private val requestForwarder: CodexResponsesRequestForwarder,
 ) : Closeable {
     companion object {
         private const val TAG = "GenieLocalProxy"
     }
 
-    private val socketFile = File(
-        socketDirectory,
-        "s${UUID.randomUUID().toString().replace("-", "").take(8)}.sock",
-    )
+    private val socketName = "codex_${UUID.randomUUID().toString().replace("-", "").take(12)}"
     private val boundSocket = LocalSocket().apply {
-        socketFile.parentFile?.mkdirs()
-        if (socketFile.exists()) {
-            socketFile.delete()
-        }
-        bind(LocalSocketAddress(socketFile.absolutePath, LocalSocketAddress.Namespace.FILESYSTEM))
+        bind(LocalSocketAddress(socketName, LocalSocketAddress.Namespace.ABSTRACT))
     }
     private val serverSocket = LocalServerSocket(boundSocket.fileDescriptor)
     private val closed = AtomicBoolean(false)
     private val clientSockets = Collections.synchronizedSet(mutableSetOf<LocalSocket>())
     private val acceptThread = Thread(::acceptLoop, "GenieLocalProxy-$sessionId")
 
-    val socketPath: String = socketFile.absolutePath
+    val socketPath: String = "@$socketName"
 
     fun start() {
         acceptThread.start()
@@ -58,7 +49,6 @@ class GenieLocalCodexProxy(
             clientSockets.forEach { socket -> runCatching { socket.close() } }
             clientSockets.clear()
         }
-        runCatching { socketFile.delete() }
         acceptThread.interrupt()
     }
 
@@ -129,13 +119,30 @@ internal object GenieLocalCodexHttpProxy {
     ) {
         val request = readRequest(input)
         logRequest(request)
-        val response = forwardResponsesRequest(request, requestForwarder)
-        writeResponse(
-            output = output,
-            statusCode = response.statusCode,
-            body = response.body,
-            path = request.forwardPath,
-        )
+        when {
+            request.method != "POST" -> {
+                writeResponse(
+                    output = output,
+                    statusCode = 405,
+                    body = "Unsupported local proxy method: ${request.method}",
+                    path = request.forwardPath,
+                )
+            }
+            request.forwardPath != "/v1/responses" -> {
+                writeResponse(
+                    output = output,
+                    statusCode = 404,
+                    body = "Unsupported local proxy path: ${request.forwardPath}",
+                    path = request.forwardPath,
+                )
+            }
+            else -> {
+                requestForwarder.openResponsesStream(request.body.orEmpty()).use { responseInput ->
+                    responseInput.copyTo(output)
+                }
+                output.flush()
+            }
+        }
     }
 
     fun writeError(
@@ -148,25 +155,6 @@ internal object GenieLocalCodexHttpProxy {
             body = err.message ?: err::class.java.simpleName,
             path = "/error",
         )
-    }
-
-    private fun forwardResponsesRequest(
-        request: ParsedRequest,
-        requestForwarder: CodexResponsesRequestForwarder,
-    ): CodexAgentBridge.HttpResponse {
-        if (request.method != "POST") {
-            return CodexAgentBridge.HttpResponse(
-                statusCode = 405,
-                body = "Unsupported local proxy method: ${request.method}",
-            )
-        }
-        if (request.forwardPath != "/v1/responses") {
-            return CodexAgentBridge.HttpResponse(
-                statusCode = 404,
-                body = "Unsupported local proxy path: ${request.forwardPath}",
-            )
-        }
-        return requestForwarder.sendResponsesRequest(request.body.orEmpty())
     }
 
     private fun readRequest(input: InputStream): ParsedRequest {

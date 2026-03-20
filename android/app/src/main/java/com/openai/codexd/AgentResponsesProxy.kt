@@ -1,18 +1,21 @@
 package com.openai.codexd
 
 import android.content.Context
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import kotlin.concurrent.thread
 import org.json.JSONObject
 
 object AgentResponsesProxy {
     private const val TAG = "AgentResponsesProxy"
     private const val CONNECT_TIMEOUT_MS = 30_000
-    private const val READ_TIMEOUT_MS = 30_000
+    private const val READ_TIMEOUT_MS = 0
     private const val DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
     private const val DEFAULT_CHATGPT_BASE_URL = "https://chatgpt.com/backend-api/codex"
     private const val DEFAULT_ORIGINATOR = "codex_cli_rs"
@@ -35,6 +38,33 @@ object AgentResponsesProxy {
         )
         Log.i(TAG, "Proxying /v1/responses -> $upstreamUrl (auth_mode=${authSnapshot.authMode})")
         return executeRequest(upstreamUrl, requestBody, authSnapshot)
+    }
+
+    fun openResponsesStream(
+        context: Context,
+        requestBody: String,
+    ): ParcelFileDescriptor {
+        val pipe = ParcelFileDescriptor.createPipe()
+        thread(name = "AgentResponsesProxyStream") {
+            ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]).use { output ->
+                streamResponsesTo(context, requestBody, output)
+            }
+        }
+        return pipe[0]
+    }
+
+    fun streamResponsesTo(
+        context: Context,
+        requestBody: String,
+        output: OutputStream,
+    ) {
+        val authSnapshot = loadAuthSnapshot(File(context.filesDir, "codex-home/auth.json"))
+        val upstreamUrl = buildResponsesUrl(
+            upstreamBaseUrl = "provider-default",
+            authSnapshot.authMode,
+        )
+        Log.i(TAG, "Streaming /v1/responses -> $upstreamUrl (auth_mode=${authSnapshot.authMode})")
+        streamRequest(upstreamUrl, requestBody, authSnapshot, output)
     }
 
     internal fun buildResponsesUrl(
@@ -92,7 +122,70 @@ object AgentResponsesProxy {
         requestBody: String,
         authSnapshot: AuthSnapshot,
     ): CodexdLocalClient.HttpResponse {
-        val connection = (URL(upstreamUrl).openConnection() as HttpURLConnection).apply {
+        val connection = openConnection(upstreamUrl, authSnapshot)
+        return try {
+            connection.outputStream.use { output ->
+                output.write(requestBody.toByteArray(StandardCharsets.UTF_8))
+                output.flush()
+            }
+            val statusCode = connection.responseCode
+            val stream = if (statusCode >= 400) connection.errorStream else connection.inputStream
+            val responseBody = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }
+                .orEmpty()
+            CodexdLocalClient.HttpResponse(
+                statusCode = statusCode,
+                body = responseBody,
+            )
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun streamRequest(
+        upstreamUrl: String,
+        requestBody: String,
+        authSnapshot: AuthSnapshot,
+        output: OutputStream,
+    ) {
+        val connection = openConnection(upstreamUrl, authSnapshot)
+        var headersWritten = false
+        try {
+            connection.outputStream.use { requestStream ->
+                requestStream.write(requestBody.toByteArray(StandardCharsets.UTF_8))
+                requestStream.flush()
+            }
+            val statusCode = connection.responseCode
+            val responseStream = if (statusCode >= 400) connection.errorStream else connection.inputStream
+            writeRawHttpResponseHeaders(
+                output = output,
+                statusCode = statusCode,
+                contentType = connection.contentType,
+            )
+            headersWritten = true
+            responseStream?.use { it.copyTo(output) }
+        } catch (err: Exception) {
+            Log.w(TAG, "Streaming /v1/responses failed", err)
+            if (!headersWritten) {
+                writeRawHttpResponseHeaders(
+                    output = output,
+                    statusCode = 502,
+                    contentType = "text/plain; charset=utf-8",
+                )
+                output.write(
+                    (err.message ?: err::class.java.simpleName).toByteArray(StandardCharsets.UTF_8),
+                )
+            }
+        } finally {
+            runCatching { output.flush() }
+            connection.disconnect()
+        }
+    }
+
+    private fun openConnection(
+        upstreamUrl: String,
+        authSnapshot: AuthSnapshot,
+    ): HttpURLConnection {
+        return (URL(upstreamUrl).openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
@@ -109,21 +202,35 @@ object AgentResponsesProxy {
                 setRequestProperty("ChatGPT-Account-ID", authSnapshot.accountId)
             }
         }
-        return try {
-            connection.outputStream.use { output ->
-                output.write(requestBody.toByteArray(StandardCharsets.UTF_8))
-                output.flush()
+    }
+
+    private fun writeRawHttpResponseHeaders(
+        output: OutputStream,
+        statusCode: Int,
+        contentType: String?,
+    ) {
+        val headers = buildString {
+            append("HTTP/1.1 $statusCode ${reasonPhrase(statusCode)}\r\n")
+            if (!contentType.isNullOrBlank()) {
+                append("Content-Type: $contentType\r\n")
             }
-            val statusCode = connection.responseCode
-            val stream = if (statusCode >= 400) connection.errorStream else connection.inputStream
-            val responseBody = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }
-                .orEmpty()
-            CodexdLocalClient.HttpResponse(
-                statusCode = statusCode,
-                body = responseBody,
-            )
-        } finally {
-            connection.disconnect()
+            append("Connection: close\r\n")
+            append("\r\n")
+        }
+        output.write(headers.toByteArray(StandardCharsets.US_ASCII))
+    }
+
+    private fun reasonPhrase(statusCode: Int): String {
+        return when (statusCode) {
+            200 -> "OK"
+            400 -> "Bad Request"
+            401 -> "Unauthorized"
+            403 -> "Forbidden"
+            404 -> "Not Found"
+            500 -> "Internal Server Error"
+            502 -> "Bad Gateway"
+            503 -> "Service Unavailable"
+            else -> "Response"
         }
     }
 

@@ -58,6 +58,7 @@ class CodexGenieService : GenieService() {
             }
 
             AgentBridgeClient(
+                context = this,
                 sessionId = sessionId,
                 callback = callback,
                 control = control,

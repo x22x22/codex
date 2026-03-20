@@ -12,6 +12,12 @@ class AgentFrameworkToolBridge(
 ) {
     companion object {
         private const val TAG = "AgentFrameworkTool"
+        private val DISALLOWED_TARGET_PACKAGES = setOf(
+            "com.android.shell",
+            "com.android.systemui",
+            "com.openai.codexd",
+            "com.openai.codex.genie",
+        )
         const val START_DIRECT_SESSION_TOOL = "android_framework_sessions_start_direct"
         const val LIST_SESSIONS_TOOL = "android_framework_sessions_list"
         const val ANSWER_QUESTION_TOOL = "android_framework_sessions_answer_question"
@@ -21,15 +27,20 @@ class AgentFrameworkToolBridge(
         internal fun parseStartDirectSessionArguments(
             arguments: JSONObject,
             userObjective: String,
-            isLaunchablePackage: (String) -> Boolean,
+            isEligibleTargetPackage: (String) -> Boolean,
         ): StartDirectSessionRequest {
             val targetsJson = arguments.optJSONArray("targets")
                 ?: throw IOException("Framework session tool arguments missing targets")
+            val rejectedPackages = mutableListOf<String>()
             val targets = buildList {
                 for (index in 0 until targetsJson.length()) {
                     val target = targetsJson.optJSONObject(index) ?: continue
                     val packageName = target.optString("packageName").trim()
-                    if (packageName.isEmpty() || !isLaunchablePackage(packageName)) {
+                    if (packageName.isEmpty()) {
+                        continue
+                    }
+                    if (!isEligibleTargetPackage(packageName)) {
+                        rejectedPackages += packageName
                         continue
                     }
                     val objective = target.optString("objective").trim().ifEmpty { userObjective }
@@ -42,7 +53,12 @@ class AgentFrameworkToolBridge(
                 }
             }.distinctBy(AgentDelegationTarget::packageName)
             if (targets.isEmpty()) {
-                throw IOException("Framework session tool did not select a launchable package")
+                if (rejectedPackages.isNotEmpty()) {
+                    throw IOException(
+                        "Framework session tool selected missing or disallowed package(s): ${rejectedPackages.joinToString(", ")}",
+                    )
+                }
+                throw IOException("Framework session tool did not select an eligible target package")
             }
             return StartDirectSessionRequest(
                 plan = AgentDelegationPlan(
@@ -90,7 +106,7 @@ class AgentFrameworkToolBridge(
                 val request = parseStartDirectSessionArguments(
                     arguments = arguments,
                     userObjective = userObjective,
-                    isLaunchablePackage = ::isLaunchablePackage,
+                    isEligibleTargetPackage = ::isEligibleTargetPackage,
                 )
                 val startedSession = sessionController.startDirectSession(
                     plan = request.plan,
@@ -267,8 +283,13 @@ class AgentFrameworkToolBridge(
             .put("sessions", sessions)
     }
 
-    private fun isLaunchablePackage(packageName: String): Boolean {
-        return context.packageManager.getLaunchIntentForPackage(packageName) != null
+    private fun isEligibleTargetPackage(packageName: String): Boolean {
+        if (packageName in DISALLOWED_TARGET_PACKAGES) {
+            return false
+        }
+        return runCatching {
+            context.packageManager.getApplicationInfo(packageName, 0)
+        }.isSuccess
     }
 
     private fun requireString(arguments: JSONObject, fieldName: String): String {

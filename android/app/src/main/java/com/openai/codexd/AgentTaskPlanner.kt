@@ -5,6 +5,7 @@ import android.util.Log
 import java.io.IOException
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 
 data class AgentDelegationTarget(
     val packageName: String,
@@ -23,19 +24,69 @@ data class AgentDelegationPlan(
 
 object AgentTaskPlanner {
     private const val TAG = "AgentTaskPlanner"
+    private const val PLANNER_ATTEMPTS = 2
 
     private val PLANNER_INSTRUCTIONS =
         """
         You are Codex acting as the Android Agent orchestrator.
         The user interacts only with the Agent. Decide which installed Android packages should receive delegated Genie sessions.
         Use the standard Android shell tools already available in this runtime, such as `cmd package`, `pm`, and `am`, to inspect installed packages and resolve the correct targets.
-        After deciding on the target packages, call the framework session tool `${AgentFrameworkToolBridge.START_DIRECT_SESSION_TOOL}` exactly once.
+        Return exactly one JSON object and nothing else. Do not wrap it in markdown fences.
+        JSON schema:
+        {
+          "targets": [
+            {
+              "packageName": "installed.package",
+              "objective": "free-form delegated objective for the child Genie"
+            }
+          ],
+          "reason": "short rationale",
+          "allowDetachedMode": true
+        }
         Rules:
         - Choose the fewest packages needed to complete the request.
-        - The framework session tool `targets` must be non-empty.
+        - `targets` must be non-empty.
         - Each delegated `objective` should be written for the child Genie, not the user.
-        - After the framework session tool succeeds, reply with a short summary for the Agent UI.
+        - Stop after at most 6 shell commands.
+        - Prefer direct package-manager commands over grepping large package lists.
+        - Verify each chosen package by inspecting its package dump or query-activities output before returning it.
+        - Only choose packages that directly own the requested app behavior. Never choose helper packages such as `com.android.shell`, `com.android.systemui`, or the Codex Agent/Genie packages unless the user explicitly asked for them.
+        - For intent resolution commands, include `--user 0`.
+        - If the user objective already names a specific installed package, use it directly after verification.
+        - `cmd package list packages PACKAGE_NAME` alone is not sufficient verification.
+        - Prefer focused verification commands such as `cmd package dump PACKAGE | sed -n '1,120p'`, `cmd package query-activities --brief --user 0 -p PACKAGE -a android.intent.action.MAIN`, and `cmd package query-activities --brief --user 0 -p PACKAGE -a RELEVANT_ACTION`.
+        - Do not enumerate every launcher activity on the device. Query specific candidate packages instead.
         """.trimIndent()
+    private val PLANNER_OUTPUT_SCHEMA =
+        JSONObject()
+            .put("type", "object")
+            .put(
+                "properties",
+                JSONObject()
+                    .put(
+                        "targets",
+                        JSONObject()
+                            .put("type", "array")
+                            .put("minItems", 1)
+                            .put(
+                                "items",
+                                JSONObject()
+                                    .put("type", "object")
+                                    .put(
+                                        "properties",
+                                        JSONObject()
+                                            .put("packageName", JSONObject().put("type", "string"))
+                                            .put("objective", JSONObject().put("type", "string")),
+                                    )
+                                    .put("required", JSONArray().put("packageName").put("objective"))
+                                    .put("additionalProperties", false),
+                            ),
+                    )
+                    .put("reason", JSONObject().put("type", "string"))
+                    .put("allowDetachedMode", JSONObject().put("type", "boolean")),
+            )
+            .put("required", JSONArray().put("targets").put("reason").put("allowDetachedMode"))
+            .put("additionalProperties", false)
 
     fun startSession(
         context: Context,
@@ -62,42 +113,117 @@ object AgentTaskPlanner {
                 allowDetachedMode = allowDetachedMode,
             )
         }
-        var sessionStartResult: SessionStartResult? = null
-        val frameworkToolBridge = AgentFrameworkToolBridge(context, sessionController)
         Log.i(TAG, "Planning Agent session for objective=${userObjective.take(160)}")
-        AgentCodexAppServerClient.requestText(
-            context = context,
-            instructions = PLANNER_INSTRUCTIONS,
-            prompt = buildPlannerPrompt(userObjective),
-            dynamicTools = frameworkToolBridge.buildPlanningToolSpecs(),
-            toolCallHandler = { toolName, arguments ->
-                frameworkToolBridge.handleToolCall(
-                    toolName = toolName,
-                    arguments = arguments,
-                    userObjective = userObjective,
-                    onSessionStarted = { startedSession ->
-                        if (sessionStartResult != null) {
-                            throw IOException("Agent runtime attempted to start multiple Genie batches")
-                        }
-                        Log.i(
-                            TAG,
-                            "Framework tool started parent=${startedSession.parentSessionId} children=${startedSession.childSessionIds}",
-                        )
-                        sessionStartResult = startedSession
-                    },
+        val isEligibleTargetPackage = { packageName: String ->
+            runCatching { context.packageManager.getApplicationInfo(packageName, 0) }.isSuccess &&
+                packageName !in setOf(
+                    "com.android.shell",
+                    "com.android.systemui",
+                    "com.openai.codexd",
+                    "com.openai.codex.genie",
                 )
-            },
-            requestUserInputHandler = requestUserInputHandler,
+        }
+        var previousPlannerResponse: String? = null
+        var plannerRequest: AgentFrameworkToolBridge.StartDirectSessionRequest? = null
+        var lastPlannerError: IOException? = null
+        for (attemptIndex in 0 until PLANNER_ATTEMPTS) {
+            val plannerResponse = AgentCodexAppServerClient.requestText(
+                context = context,
+                instructions = PLANNER_INSTRUCTIONS,
+                prompt = buildPlannerPrompt(
+                    userObjective = userObjective,
+                    previousPlannerResponse = previousPlannerResponse,
+                    previousPlannerError = lastPlannerError?.message,
+                ),
+                outputSchema = PLANNER_OUTPUT_SCHEMA,
+                requestUserInputHandler = requestUserInputHandler,
+            )
+            Log.i(TAG, "Planner response=${plannerResponse.take(400)}")
+            previousPlannerResponse = plannerResponse
+            val parsedRequest = runCatching {
+                parsePlannerResponse(
+                    responseText = plannerResponse,
+                    userObjective = userObjective,
+                    isEligibleTargetPackage = isEligibleTargetPackage,
+                )
+            }.getOrElse { err ->
+                if (err is IOException && attemptIndex < PLANNER_ATTEMPTS - 1) {
+                    Log.w(TAG, "Planner response rejected: ${err.message}")
+                    lastPlannerError = err
+                    continue
+                }
+                throw err
+            }
+            plannerRequest = parsedRequest
+            break
+        }
+        val request = plannerRequest ?: throw (lastPlannerError
+            ?: IOException("Planner did not return a valid session plan"))
+        val sessionStartResult = sessionController.startDirectSession(
+            plan = request.plan,
+            allowDetachedMode = allowDetachedMode && request.allowDetachedMode,
         )
         Log.i(TAG, "Planner sessionStartResult=$sessionStartResult")
         return sessionStartResult
-            ?: throw IOException("Agent runtime did not launch any Genie sessions")
     }
 
-    private fun buildPlannerPrompt(userObjective: String): String {
-        return """
-            User objective:
-            $userObjective
-        """.trimIndent()
+    private fun buildPlannerPrompt(
+        userObjective: String,
+        previousPlannerResponse: String?,
+        previousPlannerError: String?,
+    ): String {
+        return buildString {
+            appendLine("User objective:")
+            appendLine(userObjective)
+            if (!previousPlannerError.isNullOrBlank()) {
+                appendLine()
+                appendLine("Previous candidate plan was rejected by host validation:")
+                appendLine(previousPlannerError)
+                appendLine("Choose a different installed target package and verify it with focused package commands.")
+            }
+            if (!previousPlannerResponse.isNullOrBlank()) {
+                appendLine()
+                appendLine("Previous invalid planner response:")
+                appendLine(previousPlannerResponse)
+            }
+        }.trim()
+    }
+
+    internal fun parsePlannerResponse(
+        responseText: String,
+        userObjective: String,
+        isEligibleTargetPackage: (String) -> Boolean,
+    ): AgentFrameworkToolBridge.StartDirectSessionRequest {
+        val plannerJson = extractPlannerJson(responseText)
+        return AgentFrameworkToolBridge.parseStartDirectSessionArguments(
+            arguments = plannerJson,
+            userObjective = userObjective,
+            isEligibleTargetPackage = isEligibleTargetPackage,
+        )
+    }
+
+    private fun extractPlannerJson(responseText: String): JSONObject {
+        val trimmed = responseText.trim()
+        parseJsonObject(trimmed)?.let { return it }
+        val unfenced = trimmed
+            .removePrefix("```json")
+            .removePrefix("```")
+            .removeSuffix("```")
+            .trim()
+        parseJsonObject(unfenced)?.let { return it }
+        val firstBrace = trimmed.indexOf('{')
+        val lastBrace = trimmed.lastIndexOf('}')
+        if (firstBrace >= 0 && lastBrace > firstBrace) {
+            parseJsonObject(trimmed.substring(firstBrace, lastBrace + 1))?.let { return it }
+        }
+        throw IOException("Planner did not return a valid JSON object")
+    }
+
+    private fun parseJsonObject(text: String): JSONObject? {
+        return runCatching {
+            val tokener = JSONTokener(text)
+            val value = tokener.nextValue()
+            value as? JSONObject
+        }.getOrNull()
     }
 }

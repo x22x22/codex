@@ -35,6 +35,8 @@ class MainActivity : Activity() {
         private const val STATUS_REFRESH_INTERVAL_MS = 2000L
         private const val ACTION_DEBUG_START_AGENT_SESSION =
             "com.openai.codexd.action.DEBUG_START_AGENT_SESSION"
+        private const val ACTION_DEBUG_CANCEL_ALL_AGENT_SESSIONS =
+            "com.openai.codexd.action.DEBUG_CANCEL_ALL_AGENT_SESSIONS"
         private const val EXTRA_DEBUG_PROMPT = "prompt"
         private const val EXTRA_DEBUG_TARGET_PACKAGE = "targetPackage"
     }
@@ -86,6 +88,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AgentSocketBridgeServer.ensureStarted(this)
         setContentView(R.layout.activity_main)
         updatePaths()
         handleSessionIntent(intent)
@@ -131,6 +134,25 @@ class MainActivity : Activity() {
     }
 
     private fun maybeStartSessionFromIntent(intent: Intent?) {
+        if (intent?.action == ACTION_DEBUG_CANCEL_ALL_AGENT_SESSIONS) {
+            Log.i(TAG, "Handling debug cancel-all Agent sessions intent")
+            thread {
+                val result = runCatching { agentSessionController.cancelActiveSessions() }
+                result.onFailure { err ->
+                    Log.w(TAG, "Failed to cancel Agent sessions from debug intent", err)
+                    showToast("Failed to cancel active sessions: ${err.message}")
+                }
+                result.onSuccess { cancelResult ->
+                    focusedFrameworkSessionId = null
+                    val cancelledCount = cancelResult.cancelledSessionIds.size
+                    val failedCount = cancelResult.failedSessionIds.size
+                    showToast("Cancelled $cancelledCount sessions, $failedCount failed")
+                    refreshAgentSessions(force = true)
+                }
+            }
+            intent.action = null
+            return
+        }
         if (intent?.action != ACTION_DEBUG_START_AGENT_SESSION) {
             return
         }

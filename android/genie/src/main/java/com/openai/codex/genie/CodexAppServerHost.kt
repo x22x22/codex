@@ -79,7 +79,6 @@ class CodexAppServerHost(
         }
         val proxy = GenieLocalCodexProxy(
             sessionId = request.sessionId,
-            socketDirectory = File(context.cacheDir, "g"),
             requestForwarder = bridgeClient,
         )
         proxy.start()
@@ -237,6 +236,7 @@ class CodexAppServerHost(
         val method = message.getString("method")
         val requestId = message.get("id")
         val params = message.optJSONObject("params") ?: JSONObject()
+        Log.i(TAG, "Handling app-server request method=$method session=${request.sessionId}")
         when (method) {
             "item/tool/call" -> handleDynamicToolCall(requestId, params)
             "item/tool/requestUserInput" -> handleRequestUserInput(requestId, params)
@@ -257,6 +257,7 @@ class CodexAppServerHost(
     ) {
         val toolName = params.optString("tool").trim()
         val arguments = params.optJSONObject("arguments") ?: JSONObject()
+        Log.i(TAG, "Executing dynamic tool $toolName arguments=$arguments")
         val toolExecutor = AndroidGenieToolExecutor(
             callback = callback,
             sessionId = request.sessionId,
@@ -285,11 +286,13 @@ class CodexAppServerHost(
     ) {
         val questions = params.optJSONArray("questions") ?: JSONArray()
         val renderedQuestion = renderAgentQuestion(questions)
+        Log.i(TAG, "Requesting Agent input for ${request.sessionId}: $renderedQuestion")
         callback.publishQuestion(request.sessionId, renderedQuestion)
         callback.updateState(request.sessionId, AgentSessionInfo.STATE_WAITING_FOR_USER)
         val answer = control.waitForUserResponse()
         callback.updateState(request.sessionId, AgentSessionInfo.STATE_RUNNING)
         callback.publishTrace(request.sessionId, "Received Agent answer for ${request.targetPackage}.")
+        Log.i(TAG, "Received Agent input for ${request.sessionId}: ${answer.take(160)}")
         sendResult(
             requestId = requestId,
             result = JSONObject().put("answers", buildQuestionAnswers(questions, answer)),
@@ -332,6 +335,7 @@ class CodexAppServerHost(
         if (item == null) {
             return
         }
+        Log.i(TAG, "item/started type=${item.optString("type")} tool=${item.optString("tool")}")
         when (item.optString("type")) {
             "dynamicToolCall" -> {
                 val tool = item.optString("tool")
@@ -348,6 +352,10 @@ class CodexAppServerHost(
         if (item == null) {
             return
         }
+        Log.i(
+            TAG,
+            "item/completed type=${item.optString("type")} status=${item.optString("status")} tool=${item.optString("tool")}",
+        )
         when (item.optString("type")) {
             "agentMessage" -> {
                 val itemId = item.optString("id")
@@ -359,12 +367,29 @@ class CodexAppServerHost(
                 }
             }
             "commandExecution" -> {
+                val command = item.optJSONArray("command")?.join(" ") ?: "command"
                 val status = item.optString("status")
                 val exitCode = if (item.has("exitCode")) item.opt("exitCode") else null
-                callback.publishTrace(
-                    request.sessionId,
-                    "Command execution completed with status=$status exitCode=${exitCode ?: "unknown"}.",
-                )
+                val failureDetail = item.optString("stderr").ifBlank {
+                    item.optString("output").ifBlank {
+                        item.optString("error")
+                    }
+                }.trim()
+                if (status == "failed") {
+                    val detailSuffix = failureDetail
+                        .takeIf(String::isNotBlank)
+                        ?.let { " Details: ${it.take(240)}" }
+                        .orEmpty()
+                    callback.publishTrace(
+                        request.sessionId,
+                        "Command failed: $command (status=$status, exitCode=${exitCode ?: "unknown"}).$detailSuffix",
+                    )
+                } else {
+                    callback.publishTrace(
+                        request.sessionId,
+                        "Command completed: $command (status=$status, exitCode=${exitCode ?: "unknown"}).",
+                    )
+                }
             }
             "dynamicToolCall" -> {
                 val tool = item.optString("tool")
@@ -376,6 +401,7 @@ class CodexAppServerHost(
 
     private fun finishTurn(params: JSONObject) {
         val turn = params.optJSONObject("turn") ?: JSONObject()
+        Log.i(TAG, "turn/completed status=${turn.optString("status")} error=${turn.opt("error")}")
         when (turn.optString("status")) {
             "completed" -> {
                 val resultText = finalAgentMessage?.takeIf(String::isNotBlank)
@@ -482,7 +508,10 @@ class CodexAppServerHost(
             You are Codex acting as a child Android Genie bound to ${request.targetPackage}.
             The user interacts only with the supervising Agent.
             Decide your own local plan and choose tools yourself.
+            Prefer direct Android shell commands and intents first: for example `cmd package`, `pm`, `am start`, `am broadcast`, and other commands that can satisfy the objective without UI-driving.
             Use normal Android shell commands for package discovery, activity launch, input injection, UI dumping, and screenshots whenever those commands are available.
+            If a direct command or intent clearly accomplishes the objective, stop and report success instead of continuing exploratory UI actions.
+            If a shell command fails with permission-denied or unsupported-operation errors, treat that as a signal to switch strategy instead of retrying the same class of command.
             Use Android dynamic tools only for framework-only detached target operations that do not have equivalent shell commands.
             If you need clarification or a decision from the supervising Agent, call request_user_input with concise free-form question text.
             Do not use hidden control protocols.

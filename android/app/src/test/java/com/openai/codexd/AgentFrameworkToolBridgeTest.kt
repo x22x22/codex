@@ -24,7 +24,7 @@ class AgentFrameworkToolBridgeTest {
                 """.trimIndent(),
             ),
             userObjective = "Start a 5-minute timer.",
-            isLaunchablePackage = linkedSetOf("com.android.deskclock", "com.android.contacts")::contains,
+            isEligibleTargetPackage = linkedSetOf("com.android.deskclock", "com.android.contacts")::contains,
         )
 
         assertEquals("Start a 5-minute timer.", request.plan.originalObjective)
@@ -51,7 +51,7 @@ class AgentFrameworkToolBridgeTest {
                 """.trimIndent(),
             ),
             userObjective = "Start a 5-minute timer.",
-            isLaunchablePackage = linkedSetOf("com.android.deskclock")::contains,
+            isEligibleTargetPackage = linkedSetOf("com.android.deskclock")::contains,
         )
 
         assertEquals("Start a 5-minute timer.", request.plan.targets.single().objective)
@@ -75,12 +75,15 @@ class AgentFrameworkToolBridgeTest {
                     """.trimIndent(),
                 ),
                 userObjective = "Start a timer.",
-                isLaunchablePackage = linkedSetOf("com.android.deskclock")::contains,
+                isEligibleTargetPackage = linkedSetOf("com.android.deskclock")::contains,
             )
         }.exceptionOrNull()
 
         assertTrue(err is java.io.IOException)
-        assertEquals("Framework session tool did not select a launchable package", err?.message)
+        assertEquals(
+            "Framework session tool selected missing or disallowed package(s): com.unknown.app",
+            err?.message,
+        )
     }
 
 }

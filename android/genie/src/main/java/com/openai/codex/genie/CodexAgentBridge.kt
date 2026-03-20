@@ -138,3 +138,8 @@ object CodexAgentBridge {
         throw IOException("Responses stream missing output_text content")
     }
 }
+
+internal fun JSONObject.optNullableString(name: String): String? = when {
+    isNull(name) -> null
+    else -> optString(name).ifBlank { null }
+}

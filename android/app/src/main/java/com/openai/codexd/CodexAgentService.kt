@@ -20,6 +20,9 @@ class CodexAgentService : AgentService() {
         private const val AUTO_ANSWER_INSTRUCTIONS =
             "You are Codex acting as the Android Agent supervising a Genie execution. If you can answer the current Genie question from the available session context, call the framework session tool `android.framework.sessions.answer_question` exactly once with a short free-form answer. You may inspect current framework state with `android.framework.sessions.list`. If user input is required, do not call any framework tool. Instead reply with `ESCALATE: ` followed by the exact question the Agent should ask the user."
         private const val MAX_AUTO_ANSWER_CONTEXT_CHARS = 800
+        private val handledGenieQuestions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        private val pendingGenieQuestions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        private val handledBridgeRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     }
 
     private sealed class AutoAnswerResult {
@@ -30,10 +33,13 @@ class CodexAgentService : AgentService() {
         ) : AutoAnswerResult()
     }
 
-    private val handledGenieQuestions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-    private val pendingGenieQuestions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val agentManager by lazy { getSystemService(AgentManager::class.java) }
     private val sessionController by lazy { AgentSessionController(this) }
+
+    override fun onCreate() {
+        super.onCreate()
+        AgentSocketBridgeServer.ensureStarted(this)
+    }
 
     override fun onSessionChanged(session: AgentSessionInfo) {
         Log.i(TAG, "onSessionChanged $session")
@@ -45,6 +51,7 @@ class CodexAgentService : AgentService() {
         Log.i(TAG, "onSessionRemoved sessionId=$sessionId")
         AgentQuestionNotifier.cancel(this, sessionId)
         handledGenieQuestions.removeIf { it.startsWith("$sessionId:") }
+        handledBridgeRequests.removeIf { it.startsWith("$sessionId:") }
         pendingGenieQuestions.removeIf { it.startsWith("$sessionId:") }
     }
 
@@ -227,6 +234,20 @@ class CodexAgentService : AgentService() {
     ) {
         val request = JSONObject(question.removePrefix(BRIDGE_REQUEST_PREFIX))
         val requestId = request.optString("requestId")
+        if (requestId.isNotBlank()) {
+            val bridgeRequestKey = "${session.sessionId}:$requestId"
+            if (!handledBridgeRequests.add(bridgeRequestKey)) {
+                Log.i(
+                    TAG,
+                    "Skipping duplicate bridge question method=${request.optString("method")} requestId=$requestId session=${session.sessionId}",
+                )
+                return
+            }
+        }
+        Log.i(
+            TAG,
+            "Answering bridge question method=${request.optString("method")} requestId=$requestId session=${session.sessionId}",
+        )
         val response: JSONObject = runCatching {
             when (request.optString("method")) {
                 BRIDGE_METHOD_GET_RUNTIME_STATUS -> {
@@ -292,6 +313,14 @@ class CodexAgentService : AgentService() {
     }
 
     private fun genieQuestionKey(sessionId: String, question: String): String {
+        if (isBridgeQuestion(question)) {
+            val requestId = runCatching {
+                JSONObject(question.removePrefix(BRIDGE_REQUEST_PREFIX)).optString("requestId").trim()
+            }.getOrNull()
+            if (!requestId.isNullOrEmpty()) {
+                return "$sessionId:bridge:$requestId"
+            }
+        }
         return "$sessionId:$question"
     }
 }

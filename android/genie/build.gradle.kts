@@ -19,6 +19,13 @@ val androidJavaVersion = JavaVersion.toVersion(androidJavaTargetVersion)
 val agentPlatformStubSdkZip = providers
     .gradleProperty("agentPlatformStubSdkZip")
     .orElse(providers.environmentVariable("ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP"))
+val skipAndroidLto = providers
+    .gradleProperty("codexAndroidSkipLto")
+    .orElse(providers.environmentVariable("CODEX_ANDROID_SKIP_LTO"))
+    .orNull
+    ?.let { it == "1" || it.equals("true", ignoreCase = true) }
+    ?: false
+val codexCargoProfileDir = if (skipAndroidLto) "android-release-no-lto" else "release"
 val extractedAgentPlatformJar = layout.buildDirectory.file(
     "generated/agent-platform/android-agent-platform-stub-sdk.jar"
 )
@@ -80,7 +87,7 @@ val syncCodexCliJniLibs = tasks.register<Sync>("syncCodexCliJniLibs") {
     into(outputDir)
 
     codexTargets.forEach { (abi, triple) ->
-        val binary = file("${repoRoot}/codex-rs/target/android/${triple}/release/codex")
+        val binary = file("${repoRoot}/codex-rs/target/android/${triple}/${codexCargoProfileDir}/codex")
         from(binary) {
             into(abi)
             rename { "libcodex.so" }
@@ -89,10 +96,10 @@ val syncCodexCliJniLibs = tasks.register<Sync>("syncCodexCliJniLibs") {
 
     doFirst {
         codexTargets.forEach { (abi, triple) ->
-            val binary = file("${repoRoot}/codex-rs/target/android/${triple}/release/codex")
+            val binary = file("${repoRoot}/codex-rs/target/android/${triple}/${codexCargoProfileDir}/codex")
             if (!binary.exists()) {
                 throw GradleException(
-                    "Missing codex binary for ${abi} at ${binary}. Run `just android-build` from the repo root."
+                    "Missing codex binary for ${abi} at ${binary}. Run `just android-build` from the repo root with CODEX_ANDROID_SKIP_LTO=${if (skipAndroidLto) "1" else "0"}."
                 )
             }
         }

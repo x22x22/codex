@@ -3,6 +3,7 @@ package com.openai.codexd
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
+import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.openai.codex.bridge.BridgeHttpResponse
 import com.openai.codex.bridge.BridgeRuntimeStatus
@@ -44,6 +45,19 @@ class CodexAgentBridgeService : Service() {
             }
             Log.i(TAG, "Proxied /v1/responses")
             return BridgeHttpResponse(response.statusCode, response.body)
+        }
+
+        override fun openResponsesStream(requestBody: String?): ParcelFileDescriptor {
+            val stream = runCatching {
+                AgentResponsesProxy.openResponsesStream(
+                    this@CodexAgentBridgeService,
+                    requestBody.orEmpty(),
+                )
+            }.getOrElse { err ->
+                throw err.asBinderError("openResponsesStream")
+            }
+            Log.i(TAG, "Opened /v1/responses stream")
+            return stream
         }
     }
 

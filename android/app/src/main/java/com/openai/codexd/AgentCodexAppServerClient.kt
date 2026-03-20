@@ -45,6 +45,7 @@ object AgentCodexAppServerClient {
         context: Context,
         instructions: String,
         prompt: String,
+        outputSchema: JSONObject? = null,
         dynamicTools: JSONArray? = null,
         toolCallHandler: ((String, JSONObject) -> JSONObject)? = null,
         requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
@@ -62,7 +63,11 @@ object AgentCodexAppServerClient {
                 instructions = instructions,
                 dynamicTools = dynamicTools,
             )
-            startTurn(threadId, prompt)
+            startTurn(
+                threadId = threadId,
+                prompt = prompt,
+                outputSchema = outputSchema,
+            )
             waitForTurnCompletion(toolCallHandler, requestUserInputHandler).also { response ->
                 Log.i(TAG, "requestText completed response=${response.take(160)}")
             }
@@ -180,19 +185,24 @@ object AgentCodexAppServerClient {
     private fun startTurn(
         threadId: String,
         prompt: String,
+        outputSchema: JSONObject?,
     ) {
+        val turnParams = JSONObject()
+            .put("threadId", threadId)
+            .put(
+                "input",
+                JSONArray().put(
+                    JSONObject()
+                        .put("type", "text")
+                        .put("text", prompt),
+                ),
+            )
+        if (outputSchema != null) {
+            turnParams.put("outputSchema", outputSchema)
+        }
         request(
             method = "turn/start",
-            params = JSONObject()
-                .put("threadId", threadId)
-                .put(
-                    "input",
-                    JSONArray().put(
-                        JSONObject()
-                            .put("type", "text")
-                            .put("text", prompt),
-                    ),
-                ),
+            params = turnParams,
         )
     }
 
@@ -226,6 +236,16 @@ object AgentCodexAppServerClient {
                             .append(params.optString("delta"))
                     }
                 }
+                "item/commandExecution/outputDelta" -> {
+                    val itemId = params.optString("itemId")
+                    val delta = params.optString("delta")
+                    if (delta.isNotBlank()) {
+                        Log.i(
+                            TAG,
+                            "commandExecution/outputDelta itemId=$itemId delta=${delta.take(400)}",
+                        )
+                    }
+                }
                 "item/started" -> {
                     val item = params.optJSONObject("item")
                     Log.i(
@@ -239,6 +259,9 @@ object AgentCodexAppServerClient {
                         TAG,
                         "item/completed type=${item.optString("type")} status=${item.optString("status")} tool=${item.optString("tool")}",
                     )
+                    if (item.optString("type") == "commandExecution") {
+                        Log.i(TAG, "commandExecution/completed item=$item")
+                    }
                     if (item.optString("type") == "agentMessage") {
                         val itemId = item.optString("id")
                         val text = item.optString("text").ifBlank {
