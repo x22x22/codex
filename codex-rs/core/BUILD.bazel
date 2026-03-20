@@ -29,10 +29,12 @@ codex_rust_crate(
     },
     integration_compile_data_extra = [
         "//codex-rs/apply-patch:apply_patch_tool_instructions.md",
+        "//codex-rs/models:models.json",
         "prompt.md",
     ],
     test_data_extra = [
         "config.schema.json",
+        "//codex-rs/models:models.json",
     ] + glob([
         "src/**/snapshots/**",
     ]) + [
