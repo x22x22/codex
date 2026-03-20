@@ -319,6 +319,62 @@ pub(crate) async fn execute_exec_request(
     stdout_stream: Option<StdoutStream>,
     after_spawn: Option<Box<dyn FnOnce() + Send>>,
 ) -> Result<ExecToolCallOutput> {
+    let PreparedExecRequest {
+        params,
+        sandbox,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+    } = prepare_exec_request(exec_request);
+    let start = Instant::now();
+    let raw_output_result = exec(
+        params,
+        sandbox,
+        sandbox_policy,
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+        stdout_stream,
+        after_spawn,
+    )
+    .await;
+    let duration = start.elapsed();
+    Ok(normalize_exec_result(raw_output_result, sandbox, duration)?.to_utf8_lossy_output())
+}
+
+pub(crate) async fn execute_exec_request_raw_output(
+    exec_request: ExecRequest,
+    sandbox_policy: &SandboxPolicy,
+    stdout_stream: Option<StdoutStream>,
+    after_spawn: Option<Box<dyn FnOnce() + Send>>,
+) -> Result<ExecToolCallRawOutput> {
+    let PreparedExecRequest {
+        params,
+        sandbox,
+        file_system_sandbox_policy,
+        network_sandbox_policy,
+    } = prepare_exec_request(exec_request);
+    let start = Instant::now();
+    let raw_output_result = exec(
+        params,
+        sandbox,
+        sandbox_policy,
+        &file_system_sandbox_policy,
+        network_sandbox_policy,
+        stdout_stream,
+        after_spawn,
+    )
+    .await;
+    let duration = start.elapsed();
+    normalize_exec_result(raw_output_result, sandbox, duration)
+}
+
+struct PreparedExecRequest {
+    params: ExecParams,
+    sandbox: SandboxType,
+    file_system_sandbox_policy: FileSystemSandboxPolicy,
+    network_sandbox_policy: NetworkSandboxPolicy,
+}
+
+fn prepare_exec_request(exec_request: ExecRequest) -> PreparedExecRequest {
     let ExecRequest {
         command,
         cwd,
@@ -338,33 +394,24 @@ pub(crate) async fn execute_exec_request(
     } = exec_request;
     let _ = _sandbox_policy_from_env;
 
-    let params = ExecParams {
-        command,
-        cwd,
-        expiration,
-        capture_policy,
-        env,
-        network: network.clone(),
-        sandbox_permissions,
-        windows_sandbox_level,
-        windows_sandbox_private_desktop,
-        justification,
-        arg0,
-    };
-
-    let start = Instant::now();
-    let raw_output_result = exec(
-        params,
+    PreparedExecRequest {
+        params: ExecParams {
+            command,
+            cwd,
+            expiration,
+            capture_policy,
+            env,
+            network,
+            sandbox_permissions,
+            windows_sandbox_level,
+            windows_sandbox_private_desktop,
+            justification,
+            arg0,
+        },
         sandbox,
-        sandbox_policy,
-        &file_system_sandbox_policy,
         network_sandbox_policy,
-        stdout_stream,
-        after_spawn,
-    )
-    .await;
-    let duration = start.elapsed();
-    finalize_exec_result(raw_output_result, sandbox, duration)
+        file_system_sandbox_policy,
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -558,11 +605,11 @@ async fn exec_windows_sandbox(
     })
 }
 
-fn finalize_exec_result(
+fn normalize_exec_result(
     raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr>,
     sandbox_type: SandboxType,
     duration: Duration,
-) -> Result<ExecToolCallOutput> {
+) -> Result<ExecToolCallRawOutput> {
     match raw_output_result {
         Ok(raw_output) => {
             #[allow(unused_mut)]
@@ -584,27 +631,25 @@ fn finalize_exec_result(
                 exit_code = EXEC_TIMEOUT_EXIT_CODE;
             }
 
-            let stdout = raw_output.stdout.from_utf8_lossy();
-            let stderr = raw_output.stderr.from_utf8_lossy();
-            let aggregated_output = raw_output.aggregated_output.from_utf8_lossy();
-            let exec_output = ExecToolCallOutput {
+            let exec_output = ExecToolCallRawOutput {
                 exit_code,
-                stdout,
-                stderr,
-                aggregated_output,
+                stdout: raw_output.stdout,
+                stderr: raw_output.stderr,
+                aggregated_output: raw_output.aggregated_output,
                 duration,
                 timed_out,
             };
 
             if timed_out {
                 return Err(CodexErr::Sandbox(SandboxErr::Timeout {
-                    output: Box::new(exec_output),
+                    output: Box::new(exec_output.to_utf8_lossy_output()),
                 }));
             }
 
-            if is_likely_sandbox_denied(sandbox_type, &exec_output) {
+            let string_output = exec_output.to_utf8_lossy_output();
+            if is_likely_sandbox_denied(sandbox_type, &string_output) {
                 return Err(CodexErr::Sandbox(SandboxErr::Denied {
-                    output: Box::new(exec_output),
+                    output: Box::new(string_output),
                     network_policy_decision: None,
                 }));
             }
@@ -796,6 +841,16 @@ pub struct ExecToolCallOutput {
     pub timed_out: bool,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ExecToolCallRawOutput {
+    pub exit_code: i32,
+    pub stdout: StreamOutput<Vec<u8>>,
+    pub stderr: StreamOutput<Vec<u8>>,
+    pub aggregated_output: StreamOutput<Vec<u8>>,
+    pub duration: Duration,
+    pub timed_out: bool,
+}
+
 impl Default for ExecToolCallOutput {
     fn default() -> Self {
         Self {
@@ -805,6 +860,19 @@ impl Default for ExecToolCallOutput {
             aggregated_output: StreamOutput::new(String::new()),
             duration: Duration::ZERO,
             timed_out: false,
+        }
+    }
+}
+
+impl ExecToolCallRawOutput {
+    fn to_utf8_lossy_output(&self) -> ExecToolCallOutput {
+        ExecToolCallOutput {
+            exit_code: self.exit_code,
+            stdout: self.stdout.from_utf8_lossy(),
+            stderr: self.stderr.from_utf8_lossy(),
+            aggregated_output: self.aggregated_output.from_utf8_lossy(),
+            duration: self.duration,
+            timed_out: self.timed_out,
         }
     }
 }
