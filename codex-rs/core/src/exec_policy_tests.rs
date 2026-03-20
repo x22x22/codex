@@ -591,6 +591,73 @@ async fn evaluates_heredoc_script_against_prefix_rules() {
 }
 
 #[tokio::test]
+async fn powershell_wrapped_plain_command_matches_prefix_rules() {
+    let policy_src = r#"prefix_rule(pattern=["git", "add"], decision="allow")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let policy = Arc::new(parser.build());
+    let command = vec![
+        "pwsh".to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        "git add -A".to_string(),
+    ];
+
+    let requirement = ExecPolicyManager::new(policy)
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[tokio::test]
+async fn requested_prefix_rule_can_approve_powershell_wrapped_plain_commands() {
+    let command = vec![
+        "pwsh".to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        "git add -A".to_string(),
+    ];
+
+    let requirement = ExecPolicyManager::default()
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::UnlessTrusted,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::UseDefault,
+            prefix_rule: Some(vec!["git".to_string(), "add".to_string()]),
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::NeedsApproval {
+            reason: None,
+            proposed_execpolicy_amendment: Some(ExecPolicyAmendment::new(vec![
+                "git".to_string(),
+                "add".to_string(),
+            ])),
+        }
+    );
+}
+
+#[tokio::test]
 async fn omits_auto_amendment_for_heredoc_fallback_prompts() {
     let command = vec![
         "bash".to_string(),

@@ -33,9 +33,11 @@ use tracing::instrument;
 use crate::bash::parse_shell_lc_plain_commands;
 use crate::bash::parse_shell_lc_single_command_prefix;
 use crate::config::Config;
+use crate::powershell::extract_powershell_command;
 use crate::sandboxing::SandboxPermissions;
 use crate::tools::sandboxing::ExecApprovalRequirement;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use shlex::split as shlex_split;
 use shlex::try_join as shlex_try_join;
 
 const PROMPT_CONFLICT_REASON: &str =
@@ -631,7 +633,33 @@ fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
         return (vec![single_command], true);
     }
 
+    if let Some(single_command) = parse_powershell_plain_command(command) {
+        return (vec![single_command], false);
+    }
+
     (vec![command.to_vec()], false)
+}
+
+fn parse_powershell_plain_command(command: &[String]) -> Option<Vec<String>> {
+    let (_, script) = extract_powershell_command(command)?;
+    let script = script.trim();
+    if script.is_empty() {
+        return None;
+    }
+
+    // Only normalize simple wrapper cases where the PowerShell script is
+    // effectively a plain external command invocation. Anything that looks like
+    // real PowerShell syntax should continue to use the opaque argv form.
+    if script.chars().any(|c| {
+        matches!(
+            c,
+            '\n' | '\r' | ';' | '|' | '&' | '(' | ')' | '{' | '}' | '$' | '@' | '`' | '<' | '>'
+        )
+    }) {
+        return None;
+    }
+
+    shlex_split(script).filter(|tokens| !tokens.is_empty())
 }
 
 /// Derive a proposed execpolicy amendment when a command requires user approval
