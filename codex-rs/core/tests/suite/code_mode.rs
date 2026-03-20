@@ -1815,14 +1815,16 @@ async fn code_mode_can_use_view_image_result_with_image_helper() -> Result<()> {
         });
     let test = builder.build_remote_aware(&server).await?;
 
-    let code = r#"
+    let code = format!(
+        r#"
 const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
-await tools.exec_command({
+await tools.exec_command({{
   cmd: "printf '%s' '" + pngBase64 + "' | base64 --decode > code_mode_view_image.png"
-});
-const out = await tools.view_image({ path: "code_mode_view_image.png", detail: "original" });
+}});
+const out = await tools.view_image({{ path: "code_mode_view_image.png", detail: "original" }});
 image(out);
-"#.to_string();
+"#
+    );
 
     responses::mount_sse_once(
         &server,
