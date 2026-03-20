@@ -395,6 +395,7 @@ async fn resume_replays_legacy_js_repl_image_rollout_shapes() {
                 call_id: "legacy-js-call".to_string(),
                 name: None,
                 output: FunctionCallOutputPayload::from_text("legacy js_repl stdout".to_string()),
+                metadata: None,
             }),
         },
         RolloutLine {
@@ -537,6 +538,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                         detail: Some(ImageDetail::Original),
                     },
                 ]),
+                metadata: None,
             }),
         },
         RolloutLine {
@@ -561,6 +563,7 @@ async fn resume_replays_image_tool_outputs_with_detail() {
                         detail: Some(ImageDetail::Original),
                     },
                 ]),
+                metadata: None,
             }),
         },
     ];
@@ -1857,6 +1860,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             text: "content".into(),
         }]),
         encrypted_content: None,
+        metadata: None,
     });
     prompt.input.push(ResponseItem::Message {
         id: Some("message-id".into()),
@@ -1875,6 +1879,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
             query: Some("weather".into()),
             queries: None,
         }),
+        metadata: None,
     });
     prompt.input.push(ResponseItem::FunctionCall {
         id: Some("function-id".into()),
@@ -1887,6 +1892,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     prompt.input.push(ResponseItem::FunctionCallOutput {
         call_id: "function-call-id".into(),
         output: FunctionCallOutputPayload::from_text("ok".into()),
+        metadata: None,
     });
     prompt.input.push(ResponseItem::LocalShellCall {
         id: Some("local-shell-id".into()),
@@ -1913,6 +1919,7 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         call_id: "custom-tool-call-id".into(),
         name: None,
         output: FunctionCallOutputPayload::from_text("ok".into()),
+        metadata: None,
     });
 
     let mut stream = client_session
