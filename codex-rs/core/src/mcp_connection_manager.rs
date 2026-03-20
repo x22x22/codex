@@ -1264,8 +1264,9 @@ impl McpConnectionManager {
         server: &str,
         tool: &str,
         arguments: Option<serde_json::Value>,
+        meta: Option<serde_json::Value>,
     ) -> Result<CallToolResult> {
-        self.backend.call_tool(server, tool, arguments).await
+        self.backend.call_tool(server, tool, arguments, meta).await
     }
 
     /// List resources from the specified server.
