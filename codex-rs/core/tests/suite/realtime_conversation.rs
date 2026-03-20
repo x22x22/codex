@@ -365,7 +365,7 @@ async fn conversation_start_mints_client_secret_with_chatgpt_auth() -> Result<()
     .await;
 
     realtime_server.shutdown().await;
-    chatgpt_server.shutdown().await;
+    drop(chatgpt_server);
     Ok(())
 }
 

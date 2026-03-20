@@ -409,7 +409,7 @@ async fn realtime_conversation_uses_client_secret_with_external_chatgpt_auth() -
     );
 
     realtime_server.shutdown().await;
-    chatgpt_server.shutdown().await;
+    drop(chatgpt_server);
     Ok(())
 }
 
