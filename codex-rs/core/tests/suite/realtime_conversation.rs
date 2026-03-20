@@ -533,6 +533,52 @@ async fn conversation_start_connect_failure_emits_realtime_error_only() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn conversation_start_does_not_mint_client_secret_for_non_openai_provider() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let chatgpt_server = wiremock::MockServer::start().await;
+    let realtime_server = start_websocket_server(vec![vec![]]).await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config({
+            let chatgpt_base_url = chatgpt_server.uri();
+            move |config| {
+                config.chatgpt_base_url = chatgpt_base_url;
+                config.model_provider.name = "Custom Provider".to_string();
+            }
+        });
+    let test = builder
+        .build_with_websocket_server(&realtime_server)
+        .await?;
+
+    test.codex
+        .submit(Op::RealtimeConversationStart(ConversationStartParams {
+            prompt: "backend prompt".to_string(),
+            session_id: None,
+        }))
+        .await?;
+
+    let err = wait_for_event_match(&test.codex, |msg| match msg {
+        EventMsg::Error(err) => Some(err.clone()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(err.codex_error_info, Some(CodexErrorInfo::BadRequest));
+    assert_eq!(
+        err.message,
+        "realtime conversation requires API key or ChatGPT auth"
+    );
+
+    let requests = chatgpt_server.received_requests().await.unwrap_or_default();
+    assert_eq!(requests.len(), 0);
+
+    realtime_server.shutdown().await;
+    drop(chatgpt_server);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn conversation_text_before_start_emits_error() -> Result<()> {
     skip_if_no_network!(Ok(()));
 

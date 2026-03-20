@@ -646,7 +646,7 @@ async fn realtime_bearer_token(
     }
 
     if let Some(auth) = auth {
-        if auth.is_chatgpt_auth() {
+        if auth.is_chatgpt_auth() && provider.is_openai() {
             let auth_provider = CoreAuthProvider::from_auth(auth)?;
             let transport = ReqwestTransport::new(build_reqwest_client());
             let client = RealtimeClientSecretsClient::new(
