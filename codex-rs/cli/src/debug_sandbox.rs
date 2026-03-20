@@ -19,6 +19,9 @@ use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_sandbox::CODEX_SANDBOX_ENV_VAR;
 use codex_sandbox::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_sandbox::SandboxType;
+use codex_sandbox::SandboxType::LinuxSeccomp;
+use codex_sandbox::SandboxType::MacosSeatbelt;
+use codex_sandbox::SandboxType::WindowsRestrictedToken;
 use codex_sandbox::WindowsSandboxLevelExt;
 use codex_sandbox::create_linux_sandbox_command_args_for_policies;
 #[cfg(target_os = "macos")]
@@ -52,7 +55,7 @@ pub async fn run_command_under_seatbelt(
         command,
         config_overrides,
         codex_linux_sandbox_exe,
-        SandboxType::Seatbelt,
+        MacosSeatbelt,
         log_denials,
     )
     .await
@@ -80,7 +83,7 @@ pub async fn run_command_under_landlock(
         command,
         config_overrides,
         codex_linux_sandbox_exe,
-        SandboxType::Landlock,
+        LinuxSeccomp,
         /*log_denials*/ false,
     )
     .await
@@ -100,7 +103,7 @@ pub async fn run_command_under_windows(
         command,
         config_overrides,
         codex_linux_sandbox_exe,
-        SandboxType::Windows,
+        WindowsRestrictedToken,
         /*log_denials*/ false,
     )
     .await
@@ -137,7 +140,7 @@ async fn run_command_under_sandbox(
     );
 
     // Special-case Windows sandbox: execute and exit the process to emulate inherited stdio.
-    if let SandboxType::Windows = sandbox_type {
+    if let WindowsRestrictedToken = sandbox_type {
         #[cfg(target_os = "windows")]
         {
             use codex_windows_sandbox::run_windows_sandbox_capture;
@@ -243,7 +246,7 @@ async fn run_command_under_sandbox(
 
     let mut child = match sandbox_type {
         #[cfg(target_os = "macos")]
-        SandboxType::Seatbelt => {
+        MacosSeatbelt => {
             let args = create_seatbelt_command_args_for_policies_with_extensions(
                 command,
                 &config.permissions.file_system_sandbox_policy,
@@ -270,7 +273,7 @@ async fn run_command_under_sandbox(
             )
             .await?
         }
-        SandboxType::Landlock => {
+        LinuxSeccomp => {
             #[expect(clippy::expect_used)]
             let codex_linux_sandbox_exe = config
                 .codex_linux_sandbox_exe
@@ -302,7 +305,7 @@ async fn run_command_under_sandbox(
             )
             .await?
         }
-        SandboxType::Windows => {
+        WindowsRestrictedToken => {
             unreachable!("Windows sandbox should have been handled above");
         }
     };
