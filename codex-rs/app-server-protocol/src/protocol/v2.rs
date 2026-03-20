@@ -2061,6 +2061,40 @@ pub struct AppsListResponse {
     pub next_cursor: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// List tracked inbox entries from `$CODEX_HOME/inbox`.
+pub struct InboxListParams {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Tracked inbox records are returned as the on-disk JSON shape defined by the
+/// sort-inbox skill's thread record format.
+pub struct InboxListResponse {
+    pub data: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+/// Update user-owned inbox tracking state for one record.
+pub struct InboxUpdateParams {
+    /// Exact inbox filename under `$CODEX_HOME/inbox`, for example
+    /// `thread__20260319T170500Z__slack__C01234567__1712345678.000000.json`.
+    pub thread_id: String,
+    /// RFC 3339 timestamp to store in `tracking.last_read_at`.
+    pub last_read_at: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct InboxUpdateResponse {
+    pub entry: serde_json::Value,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

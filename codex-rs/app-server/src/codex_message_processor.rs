@@ -64,6 +64,10 @@ use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::GetConversationSummaryResponse;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
+use codex_app_server_protocol::InboxListParams;
+use codex_app_server_protocol::InboxListResponse;
+use codex_app_server_protocol::InboxUpdateParams;
+use codex_app_server_protocol::InboxUpdateResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
@@ -310,6 +314,7 @@ use uuid::Uuid;
 use codex_app_server_protocol::ServerRequest;
 
 mod apps_list_helpers;
+mod inbox_list_helpers;
 mod plugin_app_helpers;
 
 use crate::filters::compute_source_filters;
@@ -715,6 +720,14 @@ impl CodexMessageProcessor {
             }
             ClientRequest::AppsList { request_id, params } => {
                 self.apps_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::InboxList { request_id, params } => {
+                self.inbox_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::InboxUpdate { request_id, params } => {
+                self.inbox_update(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::SkillsConfigWrite { request_id, params } => {
@@ -5199,6 +5212,50 @@ impl CodexMessageProcessor {
         tokio::spawn(async move {
             Self::apps_list_task(outgoing, request, params, config).await;
         });
+    }
+
+    async fn inbox_list(&self, request_id: ConnectionRequestId, params: InboxListParams) {
+        let InboxListParams {} = params;
+
+        match inbox_list_helpers::load_inbox_entries(&self.config.codex_home).await {
+            Ok(data) => {
+                self.outgoing
+                    .send_response(request_id, InboxListResponse { data })
+                    .await;
+            }
+            Err(err) => {
+                self.send_internal_error(request_id, format!("failed to list inbox: {err}"))
+                    .await;
+            }
+        }
+    }
+
+    async fn inbox_update(&self, request_id: ConnectionRequestId, params: InboxUpdateParams) {
+        let InboxUpdateParams {
+            thread_id,
+            last_read_at,
+        } = params;
+
+        match inbox_list_helpers::update_inbox_entry_last_read_at(
+            &self.config.codex_home,
+            &thread_id,
+            &last_read_at,
+        )
+        .await
+        {
+            Ok(entry) => {
+                self.outgoing
+                    .send_response(request_id, InboxUpdateResponse { entry })
+                    .await;
+            }
+            Err(inbox_list_helpers::InboxUpdateError::InvalidRequest(message)) => {
+                self.send_invalid_request_error(request_id, message).await;
+            }
+            Err(inbox_list_helpers::InboxUpdateError::Io(err)) => {
+                self.send_internal_error(request_id, format!("failed to update inbox: {err}"))
+                    .await;
+            }
+        }
     }
 
     async fn apps_list_task(

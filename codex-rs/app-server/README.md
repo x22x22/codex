@@ -1215,6 +1215,56 @@ The server also emits `app/list/updated` notifications whenever either source (a
 }
 ```
 
+## Inbox
+
+Use `inbox/list` to load tracked inbox records from `$CODEX_HOME/inbox` (or `~/.codex/inbox` when `CODEX_HOME` is unset). The server returns the thread record JSON defined by the sort-inbox skill's format, ordered newest-first by filename, with user-owned tracking fields overlaid from `$CODEX_HOME/inbox/tracking.json`. Malformed `thread__*.json` files are skipped so one bad record does not block the rest.
+
+```json
+{ "method": "inbox/list", "id": 51, "params": {} }
+{ "id": 51, "result": {
+    "data": [
+        {
+            "schema_version": 1,
+            "source": {
+                "type": "slack",
+                "channel_id": "C01234567",
+                "thread_ts": "1712345678.000000",
+                "thread_url": "https://..."
+            },
+            "participants": [],
+            "tracking": {
+                "last_refreshed_at": "2026-03-19T17:05:00-07:00"
+            },
+            "current_progress": "Short summary of where the thread stands now.",
+            "context": {
+                "slack_threads": [],
+                "notion_pages": [],
+                "google_docs": []
+            },
+            "timeline": []
+        }
+    ]
+} }
+```
+
+Use `inbox/update` to update user-owned tracking state for a single inbox record by filename. This writes to `$CODEX_HOME/inbox/tracking.json` instead of mutating the thread record file, so model-owned and user-owned writes do not overlap.
+
+```json
+{ "method": "inbox/update", "id": 52, "params": {
+    "threadId": "thread__20260320T012640Z__slack__C08MGJXUCUQ__1773969612.866769.json",
+    "lastReadAt": "2026-03-20T09:15:00-07:00"
+} }
+{ "id": 52, "result": {
+    "entry": {
+        "schema_version": 1,
+        "tracking": {
+            "last_read_at": "2026-03-20T09:15:00-07:00",
+            "last_refreshed_at": "2026-03-19T18:54:47-07:00"
+        }
+    }
+} }
+```
+
 Invoke an app by inserting `$<app-slug>` in the text input. The slug is derived from the app name and lowercased with non-alphanumeric characters replaced by `-` (for example, "Demo App" becomes `$demo-app`). Add a `mention` input item (recommended) so the server uses the exact `app://<connector-id>` path rather than guessing by name. Plugins use the same `mention` item shape, but with `plugin://<plugin-name>@<marketplace-name>` paths from `plugin/list`.
 
 Example:

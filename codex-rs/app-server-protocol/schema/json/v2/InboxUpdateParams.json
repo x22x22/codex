@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Update user-owned inbox tracking state for one record.",
+  "properties": {
+    "lastReadAt": {
+      "description": "RFC 3339 timestamp to store in `tracking.last_read_at`.",
+      "type": "string"
+    },
+    "threadId": {
+      "description": "Exact inbox filename under `$CODEX_HOME/inbox`, for example `thread__20260319T170500Z__slack__C01234567__1712345678.000000.json`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "lastReadAt",
+    "threadId"
+  ],
+  "title": "InboxUpdateParams",
+  "type": "object"
+}

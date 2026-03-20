@@ -308,6 +308,14 @@ client_request_definitions! {
         params: v2::AppsListParams,
         response: v2::AppsListResponse,
     },
+    InboxList => "inbox/list" {
+        params: v2::InboxListParams,
+        response: v2::InboxListResponse,
+    },
+    InboxUpdate => "inbox/update" {
+        params: v2::InboxUpdateParams,
+        response: v2::InboxUpdateResponse,
+    },
     FsReadFile => "fs/readFile" {
         params: v2::FsReadFileParams,
         response: v2::FsReadFileResponse,

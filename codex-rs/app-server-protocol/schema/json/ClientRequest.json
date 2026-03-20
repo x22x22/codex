@@ -946,6 +946,28 @@
       ],
       "type": "string"
     },
+    "InboxListParams": {
+      "description": "List tracked inbox entries from `$CODEX_HOME/inbox`.",
+      "type": "object"
+    },
+    "InboxUpdateParams": {
+      "description": "Update user-owned inbox tracking state for one record.",
+      "properties": {
+        "lastReadAt": {
+          "description": "RFC 3339 timestamp to store in `tracking.last_read_at`.",
+          "type": "string"
+        },
+        "threadId": {
+          "description": "Exact inbox filename under `$CODEX_HOME/inbox`, for example `thread__20260319T170500Z__slack__C01234567__1712345678.000000.json`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "lastReadAt",
+        "threadId"
+      ],
+      "type": "object"
+    },
     "InitializeCapabilities": {
       "description": "Client-declared capabilities negotiated during initialize.",
       "properties": {
@@ -3816,6 +3838,54 @@
         "params"
       ],
       "title": "App/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "inbox/list"
+          ],
+          "title": "Inbox/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/InboxListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Inbox/listRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "inbox/update"
+          ],
+          "title": "Inbox/updateRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/InboxUpdateParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Inbox/updateRequest",
       "type": "object"
     },
     {
