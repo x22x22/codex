@@ -28,6 +28,8 @@ use codex_app_server_protocol::ThreadStartResponse;
 use codex_core::features::FEATURES;
 use codex_core::features::Feature;
 use codex_protocol::protocol::RealtimeConversationVersion;
+use core_test_support::responses::mount_realtime_client_secret;
+use core_test_support::responses::start_chatgpt_mock_server;
 use core_test_support::responses::start_websocket_server;
 use core_test_support::skip_if_no_network;
 use pretty_assertions::assert_eq;
@@ -37,10 +39,7 @@ use std::path::Path;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::timeout;
-use wiremock::Mock;
 use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 const STARTUP_CONTEXT_HEADER: &str = "Startup context from Codex.";
@@ -324,14 +323,14 @@ async fn realtime_conversation_uses_client_secret_with_external_chatgpt_auth() -
     skip_if_no_network!(Ok(()));
 
     let responses_server = create_mock_responses_server_sequence_unchecked(Vec::new()).await;
-    let chatgpt_server = wiremock::MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/codex/realtime/client_secrets"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+    let chatgpt_server = start_chatgpt_mock_server().await;
+    mount_realtime_client_secret(
+        &chatgpt_server,
+        ResponseTemplate::new(200).set_body_json(json!({
             "value": "ek-app-server"
-        })))
-        .mount(&chatgpt_server)
-        .await;
+        })),
+    )
+    .await;
     let realtime_server = start_websocket_server(vec![vec![vec![json!({
         "type": "session.updated",
         "session": { "id": "sess_external", "instructions": "backend prompt" }
