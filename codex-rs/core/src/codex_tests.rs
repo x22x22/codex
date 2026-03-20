@@ -4486,6 +4486,7 @@ async fn record_response_item_stamps_session_source_on_all_supported_variants() 
         },
         ResponseItem::CustomToolCallOutput {
             call_id: "custom-output-1".to_string(),
+            name: None,
             output: FunctionCallOutputPayload {
                 body: FunctionCallOutputBody::Text("done".to_string()),
                 success: None,
@@ -5032,7 +5033,8 @@ async fn steer_input_returns_active_turn_id() {
 }
 
 #[tokio::test]
-async fn record_into_history_generates_metadata_uuid_for_metadata_bearing_items_when_item_metadata_enabled() {
+async fn record_into_history_generates_metadata_uuid_for_metadata_bearing_items_when_item_metadata_enabled()
+ {
     let (mut sess, tc) = make_session_and_context().await;
     let _ = sess.features.enable(crate::features::Feature::ItemMetadata);
 

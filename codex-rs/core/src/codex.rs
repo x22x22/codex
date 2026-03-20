@@ -330,7 +330,6 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
-use codex_protocol::models::ReviewDecisionMetadata;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ResponseItemMetadata;
@@ -1137,28 +1136,6 @@ fn response_item_metadata_or_default(item: &ResponseItem) -> Option<ResponseItem
         | ResponseItem::GhostSnapshot { metadata, .. }
         | ResponseItem::Compaction { metadata, .. } => Some(metadata.clone().unwrap_or_default()),
         _ => None,
-    }
-}
-
-fn review_decision_to_metadata(decision: &ReviewDecision) -> ReviewDecisionMetadata {
-    match decision {
-        ReviewDecision::Approved => ReviewDecisionMetadata::Approved,
-        ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
-            ReviewDecisionMetadata::ApprovedWithAmendment
-        }
-        ReviewDecision::ApprovedForSession => ReviewDecisionMetadata::ApprovedForSession,
-        ReviewDecision::NetworkPolicyAmendment {
-            network_policy_amendment,
-        } => match network_policy_amendment.action {
-            codex_protocol::protocol::NetworkPolicyRuleAction::Allow => {
-                ReviewDecisionMetadata::ApprovedWithNetworkPolicyAllow
-            }
-            codex_protocol::protocol::NetworkPolicyRuleAction::Deny => {
-                ReviewDecisionMetadata::DeniedWithNetworkPolicyDeny
-            }
-        },
-        ReviewDecision::Denied => ReviewDecisionMetadata::Denied,
-        ReviewDecision::Abort => ReviewDecisionMetadata::Abort,
     }
 }
 
