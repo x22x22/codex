@@ -109,6 +109,8 @@ use crate::tools::spec::create_tools_json_for_responses_api;
 use crate::util::FeedbackRequestTags;
 use crate::util::emit_feedback_auth_recovery_tags;
 use crate::util::emit_feedback_request_tags_with_auth_env;
+#[cfg(test)]
+use codex_models::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_models::ModelProviderInfo;
 use codex_models::WireApi;
 
@@ -122,7 +124,8 @@ const RESPONSES_ENDPOINT: &str = "/responses";
 const RESPONSES_COMPACT_ENDPOINT: &str = "/responses/compact";
 const MEMORIES_SUMMARIZE_ENDPOINT: &str = "/memories/trace_summarize";
 #[cfg(test)]
-pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration = Duration::from_millis(15_000);
+pub(crate) const WEBSOCKET_CONNECT_TIMEOUT: Duration =
+    Duration::from_millis(DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS);
 
 /// Session-scoped state shared by all [`ModelClient`] clones.
 ///

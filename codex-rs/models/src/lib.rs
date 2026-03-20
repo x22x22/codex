@@ -25,6 +25,7 @@ pub use model_info::model_info_from_slug;
 pub use model_info::with_config_overrides;
 pub use model_provider_info::DEFAULT_LMSTUDIO_PORT;
 pub use model_provider_info::DEFAULT_OLLAMA_PORT;
+pub use model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 pub use model_provider_info::EnvKeyError;
 pub use model_provider_info::LEGACY_OLLAMA_CHAT_PROVIDER_ID;
 pub use model_provider_info::LMSTUDIO_OSS_PROVIDER_ID;

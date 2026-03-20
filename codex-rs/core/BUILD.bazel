@@ -19,6 +19,7 @@ codex_rust_crate(
         allow_empty = True,
     ) + [
         "//codex-rs:node-version.txt",
+        "//codex-rs/models:models.json",
     ],
     rustc_env = {
         # Askama resolves template paths relative to CARGO_MANIFEST_DIR. In
