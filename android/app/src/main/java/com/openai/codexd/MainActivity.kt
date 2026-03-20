@@ -4,14 +4,15 @@ import android.Manifest
 import android.app.Activity
 import android.app.agent.AgentManager
 import android.app.agent.AgentSessionInfo
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.LocalSocket
 import android.os.Binder
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.widget.Button
@@ -32,7 +33,6 @@ import kotlin.concurrent.thread
 class MainActivity : Activity() {
     companion object {
         private const val TAG = "CodexMainActivity"
-        private const val STATUS_REFRESH_INTERVAL_MS = 2000L
         private const val ACTION_DEBUG_START_AGENT_SESSION =
             "com.openai.codexd.action.DEBUG_START_AGENT_SESSION"
         private const val ACTION_DEBUG_CANCEL_ALL_AGENT_SESSIONS =
@@ -52,7 +52,6 @@ class MainActivity : Activity() {
     @Volatile
     private var latestAgentRuntimeStatus: AgentCodexAppServerClient.RuntimeStatus? = null
 
-    private val refreshHandler = Handler(Looper.getMainLooper())
     private val agentSessionController by lazy { AgentSessionController(this) }
     private val sessionUiLeaseToken = Binder()
     private val runtimeStatusListener = AgentCodexAppServerClient.RuntimeStatusListener { status ->
@@ -61,11 +60,14 @@ class MainActivity : Activity() {
             findViewById<TextView>(R.id.agent_runtime_status).text = renderAgentRuntimeStatus()
         }
     }
-    private val refreshRunnable = object : Runnable {
-        override fun run() {
-            refreshAuthStatus()
-            refreshAgentSessions()
-            refreshHandler.postDelayed(this, STATUS_REFRESH_INTERVAL_MS)
+    private val authStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(
+            context: Context?,
+            intent: Intent?,
+        ) {
+            if (intent?.action == CodexdForegroundService.ACTION_AUTH_STATE_CHANGED) {
+                refreshAuthStatus()
+            }
         }
     }
     private val sessionListener = object : AgentManager.SessionListener {
@@ -85,6 +87,7 @@ class MainActivity : Activity() {
     }
 
     private var sessionListenerRegistered = false
+    private var authStatusReceiverRegistered = false
     private var focusedFrameworkSessionId: String? = null
     private var leasedParentSessionId: String? = null
     private var latestAgentSnapshot: AgentSnapshot = AgentSnapshot.unavailable
@@ -108,15 +111,16 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         registerSessionListenerIfNeeded()
+        registerAuthStatusReceiverIfNeeded()
         AgentCodexAppServerClient.registerRuntimeStatusListener(runtimeStatusListener)
         AgentCodexAppServerClient.refreshRuntimeStatusAsync(this)
-        refreshHandler.removeCallbacks(refreshRunnable)
-        refreshHandler.post(refreshRunnable)
+        refreshAuthStatus()
+        refreshAgentSessions(force = true)
     }
 
     override fun onPause() {
-        refreshHandler.removeCallbacks(refreshRunnable)
         AgentCodexAppServerClient.unregisterRuntimeStatusListener(runtimeStatusListener)
+        unregisterAuthStatusReceiverIfNeeded()
         unregisterSessionListenerIfNeeded()
         updateSessionUiLease(null)
         super.onPause()
@@ -190,6 +194,28 @@ class MainActivity : Activity() {
         }
         runCatching { agentSessionController.unregisterSessionListener(sessionListener) }
         sessionListenerRegistered = false
+    }
+
+    private fun registerAuthStatusReceiverIfNeeded() {
+        if (authStatusReceiverRegistered) {
+            return
+        }
+        val filter = IntentFilter(CodexdForegroundService.ACTION_AUTH_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(authStatusReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            registerReceiver(authStatusReceiver, filter)
+        }
+        authStatusReceiverRegistered = true
+    }
+
+    private fun unregisterAuthStatusReceiverIfNeeded() {
+        if (!authStatusReceiverRegistered) {
+            return
+        }
+        unregisterReceiver(authStatusReceiver)
+        authStatusReceiverRegistered = false
     }
 
     private fun updateSessionUiLease(parentSessionId: String?) {

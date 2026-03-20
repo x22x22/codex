@@ -16,6 +16,7 @@ class CodexdForegroundService : Service() {
     companion object {
         const val ACTION_START = "com.openai.codexd.action.START"
         const val ACTION_STOP = "com.openai.codexd.action.STOP"
+        const val ACTION_AUTH_STATE_CHANGED = "com.openai.codexd.action.AUTH_STATE_CHANGED"
         const val EXTRA_SOCKET_PATH = "com.openai.codexd.extra.SOCKET_PATH"
         const val EXTRA_CODEX_HOME = "com.openai.codexd.extra.CODEX_HOME"
         const val EXTRA_UPSTREAM_BASE_URL = "com.openai.codexd.extra.UPSTREAM_BASE_URL"
@@ -50,6 +51,7 @@ class CodexdForegroundService : Service() {
             codexdProcess = null
         }
         statusThread?.interrupt()
+        notifyAuthStateChanged()
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
@@ -140,6 +142,7 @@ class CodexdForegroundService : Service() {
                         || lastClientCount != status.clientCount
                     ) {
                         updateNotification(messageWithClients)
+                        notifyAuthStateChanged()
                         lastAuthenticated = status.authenticated
                         lastEmail = status.accountEmail
                         lastClientCount = status.clientCount
@@ -171,6 +174,10 @@ class CodexdForegroundService : Service() {
     private fun updateNotification(status: String) {
         val manager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(NOTIFICATION_ID, buildNotification(status))
+    }
+
+    private fun notifyAuthStateChanged() {
+        sendBroadcast(Intent(ACTION_AUTH_STATE_CHANGED).setPackage(packageName))
     }
 
     private fun createNotificationChannel() {
