@@ -3298,7 +3298,7 @@ impl Session {
             items
                 .iter()
                 .cloned()
-                .map(ResponseItem::with_generated_metadata_uuid)
+                .map(ResponseItem::with_generated_metadata_id)
                 .collect()
         } else {
             items.to_vec()
