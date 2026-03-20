@@ -308,8 +308,8 @@ pub(crate) async fn built_tools(
 
 #[derive(Debug)]
 pub(super) struct SamplingRequestResult {
-    needs_follow_up: bool,
-    last_agent_message: Option<String>,
+    pub(super) needs_follow_up: bool,
+    pub(super) last_agent_message: Option<String>,
 }
 
 /// Ephemeral per-response state for streaming a single proposed plan.
