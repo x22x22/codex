@@ -168,6 +168,24 @@ def test_examples_readme_matches_pinned_runtime_version() -> None:
     )
 
 
+def test_pinned_runtime_git_ref_matches_runtime_setup_pin() -> None:
+    script = _load_update_script_module()
+    runtime_setup = _load_runtime_setup_module()
+
+    assert script.pinned_runtime_git_ref() == (
+        f"rust-v{runtime_setup.pinned_runtime_version()}"
+    )
+
+
+def test_parser_supports_generate_types_for_pinned_runtime() -> None:
+    script = _load_update_script_module()
+
+    args = script.parse_args(["generate-types-for-pinned-runtime"])
+
+    assert args.command == "generate-types-for-pinned-runtime"
+    assert args.git_ref is None
+
+
 def test_release_metadata_retries_without_invalid_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     runtime_setup = _load_runtime_setup_module()
     authorizations: list[str | None] = []
@@ -322,6 +340,9 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
     def fake_generate_types() -> None:
         calls.append("generate_types")
 
+    def fake_generate_types_for_pinned_runtime(_git_ref: str | None = None) -> None:
+        calls.append("generate_types_for_pinned_runtime")
+
     def fake_stage_sdk_package(
         _staging_dir: Path, _sdk_version: str, _runtime_version: str
     ) -> Path:
@@ -338,6 +359,7 @@ def test_stage_sdk_runs_type_generation_before_staging(tmp_path: Path) -> None:
 
     ops = script.CliOps(
         generate_types=fake_generate_types,
+        generate_types_for_pinned_runtime=fake_generate_types_for_pinned_runtime,
         stage_python_sdk_package=fake_stage_sdk_package,
         stage_python_runtime_package=fake_stage_runtime_package,
         current_sdk_version=fake_current_sdk_version,
@@ -366,6 +388,9 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
     def fake_generate_types() -> None:
         calls.append("generate_types")
 
+    def fake_generate_types_for_pinned_runtime(_git_ref: str | None = None) -> None:
+        calls.append("generate_types_for_pinned_runtime")
+
     def fake_stage_sdk_package(
         _staging_dir: Path, _sdk_version: str, _runtime_version: str
     ) -> Path:
@@ -382,6 +407,7 @@ def test_stage_runtime_stages_binary_without_type_generation(tmp_path: Path) -> 
 
     ops = script.CliOps(
         generate_types=fake_generate_types,
+        generate_types_for_pinned_runtime=fake_generate_types_for_pinned_runtime,
         stage_python_sdk_package=fake_stage_sdk_package,
         stage_python_runtime_package=fake_stage_runtime_package,
         current_sdk_version=fake_current_sdk_version,
