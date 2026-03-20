@@ -8,14 +8,12 @@ use crate::error::Result as CodexResult;
 use crate::realtime_context::build_realtime_startup_context;
 use async_channel::Receiver;
 use async_channel::Sender;
-use async_channel::TrySendError;
 use codex_api::Provider as ApiProvider;
-use codex_api::RealtimeAudioFrame;
 use codex_api::RealtimeEvent;
 use codex_api::RealtimeSessionConfig;
-use codex_api::RealtimeWebsocketClient;
-use codex_api::endpoint::realtime_websocket::RealtimeWebsocketEvents;
-use codex_api::endpoint::realtime_websocket::RealtimeWebsocketWriter;
+use codex_api::RealtimeWebrtcClient;
+use codex_api::endpoint::realtime_webrtc::RealtimeWebrtcEvents;
+use codex_api::endpoint::realtime_webrtc::RealtimeWebrtcWriter;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
 use codex_protocol::protocol::ConversationAudioTruncateParams;
@@ -24,6 +22,7 @@ use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::RealtimeAudioFrame;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
 use codex_protocol::protocol::RealtimeConversationRealtimeEvent;
 use codex_protocol::protocol::RealtimeConversationStartedEvent;
@@ -42,7 +41,6 @@ use tracing::error;
 use tracing::info;
 use tracing::warn;
 
-const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
 const USER_TEXT_IN_QUEUE_CAPACITY: usize = 64;
 const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
@@ -132,9 +130,8 @@ impl RealtimeHandoffState {
 
 #[allow(dead_code)]
 struct ConversationState {
-    audio_tx: Sender<RealtimeAudioFrame>,
     user_text_tx: Sender<String>,
-    writer: RealtimeWebsocketWriter,
+    writer: RealtimeWebrtcWriter,
     handoff: RealtimeHandoffState,
     task: JoinHandle<()>,
     realtime_active: Arc<AtomicBool>,
@@ -178,7 +175,7 @@ impl RealtimeConversationManager {
             model,
             session_id,
         };
-        let client = RealtimeWebsocketClient::new(api_provider);
+        let client = RealtimeWebrtcClient::new(api_provider);
         let connection = client
             .connect(
                 session_config,
@@ -190,8 +187,6 @@ impl RealtimeConversationManager {
 
         let writer = connection.writer();
         let events = connection.events();
-        let (audio_tx, audio_rx) =
-            async_channel::bounded::<RealtimeAudioFrame>(AUDIO_IN_QUEUE_CAPACITY);
         let (user_text_tx, user_text_rx) =
             async_channel::bounded::<String>(USER_TEXT_IN_QUEUE_CAPACITY);
         let (handoff_output_tx, handoff_output_rx) =
@@ -206,14 +201,12 @@ impl RealtimeConversationManager {
             events,
             user_text_rx,
             handoff_output_rx,
-            audio_rx,
             events_tx,
             handoff.clone(),
         );
 
         let mut guard = self.state.lock().await;
         *guard = Some(ConversationState {
-            audio_tx,
             user_text_tx,
             writer,
             handoff,
@@ -224,27 +217,10 @@ impl RealtimeConversationManager {
     }
 
     pub(crate) async fn audio_in(&self, frame: RealtimeAudioFrame) -> CodexResult<()> {
-        let sender = {
-            let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.audio_tx.clone())
-        };
-
-        let Some(sender) = sender else {
-            return Err(CodexErr::InvalidRequest(
-                "conversation is not running".to_string(),
-            ));
-        };
-
-        match sender.try_send(frame) {
-            Ok(()) => Ok(()),
-            Err(TrySendError::Full(_)) => {
-                warn!("dropping input audio frame due to full queue");
-                Ok(())
-            }
-            Err(TrySendError::Closed(_)) => Err(CodexErr::InvalidRequest(
-                "conversation is not running".to_string(),
-            )),
-        }
+        let _ = frame;
+        Err(CodexErr::InvalidRequest(
+            "realtime audio input is handled by WebRTC native audio, not PCM append".to_string(),
+        ))
     }
 
     pub(crate) async fn text_in(&self, text: String) -> CodexResult<()> {
@@ -270,25 +246,17 @@ impl RealtimeConversationManager {
         &self,
         params: ConversationAudioTruncateParams,
     ) -> CodexResult<()> {
-        let writer = {
+        let is_running = {
             let guard = self.state.lock().await;
-            guard.as_ref().map(|state| state.writer.clone())
+            guard.is_some()
         };
-
-        let Some(writer) = writer else {
+        if !is_running {
             return Err(CodexErr::InvalidRequest(
                 "conversation is not running".to_string(),
             ));
-        };
+        }
 
-        writer
-            .send_conversation_item_truncate(
-                params.item_id,
-                params.content_index,
-                params.audio_end_ms,
-            )
-            .await
-            .map_err(map_api_error)?;
+        let _ = params;
         Ok(())
     }
 
@@ -608,11 +576,10 @@ pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
 }
 
 fn spawn_realtime_input_task(
-    writer: RealtimeWebsocketWriter,
-    events: RealtimeWebsocketEvents,
+    writer: RealtimeWebrtcWriter,
+    events: RealtimeWebrtcEvents,
     user_text_rx: Receiver<String>,
     handoff_output_rx: Receiver<HandoffOutput>,
-    audio_rx: Receiver<RealtimeAudioFrame>,
     events_tx: Sender<RealtimeEvent>,
     handoff_state: RealtimeHandoffState,
 ) -> JoinHandle<()> {
@@ -806,18 +773,6 @@ fn spawn_realtime_input_task(
                         }
                     }
                 }
-                frame = audio_rx.recv() => {
-                    match frame {
-                        Ok(frame) => {
-                            if let Err(err) = writer.send_audio_frame(frame).await {
-                                let mapped_error = map_api_error(err);
-                                error!("failed to send input audio: {mapped_error}");
-                                break;
-                            }
-                        }
-                        Err(_) => break,
-                    }
-                }
             }
         }
     })
@@ -843,9 +798,11 @@ async fn send_conversation_error(
 mod tests {
     use super::HandoffOutput;
     use super::INTERRUPT_TOOL_OUTPUT_CANCELLED;
+    use super::RealtimeConversationManager;
     use super::RealtimeHandoffState;
     use super::realtime_text_from_handoff_request;
     use async_channel::bounded;
+    use codex_protocol::protocol::RealtimeAudioFrame;
     use codex_protocol::protocol::RealtimeHandoffRequested;
     use codex_protocol::protocol::RealtimeTranscriptEntry;
     use pretty_assertions::assert_eq;
@@ -899,6 +856,26 @@ mod tests {
             active_transcript: vec![],
         };
         assert_eq!(realtime_text_from_handoff_request(&handoff), None);
+    }
+
+    #[tokio::test]
+    async fn rejects_pcm_audio_append_in_webrtc_mode() {
+        let manager = RealtimeConversationManager::new();
+
+        let err = manager
+            .audio_in(RealtimeAudioFrame {
+                data: "AQID".to_string(),
+                sample_rate: 24000,
+                num_channels: 1,
+                samples_per_channel: Some(480),
+            })
+            .await
+            .expect_err("PCM append should be unsupported");
+
+        assert_eq!(
+            err.to_string(),
+            "realtime audio input is handled by WebRTC native audio, not PCM append"
+        );
     }
 
     #[tokio::test]

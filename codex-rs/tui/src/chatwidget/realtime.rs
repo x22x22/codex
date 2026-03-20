@@ -1,5 +1,4 @@
 use super::*;
-use codex_protocol::protocol::ConversationAudioTruncateParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::RealtimeConversationClosedEvent;
@@ -538,45 +537,12 @@ impl ChatWidget {
     }
 
     fn enqueue_realtime_audio_out(&mut self, frame: &RealtimeOutputAudioDelta) {
-        #[cfg(not(target_os = "linux"))]
-        {
-            if self.realtime_conversation.audio_player.is_none() {
-                self.realtime_conversation.audio_player =
-                    crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
-            }
-            if let Some(player) = &self.realtime_conversation.audio_player
-                && let Err(err) = player.enqueue_frame(frame)
-            {
-                warn!("failed to play realtime audio: {err}");
-            }
-        }
-        #[cfg(target_os = "linux")]
-        {
-            let _ = frame;
-        }
+        let _ = frame;
     }
 
-    #[cfg(not(target_os = "linux"))]
     fn interrupt_realtime_audio_playback(&mut self) {
-        let Some(player) = &self.realtime_conversation.audio_player else {
-            return;
-        };
-
-        let Some(position) = player.interrupt() else {
-            return;
-        };
-
-        self.submit_op(Op::RealtimeConversationAudioTruncate(
-            ConversationAudioTruncateParams {
-                item_id: position.item_id,
-                content_index: 0,
-                audio_end_ms: position.audio_end_ms,
-            },
-        ));
+        // WebRTC handles response interruption on the media path.
     }
-
-    #[cfg(target_os = "linux")]
-    fn interrupt_realtime_audio_playback(&mut self) {}
 
     fn on_realtime_handoff_requested(&mut self, handoff: RealtimeHandoffRequested) {
         let Some(text) = realtime_text_from_handoff_request(&handoff) else {
@@ -1467,58 +1433,9 @@ impl ChatWidget {
 
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     fn start_realtime_local_audio(&mut self) {
-        if self.realtime_conversation.capture_stop_flag.is_some() {
-            return;
-        }
-
-        self.realtime_conversation.meter_generation =
-            self.realtime_conversation.meter_generation.wrapping_add(1);
-        let meter_generation = self.realtime_conversation.meter_generation;
-        self.realtime_conversation.meter_text = Some("⠤⠤⠤⠤".to_string());
+        self.realtime_conversation.meter_text = None;
         self.sync_realtime_status_label();
         self.request_redraw();
-
-        let capture = match crate::voice::VoiceCapture::start_realtime(
-            &self.config,
-            self.app_event_tx.clone(),
-        ) {
-            Ok(capture) => capture,
-            Err(err) => {
-                self.realtime_conversation.meter_text = None;
-                self.sync_realtime_status_label();
-                self.add_error_message(format!("Failed to start microphone capture: {err}"));
-                return;
-            }
-        };
-
-        let stop_flag = capture.stopped_flag();
-        let peak = capture.last_peak_arc();
-        let app_event_tx = self.app_event_tx.clone();
-
-        self.realtime_conversation.capture_stop_flag = Some(stop_flag.clone());
-        self.realtime_conversation.capture = Some(capture);
-        if self.realtime_conversation.audio_player.is_none() {
-            self.realtime_conversation.audio_player =
-                crate::voice::RealtimeAudioPlayer::start(&self.config).ok();
-        }
-
-        std::thread::spawn(move || {
-            let mut meter = crate::voice::RecordingMeterState::new();
-
-            loop {
-                if stop_flag.load(Ordering::Relaxed) {
-                    break;
-                }
-
-                let meter_text = meter.next_text(peak.load(Ordering::Relaxed));
-                app_event_tx.send(AppEvent::UpdateRealtimeRecordingMeter {
-                    generation: meter_generation,
-                    text: meter_text,
-                });
-
-                std::thread::sleep(Duration::from_millis(60));
-            }
-        });
     }
 
     #[cfg(target_os = "linux")]
@@ -1529,28 +1446,7 @@ impl ChatWidget {
 
     #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
     pub(crate) fn restart_realtime_audio_device(&mut self, kind: RealtimeAudioDeviceKind) {
-        if !self.realtime_conversation.is_active() {
-            return;
-        }
-
-        match kind {
-            RealtimeAudioDeviceKind::Microphone => {
-                self.stop_realtime_microphone();
-                self.start_realtime_local_audio();
-            }
-            RealtimeAudioDeviceKind::Speaker => {
-                self.stop_realtime_speaker();
-                match crate::voice::RealtimeAudioPlayer::start(&self.config) {
-                    Ok(player) => {
-                        self.realtime_conversation.audio_player = Some(player);
-                    }
-                    Err(err) => {
-                        self.add_error_message(format!("Failed to start speaker output: {err}"));
-                    }
-                }
-            }
-        }
-        self.request_redraw();
+        let _ = kind;
     }
 
     #[cfg(any(target_os = "linux", not(feature = "voice-input")))]

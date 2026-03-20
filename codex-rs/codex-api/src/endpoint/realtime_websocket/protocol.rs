@@ -1,150 +1,18 @@
-pub use codex_protocol::protocol::RealtimeAudioFrame;
-pub use codex_protocol::protocol::RealtimeCloseRequested;
-pub use codex_protocol::protocol::RealtimeEvent;
-pub use codex_protocol::protocol::RealtimeHandoffRequested;
-pub use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
-pub use codex_protocol::protocol::RealtimeInterruptRequested;
-pub use codex_protocol::protocol::RealtimeOutputAudioDelta;
-pub use codex_protocol::protocol::RealtimeResponseCancelled;
-pub use codex_protocol::protocol::RealtimeToolAction;
-pub use codex_protocol::protocol::RealtimeToolActionRequested;
-pub use codex_protocol::protocol::RealtimeTranscriptDelta;
-pub use codex_protocol::protocol::RealtimeTranscriptEntry;
+use codex_protocol::protocol::RealtimeCloseRequested;
+use codex_protocol::protocol::RealtimeEvent;
+use codex_protocol::protocol::RealtimeHandoffRequested;
+use codex_protocol::protocol::RealtimeInputAudioSpeechStarted;
+use codex_protocol::protocol::RealtimeInterruptRequested;
+use codex_protocol::protocol::RealtimeResponseCancelled;
+use codex_protocol::protocol::RealtimeToolAction;
+use codex_protocol::protocol::RealtimeToolActionRequested;
+use codex_protocol::protocol::RealtimeTranscriptDelta;
 use serde::Deserialize;
-use serde::Serialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::string::ToString;
 use tracing::debug;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RealtimeSessionConfig {
-    pub instructions: String,
-    pub model: Option<String>,
-    pub session_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
-pub(super) enum RealtimeOutboundMessage {
-    #[serde(rename = "input_audio_buffer.append")]
-    InputAudioBufferAppend { audio: String },
-    #[serde(rename = "response.create")]
-    ResponseCreate,
-    #[serde(rename = "conversation.item.truncate")]
-    ConversationItemTruncate {
-        item_id: String,
-        content_index: u32,
-        audio_end_ms: u32,
-    },
-    #[serde(rename = "session.update")]
-    SessionUpdate { session: Box<SessionUpdateSession> },
-    #[serde(rename = "conversation.item.create")]
-    ConversationItemCreate { item: ConversationItem },
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionUpdateSession {
-    #[serde(rename = "type")]
-    pub(super) kind: String,
-    pub(super) instructions: String,
-    pub(super) output_modalities: Vec<String>,
-    pub(super) audio: SessionAudio,
-    pub(super) tools: Vec<SessionTool>,
-    pub(super) tool_choice: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionAudio {
-    pub(super) input: SessionAudioInput,
-    pub(super) output: SessionAudioOutput,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionAudioInput {
-    pub(super) format: SessionAudioFormat,
-    pub(super) noise_reduction: SessionNoiseReduction,
-    pub(super) turn_detection: SessionTurnDetection,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionAudioFormat {
-    #[serde(rename = "type")]
-    pub(super) kind: String,
-    pub(super) rate: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionNoiseReduction {
-    #[serde(rename = "type")]
-    pub(super) kind: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionTurnDetection {
-    #[serde(rename = "type")]
-    pub(super) kind: String,
-    pub(super) interrupt_response: bool,
-    pub(super) create_response: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionAudioOutput {
-    pub(super) format: SessionAudioOutputFormat,
-    pub(super) voice: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionAudioOutputFormat {
-    #[serde(rename = "type")]
-    pub(super) kind: String,
-    pub(super) rate: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionTool {
-    #[serde(rename = "type")]
-    pub(super) kind: String,
-    pub(super) name: String,
-    pub(super) description: String,
-    pub(super) parameters: SessionToolParameters,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionToolParameters {
-    #[serde(rename = "type")]
-    pub(super) kind: String,
-    pub(super) properties: BTreeMap<String, SessionToolProperty>,
-    pub(super) required: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct SessionToolProperty {
-    #[serde(rename = "type")]
-    pub(super) kind: String,
-    pub(super) description: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
-pub(super) enum ConversationItem {
-    #[serde(rename = "message")]
-    Message {
-        role: String,
-        content: Vec<ConversationItemContent>,
-    },
-    #[serde(rename = "function_call_output")]
-    FunctionCallOutput { call_id: String, output: String },
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct ConversationItemContent {
-    #[serde(rename = "type")]
-    pub(super) kind: String,
-    pub(super) text: String,
-}
-
-pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
+pub(crate) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
     let parsed: Value = match serde_json::from_str(payload) {
         Ok(msg) => msg,
         Err(err) => {
@@ -160,6 +28,7 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
             return None;
         }
     };
+
     match message_type {
         "session.created" | "session.updated" => {
             let session_id = parsed
@@ -178,42 +47,6 @@ pub(super) fn parse_realtime_event(payload: &str) -> Option<RealtimeEvent> {
                 session_id,
                 instructions,
             })
-        }
-
-        "conversation.output_audio.delta"
-        | "response.output_audio.delta"
-        | "response.audio.delta" => {
-            let data = parsed
-                .get("delta")
-                .and_then(Value::as_str)
-                .or_else(|| parsed.get("data").and_then(Value::as_str))
-                .map(str::to_string)?;
-            let sample_rate = parsed
-                .get("sample_rate")
-                .and_then(Value::as_u64)
-                .and_then(|v| u32::try_from(v).ok())
-                .unwrap_or(24_000);
-            let num_channels = parsed
-                .get("channels")
-                .or_else(|| parsed.get("num_channels"))
-                .and_then(Value::as_u64)
-                .and_then(|v| u16::try_from(v).ok())
-                .unwrap_or(1);
-            Some(RealtimeEvent::AudioOut(RealtimeOutputAudioDelta {
-                frame: RealtimeAudioFrame {
-                    data,
-                    sample_rate,
-                    num_channels,
-                    samples_per_channel: parsed
-                        .get("samples_per_channel")
-                        .and_then(Value::as_u64)
-                        .and_then(|v| u32::try_from(v).ok()),
-                },
-                item_id: parsed
-                    .get("item_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            }))
         }
         "input_audio_buffer.speech_started" => Some(RealtimeEvent::InputAudioSpeechStarted(
             RealtimeInputAudioSpeechStarted {
@@ -525,13 +358,6 @@ fn parse_tool_action_requested(parsed: &Value) -> Option<RealtimeToolActionReque
         });
     }
 
-    if let Some(function_call) = find_function_call(parsed, "compact_conversation") {
-        return Some(RealtimeToolActionRequested {
-            call_id: parse_call_id(function_call)?,
-            action: RealtimeToolAction::CompactConversation,
-        });
-    }
-
     None
 }
 
@@ -551,80 +377,39 @@ fn parse_response_cancelled(parsed: &Value) -> Option<RealtimeResponseCancelled>
 }
 
 fn find_function_call<'a>(parsed: &'a Value, name: &str) -> Option<&'a Value> {
-    parsed
+    let output = parsed
         .get("response")
         .and_then(Value::as_object)
         .and_then(|response| response.get("output"))
-        .and_then(Value::as_array)?
-        .iter()
-        .find(|item| {
-            item.get("type").and_then(Value::as_str) == Some("function_call")
-                && item.get("name").and_then(Value::as_str) == Some(name)
-        })
+        .and_then(Value::as_array)?;
+    output.iter().find(|item| {
+        item.get("type").and_then(Value::as_str) == Some("function_call")
+            && item.get("name").and_then(Value::as_str) == Some(name)
+    })
 }
 
+#[derive(Debug, Default)]
 struct ParsedHandoffArguments {
     input_transcript: String,
     send_immediately: bool,
 }
 
 fn parse_handoff_arguments(arguments: &str) -> ParsedHandoffArguments {
-    #[derive(Debug, Deserialize)]
-    struct HandoffArguments {
+    #[derive(Debug, Deserialize, Default)]
+    struct RawHandoffArguments {
         #[serde(default)]
-        prompt: Option<String>,
-        #[serde(default)]
-        text: Option<String>,
-        #[serde(default)]
-        input: Option<String>,
-        #[serde(default)]
-        message: Option<String>,
-        #[serde(default)]
-        input_transcript: Option<String>,
+        input_transcript: String,
         #[serde(default)]
         send_immediately: bool,
-        #[serde(default)]
-        messages: Vec<RealtimeTranscriptEntry>,
     }
 
-    let Some(parsed) = serde_json::from_str::<HandoffArguments>(arguments).ok() else {
-        return ParsedHandoffArguments {
+    serde_json::from_str::<RawHandoffArguments>(arguments)
+        .map(|raw| ParsedHandoffArguments {
+            input_transcript: raw.input_transcript,
+            send_immediately: raw.send_immediately,
+        })
+        .unwrap_or_else(|_| ParsedHandoffArguments {
             input_transcript: arguments.to_string(),
             send_immediately: false,
-        };
-    };
-
-    for value in [
-        parsed.prompt,
-        parsed.text,
-        parsed.input,
-        parsed.message,
-        parsed.input_transcript,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if !value.is_empty() {
-            return ParsedHandoffArguments {
-                input_transcript: value,
-                send_immediately: parsed.send_immediately,
-            };
-        }
-    }
-
-    if let Some(message) = parsed
-        .messages
-        .into_iter()
-        .find(|message| message.role == "user" && !message.text.is_empty())
-    {
-        return ParsedHandoffArguments {
-            input_transcript: message.text,
-            send_immediately: parsed.send_immediately,
-        };
-    }
-
-    ParsedHandoffArguments {
-        input_transcript: String::new(),
-        send_immediately: parsed.send_immediately,
-    }
+        })
 }

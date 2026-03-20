@@ -6,7 +6,6 @@ use codex_core::auth::OPENAI_API_KEY_ENV_VAR;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
-use codex_protocol::protocol::ConversationAudioTruncateParams;
 use codex_protocol::protocol::ConversationStartParams;
 use codex_protocol::protocol::ConversationTextParams;
 use codex_protocol::protocol::ErrorEvent;
@@ -269,71 +268,6 @@ async fn conversation_start_audio_text_close_round_trip() -> Result<()> {
         closed.reason.as_deref(),
         Some("requested" | "transport_closed")
     ));
-
-    server.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn conversation_audio_truncate_sends_truncate_event() -> Result<()> {
-    skip_if_no_network!(Ok(()));
-
-    let server = start_websocket_server(vec![
-        vec![],
-        vec![
-            vec![json!({
-                "type": "session.updated",
-                "session": { "id": "sess_truncate", "instructions": "backend prompt" }
-            })],
-            vec![],
-        ],
-    ])
-    .await;
-
-    let mut builder = test_codex();
-    let test = builder.build_with_websocket_server(&server).await?;
-    assert!(server.wait_for_handshakes(1, Duration::from_secs(2)).await);
-
-    test.codex
-        .submit(Op::RealtimeConversationStart(ConversationStartParams {
-            prompt: "backend prompt".to_string(),
-            session_id: None,
-        }))
-        .await?;
-
-    wait_for_event_match(&test.codex, |msg| match msg {
-        EventMsg::RealtimeConversationRealtime(RealtimeConversationRealtimeEvent {
-            payload: RealtimeEvent::SessionUpdated { session_id, .. },
-        }) if session_id == "sess_truncate" => Some(()),
-        _ => None,
-    })
-    .await;
-
-    test.codex
-        .submit(Op::RealtimeConversationAudioTruncate(
-            ConversationAudioTruncateParams {
-                item_id: "item_audio_1".to_string(),
-                content_index: 0,
-                audio_end_ms: 320,
-            },
-        ))
-        .await?;
-
-    let truncate_request = wait_for_matching_websocket_request(
-        &server,
-        "realtime conversation.item.truncate request",
-        |request| request.body_json()["type"].as_str() == Some("conversation.item.truncate"),
-    )
-    .await;
-    assert_eq!(
-        truncate_request.body_json(),
-        json!({
-            "type": "conversation.item.truncate",
-            "item_id": "item_audio_1",
-            "content_index": 0,
-            "audio_end_ms": 320
-        })
-    );
 
     server.shutdown().await;
     Ok(())

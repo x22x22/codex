@@ -445,7 +445,7 @@ pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::R
     let env_filter = || {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             EnvFilter::new(
-                "codex_core=info,codex_tui=info,codex_rmcp_client=info,codex_api::endpoint::realtime_websocket=info",
+                "codex_core=info,codex_tui=info,codex_rmcp_client=info,codex_api::endpoint::realtime_webrtc=info",
             )
         })
     };
