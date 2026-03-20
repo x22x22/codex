@@ -95,6 +95,7 @@ impl FeedbackNoteView {
             Vec::new()
         };
         let classification = feedback_classification(self.category);
+
         let mut thread_id = self.snapshot.thread_id.clone();
 
         let result = self.snapshot.upload_feedback(
