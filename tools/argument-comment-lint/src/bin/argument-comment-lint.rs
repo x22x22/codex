@@ -5,6 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitCode;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 fn main() -> ExitCode {
     match run() {
@@ -33,7 +35,7 @@ fn run() -> Result<ExitCode, String> {
     })?;
     let cargo_dylint = bin_dir.join(cargo_dylint_binary_name());
     let library_dir = package_root.join("lib");
-    let library_path = find_bundled_library(&library_dir)?;
+    let library_path = prepare_library_path_for_dylint(&find_bundled_library(&library_dir)?)?;
 
     ensure_exists(&cargo_dylint, "bundled cargo-dylint executable")?;
     ensure_exists(
@@ -158,7 +160,90 @@ fn find_bundled_library(library_dir: &Path) -> Result<PathBuf, String> {
     Ok(first)
 }
 
+fn prepare_library_path_for_dylint(library_path: &Path) -> Result<PathBuf, String> {
+    let Some(normalized_filename) = normalize_nightly_library_filename(library_path) else {
+        return Ok(library_path.to_path_buf());
+    };
+
+    let temp_dir = env::temp_dir().join(format!(
+        "argument-comment-lint-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| format!("failed to compute timestamp for temp dir: {err}"))?
+            .as_nanos()
+    ));
+    fs::create_dir_all(&temp_dir).map_err(|err| {
+        format!(
+            "failed to create temporary directory {}: {err}",
+            temp_dir.display()
+        )
+    })?;
+    let normalized_path = temp_dir.join(normalized_filename);
+    fs::copy(library_path, &normalized_path).map_err(|err| {
+        format!(
+            "failed to copy packaged library {} to {}: {err}",
+            library_path.display(),
+            normalized_path.display()
+        )
+    })?;
+    Ok(normalized_path)
+}
+
+fn normalize_nightly_library_filename(library_path: &Path) -> Option<String> {
+    let stem = library_path.file_stem()?.to_string_lossy();
+    let extension = library_path.extension()?.to_string_lossy();
+    let (lib_name, toolchain) = stem.rsplit_once('@')?;
+    let normalized_toolchain = normalize_nightly_toolchain(toolchain)?;
+    Some(format!("{lib_name}@{normalized_toolchain}.{extension}"))
+}
+
+fn normalize_nightly_toolchain(toolchain: &str) -> Option<String> {
+    let parts: Vec<_> = toolchain.split('-').collect();
+    if parts.len() > 4
+        && parts[0] == "nightly"
+        && parts[1].len() == 4
+        && parts[2].len() == 2
+        && parts[3].len() == 2
+        && parts[1..4]
+            .iter()
+            .all(|part| part.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        Some(format!("nightly-{}-{}-{}", parts[1], parts[2], parts[3]))
+    } else {
+        None
+    }
+}
+
 fn exit_code_from_status(code: Option<i32>) -> ExitCode {
     code.and_then(|value| u8::try_from(value).ok())
         .map_or_else(|| ExitCode::from(1), ExitCode::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_nightly_library_filename;
+    use std::path::Path;
+
+    #[test]
+    fn strips_host_triple_from_nightly_filename() {
+        assert_eq!(
+            normalize_nightly_library_filename(Path::new(
+                "libargument_comment_lint@nightly-2025-09-18-aarch64-apple-darwin.dylib"
+            )),
+            Some(String::from(
+                "libargument_comment_lint@nightly-2025-09-18.dylib"
+            ))
+        );
+    }
+
+    #[test]
+    fn leaves_unqualified_nightly_filename_alone() {
+        assert_eq!(
+            normalize_nightly_library_filename(Path::new(
+                "libargument_comment_lint@nightly-2025-09-18.dylib"
+            )),
+            None
+        );
+    }
 }
