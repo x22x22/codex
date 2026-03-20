@@ -3166,7 +3166,6 @@ pub(crate) fn build_specs_with_discoverable_tools(
                 /*supports_parallel_tool_calls*/ false,
                 Arc::new(ResumeAgentHandler),
             );
-            builder.register_handler("resume_agent", Arc::new(ResumeAgentHandler));
         }
         push_builtin_tool_with_handler_if_enabled(
             &mut builder,
