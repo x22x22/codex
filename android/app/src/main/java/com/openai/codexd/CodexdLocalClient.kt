@@ -6,6 +6,7 @@ import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
 import java.nio.charset.StandardCharsets
 import org.json.JSONObject
 
@@ -55,6 +56,35 @@ object CodexdLocalClient {
         throw IOException("codexd unavailable")
     }
 
+    fun streamResponse(
+        context: Context,
+        method: String,
+        path: String,
+        body: String?,
+        output: OutputStream,
+    ) {
+        context.startForegroundService(
+            android.content.Intent(context, CodexdForegroundService::class.java).apply {
+                action = CodexdForegroundService.ACTION_START
+                putExtra(CodexdForegroundService.EXTRA_SOCKET_PATH, CodexSocketConfig.DEFAULT_SOCKET_PATH)
+                putExtra(CodexdForegroundService.EXTRA_CODEX_HOME, File(context.filesDir, "codex-home").absolutePath)
+            },
+        )
+
+        var lastError: IOException? = null
+        repeat(30) {
+            try {
+                streamRequest(CodexSocketConfig.DEFAULT_SOCKET_PATH, method, path, body, output)
+                return
+            } catch (err: IOException) {
+                lastError = err
+                Thread.sleep(100)
+            }
+        }
+
+        throw lastError ?: IOException("codexd unavailable")
+    }
+
     fun waitForAuthStatus(context: Context): AuthStatus {
         val response = waitForResponse(context, "GET", "/internal/auth/status", null)
         if (response.statusCode != 200) {
@@ -92,21 +122,8 @@ object CodexdLocalClient {
         val socket = LocalSocket()
         val address = CodexSocketConfig.toLocalSocketAddress(socketPath)
         socket.connect(address)
-        val payload = body ?: ""
-        val request = buildString {
-            append("$method $path HTTP/1.1\r\n")
-            append("Host: localhost\r\n")
-            append("Connection: close\r\n")
-            if (body != null) {
-                append("Content-Type: application/json\r\n")
-            }
-            append("Content-Length: ${payload.toByteArray(StandardCharsets.UTF_8).size}\r\n")
-            append("\r\n")
-            append(payload)
-        }
         val output = socket.outputStream
-        output.write(request.toByteArray(StandardCharsets.UTF_8))
-        output.flush()
+        writeHttpRequest(output, method, path, body)
 
         val responseBytes = BufferedInputStream(socket.inputStream).use { it.readBytes() }
         socket.close()
@@ -134,6 +151,46 @@ object CodexdLocalClient {
             statusCode = statusCode,
             body = decodedBodyBytes.toString(StandardCharsets.UTF_8),
         )
+    }
+
+    fun streamRequest(
+        socketPath: String,
+        method: String,
+        path: String,
+        body: String?,
+        output: OutputStream,
+    ) {
+        val socket = LocalSocket()
+        val address = CodexSocketConfig.toLocalSocketAddress(socketPath)
+        socket.connect(address)
+        try {
+            writeHttpRequest(socket.outputStream, method, path, body)
+            socket.inputStream.use { input -> input.copyTo(output) }
+        } finally {
+            socket.close()
+        }
+    }
+
+    private fun writeHttpRequest(
+        output: OutputStream,
+        method: String,
+        path: String,
+        body: String?,
+    ) {
+        val payload = body ?: ""
+        val request = buildString {
+            append("$method $path HTTP/1.1\r\n")
+            append("Host: localhost\r\n")
+            append("Connection: close\r\n")
+            if (body != null) {
+                append("Content-Type: application/json\r\n")
+            }
+            append("Content-Length: ${payload.toByteArray(StandardCharsets.UTF_8).size}\r\n")
+            append("\r\n")
+            append(payload)
+        }
+        output.write(request.toByteArray(StandardCharsets.UTF_8))
+        output.flush()
     }
 
     private fun ByteArray.indexOfHeaderBodySeparator(): Int {

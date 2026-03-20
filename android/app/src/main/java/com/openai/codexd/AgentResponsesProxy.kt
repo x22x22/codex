@@ -7,6 +7,7 @@ import java.io.File
 import java.io.IOException
 import java.io.OutputStream
 import java.net.HttpURLConnection
+import java.net.UnknownHostException
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import kotlin.concurrent.thread
@@ -37,7 +38,15 @@ object AgentResponsesProxy {
             authSnapshot.authMode,
         )
         Log.i(TAG, "Proxying /v1/responses -> $upstreamUrl (auth_mode=${authSnapshot.authMode})")
-        return executeRequest(upstreamUrl, requestBody, authSnapshot)
+        return try {
+            executeRequest(upstreamUrl, requestBody, authSnapshot)
+        } catch (err: IOException) {
+            if (!shouldFallbackToCodexd(err)) {
+                throw err
+            }
+            Log.w(TAG, "Falling back to codexd for /v1/responses after direct proxy DNS failure", err)
+            CodexdLocalClient.waitForResponse(context, "POST", "/v1/responses", requestBody)
+        }
     }
 
     fun openResponsesStream(
@@ -64,7 +73,15 @@ object AgentResponsesProxy {
             authSnapshot.authMode,
         )
         Log.i(TAG, "Streaming /v1/responses -> $upstreamUrl (auth_mode=${authSnapshot.authMode})")
-        streamRequest(upstreamUrl, requestBody, authSnapshot, output)
+        try {
+            streamRequest(upstreamUrl, requestBody, authSnapshot, output)
+        } catch (err: IOException) {
+            if (!shouldFallbackToCodexd(err)) {
+                throw err
+            }
+            Log.w(TAG, "Falling back to codexd stream for /v1/responses after direct proxy DNS failure", err)
+            CodexdLocalClient.streamResponse(context, "POST", "/v1/responses", requestBody, output)
+        }
     }
 
     internal fun buildResponsesUrl(
@@ -234,10 +251,28 @@ object AgentResponsesProxy {
         }
     }
 
+    internal fun shouldFallbackToCodexd(error: Throwable): Boolean {
+        return error.causeSequence().any { cause ->
+            when (cause) {
+                is UnknownHostException -> true
+                is IOException -> {
+                    val message = cause.message.orEmpty()
+                    message.contains("Unable to resolve host", ignoreCase = true) ||
+                        message.contains("No address associated with hostname", ignoreCase = true)
+                }
+                else -> false
+            }
+        }
+    }
+
     private fun JSONObject.stringOrNull(key: String): String? {
         if (!has(key) || isNull(key)) {
             return null
         }
         return optString(key).ifBlank { null }
+    }
+
+    private fun Throwable.causeSequence(): Sequence<Throwable> {
+        return generateSequence(this) { cause -> cause.cause }
     }
 }
