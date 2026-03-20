@@ -4638,7 +4638,10 @@ async fn tool_call_metadata_stamps_policy_source_without_review_decision_when_fe
 
     sess.record_call_approval_outcome(
         "call-policy-runtime-1".to_string(),
-        ApprovalOutcomeMetadata::policy(),
+        ApprovalOutcomeMetadata {
+            review_decision: None,
+            approval_source: codex_protocol::models::ApprovalSourceMetadata::Policy,
+        },
     )
     .await;
     sess.record_response_item_and_emit_turn_item(
@@ -5070,8 +5073,8 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
             .map(|(input, metadata)| crate::state::PendingInputItem { input, metadata })
             .collect(),
     )
-        .await
-        .expect("requeue later pending input at the front of the queue");
+    .await
+    .expect("requeue later pending input at the front of the queue");
 
     assert_eq!(
         sess.get_pending_input_with_metadata().await,

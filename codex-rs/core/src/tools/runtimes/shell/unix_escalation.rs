@@ -535,7 +535,10 @@ impl CoreShellActionProvider {
                 self.session
                     .record_call_approval_outcome(
                         self.call_id.clone(),
-                        ApprovalOutcomeMetadata::policy(),
+                        ApprovalOutcomeMetadata {
+                            review_decision: None,
+                            approval_source: codex_protocol::models::ApprovalSourceMetadata::Policy,
+                        },
                     )
                     .await;
                 EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
@@ -547,7 +550,10 @@ impl CoreShellActionProvider {
                     self.session
                         .record_call_approval_outcome(
                             self.call_id.clone(),
-                            ApprovalOutcomeMetadata::policy(),
+                            ApprovalOutcomeMetadata {
+                                review_decision: None,
+                                approval_source: codex_protocol::models::ApprovalSourceMetadata::Policy,
+                            },
                         )
                         .await;
                     EscalationDecision::deny(Some("Execution forbidden by policy".to_string()))
