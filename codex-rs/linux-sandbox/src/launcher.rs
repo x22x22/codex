@@ -4,6 +4,8 @@ use std::os::fd::AsRawFd;
 use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::process::Command;
+use std::sync::OnceLock;
 
 use crate::vendored_bwrap::exec_vendored_bwrap;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -24,15 +26,37 @@ pub(crate) fn exec_bwrap(argv: Vec<String>, preserved_files: Vec<File>) -> ! {
 }
 
 fn preferred_bwrap_launcher() -> BubblewrapLauncher {
-    if !Path::new(SYSTEM_BWRAP_PATH).is_file() {
+    static LAUNCHER: OnceLock<BubblewrapLauncher> = OnceLock::new();
+    LAUNCHER
+        .get_or_init(|| preferred_bwrap_launcher_for_path(Path::new(SYSTEM_BWRAP_PATH)))
+        .clone()
+}
+
+fn preferred_bwrap_launcher_for_path(system_bwrap_path: &Path) -> BubblewrapLauncher {
+    if !system_bwrap_path.is_file() || !system_bwrap_supports_argv0(system_bwrap_path) {
         return BubblewrapLauncher::Vendored;
     }
 
-    let system_bwrap_path = match AbsolutePathBuf::from_absolute_path(SYSTEM_BWRAP_PATH) {
+    let system_bwrap_path = match AbsolutePathBuf::from_absolute_path(system_bwrap_path) {
         Ok(path) => path,
-        Err(err) => panic!("failed to normalize system bubblewrap path {SYSTEM_BWRAP_PATH}: {err}"),
+        Err(err) => panic!(
+            "failed to normalize system bubblewrap path {}: {err}",
+            system_bwrap_path.display()
+        ),
     };
     BubblewrapLauncher::System(system_bwrap_path)
+}
+
+fn system_bwrap_supports_argv0(system_bwrap_path: &Path) -> bool {
+    // Older distro packages (for example Ubuntu 20.04/22.04) ship bubblewrap
+    // builds that reject `--argv0`, so prefer the vendored build in that case.
+    let output = match Command::new(system_bwrap_path).arg("--help").output() {
+        Ok(output) => output,
+        Err(_) => return false,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    stdout.contains("--argv0") || stderr.contains("--argv0")
 }
 
 fn exec_system_bwrap(
@@ -100,7 +124,42 @@ fn clear_cloexec(fd: libc::c_int) {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn prefers_system_bwrap_when_help_lists_argv0() {
+        let fake_bwrap = write_fake_bwrap(
+            "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  echo '  --argv0 PROGRAM'\n  exit 0\nfi\nexit 1\n",
+        );
+        let expected = AbsolutePathBuf::from_absolute_path(fake_bwrap.path()).expect("absolute");
+
+        assert_eq!(
+            preferred_bwrap_launcher_for_path(fake_bwrap.path()),
+            BubblewrapLauncher::System(expected)
+        );
+    }
+
+    #[test]
+    fn falls_back_to_vendored_when_system_bwrap_lacks_argv0() {
+        let fake_bwrap = write_fake_bwrap(
+            "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  echo 'usage: bwrap [OPTION...] COMMAND'\n  exit 0\nfi\nexit 1\n",
+        );
+
+        assert_eq!(
+            preferred_bwrap_launcher_for_path(fake_bwrap.path()),
+            BubblewrapLauncher::Vendored
+        );
+    }
+
+    #[test]
+    fn falls_back_to_vendored_when_system_bwrap_is_missing() {
+        assert_eq!(
+            preferred_bwrap_launcher_for_path(Path::new("/definitely/not/a/bwrap")),
+            BubblewrapLauncher::Vendored
+        );
+    }
 
     #[test]
     fn preserved_files_are_made_inheritable_for_system_exec() {
@@ -130,5 +189,13 @@ mod tests {
             panic!("failed to read fd flags for test fd {fd}: {err}");
         }
         flags
+    }
+
+    fn write_fake_bwrap(contents: &str) -> NamedTempFile {
+        let file = NamedTempFile::new().expect("temp file");
+        fs::write(file.path(), contents).expect("write fake bwrap");
+        let permissions = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(file.path(), permissions).expect("chmod fake bwrap");
+        file
     }
 }
