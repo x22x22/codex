@@ -85,6 +85,7 @@ async fn realtime_conversation_streams_v2_notifications() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
+        None,
         true,
     )?;
 
@@ -258,6 +259,7 @@ async fn realtime_conversation_stop_emits_closed_notification() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
+        None,
         true,
     )?;
 
@@ -342,15 +344,8 @@ async fn realtime_conversation_uses_client_secret_with_external_chatgpt_auth() -
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
+        Some(chatgpt_server.uri().as_str()),
         true,
-    )?;
-    std::fs::write(
-        codex_home.path().join("config.toml"),
-        format!(
-            "{}chatgpt_base_url = \"{}\"\n",
-            std::fs::read_to_string(codex_home.path().join("config.toml"))?,
-            chatgpt_server.uri(),
-        ),
     )?;
 
     let mut mcp = McpProcess::new(codex_home.path()).await?;
@@ -424,6 +419,7 @@ async fn realtime_conversation_requires_feature_flag() -> Result<()> {
         codex_home.path(),
         &responses_server.uri(),
         realtime_server.uri(),
+        None,
         false,
     )?;
 
@@ -522,6 +518,7 @@ fn create_config_toml(
     codex_home: &Path,
     responses_server_uri: &str,
     realtime_server_uri: &str,
+    chatgpt_base_url: Option<&str>,
     realtime_enabled: bool,
 ) -> std::io::Result<()> {
     let realtime_feature_key = FEATURES
@@ -529,6 +526,9 @@ fn create_config_toml(
         .find(|spec| spec.id == Feature::RealtimeConversation)
         .map(|spec| spec.key)
         .unwrap_or("realtime_conversation");
+    let chatgpt_base_url = chatgpt_base_url
+        .map(|url| format!("chatgpt_base_url = \"{url}\"\n"))
+        .unwrap_or_default();
 
     std::fs::write(
         codex_home.join("config.toml"),
@@ -537,7 +537,7 @@ fn create_config_toml(
 model = "mock-model"
 approval_policy = "never"
 sandbox_mode = "read-only"
-model_provider = "mock_provider"
+{chatgpt_base_url}model_provider = "mock_provider"
 experimental_realtime_ws_base_url = "{realtime_server_uri}"
 
 [realtime]
