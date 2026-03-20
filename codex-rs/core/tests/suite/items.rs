@@ -220,7 +220,7 @@ async fn user_message_type_metadata_is_emitted_when_feature_enabled() -> anyhow:
             .get("metadata")
             .and_then(|metadata| metadata.get("session_source"))
             .and_then(Value::as_str),
-        Some("exec")
+        Some("user")
     );
     Ok(())
 }
@@ -356,7 +356,7 @@ async fn user_message_type_prompt_steering_metadata_is_emitted_when_feature_enab
             .get("metadata")
             .and_then(|metadata| metadata.get("session_source"))
             .and_then(Value::as_str),
-        Some("exec")
+        Some("user")
     );
 
     Ok(())

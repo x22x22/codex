@@ -1190,15 +1190,13 @@
     },
     "SessionSourceMetadata": {
       "enum": [
-        "cli",
-        "vscode",
-        "exec",
-        "mcp",
-        "subagent_review",
-        "subagent_compact",
-        "subagent_memory_consolidation",
-        "subagent_thread_spawn",
-        "subagent_other",
+        "user",
+        "agent_guardian",
+        "agent_review",
+        "agent_spawned",
+        "agent_compaction",
+        "agent_memory",
+        "agent_other",
         "unknown"
       ],
       "type": "string"

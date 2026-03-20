@@ -4364,7 +4364,7 @@ async fn task_finish_emits_prompt_queued_metadata_for_injected_user_input_when_f
                 } if metadata.user_message_type
                     == Some(codex_protocol::models::UserMessageType::PromptQueued)
                     && metadata.session_source
-                        == Some(codex_protocol::models::SessionSourceMetadata::Exec)
+                        == Some(codex_protocol::models::SessionSourceMetadata::User)
             )
     ));
 
@@ -4532,7 +4532,7 @@ async fn record_response_item_stamps_session_source_on_all_supported_variants() 
             .await;
     }
 
-    let expected_session_source = codex_protocol::models::SessionSourceMetadata::Exec;
+    let expected_session_source = codex_protocol::models::SessionSourceMetadata::User;
     let stamped_count = sess
         .clone_history()
         .await
@@ -4670,33 +4670,33 @@ fn sandbox_policy_metadata_mapping_is_stable() {
 fn session_source_metadata_mapping_is_stable() {
     assert_eq!(
         session_source_to_metadata(&SessionSource::Cli),
-        codex_protocol::models::SessionSourceMetadata::Cli
+        codex_protocol::models::SessionSourceMetadata::User
     );
     assert_eq!(
         session_source_to_metadata(&SessionSource::VSCode),
-        codex_protocol::models::SessionSourceMetadata::Vscode
+        codex_protocol::models::SessionSourceMetadata::User
     );
     assert_eq!(
         session_source_to_metadata(&SessionSource::Exec),
-        codex_protocol::models::SessionSourceMetadata::Exec
+        codex_protocol::models::SessionSourceMetadata::User
     );
     assert_eq!(
         session_source_to_metadata(&SessionSource::Mcp),
-        codex_protocol::models::SessionSourceMetadata::Mcp
+        codex_protocol::models::SessionSourceMetadata::User
     );
     assert_eq!(
         session_source_to_metadata(&SessionSource::SubAgent(SubAgentSource::Review)),
-        codex_protocol::models::SessionSourceMetadata::SubagentReview
+        codex_protocol::models::SessionSourceMetadata::AgentReview
     );
     assert_eq!(
         session_source_to_metadata(&SessionSource::SubAgent(SubAgentSource::Compact)),
-        codex_protocol::models::SessionSourceMetadata::SubagentCompact
+        codex_protocol::models::SessionSourceMetadata::AgentCompaction
     );
     assert_eq!(
         session_source_to_metadata(&SessionSource::SubAgent(
             SubAgentSource::MemoryConsolidation
         )),
-        codex_protocol::models::SessionSourceMetadata::SubagentMemoryConsolidation
+        codex_protocol::models::SessionSourceMetadata::AgentMemory
     );
     assert_eq!(
         session_source_to_metadata(&SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
@@ -4705,13 +4705,19 @@ fn session_source_metadata_mapping_is_stable() {
             agent_nickname: Some("mini".to_string()),
             agent_role: Some("reviewer".to_string()),
         })),
-        codex_protocol::models::SessionSourceMetadata::SubagentThreadSpawn
+        codex_protocol::models::SessionSourceMetadata::AgentSpawned
+    );
+    assert_eq!(
+        session_source_to_metadata(&SessionSource::SubAgent(SubAgentSource::Other(
+            crate::guardian::GUARDIAN_REVIEWER_NAME.to_string()
+        ))),
+        codex_protocol::models::SessionSourceMetadata::AgentGuardian
     );
     assert_eq!(
         session_source_to_metadata(&SessionSource::SubAgent(SubAgentSource::Other(
             "custom".to_string()
         ))),
-        codex_protocol::models::SessionSourceMetadata::SubagentOther
+        codex_protocol::models::SessionSourceMetadata::AgentOther
     );
     assert_eq!(
         session_source_to_metadata(&SessionSource::Unknown),

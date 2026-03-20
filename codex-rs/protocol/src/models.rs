@@ -307,15 +307,13 @@ pub enum SandboxPolicyMetadata {
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum SessionSourceMetadata {
-    Cli,
-    Vscode,
-    Exec,
-    Mcp,
-    SubagentReview,
-    SubagentCompact,
-    SubagentMemoryConsolidation,
-    SubagentThreadSpawn,
-    SubagentOther,
+    User,
+    AgentGuardian,
+    AgentReview,
+    AgentSpawned,
+    AgentCompaction,
+    AgentMemory,
+    AgentOther,
     Unknown,
 }
 
@@ -2788,7 +2786,7 @@ mod tests {
             output: FunctionCallOutputPayload::from_text("ok".to_string()),
             metadata: Some(ResponseItemMetadata {
                 uuid: Some("uuid-1".to_string()),
-                session_source: Some(SessionSourceMetadata::Exec),
+                session_source: Some(SessionSourceMetadata::User),
                 ..ResponseItemMetadata::default()
             }),
         };
@@ -2800,7 +2798,7 @@ mod tests {
                 output: FunctionCallOutputPayload::from_text("ok".to_string()),
                 metadata: Some(ResponseItemMetadata {
                     uuid: Some("uuid-1".to_string()),
-                    session_source: Some(SessionSourceMetadata::Exec),
+                    session_source: Some(SessionSourceMetadata::User),
                     ..ResponseItemMetadata::default()
                 }),
             }
@@ -2814,7 +2812,7 @@ mod tests {
                 "output": "ok",
                 "metadata": {
                     "uuid": "uuid-1",
-                    "session_source": "exec"
+                    "session_source": "user"
                 },
             })
         );
@@ -3177,7 +3175,7 @@ mod tests {
             metadata: Some(ResponseItemMetadata {
                 uuid: Some("uuid-1".to_string()),
                 sandbox_policy: Some(SandboxPolicyMetadata::ReadOnly),
-                session_source: Some(SessionSourceMetadata::Cli),
+                session_source: Some(SessionSourceMetadata::User),
                 ..ResponseItemMetadata::default()
             }),
         };
@@ -3204,7 +3202,7 @@ mod tests {
                 metadata: Some(ResponseItemMetadata {
                     uuid: Some("uuid-1".to_string()),
                     sandbox_policy: Some(SandboxPolicyMetadata::ReadOnly),
-                    session_source: Some(SessionSourceMetadata::Cli),
+                    session_source: Some(SessionSourceMetadata::User),
                     ..ResponseItemMetadata::default()
                 }),
             }
@@ -3235,7 +3233,7 @@ mod tests {
                 "metadata": {
                     "uuid": "uuid-1",
                     "sandbox_policy": "read_only",
-                    "session_source": "cli"
+                    "session_source": "user"
                 }
             })
         );
@@ -3537,27 +3535,27 @@ mod tests {
         assert!(metadata.is_empty());
 
         metadata.merge_from(ResponseItemMetadata {
-            session_source: Some(SessionSourceMetadata::Exec),
+            session_source: Some(SessionSourceMetadata::User),
             ..Default::default()
         });
 
-        assert_eq!(metadata.session_source, Some(SessionSourceMetadata::Exec));
+        assert_eq!(metadata.session_source, Some(SessionSourceMetadata::User));
         assert!(!metadata.is_empty());
     }
 
     #[test]
     fn session_source_metadata_serializes_snake_case() -> Result<()> {
         assert_eq!(
-            serde_json::to_value(SessionSourceMetadata::Cli)?,
-            serde_json::Value::String("cli".to_string())
+            serde_json::to_value(SessionSourceMetadata::User)?,
+            serde_json::Value::String("user".to_string())
         );
         assert_eq!(
-            serde_json::to_value(SessionSourceMetadata::Vscode)?,
-            serde_json::Value::String("vscode".to_string())
+            serde_json::to_value(SessionSourceMetadata::AgentGuardian)?,
+            serde_json::Value::String("agent_guardian".to_string())
         );
         assert_eq!(
-            serde_json::to_value(SessionSourceMetadata::SubagentThreadSpawn)?,
-            serde_json::Value::String("subagent_thread_spawn".to_string())
+            serde_json::to_value(SessionSourceMetadata::AgentSpawned)?,
+            serde_json::Value::String("agent_spawned".to_string())
         );
         Ok(())
     }

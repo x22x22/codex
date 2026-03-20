@@ -1045,21 +1045,25 @@ fn user_message_metadata_patch(
 }
 
 fn session_source_to_metadata(session_source: &SessionSource) -> SessionSourceMetadata {
+    if crate::guardian::is_guardian_reviewer_source(session_source) {
+        return SessionSourceMetadata::AgentGuardian;
+    }
+
     match session_source {
-        SessionSource::Cli => SessionSourceMetadata::Cli,
-        SessionSource::VSCode => SessionSourceMetadata::Vscode,
-        SessionSource::Exec => SessionSourceMetadata::Exec,
-        SessionSource::Mcp => SessionSourceMetadata::Mcp,
+        SessionSource::Cli => SessionSourceMetadata::User,
+        SessionSource::VSCode => SessionSourceMetadata::User,
+        SessionSource::Exec => SessionSourceMetadata::User,
+        SessionSource::Mcp => SessionSourceMetadata::User,
         SessionSource::Custom(_) => SessionSourceMetadata::Unknown,
-        SessionSource::SubAgent(SubAgentSource::Review) => SessionSourceMetadata::SubagentReview,
-        SessionSource::SubAgent(SubAgentSource::Compact) => SessionSourceMetadata::SubagentCompact,
+        SessionSource::SubAgent(SubAgentSource::Review) => SessionSourceMetadata::AgentReview,
+        SessionSource::SubAgent(SubAgentSource::Compact) => SessionSourceMetadata::AgentCompaction,
         SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
-            SessionSourceMetadata::SubagentMemoryConsolidation
+            SessionSourceMetadata::AgentMemory
         }
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) => {
-            SessionSourceMetadata::SubagentThreadSpawn
+            SessionSourceMetadata::AgentSpawned
         }
-        SessionSource::SubAgent(SubAgentSource::Other(_)) => SessionSourceMetadata::SubagentOther,
+        SessionSource::SubAgent(SubAgentSource::Other(_)) => SessionSourceMetadata::AgentOther,
         SessionSource::Unknown => SessionSourceMetadata::Unknown,
     }
 }

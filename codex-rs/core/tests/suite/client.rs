@@ -119,6 +119,21 @@ fn assistant_message_item_by_text<'a>(
         })
 }
 
+fn strip_top_level_item_metadata(items: &[serde_json::Value]) -> serde_json::Value {
+    serde_json::Value::Array(
+        items
+            .iter()
+            .cloned()
+            .map(|mut item| {
+                if let Some(obj) = item.as_object_mut() {
+                    obj.remove("metadata");
+                }
+                item
+            })
+            .collect(),
+    )
+}
+
 /// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
 /// Returns the fake JWT string written to `tokens.id_token`.
 #[expect(clippy::unwrap_used)]
@@ -2707,7 +2722,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let tail_len = r3_tail_expected.as_array().unwrap().len();
     let actual_tail = &r3_input_array[r3_input_array.len() - tail_len..];
     assert_eq!(
-        serde_json::Value::Array(actual_tail.to_vec()),
+        strip_top_level_item_metadata(actual_tail),
         r3_tail_expected,
         "request 3 tail mismatch",
     );
