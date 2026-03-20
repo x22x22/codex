@@ -65,6 +65,7 @@ members = [
     "utils/oss",
     "utils/fuzzy-match",
     "utils/stream-parser",
+    "write-config-schema",
     "codex-client",
     "codex-api",
     "state",
