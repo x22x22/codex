@@ -122,7 +122,7 @@ async fn list_tool_suggest_discoverable_plugins_omits_installed_curated_plugins(
 #[tokio::test]
 async fn list_tool_suggest_discoverable_plugins_includes_configured_plugin_ids() {
     let codex_home = tempdir().expect("tempdir should succeed");
-    let curated_root = crate::plugins::curated_plugins_repo_path(codex_home.path());
+    let curated_root = curated_plugins_repo_path(codex_home.path());
     write_openai_curated_marketplace(&curated_root, &["sample"]);
     write_file(
         &codex_home.path().join(crate::config::CONFIG_TOML_FILE),
