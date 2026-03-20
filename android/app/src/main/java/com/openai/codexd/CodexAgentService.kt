@@ -22,6 +22,7 @@ class CodexAgentService : AgentService() {
         private const val MAX_AUTO_ANSWER_CONTEXT_CHARS = 800
         private val handledGenieQuestions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val pendingGenieQuestions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        private val pendingQuestionLoads = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val handledBridgeRequests = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     }
 
@@ -38,30 +39,71 @@ class CodexAgentService : AgentService() {
 
     override fun onCreate() {
         super.onCreate()
-        AgentSocketBridgeServer.ensureStarted(this)
     }
 
     override fun onSessionChanged(session: AgentSessionInfo) {
         Log.i(TAG, "onSessionChanged $session")
-        maybeAutoAnswerGenieQuestion(session)
-        updateQuestionNotification(session)
+        agentManager?.let { manager ->
+            if (shouldServeSessionBridge(session)) {
+                AgentSessionBridgeServer.ensureStarted(this, manager, session.sessionId)
+            } else {
+                AgentSessionBridgeServer.closeSession(session.sessionId)
+            }
+        }
+        if (session.state != AgentSessionInfo.STATE_WAITING_FOR_USER) {
+            AgentQuestionNotifier.cancel(this, session.sessionId)
+            return
+        }
+        if (!pendingQuestionLoads.add(session.sessionId)) {
+            return
+        }
+        thread(name = "CodexAgentQuestionLoad-${session.sessionId}") {
+            try {
+                handleWaitingSession(session)
+            } finally {
+                pendingQuestionLoads.remove(session.sessionId)
+            }
+        }
     }
 
     override fun onSessionRemoved(sessionId: String) {
         Log.i(TAG, "onSessionRemoved sessionId=$sessionId")
+        AgentSessionBridgeServer.closeSession(sessionId)
         AgentQuestionNotifier.cancel(this, sessionId)
         handledGenieQuestions.removeIf { it.startsWith("$sessionId:") }
         handledBridgeRequests.removeIf { it.startsWith("$sessionId:") }
         pendingGenieQuestions.removeIf { it.startsWith("$sessionId:") }
     }
 
-    private fun maybeAutoAnswerGenieQuestion(session: AgentSessionInfo) {
-        if (session.state != AgentSessionInfo.STATE_WAITING_FOR_USER) {
-            return
+    private fun shouldServeSessionBridge(session: AgentSessionInfo): Boolean {
+        if (session.targetPackage.isNullOrBlank()) {
+            return false
         }
+        if (session.geniePackage.isNullOrBlank()) {
+            return false
+        }
+        return when (session.state) {
+            AgentSessionInfo.STATE_COMPLETED,
+            AgentSessionInfo.STATE_CANCELLED,
+            AgentSessionInfo.STATE_FAILED,
+            -> false
+            else -> true
+        }
+    }
+
+    private fun handleWaitingSession(session: AgentSessionInfo) {
         val manager = agentManager ?: return
         val events = manager.getSessionEvents(session.sessionId)
         val question = findLatestQuestion(events) ?: return
+        updateQuestionNotification(session, question)
+        maybeAutoAnswerGenieQuestion(session, question, events)
+    }
+
+    private fun maybeAutoAnswerGenieQuestion(
+        session: AgentSessionInfo,
+        question: String,
+        events: List<AgentSessionEvent>,
+    ) {
         val questionKey = genieQuestionKey(session.sessionId, question)
         if (handledGenieQuestions.contains(questionKey) || !pendingGenieQuestions.add(questionKey)) {
             return
@@ -72,12 +114,12 @@ class CodexAgentService : AgentService() {
                 if (isBridgeQuestion(question)) {
                     answerBridgeQuestion(session, question)
                     handledGenieQuestions.add(questionKey)
-                    AgentQuestionNotifier.cancel(this, session.sessionId)
-                    Log.i(TAG, "Answered bridge question for ${session.sessionId}")
-                } else {
-                    when (val result = requestGenieAutoAnswer(session, question, events)) {
-                        AutoAnswerResult.Answered -> {
-                            handledGenieQuestions.add(questionKey)
+                        AgentQuestionNotifier.cancel(this, session.sessionId)
+                        Log.i(TAG, "Answered bridge question for ${session.sessionId}")
+                    } else {
+                        when (val result = requestGenieAutoAnswer(session, question, events)) {
+                            AutoAnswerResult.Answered -> {
+                                handledGenieQuestions.add(questionKey)
                             AgentQuestionNotifier.cancel(this, session.sessionId)
                             Log.i(TAG, "Auto-answered Genie question for ${session.sessionId}")
                         }
@@ -108,14 +150,8 @@ class CodexAgentService : AgentService() {
         }
     }
 
-    private fun updateQuestionNotification(session: AgentSessionInfo) {
-        if (session.state != AgentSessionInfo.STATE_WAITING_FOR_USER) {
-            AgentQuestionNotifier.cancel(this, session.sessionId)
-            return
-        }
-        val manager = agentManager ?: return
-        val question = findLatestQuestion(manager.getSessionEvents(session.sessionId))
-        if (question.isNullOrBlank()) {
+    private fun updateQuestionNotification(session: AgentSessionInfo, question: String) {
+        if (question.isBlank()) {
             AgentQuestionNotifier.cancel(this, session.sessionId)
             return
         }

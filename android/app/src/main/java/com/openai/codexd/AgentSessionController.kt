@@ -10,6 +10,11 @@ import java.util.concurrent.Executor
 
 class AgentSessionController(context: Context) {
     companion object {
+        private const val BRIDGE_REQUEST_PREFIX = "__codex_bridge__ "
+        private const val BRIDGE_RESPONSE_PREFIX = "__codex_bridge_result__ "
+        private const val DIAGNOSTIC_NOT_LOADED = "Diagnostics not loaded."
+        private const val MAX_TIMELINE_EVENTS = 12
+        private const val MAX_EVENT_MESSAGE_CHARS = 240
         private const val PREFERRED_GENIE_PACKAGE = "com.openai.codex.genie"
         private const val QUESTION_ANSWER_RETRY_COUNT = 10
         private const val QUESTION_ANSWER_RETRY_DELAY_MS = 50L
@@ -44,8 +49,7 @@ class AgentSessionController(context: Context) {
         val manager = agentManager ?: return AgentSnapshot.unavailable
         val roleHolders = manager.getGenieRoleHolders(currentUserId())
         val selectedGeniePackage = selectGeniePackage(roleHolders)
-        val sessionDetails = manager.getSessions(currentUserId()).map { session ->
-            val events = manager.getSessionEvents(session.sessionId)
+        var sessionDetails = manager.getSessions(currentUserId()).map { session ->
             AgentSessionDetails(
                 sessionId = session.sessionId,
                 parentSessionId = session.parentSessionId,
@@ -54,12 +58,26 @@ class AgentSessionController(context: Context) {
                 state = session.state,
                 stateLabel = stateToString(session.state),
                 targetDetached = session.isTargetDetached,
-                latestQuestion = findLastEventMessage(events, AgentSessionEvent.TYPE_QUESTION),
-                latestResult = findLastEventMessage(events, AgentSessionEvent.TYPE_RESULT),
-                latestError = findLastEventMessage(events, AgentSessionEvent.TYPE_ERROR),
-                latestTrace = findLastEventMessage(events, AgentSessionEvent.TYPE_TRACE),
-                timeline = renderTimeline(events),
+                latestQuestion = null,
+                latestResult = null,
+                latestError = null,
+                latestTrace = null,
+                timeline = DIAGNOSTIC_NOT_LOADED,
             )
+        }
+        val selectedSessionId = chooseSelectedSession(sessionDetails, focusedSessionId)?.sessionId
+        val parentSessionId = selectedSessionId?.let { selectedId ->
+            findParentSession(sessionDetails, sessionDetails.firstOrNull { it.sessionId == selectedId })?.sessionId
+        }
+        val diagnosticSessionIds = linkedSetOf<String>().apply {
+            parentSessionId?.let(::add)
+            selectedSessionId?.let(::add)
+        }
+        val diagnosticsBySessionId = diagnosticSessionIds.associateWith { sessionId ->
+            loadSessionDiagnostics(manager, sessionId)
+        }
+        sessionDetails = sessionDetails.map { session ->
+            diagnosticsBySessionId[session.sessionId]?.let(session::withDiagnostics) ?: session
         }
         val selectedSession = chooseSelectedSession(sessionDetails, focusedSessionId)
         val parentSession = findParentSession(sessionDetails, selectedSession)
@@ -255,18 +273,76 @@ class AgentSessionController(context: Context) {
         for (index in events.indices.reversed()) {
             val event = events[index]
             if (event.type == type && event.message != null) {
-                return event.message
+                return summarizeEventMessage(event.message)
             }
         }
         return null
+    }
+
+    private fun loadSessionDiagnostics(manager: AgentManager, sessionId: String): SessionDiagnostics {
+        val events = manager.getSessionEvents(sessionId)
+        return SessionDiagnostics(
+            latestQuestion = findLastEventMessage(events, AgentSessionEvent.TYPE_QUESTION),
+            latestResult = findLastEventMessage(events, AgentSessionEvent.TYPE_RESULT),
+            latestError = findLastEventMessage(events, AgentSessionEvent.TYPE_ERROR),
+            latestTrace = findLastEventMessage(events, AgentSessionEvent.TYPE_TRACE),
+            timeline = renderTimeline(events),
+        )
     }
 
     private fun renderTimeline(events: List<AgentSessionEvent>): String {
         if (events.isEmpty()) {
             return "No framework events yet."
         }
-        return events.joinToString("\n") { event ->
-            "${eventTypeToString(event.type)}: ${event.message ?: ""}"
+        return events.takeLast(MAX_TIMELINE_EVENTS).joinToString("\n") { event ->
+            "${eventTypeToString(event.type)}: ${summarizeEventMessage(event.message).orEmpty()}"
+        }
+    }
+
+    private fun summarizeEventMessage(message: String?): String? {
+        val trimmed = message?.trim()?.takeIf(String::isNotEmpty) ?: return null
+        if (trimmed.startsWith(BRIDGE_REQUEST_PREFIX)) {
+            return summarizeBridgeRequest(trimmed)
+        }
+        if (trimmed.startsWith(BRIDGE_RESPONSE_PREFIX)) {
+            return summarizeBridgeResponse(trimmed)
+        }
+        return if (trimmed.length <= MAX_EVENT_MESSAGE_CHARS) {
+            trimmed
+        } else {
+            trimmed.take(MAX_EVENT_MESSAGE_CHARS) + "…"
+        }
+    }
+
+    private fun summarizeBridgeRequest(message: String): String {
+        val request = runCatching {
+            org.json.JSONObject(message.removePrefix(BRIDGE_REQUEST_PREFIX))
+        }.getOrNull()
+        val method = request?.optString("method")?.ifEmpty { "unknown" } ?: "unknown"
+        val requestId = request?.optString("requestId")?.takeIf(String::isNotBlank)
+        return buildString {
+            append("Bridge request: ")
+            append(method)
+            requestId?.let { append(" (#$it)") }
+        }
+    }
+
+    private fun summarizeBridgeResponse(message: String): String {
+        val response = runCatching {
+            org.json.JSONObject(message.removePrefix(BRIDGE_RESPONSE_PREFIX))
+        }.getOrNull()
+        val requestId = response?.optString("requestId")?.takeIf(String::isNotBlank)
+        val statusCode = response?.optJSONObject("httpResponse")?.optInt("statusCode")
+        val ok = response?.optBoolean("ok")
+        return buildString {
+            append("Bridge response")
+            requestId?.let { append(" (#$it)") }
+            if (statusCode != null) {
+                append(": HTTP $statusCode")
+            } else if (ok != null) {
+                append(": ")
+                append(if (ok) "ok" else "error")
+            }
         }
     }
 
@@ -340,6 +416,24 @@ data class AgentSessionDetails(
     val state: Int,
     val stateLabel: String,
     val targetDetached: Boolean,
+    val latestQuestion: String?,
+    val latestResult: String?,
+    val latestError: String?,
+    val latestTrace: String?,
+    val timeline: String,
+) {
+    fun withDiagnostics(diagnostics: SessionDiagnostics): AgentSessionDetails {
+        return copy(
+            latestQuestion = diagnostics.latestQuestion,
+            latestResult = diagnostics.latestResult,
+            latestError = diagnostics.latestError,
+            latestTrace = diagnostics.latestTrace,
+            timeline = diagnostics.timeline,
+        )
+    }
+}
+
+data class SessionDiagnostics(
     val latestQuestion: String?,
     val latestResult: String?,
     val latestError: String?,

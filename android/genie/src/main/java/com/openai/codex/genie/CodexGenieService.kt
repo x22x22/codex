@@ -58,10 +58,8 @@ class CodexGenieService : GenieService() {
             }
 
             AgentBridgeClient(
-                context = this,
-                sessionId = sessionId,
                 callback = callback,
-                control = control,
+                sessionId = sessionId,
             ).use { bridgeClient ->
                 val runtimeStatus = bridgeClient.getRuntimeStatus()
                 val accountSuffix = runtimeStatus.accountEmail?.let { " ($it)" } ?: ""

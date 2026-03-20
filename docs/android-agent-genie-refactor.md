@@ -21,10 +21,11 @@ The current repo now contains these implementation slices:
   - attach detached targets
 - The Genie app now hosts a real `codex app-server` subprocess, packaged inside
   the Genie APK as `libcodex.so`.
-- The first internal Agent<->Genie control plane uses an exported
-  **Binder/AIDL service** in the Agent app, not framework question/answer
-  events.
-- The current Binder bridge exposes small fixed-form calls, and the Genie
+- The first internal Agent<->Genie control plane uses the framework-managed
+  **per-session bridge** returned by `AgentManager.openSessionBridge(...)` on
+  the Agent side and `GenieService.Callback.openSessionBridge(...)` on the
+  Genie side, not framework question/answer events.
+- The current session bridge exposes small fixed-form calls, and the Genie
   runtime already uses it to fetch Agent-owned runtime metadata from the
   hosted Agent Codex runtime, including auth status and configured model/provider.
 - Target-package planning now relies on the hosted Agent Codex runtime using
@@ -38,9 +39,10 @@ The current repo now contains these implementation slices:
   of host-side Kotlin wrappers for those operations.
 - The hosted `codex app-server` process now talks to a **Genie-local loopback
   HTTP proxy** inside the Genie app. That proxy forwards HTTP traffic to the
-  Agent over Binder/AIDL, keeping network/auth Agent-owned without assuming the
-  Genie child process can reach the Agent's abstract socket directly.
-- The Binder bridge now exposes a **narrow Responses transport** owned by the
+  Agent over the framework session bridge, keeping network/auth Agent-owned
+  without assuming the live Genie runtime can reach the Agent over direct
+  cross-app bind or raw local sockets.
+- The session bridge now exposes a **narrow Responses transport** owned by the
   Agent app itself, so Genie model traffic no longer depends on the legacy
   `codexd` socket service.
 - The Genie runtime now keeps host dynamic tools limited to framework-only
@@ -52,16 +54,14 @@ The current repo now contains these implementation slices:
   runtime before falling back to notification/UI escalation, and now submits
   those answers through the same framework-session bridge instead of a separate
   Kotlin-only path.
-- Runtime testing on the emulator shows that the exported Agent Binder service
-  is reachable from Genie execution for the current bootstrap calls, while
-  direct cross-app access to the Agent-owned abstract socket is not a valid
-  assumption.
-- Runtime testing on the emulator also shows that headless Genie runtimes
-  cannot directly launch activities via `startActivity` or shell `am start`
-  under the paired app UID. The viable path is to treat the target as
-  framework-launched hidden state, then use detached-target controls and frame
-  capture while keeping shell commands for discovery and any input surfaces
-  that still work inside the paired sandbox.
+- Runtime testing on the emulator showed that direct cross-app `bindService`
+  and raw local-socket access from the live Genie runtime are not a stable
+  contract because the runtime executes under the paired target sandbox
+  identity. The framework session bridge is the correct transport boundary.
+- Runtime testing on the updated image shows that self-targeted shell activity
+  launch is viable from the paired Genie sandbox when the command shape is
+  correct, for example `cmd activity start-activity --user 0 ...` or
+  `am start --user 0 ...`.
 
 The Rust `codexd` service/client split remains in place only for the legacy
 foreground-service auth/status surface while this refactor proceeds.
@@ -90,12 +90,12 @@ foreground-service auth/status surface while this refactor proceeds.
 - The first milestone keeps the current local CLI/socket bridge internally so
   the Rust runtime can migrate incrementally.
 - Internal Agent<->Genie coordination now splits into:
-  - Binder/AIDL for fixed-form control/data RPC
+  - framework per-session bridges for fixed-form control/data RPC
   - AgentSDK session events for free-form product dialogue
 - hosted `codex app-server` inside Genie for the actual Codex execution loop
 - Genie-local transport termination between the hosted `codex` child process
-  and the Binder control plane
-- Agent-owned Responses transport termination between the Binder control plane
+  and the framework session bridge
+- Agent-owned Responses transport termination between the framework session bridge
   and the upstream model backend
 
 ## Runtime Model
@@ -129,8 +129,8 @@ foreground-service auth/status surface while this refactor proceeds.
   - framework lifecycle and result publication
   - Android dynamic tool execution
   - Agent escalation via `request_user_input`
-  - runtime bootstrap from the Agent-owned Binder bridge
-  - local proxying of hosted `codex` HTTP traffic onto Binder
+  - runtime bootstrap from the framework session bridge
+  - local proxying of hosted `codex` HTTP traffic onto the framework session bridge
 
 ## First Milestone Scope
 
@@ -146,22 +146,17 @@ foreground-service auth/status surface while this refactor proceeds.
 - Dedicated framework-session bridge tools for direct Genie-session launch and question resolution
 - Framework session inspection UI in the Agent app
 - Question answering and detached-target attach controls
-- Exported Binder bridge request handling in `CodexAgentBridgeService`
-- Binder bridge request issuance in `CodexGenieService`
+- Framework session bridge request handling in `AgentSessionBridgeServer`
+- Framework session bridge request issuance in `CodexGenieService`
 - Agent-hosted runtime metadata for Genie bootstrap
 - Shell-first Genie execution for package inspection, activity launch, input injection, and UI dumping
 - Hosted `codex app-server` inside Genie, with model traffic routed through a
-  Genie-local proxy backed by the Agent Binder bridge
+  Genie-local proxy backed by the Agent framework session bridge
 - Agent-owned `/v1/responses` proxying in
   `android/app/src/main/java/com/openai/codexd/AgentResponsesProxy.kt`
-- Android dynamic tools registered on the Genie Codex thread with:
-  - `android.package.inspect`
-  - `android.intent.launch`
+- Framework-only Android dynamic tools registered on the Genie Codex thread with:
   - detached target show/hide/attach/close
   - detached frame capture
-  - UI hierarchy dump
-  - shell-backed input injection helpers (`tap`, `text`, `key`)
-  - bounded waits
 - `request_user_input` bridged from hosted Codex back into AgentSDK questions
 - Agent-owned question notifications for Genie questions that need user input
 - Agent-mediated free-form answers for Genie questions, using the hosted Agent
@@ -174,7 +169,7 @@ foreground-service auth/status surface while this refactor proceeds.
 
 ### Not done yet
 
-- Expanding the Binder control plane beyond the current fixed-form runtime
+- Expanding the framework session bridge beyond the current fixed-form runtime
   bootstrap/status calls
 - Making the Agent the default product surface instead of the legacy service app
 - Consolidating the remaining auth/status responsibilities out of the legacy
@@ -205,13 +200,13 @@ foreground-service auth/status surface while this refactor proceeds.
     and `request_user_input` bridging
 - `android/genie/src/main/java/com/openai/codex/genie/GenieLocalCodexProxy.kt`
   - Genie-local loopback HTTP proxy that forwards hosted `codex` HTTP traffic to
-    the Agent Binder bridge
-- `android/app/src/main/java/com/openai/codexd/CodexAgentBridgeService.kt`
-  - exported Binder/AIDL bridge for Genie control-plane calls
+    the Agent framework session bridge
+- `android/app/src/main/java/com/openai/codexd/AgentSessionBridgeServer.kt`
+  - Agent-side server for the framework-managed per-session bridge
 - `android/app/src/main/java/com/openai/codexd/AgentResponsesProxy.kt`
   - Agent-owned Responses transport used by Genie model traffic
 - `android/genie/src/main/java/com/openai/codex/genie/AgentBridgeClient.kt`
-  - Genie-side Binder client for the Agent bridge service
+  - Genie-side client for the framework-managed session bridge
 - `android/app/src/main/java/com/openai/codexd/AgentCodexAppServerClient.kt`
   - hosted Agent `codex app-server` client for planning, orchestration, auto-answering, runtime metadata, and narrow Agent tool calls
 - `android/app/src/main/java/com/openai/codexd/CodexdLocalClient.kt`

@@ -94,7 +94,6 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        AgentSocketBridgeServer.ensureStarted(this)
         setContentView(R.layout.activity_main)
         updatePaths()
         handleSessionIntent(intent)
