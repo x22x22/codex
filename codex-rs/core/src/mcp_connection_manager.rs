@@ -1400,7 +1400,7 @@ impl McpConnectionManager {
     pub(crate) fn new_uninitialized(approval_policy: &Constrained<AskForApproval>) -> Self {
         Self::from_parts(
             Arc::new(SharedMcpBackend::new_uninitialized()),
-            None,
+            /*shared_backend*/ None,
             SessionMcpHandle::new(approval_policy.value()),
             /*shared_backend_lease*/ None,
         )
@@ -1459,7 +1459,7 @@ impl McpConnectionManager {
         (
             Self::from_parts(
                 Arc::new(backend),
-                None,
+                /*shared_backend*/ None,
                 session,
                 /*shared_backend_lease*/ None,
             ),
