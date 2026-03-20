@@ -2159,6 +2159,7 @@ version = "0.0.0"
 dependencies = [
  "cc",
  "clap",
+ "codex-core",
  "codex-protocol",
  "codex-sandbox",
  "codex-utils-absolute-path",
@@ -2464,7 +2465,6 @@ dependencies = [
  "libc",
  "pretty_assertions",
  "seccompiler",
- "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",

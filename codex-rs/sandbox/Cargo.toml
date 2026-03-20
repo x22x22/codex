@@ -28,7 +28,6 @@ dirs = { workspace = true }
 dunce = { workspace = true }
 encoding_rs = { workspace = true }
 libc = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = [

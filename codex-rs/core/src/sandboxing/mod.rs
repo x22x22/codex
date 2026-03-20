@@ -6,7 +6,6 @@ pub(crate) use codex_sandbox::CommandSpec;
 pub(crate) use codex_sandbox::ExecRequest;
 pub(crate) use codex_sandbox::SandboxManager;
 pub(crate) use codex_sandbox::SandboxPermissions;
-pub(crate) use codex_sandbox::SandboxPreference;
 pub(crate) use codex_sandbox::SandboxTransformError;
 pub(crate) use codex_sandbox::effective_file_system_sandbox_policy;
 pub(crate) use codex_sandbox::intersect_permission_profiles;

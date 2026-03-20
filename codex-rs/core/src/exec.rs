@@ -10,7 +10,6 @@ pub(crate) use codex_sandbox::ExecCapturePolicy;
 pub(crate) use codex_sandbox::ExecExpiration;
 pub(crate) use codex_sandbox::ExecParams;
 pub(crate) use codex_sandbox::ExecToolCallOutput;
-pub(crate) use codex_sandbox::IO_DRAIN_TIMEOUT_MS;
 pub(crate) use codex_sandbox::MAX_EXEC_OUTPUT_DELTAS_PER_CALL;
 pub(crate) use codex_sandbox::SandboxType;
 pub(crate) use codex_sandbox::StdoutStream;

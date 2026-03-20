@@ -15,6 +15,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::RateLimitSnapshot;
+use codex_sandbox::SandboxTransformError;
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
@@ -230,6 +231,20 @@ impl From<codex_sandbox::error::CodexErr> for CodexErr {
             codex_sandbox::error::CodexErr::LandlockRuleset(err) => CodexErr::LandlockRuleset(err),
             #[cfg(target_os = "linux")]
             codex_sandbox::error::CodexErr::LandlockPathFd(err) => CodexErr::LandlockPathFd(err),
+        }
+    }
+}
+
+impl From<SandboxTransformError> for CodexErr {
+    fn from(err: SandboxTransformError) -> Self {
+        match err {
+            SandboxTransformError::MissingLinuxSandboxExecutable => {
+                CodexErr::LandlockSandboxExecutableNotProvided
+            }
+            #[cfg(not(target_os = "macos"))]
+            SandboxTransformError::SeatbeltUnavailable => CodexErr::UnsupportedOperation(
+                "seatbelt sandbox is only available on macOS".to_string(),
+            ),
         }
     }
 }
