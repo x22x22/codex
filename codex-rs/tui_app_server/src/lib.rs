@@ -38,7 +38,6 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_core::read_session_meta_line;
 use codex_core::state_db::get_state_db;
-use codex_core::terminal::Multiplexer;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::AltScreenMode;
@@ -47,7 +46,10 @@ use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::TurnContextItem;
 use codex_state::log_db;
+use codex_terminal_detection::Multiplexer;
+use codex_terminal_detection::terminal_info;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
@@ -78,6 +80,19 @@ mod app_server_session;
 mod ascii_animation;
 #[cfg(all(not(target_os = "linux"), feature = "voice-input"))]
 mod audio_device;
+#[cfg(all(not(target_os = "linux"), not(feature = "voice-input")))]
+mod audio_device {
+    use crate::app_event::RealtimeAudioDeviceKind;
+
+    pub(crate) fn list_realtime_audio_device_names(
+        kind: RealtimeAudioDeviceKind,
+    ) -> Result<Vec<String>, String> {
+        Err(format!(
+            "Failed to load realtime {} devices: voice input is unavailable in this build",
+            kind.noun()
+        ))
+    }
+}
 mod bottom_pane;
 mod chatwidget;
 mod cli;
@@ -100,6 +115,7 @@ pub mod insert_history;
 mod key_hint;
 mod line_truncation;
 pub mod live_wrap;
+mod local_chatgpt_auth;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
@@ -1341,7 +1357,7 @@ pub(crate) async fn read_session_cwd(
     // changes, but the rollout is an append-only JSONL log and rewriting the head
     // would be error-prone.
     let path = path?;
-    if let Some(cwd) = parse_latest_turn_context_cwd(path).await {
+    if let Some(cwd) = read_latest_turn_context(path).await.map(|item| item.cwd) {
         return Some(cwd);
     }
     match read_session_meta_line(path).await {
@@ -1358,7 +1374,23 @@ pub(crate) async fn read_session_cwd(
     }
 }
 
-async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
+pub(crate) async fn read_session_model(
+    config: &Config,
+    thread_id: ThreadId,
+    path: Option<&Path>,
+) -> Option<String> {
+    if let Some(state_db_ctx) = get_state_db(config).await
+        && let Ok(Some(metadata)) = state_db_ctx.get_thread(thread_id).await
+        && let Some(model) = metadata.model
+    {
+        return Some(model);
+    }
+
+    let path = path?;
+    read_latest_turn_context(path).await.map(|item| item.model)
+}
+
+async fn read_latest_turn_context(path: &Path) -> Option<TurnContextItem> {
     let text = tokio::fs::read_to_string(path).await.ok()?;
     for line in text.lines().rev() {
         let trimmed = line.trim();
@@ -1369,7 +1401,7 @@ async fn parse_latest_turn_context_cwd(path: &Path) -> Option<PathBuf> {
             continue;
         };
         if let RolloutItem::TurnContext(item) = rollout_line.item {
-            return Some(item.cwd);
+            return Some(item);
         }
     }
     None
@@ -1454,7 +1486,7 @@ fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScree
             AltScreenMode::Always => true,
             AltScreenMode::Never => false,
             AltScreenMode::Auto => {
-                let terminal_info = codex_core::terminal::terminal_info();
+                let terminal_info = terminal_info();
                 !matches!(terminal_info.multiplexer, Some(Multiplexer::Zellij { .. }))
             }
         }
