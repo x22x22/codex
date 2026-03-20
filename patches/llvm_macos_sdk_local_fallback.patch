@@ -1,14 +1,35 @@
 diff --git a/http_pkg_archive.bzl b/http_pkg_archive.bzl
 --- a/http_pkg_archive.bzl
 +++ b/http_pkg_archive.bzl
-@@ -2,6 +2,49 @@
+@@ -2,6 +2,68 @@
  load("@bazel_lib//lib:repo_utils.bzl", "repo_utils")
  
++def _execute_or_fail(rctx, args, error_message):
++    res = rctx.execute(args)
++    if res.return_code != 0:
++        fail("{}: {}".format(error_message, res.stderr))
++
++def _copy_path_if_exists(rctx, cp, src, dst_dir):
++    if not rctx.path(src).exists:
++        return
++
++    _execute_or_fail(
++        rctx,
++        [cp, "-LR", src, dst_dir],
++        "Failed to copy {}".format(src),
++    )
++
  def _http_pkg_archive_impl(rctx):
 +    if repo_utils.is_darwin(rctx):
 +        host_xcrun = rctx.which("xcrun")
++        host_cp = rctx.which("cp")
++        host_mkdir = rctx.which("mkdir")
 +        if host_xcrun == None:
 +            fail("xcrun is required to locate the local macOS SDK")
++        if host_cp == None:
++            fail("cp is required to materialize the local macOS SDK")
++        if host_mkdir == None:
++            fail("mkdir is required to materialize the local macOS SDK")
 +
 +        res = rctx.execute([host_xcrun, "--show-sdk-path"])
 +        if res.return_code != 0:
@@ -19,13 +40,17 @@ diff --git a/http_pkg_archive.bzl b/http_pkg_archive.bzl
 +            fail("xcrun --show-sdk-path returned an empty SDK path")
 +
 +        rctx.file(rctx.attr.dst + "/BUILD.bazel", rctx.read(Label("//3rd_party/macos_sdk:CLTools_macOSNMOS_SDK.BUILD.bazel")))
-+        rctx.execute([
-+            "mkdir",
-+            "-p",
-+            rctx.attr.dst + "/System/Library/Frameworks",
-+            rctx.attr.dst + "/System/Library/PrivateFrameworks",
-+            rctx.attr.dst + "/usr",
-+        ])
++        _execute_or_fail(
++            rctx,
++            [
++                host_mkdir,
++                "-p",
++                rctx.attr.dst + "/System/Library/Frameworks",
++                rctx.attr.dst + "/System/Library/PrivateFrameworks",
++                rctx.attr.dst + "/usr",
++            ],
++            "Failed to prepare local macOS SDK repo",
++        )
 +        rctx.symlink(sdk_path + "/usr/include", rctx.attr.dst + "/usr/include")
 +        rctx.symlink(sdk_path + "/usr/lib", rctx.attr.dst + "/usr/lib")
 +        rctx.symlink(sdk_path + "/Entitlements.plist", rctx.attr.dst + "/Entitlements.plist")
@@ -35,15 +60,19 @@ diff --git a/http_pkg_archive.bzl b/http_pkg_archive.bzl
 +        for include in rctx.attr.includes:
 +            if include.startswith("System/Library/Frameworks/") and include.endswith("/*"):
 +                framework = include.removeprefix("System/Library/Frameworks/").removesuffix("/*")
-+                rctx.symlink(
++                _copy_path_if_exists(
++                    rctx,
++                    host_cp,
 +                    sdk_path + "/System/Library/Frameworks/" + framework,
-+                    rctx.attr.dst + "/System/Library/Frameworks/" + framework,
++                    rctx.attr.dst + "/System/Library/Frameworks",
 +                )
 +            if include.startswith("System/Library/PrivateFrameworks/") and include.endswith("/*"):
 +                framework = include.removeprefix("System/Library/PrivateFrameworks/").removesuffix("/*")
-+                rctx.symlink(
++                _copy_path_if_exists(
++                    rctx,
++                    host_cp,
 +                    sdk_path + "/System/Library/PrivateFrameworks/" + framework,
-+                    rctx.attr.dst + "/System/Library/PrivateFrameworks/" + framework,
++                    rctx.attr.dst + "/System/Library/PrivateFrameworks",
 +                )
 +
 +        return rctx.repo_metadata(reproducible = False)
