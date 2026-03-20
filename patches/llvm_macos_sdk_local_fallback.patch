@@ -9,7 +9,7 @@ index 8822c51..a2c7f31 100644
  def _http_pkg_archive_impl(rctx):
 -    rctx.download(
 -        url = rctx.attr.urls,
-+    if repo_utils.platform(rctx).startswith("macos_"):
++    if repo_utils.is_darwin(rctx):
 +        host_xcrun = rctx.which("xcrun")
 +        if host_xcrun == None:
 +            fail("xcrun is required to locate the local macOS SDK")
@@ -22,7 +22,7 @@ index 8822c51..a2c7f31 100644
 +        if not sdk_path:
 +            fail("xcrun --show-sdk-path returned an empty SDK path")
 +
-+        rctx.file(rctx.attr.dst + "/BUILD.bazel", rctx.read("//3rd_party/macos_sdk:CLTools_macOSNMOS_SDK.BUILD.bazel"))
++        rctx.file(rctx.attr.dst + "/BUILD.bazel", rctx.read(Label("//3rd_party/macos_sdk:CLTools_macOSNMOS_SDK.BUILD.bazel")))
 +        rctx.symlink(sdk_path + "/System", rctx.attr.dst + "/System")
 +        rctx.symlink(sdk_path + "/usr", rctx.attr.dst + "/usr")
 +        rctx.symlink(sdk_path + "/Entitlements.plist", rctx.attr.dst + "/Entitlements.plist")
