@@ -1146,7 +1146,6 @@ impl PluginsManager {
                 config_persister,
             );
 
-            let request = request.clone();
             let manager = Arc::clone(self);
             tokio::spawn(async move {
                 let auth = auth_manager.auth().await;

@@ -42,7 +42,6 @@ pub use codex_capabilities::plugins::RemotePluginSyncResult;
 pub use codex_capabilities::plugins::installed_plugin_telemetry_metadata;
 pub use codex_capabilities::plugins::load_plugin_apps;
 pub use codex_capabilities::plugins::load_plugin_mcp_servers;
-pub(crate) use codex_capabilities::plugins::plugin_namespace_for_skill_path;
 pub use codex_capabilities::plugins::plugin_telemetry_metadata_from_root;
 
 pub struct PluginsManager {
