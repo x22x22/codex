@@ -2,6 +2,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecCapturePolicy;
 use crate::exec::ExecExpiration;
+use crate::exec::ExecStdin;
 use crate::exec::ExecToolCallRawOutput;
 use crate::sandboxing::CommandSpec;
 use crate::sandboxing::SandboxPermissions;
@@ -95,6 +96,7 @@ async fn perform_operation(
             exit_code: -1,
             message: error.to_string(),
         })?;
+    exec_request.stdin = stdin;
 
     let output = execute_env_raw_output(exec_request, /*stdout_stream*/ None)
         .await
