@@ -363,7 +363,7 @@ impl ResponseItemMetadata {
 }
 
 impl ResponseItem {
-    /// Ensures message metadata includes a generated UUID.
+    /// Ensures metadata includes a generated UUID for any item variant that carries metadata.
     pub fn with_generated_metadata_uuid(self) -> Self {
         match self {
             ResponseItem::Message {
@@ -384,6 +384,148 @@ impl ResponseItem {
                     phase,
                 }
             }
+            ResponseItem::Reasoning {
+                id,
+                summary,
+                content,
+                encrypted_content,
+                metadata,
+            } => ResponseItem::Reasoning {
+                id,
+                summary,
+                content,
+                encrypted_content,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::LocalShellCall {
+                id,
+                call_id,
+                status,
+                action,
+                metadata,
+            } => ResponseItem::LocalShellCall {
+                id,
+                call_id,
+                status,
+                action,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::FunctionCall {
+                id,
+                name,
+                namespace,
+                arguments,
+                call_id,
+                metadata,
+            } => ResponseItem::FunctionCall {
+                id,
+                name,
+                namespace,
+                arguments,
+                call_id,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::ToolSearchCall {
+                id,
+                call_id,
+                status,
+                execution,
+                arguments,
+                metadata,
+            } => ResponseItem::ToolSearchCall {
+                id,
+                call_id,
+                status,
+                execution,
+                arguments,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::FunctionCallOutput {
+                call_id,
+                output,
+                metadata,
+            } => ResponseItem::FunctionCallOutput {
+                call_id,
+                output,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::CustomToolCall {
+                id,
+                status,
+                call_id,
+                name,
+                input,
+                metadata,
+            } => ResponseItem::CustomToolCall {
+                id,
+                status,
+                call_id,
+                name,
+                input,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+                metadata,
+            } => ResponseItem::CustomToolCallOutput {
+                call_id,
+                name,
+                output,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::ToolSearchOutput {
+                call_id,
+                status,
+                execution,
+                tools,
+                metadata,
+            } => ResponseItem::ToolSearchOutput {
+                call_id,
+                status,
+                execution,
+                tools,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::WebSearchCall {
+                id,
+                status,
+                action,
+                metadata,
+            } => ResponseItem::WebSearchCall {
+                id,
+                status,
+                action,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::ImageGenerationCall {
+                id,
+                status,
+                revised_prompt,
+                result,
+                metadata,
+            } => ResponseItem::ImageGenerationCall {
+                id,
+                status,
+                revised_prompt,
+                result,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::GhostSnapshot {
+                ghost_commit,
+                metadata,
+            } => ResponseItem::GhostSnapshot {
+                ghost_commit,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
+            ResponseItem::Compaction {
+                encrypted_content,
+                metadata,
+            } => ResponseItem::Compaction {
+                encrypted_content,
+                metadata: ensure_generated_metadata_uuid(metadata),
+            },
             other => other,
         }
     }
@@ -3155,7 +3297,7 @@ mod tests {
     }
 
     #[test]
-    fn generates_metadata_uuid_for_message_items() -> Result<()> {
+    fn generates_metadata_uuid_for_metadata_bearing_items() -> Result<()> {
         let item = ResponseItem::Message {
             id: Some("msg_123".to_string()),
             role: "assistant".to_string(),
@@ -3198,6 +3340,39 @@ mod tests {
             Some(&serde_json::json!("prompt"))
         );
         assert_ne!(uuid, "msg_123");
+
+        Ok(())
+    }
+
+    #[test]
+    fn generates_metadata_uuid_for_function_call_output_items() -> Result<()> {
+        let item = ResponseItem::FunctionCallOutput {
+            call_id: "call_123".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            metadata: None,
+        };
+
+        let surfaced = item.with_generated_metadata_uuid();
+        let serialized = serde_json::to_value(&surfaced)?;
+        let metadata = serialized
+            .get("metadata")
+            .and_then(serde_json::Value::as_object)
+            .expect("metadata should be present");
+        let uuid = metadata
+            .get("uuid")
+            .and_then(serde_json::Value::as_str)
+            .expect("uuid should be present");
+
+        uuid::Uuid::parse_str(uuid).expect("uuid should be valid");
+
+        assert_eq!(
+            serialized.get("type"),
+            Some(&serde_json::json!("function_call_output"))
+        );
+        assert_eq!(
+            serialized.get("call_id"),
+            Some(&serde_json::json!("call_123"))
+        );
 
         Ok(())
     }

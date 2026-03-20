@@ -5032,34 +5032,44 @@ async fn steer_input_returns_active_turn_id() {
 }
 
 #[tokio::test]
-async fn record_into_history_generates_message_metadata_uuid_when_item_metadata_enabled() {
+async fn record_into_history_generates_metadata_uuid_for_metadata_bearing_items_when_item_metadata_enabled() {
     let (mut sess, tc) = make_session_and_context().await;
     let _ = sess.features.enable(crate::features::Feature::ItemMetadata);
 
-    let item = ResponseItem::Message {
-        id: Some("msg_123".to_string()),
-        role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: "hello".to_string(),
-        }],
-        metadata: None,
-        end_turn: None,
-        phase: None,
-    };
+    let items = [
+        ResponseItem::Message {
+            id: Some("msg_123".to_string()),
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+            metadata: None,
+            end_turn: None,
+            phase: None,
+        },
+        ResponseItem::FunctionCallOutput {
+            call_id: "call_123".to_string(),
+            output: FunctionCallOutputPayload::from_text("ok".to_string()),
+            metadata: None,
+        },
+    ];
 
-    sess.record_into_history(std::slice::from_ref(&item), &tc)
-        .await;
+    sess.record_into_history(&items, &tc).await;
 
     let history = sess.state.lock().await.clone_history();
-    let [ResponseItem::Message { metadata, .. }] = history.raw_items() else {
-        panic!("expected a single message item in history");
-    };
+    for item in history.raw_items() {
+        let metadata = match item {
+            ResponseItem::Message { metadata, .. }
+            | ResponseItem::FunctionCallOutput { metadata, .. } => metadata,
+            other => panic!("unexpected item in history: {other:?}"),
+        };
 
-    let uuid = metadata
-        .as_ref()
-        .and_then(|metadata| metadata.uuid.as_deref())
-        .expect("uuid should be generated when item metadata is enabled");
-    uuid::Uuid::parse_str(uuid).expect("uuid should be valid");
+        let uuid = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.uuid.as_deref())
+            .expect("uuid should be generated when item metadata is enabled");
+        uuid::Uuid::parse_str(uuid).expect("uuid should be valid");
+    }
 }
 
 #[tokio::test]

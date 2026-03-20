@@ -330,6 +330,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
+use codex_protocol::models::ReviewDecisionMetadata;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ResponseItemMetadata;
@@ -1050,6 +1051,7 @@ fn session_source_to_metadata(session_source: &SessionSource) -> SessionSourceMe
         SessionSource::VSCode => SessionSourceMetadata::Vscode,
         SessionSource::Exec => SessionSourceMetadata::Exec,
         SessionSource::Mcp => SessionSourceMetadata::Mcp,
+        SessionSource::Custom(_) => SessionSourceMetadata::Unknown,
         SessionSource::SubAgent(SubAgentSource::Review) => SessionSourceMetadata::SubagentReview,
         SessionSource::SubAgent(SubAgentSource::Compact) => SessionSourceMetadata::SubagentCompact,
         SessionSource::SubAgent(SubAgentSource::MemoryConsolidation) => {
