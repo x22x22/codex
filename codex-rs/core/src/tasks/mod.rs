@@ -265,13 +265,7 @@ impl Session {
             for pending_input_item in pending_input {
                 match inspect_pending_input(self, &turn_context, pending_input_item.input).await {
                     PendingInputHookDisposition::Accepted(pending_input) => {
-                        record_pending_input(
-                            self,
-                            &turn_context,
-                            *pending_input,
-                            pending_input_item.user_message_type,
-                        )
-                        .await;
+                        record_pending_input(self, &turn_context, *pending_input).await;
                     }
                     PendingInputHookDisposition::Blocked {
                         additional_contexts,

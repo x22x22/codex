@@ -8,7 +8,6 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::UserMessageType;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::HookCompletedEvent;
@@ -165,7 +164,6 @@ pub(crate) async fn record_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     pending_input: PendingInputRecord,
-    user_message_type: Option<UserMessageType>,
 ) {
     match pending_input {
         PendingInputRecord::UserMessage {
@@ -177,7 +175,6 @@ pub(crate) async fn record_pending_input(
                 turn_context.as_ref(),
                 content.as_slice(),
                 response_item,
-                user_message_type,
             )
             .await;
             record_additional_contexts(sess, turn_context, additional_contexts).await;

@@ -3819,40 +3819,7 @@ impl Session {
         turn_context: &TurnContext,
         input: &[UserInput],
         response_item: ResponseItem,
-        user_message_type: Option<UserMessageType>,
     ) {
-        let user_message_type = if self.enabled(Feature::ItemMetadata) {
-            user_message_type
-        } else {
-            None
-        };
-
-        let response_item = match (response_item, user_message_type.clone()) {
-            (
-                ResponseItem::Message {
-                    id,
-                    role,
-                    content,
-                    metadata,
-                    end_turn,
-                    phase,
-                },
-                Some(kind),
-            ) if role == "user" => {
-                let mut metadata = metadata.unwrap_or_default();
-                metadata.user_message_type = Some(kind);
-                ResponseItem::Message {
-                    id,
-                    role,
-                    content,
-                    metadata: Some(metadata),
-                    end_turn,
-                    phase,
-                }
-            }
-            (response_item, _) => response_item,
-        };
-
         // Persist the user message to history, but emit the turn item from `UserInput` so
         // UI-only `text_elements` are preserved. `ResponseItem::Message` does not carry
         // those spans, and `record_response_item_and_emit_turn_item` would drop them.
@@ -5697,13 +5664,8 @@ pub(crate) async fn run_turn(
         stamp_user_message_type_on_input_item(&mut initial_input_for_turn, UserMessageType::Prompt);
     }
     let response_item: ResponseItem = initial_input_for_turn.clone().into();
-    sess.record_user_prompt_and_emit_turn_item(
-        turn_context.as_ref(),
-        &input,
-        response_item,
-        Some(UserMessageType::Prompt),
-    )
-    .await;
+    sess.record_user_prompt_and_emit_turn_item(turn_context.as_ref(), &input, response_item)
+        .await;
     record_additional_contexts(&sess, &turn_context, additional_contexts).await;
     // Track the previous-turn baseline from the regular user-turn path only so
     // standalone tasks (compact/shell/review/undo) cannot suppress future
@@ -5775,8 +5737,8 @@ pub(crate) async fn run_turn(
         }
 
         let has_accepted_pending_input = !accepted_pending_input.is_empty();
-        for (pending_input, user_message_type) in accepted_pending_input {
-            record_pending_input(&sess, &turn_context, pending_input, user_message_type).await;
+        for (pending_input, _user_message_type) in accepted_pending_input {
+            record_pending_input(&sess, &turn_context, pending_input).await;
         }
         record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
 
