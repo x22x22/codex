@@ -661,7 +661,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::UseLegacyLandlock,
         key: "use_legacy_landlock",
         stage: Stage::Stable,
-        default_enabled: false,
+        default_enabled: true,
     },
     FeatureSpec {
         id: Feature::RequestRule,
