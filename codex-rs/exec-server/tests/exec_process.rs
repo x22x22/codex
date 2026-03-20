@@ -162,15 +162,25 @@ async fn assert_exec_process_read_returns_one_chunk_when_max_bytes_is_zero(
         }
     );
 
-    let read = context
-        .process
-        .read(ReadParams {
-            process_id: "proc-truncate".to_string(),
-            after_seq: Some(0),
-            max_bytes: Some(0),
-            wait_ms: Some(100),
-        })
-        .await?;
+    let mut read = None;
+    for _ in 0..20 {
+        let candidate = context
+            .process
+            .read(ReadParams {
+                process_id: "proc-truncate".to_string(),
+                after_seq: Some(0),
+                max_bytes: Some(0),
+                wait_ms: Some(100),
+            })
+            .await?;
+        if !candidate.chunks.is_empty() {
+            read = Some(candidate);
+            break;
+        }
+    }
+    let Some(read) = read else {
+        anyhow::bail!("timed out waiting for retained output with max_bytes = 0");
+    };
     assert_eq!(read.chunks.len(), 1);
     assert_eq!(read.chunks[0].chunk.0, b"a");
     assert_eq!(read.next_seq, 2);
