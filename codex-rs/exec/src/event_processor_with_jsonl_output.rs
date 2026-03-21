@@ -8,6 +8,7 @@ use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
@@ -16,7 +17,7 @@ use codex_protocol::models::WebSearchAction;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use serde_json::json;
 
-use crate::event_processor::CodexStatus;
+pub use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
 use crate::exec_events::AgentMessageItem;
@@ -52,7 +53,6 @@ use crate::exec_events::TurnFailedEvent;
 use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
-use crate::typed_exec_event::TypedExecEvent;
 
 pub struct EventProcessorWithJsonOutput {
     last_message_path: Option<PathBuf>,
@@ -70,9 +70,9 @@ struct RunningTodoList {
 }
 
 #[derive(Debug, PartialEq)]
-struct CollectedThreadEvents {
-    events: Vec<ThreadEvent>,
-    status: CodexStatus,
+pub struct CollectedThreadEvents {
+    pub events: Vec<ThreadEvent>,
+    pub status: CodexStatus,
 }
 
 impl EventProcessorWithJsonOutput {
@@ -116,7 +116,7 @@ impl EventProcessorWithJsonOutput {
         }
     }
 
-    fn map_todo_items(plan: &[codex_app_server_protocol::TurnPlanStep]) -> Vec<TodoItem> {
+    pub fn map_todo_items(plan: &[codex_app_server_protocol::TurnPlanStep]) -> Vec<TodoItem> {
         plan.iter()
             .map(|step| TodoItem {
                 text: step.step.clone(),
@@ -295,25 +295,31 @@ impl EventProcessorWithJsonOutput {
             })
     }
 
-    fn thread_started_event(session_configured: &SessionConfiguredEvent) -> ThreadEvent {
+    pub fn thread_started_event(session_configured: &SessionConfiguredEvent) -> ThreadEvent {
         ThreadEvent::ThreadStarted(ThreadStartedEvent {
             thread_id: session_configured.session_id.to_string(),
         })
     }
 
-    fn collect_thread_events(&mut self, event: TypedExecEvent) -> CollectedThreadEvents {
+    pub fn collect_warning(&mut self, message: String) -> CollectedThreadEvents {
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: self.next_item_id(),
+                    details: ThreadItemDetails::Error(ErrorItem { message }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    }
+
+    pub fn collect_thread_events(
+        &mut self,
+        notification: ServerNotification,
+    ) -> CollectedThreadEvents {
         let mut events = Vec::new();
-        let status = match event {
-            TypedExecEvent::Warning(message) => {
-                events.push(ThreadEvent::ItemCompleted(ItemCompletedEvent {
-                    item: ExecThreadItem {
-                        id: self.next_item_id(),
-                        details: ThreadItemDetails::Error(ErrorItem { message }),
-                    },
-                }));
-                CodexStatus::Running
-            }
-            TypedExecEvent::ConfigWarning(notification) => {
+        let status = match notification {
+            ServerNotification::ConfigWarning(notification) => {
                 let message = match notification.details {
                     Some(details) if !details.is_empty() => {
                         format!("{} ({details})", notification.summary)
@@ -328,7 +334,7 @@ impl EventProcessorWithJsonOutput {
                 }));
                 CodexStatus::Running
             }
-            TypedExecEvent::Error(notification) => {
+            ServerNotification::Error(notification) => {
                 let message = match notification.error.additional_details {
                     Some(details) if !details.is_empty() => {
                         format!("{} ({details})", notification.error.message)
@@ -340,7 +346,7 @@ impl EventProcessorWithJsonOutput {
                 events.push(ThreadEvent::Error(error));
                 CodexStatus::Running
             }
-            TypedExecEvent::DeprecationNotice(notification) => {
+            ServerNotification::DeprecationNotice(notification) => {
                 let message = match notification.details {
                     Some(details) if !details.is_empty() => {
                         format!("{} ({details})", notification.summary)
@@ -355,16 +361,16 @@ impl EventProcessorWithJsonOutput {
                 }));
                 CodexStatus::Running
             }
-            TypedExecEvent::HookStarted(_) | TypedExecEvent::HookCompleted(_) => {
+            ServerNotification::HookStarted(_) | ServerNotification::HookCompleted(_) => {
                 CodexStatus::Running
             }
-            TypedExecEvent::ItemStarted(notification) => {
+            ServerNotification::ItemStarted(notification) => {
                 if let Some(item) = Self::map_item(notification.item) {
                     events.push(ThreadEvent::ItemStarted(ItemStartedEvent { item }));
                 }
                 CodexStatus::Running
             }
-            TypedExecEvent::ItemCompleted(notification) => {
+            ServerNotification::ItemCompleted(notification) => {
                 if let Some(item) = Self::map_item(notification.item) {
                     if let ThreadItemDetails::AgentMessage(AgentMessageItem { text }) =
                         &item.details
@@ -375,7 +381,7 @@ impl EventProcessorWithJsonOutput {
                 }
                 CodexStatus::Running
             }
-            TypedExecEvent::ModelRerouted(notification) => {
+            ServerNotification::ModelRerouted(notification) => {
                 events.push(ThreadEvent::ItemCompleted(ItemCompletedEvent {
                     item: ExecThreadItem {
                         id: self.next_item_id(),
@@ -389,11 +395,11 @@ impl EventProcessorWithJsonOutput {
                 }));
                 CodexStatus::Running
             }
-            TypedExecEvent::ThreadTokenUsageUpdated(notification) => {
+            ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 self.last_total_token_usage = Some(notification.token_usage);
                 CodexStatus::Running
             }
-            TypedExecEvent::TurnCompleted(notification) => {
+            ServerNotification::TurnCompleted(notification) => {
                 if let Some(running) = self.running_todo_list.take() {
                     events.push(ThreadEvent::ItemCompleted(ItemCompletedEvent {
                         item: ExecThreadItem {
@@ -439,8 +445,8 @@ impl EventProcessorWithJsonOutput {
                     TurnStatus::InProgress => CodexStatus::Running,
                 }
             }
-            TypedExecEvent::TurnDiffUpdated(_) => CodexStatus::Running,
-            TypedExecEvent::TurnPlanUpdated(notification) => {
+            ServerNotification::TurnDiffUpdated(_) => CodexStatus::Running,
+            ServerNotification::TurnPlanUpdated(notification) => {
                 let items = Self::map_todo_items(&notification.plan);
                 if let Some(running) = self.running_todo_list.as_mut() {
                     running.items = items.clone();
@@ -466,10 +472,11 @@ impl EventProcessorWithJsonOutput {
                 }
                 CodexStatus::Running
             }
-            TypedExecEvent::TurnStarted => {
+            ServerNotification::TurnStarted(_) => {
                 events.push(ThreadEvent::TurnStarted(TurnStartedEvent {}));
                 CodexStatus::Running
             }
+            _ => CodexStatus::Running,
         };
 
         CollectedThreadEvents { events, status }
@@ -486,8 +493,16 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         self.emit(Self::thread_started_event(session_configured));
     }
 
-    fn process_event(&mut self, event: TypedExecEvent) -> CodexStatus {
-        let collected = self.collect_thread_events(event);
+    fn process_server_notification(&mut self, notification: ServerNotification) -> CodexStatus {
+        let collected = self.collect_thread_events(notification);
+        for event in collected.events {
+            self.emit(event);
+        }
+        collected.status
+    }
+
+    fn process_warning(&mut self, message: String) -> CodexStatus {
+        let collected = self.collect_warning(message);
         for event in collected.events {
             self.emit(event);
         }
@@ -500,7 +515,3 @@ impl EventProcessor for EventProcessorWithJsonOutput {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/event_processor_with_json_output.rs"]
-mod tests;

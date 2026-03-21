@@ -9,7 +9,6 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
-mod typed_exec_event;
 
 pub use cli::Cli;
 pub use cli::Command;
@@ -101,8 +100,6 @@ use uuid::Uuid;
 use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use crate::typed_exec_event::TypedExecEvent;
-use crate::typed_exec_event::session_configured_from_thread_response;
 use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 
@@ -661,7 +658,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
     if !json_mode && let Some(message) = codex_core::config::missing_system_bwrap_warning() {
-        event_processor.process_event(TypedExecEvent::Warning(message));
+        event_processor.process_warning(message);
     }
 
     info!("Codex initialized with event: {session_configured:?}");
@@ -794,9 +791,8 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     &notification,
                     &primary_thread_id_for_requests,
                     &task_id,
-                ) && let Some(event) = TypedExecEvent::from_server_notification(notification)
-                {
-                    match event_processor.process_event(event) {
+                ) {
+                    match event_processor.process_server_notification(notification) {
                         CodexStatus::Running => {}
                         CodexStatus::InitiateShutdown => {
                             if let Err(err) = request_shutdown(
@@ -816,7 +812,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             InProcessServerEvent::Lagged { skipped } => {
                 let message = lagged_event_warning_message(skipped);
                 warn!("{message}");
-                event_processor.process_event(TypedExecEvent::Warning(message));
+                event_processor.process_warning(message);
             }
         }
     }
@@ -950,6 +946,46 @@ fn review_target_to_api(target: ReviewTarget) -> ApiReviewTarget {
         ReviewTarget::Commit { sha, title } => ApiReviewTarget::Commit { sha, title },
         ReviewTarget::Custom { instructions } => ApiReviewTarget::Custom { instructions },
     }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "session mapping keeps explicit fields"
+)]
+fn session_configured_from_thread_response(
+    thread_id: &str,
+    thread_name: Option<String>,
+    rollout_path: Option<PathBuf>,
+    model: String,
+    model_provider_id: String,
+    service_tier: Option<codex_protocol::config_types::ServiceTier>,
+    approval_policy: AskForApproval,
+    approvals_reviewer: codex_protocol::config_types::ApprovalsReviewer,
+    sandbox_policy: SandboxPolicy,
+    cwd: PathBuf,
+    reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+) -> Result<SessionConfiguredEvent, String> {
+    let session_id = codex_protocol::ThreadId::from_string(thread_id)
+        .map_err(|err| format!("thread id `{thread_id}` is invalid: {err}"))?;
+
+    Ok(SessionConfiguredEvent {
+        session_id,
+        forked_from_id: None,
+        thread_name,
+        model,
+        model_provider_id,
+        service_tier,
+        approval_policy,
+        approvals_reviewer,
+        sandbox_policy,
+        cwd,
+        reasoning_effort,
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: None,
+        network_proxy: None,
+        rollout_path,
+    })
 }
 
 fn lagged_event_warning_message(skipped: usize) -> String {

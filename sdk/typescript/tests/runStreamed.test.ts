@@ -37,17 +37,9 @@ describe("Codex", () => {
           type: "turn.started",
         },
         {
-          type: "item.started",
-          item: {
-            id: "msg_mock",
-            type: "agent_message",
-            text: "Hi!",
-          },
-        },
-        {
           type: "item.completed",
           item: {
-            id: "msg_mock",
+            id: "item_0",
             type: "agent_message",
             text: "Hi!",
           },

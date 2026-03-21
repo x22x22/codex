@@ -16,6 +16,7 @@ use codex_app_server_protocol::McpToolCallResult;
 use codex_app_server_protocol::McpToolCallStatus as ApiMcpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus as ApiPatchApplyStatus;
 use codex_app_server_protocol::PatchChangeKind as ApiPatchChangeKind;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TokenUsageBreakdown;
@@ -25,6 +26,7 @@ use codex_app_server_protocol::TurnError;
 use codex_app_server_protocol::TurnPlanStep;
 use codex_app_server_protocol::TurnPlanStepStatus;
 use codex_app_server_protocol::TurnPlanUpdatedNotification;
+use codex_app_server_protocol::TurnStartedNotification;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WebSearchAction as ApiWebSearchAction;
 use codex_protocol::ThreadId;
@@ -35,43 +37,42 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 
-use super::CollectedThreadEvents;
-use super::EventProcessorWithJsonOutput;
-use crate::event_processor::CodexStatus;
-use crate::exec_events::AgentMessageItem;
-use crate::exec_events::CollabAgentState;
-use crate::exec_events::CollabAgentStatus;
-use crate::exec_events::CollabTool;
-use crate::exec_events::CollabToolCallItem;
-use crate::exec_events::CollabToolCallStatus;
-use crate::exec_events::CommandExecutionItem;
-use crate::exec_events::CommandExecutionStatus;
-use crate::exec_events::ErrorItem;
-use crate::exec_events::FileChangeItem;
-use crate::exec_events::FileUpdateChange as ExecFileUpdateChange;
-use crate::exec_events::ItemCompletedEvent;
-use crate::exec_events::ItemStartedEvent;
-use crate::exec_events::ItemUpdatedEvent;
-use crate::exec_events::McpToolCallItem;
-use crate::exec_events::McpToolCallItemError;
-use crate::exec_events::McpToolCallItemResult;
-use crate::exec_events::McpToolCallStatus;
-use crate::exec_events::PatchApplyStatus;
-use crate::exec_events::PatchChangeKind;
-use crate::exec_events::ReasoningItem;
-use crate::exec_events::ThreadErrorEvent;
-use crate::exec_events::ThreadEvent;
-use crate::exec_events::ThreadItem as ExecThreadItem;
-use crate::exec_events::ThreadItemDetails;
-use crate::exec_events::ThreadStartedEvent;
-use crate::exec_events::TodoItem;
-use crate::exec_events::TodoListItem;
-use crate::exec_events::TurnCompletedEvent;
-use crate::exec_events::TurnFailedEvent;
-use crate::exec_events::TurnStartedEvent;
-use crate::exec_events::Usage;
-use crate::exec_events::WebSearchItem;
-use crate::typed_exec_event::TypedExecEvent;
+use codex_exec::event_processor_with_jsonl_output::CodexStatus;
+use codex_exec::event_processor_with_jsonl_output::CollectedThreadEvents;
+use codex_exec::event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+use codex_exec::exec_events::AgentMessageItem;
+use codex_exec::exec_events::CollabAgentState;
+use codex_exec::exec_events::CollabAgentStatus;
+use codex_exec::exec_events::CollabTool;
+use codex_exec::exec_events::CollabToolCallItem;
+use codex_exec::exec_events::CollabToolCallStatus;
+use codex_exec::exec_events::CommandExecutionItem;
+use codex_exec::exec_events::CommandExecutionStatus;
+use codex_exec::exec_events::ErrorItem;
+use codex_exec::exec_events::FileChangeItem;
+use codex_exec::exec_events::FileUpdateChange as ExecFileUpdateChange;
+use codex_exec::exec_events::ItemCompletedEvent;
+use codex_exec::exec_events::ItemStartedEvent;
+use codex_exec::exec_events::ItemUpdatedEvent;
+use codex_exec::exec_events::McpToolCallItem;
+use codex_exec::exec_events::McpToolCallItemError;
+use codex_exec::exec_events::McpToolCallItemResult;
+use codex_exec::exec_events::McpToolCallStatus;
+use codex_exec::exec_events::PatchApplyStatus;
+use codex_exec::exec_events::PatchChangeKind;
+use codex_exec::exec_events::ReasoningItem;
+use codex_exec::exec_events::ThreadErrorEvent;
+use codex_exec::exec_events::ThreadEvent;
+use codex_exec::exec_events::ThreadItem as ExecThreadItem;
+use codex_exec::exec_events::ThreadItemDetails;
+use codex_exec::exec_events::ThreadStartedEvent;
+use codex_exec::exec_events::TodoItem;
+use codex_exec::exec_events::TodoListItem;
+use codex_exec::exec_events::TurnCompletedEvent;
+use codex_exec::exec_events::TurnFailedEvent;
+use codex_exec::exec_events::TurnStartedEvent;
+use codex_exec::exec_events::Usage;
+use codex_exec::exec_events::WebSearchItem;
 
 #[test]
 fn map_todo_items_preserves_text_and_completion_state() {
@@ -135,7 +136,16 @@ fn session_configured_produces_thread_started_event() {
 fn turn_started_emits_turn_started_event() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let collected = processor.collect_thread_events(TypedExecEvent::TurnStarted);
+    let collected =
+        processor.collect_thread_events(ServerNotification::TurnStarted(TurnStartedNotification {
+            thread_id: "thread-1".to_string(),
+            turn: Turn {
+                id: "turn-1".to_string(),
+                items: Vec::new(),
+                status: TurnStatus::InProgress,
+                error: None,
+            },
+        }));
 
     assert_eq!(
         collected,
@@ -163,7 +173,7 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
     };
 
     let started =
-        processor.collect_thread_events(TypedExecEvent::ItemStarted(ItemStartedNotification {
+        processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
             item: command_item,
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
@@ -186,8 +196,8 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
         }
     );
 
-    let completed =
-        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+    let completed = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
             item: ThreadItem::CommandExecution {
                 id: "cmd-1".to_string(),
                 command: "ls".to_string(),
@@ -202,7 +212,8 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-        }));
+        },
+    ));
     assert_eq!(
         completed,
         CollectedThreadEvents {
@@ -226,8 +237,8 @@ fn command_execution_started_and_completed_translate_to_thread_events() {
 fn reasoning_items_emit_summary_not_raw_content() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let collected =
-        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
             item: ThreadItem::Reasoning {
                 id: "reasoning-1".to_string(),
                 summary: vec!["safe summary".to_string()],
@@ -235,7 +246,8 @@ fn reasoning_items_emit_summary_not_raw_content() {
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-        }));
+        },
+    ));
 
     assert_eq!(
         collected,
@@ -257,8 +269,8 @@ fn reasoning_items_emit_summary_not_raw_content() {
 fn web_search_completion_preserves_query_and_action() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let collected =
-        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
             item: ThreadItem::WebSearch {
                 id: "search-1".to_string(),
                 query: "rust async await".to_string(),
@@ -269,7 +281,8 @@ fn web_search_completion_preserves_query_and_action() {
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-        }));
+        },
+    ));
 
     assert_eq!(
         collected,
@@ -297,7 +310,7 @@ fn web_search_start_and_completion_reuse_item_id() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
     let started =
-        processor.collect_thread_events(TypedExecEvent::ItemStarted(ItemStartedNotification {
+        processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
             item: ThreadItem::WebSearch {
                 id: "search-1".to_string(),
                 query: String::new(),
@@ -307,8 +320,8 @@ fn web_search_start_and_completion_reuse_item_id() {
             turn_id: "turn-1".to_string(),
         }));
 
-    let completed =
-        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+    let completed = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
             item: ThreadItem::WebSearch {
                 id: "search-1".to_string(),
                 query: "rust async await".to_string(),
@@ -319,7 +332,8 @@ fn web_search_start_and_completion_reuse_item_id() {
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-        }));
+        },
+    ));
 
     assert_eq!(
         started,
@@ -363,7 +377,7 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
     let started =
-        processor.collect_thread_events(TypedExecEvent::ItemStarted(ItemStartedNotification {
+        processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
             item: ThreadItem::McpToolCall {
                 id: "mcp-1".to_string(),
                 server: "server_a".to_string(),
@@ -377,8 +391,8 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
         }));
-    let completed =
-        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+    let completed = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
             item: ThreadItem::McpToolCall {
                 id: "mcp-1".to_string(),
                 server: "server_a".to_string(),
@@ -394,7 +408,8 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-        }));
+        },
+    ));
 
     assert_eq!(
         started,
@@ -443,8 +458,8 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
 fn mcp_tool_call_failure_sets_failed_status() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let collected =
-        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
             item: ThreadItem::McpToolCall {
                 id: "mcp-2".to_string(),
                 server: "server_b".to_string(),
@@ -459,7 +474,8 @@ fn mcp_tool_call_failure_sets_failed_status() {
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-        }));
+        },
+    ));
 
     assert_eq!(
         collected,
@@ -489,7 +505,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
     let started =
-        processor.collect_thread_events(TypedExecEvent::ItemStarted(ItemStartedNotification {
+        processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
             item: ThreadItem::McpToolCall {
                 id: "mcp-3".to_string(),
                 server: "server_c".to_string(),
@@ -503,8 +519,8 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
         }));
-    let completed =
-        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+    let completed = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
             item: ThreadItem::McpToolCall {
                 id: "mcp-3".to_string(),
                 server: "server_c".to_string(),
@@ -523,7 +539,8 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-        }));
+        },
+    ));
 
     assert_eq!(
         started,
@@ -576,7 +593,7 @@ fn collab_spawn_begin_and_end_emit_item_events() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
     let started =
-        processor.collect_thread_events(TypedExecEvent::ItemStarted(ItemStartedNotification {
+        processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
             item: ThreadItem::CollabAgentToolCall {
                 id: "collab-1".to_string(),
                 tool: CollabAgentTool::SpawnAgent,
@@ -591,8 +608,8 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             thread_id: "thread-parent".to_string(),
             turn_id: "turn-1".to_string(),
         }));
-    let completed =
-        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+    let completed = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
             item: ThreadItem::CollabAgentToolCall {
                 id: "collab-1".to_string(),
                 tool: CollabAgentTool::SpawnAgent,
@@ -612,7 +629,8 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             },
             thread_id: "thread-parent".to_string(),
             turn_id: "turn-1".to_string(),
-        }));
+        },
+    ));
 
     assert_eq!(
         started,
@@ -664,8 +682,8 @@ fn collab_spawn_begin_and_end_emit_item_events() {
 fn file_change_completion_maps_change_kinds() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let collected =
-        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
             item: ThreadItem::FileChange {
                 id: "patch-1".to_string(),
                 changes: vec![
@@ -689,7 +707,8 @@ fn file_change_completion_maps_change_kinds() {
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-        }));
+        },
+    ));
 
     assert_eq!(
         collected,
@@ -725,8 +744,8 @@ fn file_change_completion_maps_change_kinds() {
 fn file_change_declined_maps_to_failed_status() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let collected =
-        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
             item: ThreadItem::FileChange {
                 id: "patch-2".to_string(),
                 changes: vec![ApiFileUpdateChange {
@@ -738,7 +757,8 @@ fn file_change_declined_maps_to_failed_status() {
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-        }));
+        },
+    ));
 
     assert_eq!(
         collected,
@@ -764,8 +784,8 @@ fn file_change_declined_maps_to_failed_status() {
 fn agent_message_item_updates_final_message() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let collected =
-        processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
             item: ThreadItem::AgentMessage {
                 id: "msg-1".to_string(),
                 text: "hello".to_string(),
@@ -774,7 +794,8 @@ fn agent_message_item_updates_final_message() {
             },
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-        }));
+        },
+    ));
 
     assert_eq!(
         collected,
@@ -797,9 +818,9 @@ fn agent_message_item_updates_final_message() {
 fn warning_event_produces_error_item() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let collected = processor.collect_thread_events(TypedExecEvent::Warning(
+    let collected = processor.collect_warning(
         "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
-    ));
+    );
 
     assert_eq!(
         collected,
@@ -821,7 +842,7 @@ fn warning_event_produces_error_item() {
 fn plan_update_emits_started_then_updated_then_completed() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let started = processor.collect_thread_events(TypedExecEvent::TurnPlanUpdated(
+    let started = processor.collect_thread_events(ServerNotification::TurnPlanUpdated(
         TurnPlanUpdatedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
@@ -862,7 +883,7 @@ fn plan_update_emits_started_then_updated_then_completed() {
         }
     );
 
-    let updated = processor.collect_thread_events(TypedExecEvent::TurnPlanUpdated(
+    let updated = processor.collect_thread_events(ServerNotification::TurnPlanUpdated(
         TurnPlanUpdatedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
@@ -903,8 +924,8 @@ fn plan_update_emits_started_then_updated_then_completed() {
         }
     );
 
-    let completed =
-        processor.collect_thread_events(TypedExecEvent::TurnCompleted(TurnCompletedNotification {
+    let completed = processor.collect_thread_events(ServerNotification::TurnCompleted(
+        TurnCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn: Turn {
                 id: "turn-1".to_string(),
@@ -912,7 +933,8 @@ fn plan_update_emits_started_then_updated_then_completed() {
                 status: TurnStatus::Completed,
                 error: None,
             },
-        }));
+        },
+    ));
     assert_eq!(
         completed,
         CollectedThreadEvents {
@@ -947,7 +969,7 @@ fn plan_update_emits_started_then_updated_then_completed() {
 fn plan_update_after_completion_starts_new_todo_list_with_new_id() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let _ = processor.collect_thread_events(TypedExecEvent::TurnPlanUpdated(
+    let _ = processor.collect_thread_events(ServerNotification::TurnPlanUpdated(
         TurnPlanUpdatedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
@@ -958,8 +980,8 @@ fn plan_update_after_completion_starts_new_todo_list_with_new_id() {
             }],
         },
     ));
-    let _ =
-        processor.collect_thread_events(TypedExecEvent::TurnCompleted(TurnCompletedNotification {
+    let _ = processor.collect_thread_events(ServerNotification::TurnCompleted(
+        TurnCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn: Turn {
                 id: "turn-1".to_string(),
@@ -967,9 +989,10 @@ fn plan_update_after_completion_starts_new_todo_list_with_new_id() {
                 status: TurnStatus::Completed,
                 error: None,
             },
-        }));
+        },
+    ));
 
-    let restarted = processor.collect_thread_events(TypedExecEvent::TurnPlanUpdated(
+    let restarted = processor.collect_thread_events(ServerNotification::TurnPlanUpdated(
         TurnPlanUpdatedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-2".to_string(),
@@ -1004,29 +1027,30 @@ fn plan_update_after_completion_starts_new_todo_list_with_new_id() {
 fn token_usage_update_is_emitted_on_turn_completion() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let usage_update = processor.collect_thread_events(TypedExecEvent::ThreadTokenUsageUpdated(
-        codex_app_server_protocol::ThreadTokenUsageUpdatedNotification {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            token_usage: ThreadTokenUsage {
-                total: TokenUsageBreakdown {
-                    total_tokens: 42,
-                    input_tokens: 10,
-                    cached_input_tokens: 3,
-                    output_tokens: 29,
-                    reasoning_output_tokens: 7,
+    let usage_update =
+        processor.collect_thread_events(ServerNotification::ThreadTokenUsageUpdated(
+            codex_app_server_protocol::ThreadTokenUsageUpdatedNotification {
+                thread_id: "thread-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                token_usage: ThreadTokenUsage {
+                    total: TokenUsageBreakdown {
+                        total_tokens: 42,
+                        input_tokens: 10,
+                        cached_input_tokens: 3,
+                        output_tokens: 29,
+                        reasoning_output_tokens: 7,
+                    },
+                    last: TokenUsageBreakdown {
+                        total_tokens: 42,
+                        input_tokens: 10,
+                        cached_input_tokens: 3,
+                        output_tokens: 29,
+                        reasoning_output_tokens: 7,
+                    },
+                    model_context_window: Some(128_000),
                 },
-                last: TokenUsageBreakdown {
-                    total_tokens: 42,
-                    input_tokens: 10,
-                    cached_input_tokens: 3,
-                    output_tokens: 29,
-                    reasoning_output_tokens: 7,
-                },
-                model_context_window: Some(128_000),
             },
-        },
-    ));
+        ));
     assert_eq!(
         usage_update,
         CollectedThreadEvents {
@@ -1035,8 +1059,8 @@ fn token_usage_update_is_emitted_on_turn_completion() {
         }
     );
 
-    let completed =
-        processor.collect_thread_events(TypedExecEvent::TurnCompleted(TurnCompletedNotification {
+    let completed = processor.collect_thread_events(ServerNotification::TurnCompleted(
+        TurnCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn: Turn {
                 id: "turn-1".to_string(),
@@ -1044,7 +1068,8 @@ fn token_usage_update_is_emitted_on_turn_completion() {
                 status: TurnStatus::Completed,
                 error: None,
             },
-        }));
+        },
+    ));
     assert_eq!(
         completed,
         CollectedThreadEvents {
@@ -1064,8 +1089,8 @@ fn token_usage_update_is_emitted_on_turn_completion() {
 fn turn_completion_recovers_final_message_from_turn_items() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let completed =
-        processor.collect_thread_events(TypedExecEvent::TurnCompleted(TurnCompletedNotification {
+    let completed = processor.collect_thread_events(ServerNotification::TurnCompleted(
+        TurnCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn: Turn {
                 id: "turn-1".to_string(),
@@ -1078,7 +1103,8 @@ fn turn_completion_recovers_final_message_from_turn_items() {
                 status: TurnStatus::Completed,
                 error: None,
             },
-        }));
+        },
+    ));
 
     assert_eq!(
         completed,
@@ -1097,8 +1123,8 @@ fn turn_completion_overwrites_stale_final_message_from_turn_items() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
     processor.final_message = Some("stale answer".to_string());
 
-    let completed =
-        processor.collect_thread_events(TypedExecEvent::TurnCompleted(TurnCompletedNotification {
+    let completed = processor.collect_thread_events(ServerNotification::TurnCompleted(
+        TurnCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn: Turn {
                 id: "turn-1".to_string(),
@@ -1111,7 +1137,8 @@ fn turn_completion_overwrites_stale_final_message_from_turn_items() {
                 status: TurnStatus::Completed,
                 error: None,
             },
-        }));
+        },
+    ));
 
     assert_eq!(
         completed,
@@ -1130,8 +1157,8 @@ fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() 
     let mut processor = EventProcessorWithJsonOutput::new(None);
     processor.final_message = Some("streamed answer".to_string());
 
-    let completed =
-        processor.collect_thread_events(TypedExecEvent::TurnCompleted(TurnCompletedNotification {
+    let completed = processor.collect_thread_events(ServerNotification::TurnCompleted(
+        TurnCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn: Turn {
                 id: "turn-1".to_string(),
@@ -1139,7 +1166,8 @@ fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() 
                 status: TurnStatus::Completed,
                 error: None,
             },
-        }));
+        },
+    ));
 
     assert_eq!(
         completed,
@@ -1157,8 +1185,8 @@ fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() 
 fn turn_completion_falls_back_to_final_plan_text() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let completed =
-        processor.collect_thread_events(TypedExecEvent::TurnCompleted(TurnCompletedNotification {
+    let completed = processor.collect_thread_events(ServerNotification::TurnCompleted(
+        TurnCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn: Turn {
                 id: "turn-1".to_string(),
@@ -1169,7 +1197,8 @@ fn turn_completion_falls_back_to_final_plan_text() {
                 status: TurnStatus::Completed,
                 error: None,
             },
-        }));
+        },
+    ));
 
     assert_eq!(
         completed,
@@ -1190,7 +1219,7 @@ fn turn_completion_falls_back_to_final_plan_text() {
 fn turn_failure_prefers_structured_error_message() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let error = processor.collect_thread_events(TypedExecEvent::Error(ErrorNotification {
+    let error = processor.collect_thread_events(ServerNotification::Error(ErrorNotification {
         error: TurnError {
             message: "backend failed".to_string(),
             codex_error_info: None,
@@ -1210,8 +1239,8 @@ fn turn_failure_prefers_structured_error_message() {
         }
     );
 
-    let failed =
-        processor.collect_thread_events(TypedExecEvent::TurnCompleted(TurnCompletedNotification {
+    let failed = processor.collect_thread_events(ServerNotification::TurnCompleted(
+        TurnCompletedNotification {
             thread_id: "thread-1".to_string(),
             turn: Turn {
                 id: "turn-1".to_string(),
@@ -1219,7 +1248,8 @@ fn turn_failure_prefers_structured_error_message() {
                 status: TurnStatus::Failed,
                 error: None,
             },
-        }));
+        },
+    ));
     assert_eq!(
         failed,
         CollectedThreadEvents {
@@ -1237,7 +1267,7 @@ fn turn_failure_prefers_structured_error_message() {
 fn model_reroute_surfaces_as_error_item() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
 
-    let collected = processor.collect_thread_events(TypedExecEvent::ModelRerouted(
+    let collected = processor.collect_thread_events(ServerNotification::ModelRerouted(
         codex_app_server_protocol::ModelReroutedNotification {
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),

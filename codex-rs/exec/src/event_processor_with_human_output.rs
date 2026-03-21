@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use codex_app_server_protocol::CommandExecutionStatus;
 use codex_app_server_protocol::McpToolCallStatus;
 use codex_app_server_protocol::PatchApplyStatus;
+use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadTokenUsage;
 use codex_app_server_protocol::TurnStatus;
@@ -16,7 +17,6 @@ use owo_colors::Style;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 use crate::event_processor::handle_last_message;
-use crate::typed_exec_event::TypedExecEvent;
 
 pub(crate) struct EventProcessorWithHumanOutput {
     bold: Style,
@@ -232,16 +232,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         eprintln!("{}\n{}", "user".style(self.cyan), prompt);
     }
 
-    fn process_event(&mut self, event: TypedExecEvent) -> CodexStatus {
-        match event {
-            TypedExecEvent::Warning(message) => {
-                eprintln!(
-                    "{} {message}",
-                    "warning:".style(self.yellow).style(self.bold)
-                );
-                CodexStatus::Running
-            }
-            TypedExecEvent::ConfigWarning(notification) => {
+    fn process_server_notification(&mut self, notification: ServerNotification) -> CodexStatus {
+        match notification {
+            ServerNotification::ConfigWarning(notification) => {
                 let details = notification
                     .details
                     .map(|details| format!(" ({details})"))
@@ -254,7 +247,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
                 CodexStatus::Running
             }
-            TypedExecEvent::Error(notification) => {
+            ServerNotification::Error(notification) => {
                 eprintln!(
                     "{} {}",
                     "ERROR:".style(self.red).style(self.bold),
@@ -262,7 +255,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
                 CodexStatus::Running
             }
-            TypedExecEvent::DeprecationNotice(notification) => {
+            ServerNotification::DeprecationNotice(notification) => {
                 eprintln!(
                     "{} {}",
                     "deprecated:".style(self.yellow).style(self.bold),
@@ -273,7 +266,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 CodexStatus::Running
             }
-            TypedExecEvent::HookStarted(notification) => {
+            ServerNotification::HookStarted(notification) => {
                 eprintln!(
                     "{} {}",
                     "hook:".style(self.bold),
@@ -281,7 +274,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
                 CodexStatus::Running
             }
-            TypedExecEvent::HookCompleted(notification) => {
+            ServerNotification::HookCompleted(notification) => {
                 eprintln!(
                     "{} {} {:?}",
                     "hook:".style(self.bold),
@@ -290,15 +283,15 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
                 CodexStatus::Running
             }
-            TypedExecEvent::ItemStarted(notification) => {
+            ServerNotification::ItemStarted(notification) => {
                 self.render_item_started(&notification.item);
                 CodexStatus::Running
             }
-            TypedExecEvent::ItemCompleted(notification) => {
+            ServerNotification::ItemCompleted(notification) => {
                 self.render_item_completed(notification.item);
                 CodexStatus::Running
             }
-            TypedExecEvent::ModelRerouted(notification) => {
+            ServerNotification::ModelRerouted(notification) => {
                 eprintln!(
                     "{} {} -> {}",
                     "model rerouted:".style(self.yellow).style(self.bold),
@@ -307,11 +300,11 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
                 CodexStatus::Running
             }
-            TypedExecEvent::ThreadTokenUsageUpdated(notification) => {
+            ServerNotification::ThreadTokenUsageUpdated(notification) => {
                 self.last_total_token_usage = Some(notification.token_usage);
                 CodexStatus::Running
             }
-            TypedExecEvent::TurnCompleted(notification) => match notification.turn.status {
+            ServerNotification::TurnCompleted(notification) => match notification.turn.status {
                 TurnStatus::Completed => {
                     if let Some(final_message) =
                         final_message_from_turn_items(notification.turn.items.as_slice())
@@ -333,13 +326,13 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 TurnStatus::InProgress => CodexStatus::Running,
             },
-            TypedExecEvent::TurnDiffUpdated(notification) => {
+            ServerNotification::TurnDiffUpdated(notification) => {
                 if !notification.diff.trim().is_empty() {
                     eprintln!("{}", notification.diff);
                 }
                 CodexStatus::Running
             }
-            TypedExecEvent::TurnPlanUpdated(notification) => {
+            ServerNotification::TurnPlanUpdated(notification) => {
                 if let Some(explanation) = notification.explanation {
                     eprintln!("{}", explanation.style(self.dimmed));
                 }
@@ -348,8 +341,17 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 CodexStatus::Running
             }
-            TypedExecEvent::TurnStarted => CodexStatus::Running,
+            ServerNotification::TurnStarted(_) => CodexStatus::Running,
+            _ => CodexStatus::Running,
         }
+    }
+
+    fn process_warning(&mut self, message: String) -> CodexStatus {
+        eprintln!(
+            "{} {message}",
+            "warning:".style(self.yellow).style(self.bold)
+        );
+        CodexStatus::Running
     }
 
     fn print_final_output(&mut self) {
@@ -422,7 +424,7 @@ mod tests {
     use super::reasoning_text;
     use super::should_print_final_message_to_stdout;
     use crate::event_processor::EventProcessor;
-    use crate::typed_exec_event::TypedExecEvent;
+    use codex_app_server_protocol::ServerNotification;
 
     #[test]
     fn suppresses_final_stdout_message_when_both_streams_are_terminals() {
@@ -539,7 +541,7 @@ mod tests {
             last_total_token_usage: None,
         };
 
-        let status = processor.process_event(TypedExecEvent::TurnCompleted(
+        let status = processor.process_server_notification(ServerNotification::TurnCompleted(
             codex_app_server_protocol::TurnCompletedNotification {
                 thread_id: "thread-1".to_string(),
                 turn: Turn {
@@ -579,7 +581,7 @@ mod tests {
             last_total_token_usage: None,
         };
 
-        let status = processor.process_event(TypedExecEvent::TurnCompleted(
+        let status = processor.process_server_notification(ServerNotification::TurnCompleted(
             codex_app_server_protocol::TurnCompletedNotification {
                 thread_id: "thread-1".to_string(),
                 turn: Turn {
@@ -619,7 +621,7 @@ mod tests {
             last_total_token_usage: None,
         };
 
-        let status = processor.process_event(TypedExecEvent::TurnCompleted(
+        let status = processor.process_server_notification(ServerNotification::TurnCompleted(
             codex_app_server_protocol::TurnCompletedNotification {
                 thread_id: "thread-1".to_string(),
                 turn: Turn {
