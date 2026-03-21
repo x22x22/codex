@@ -819,7 +819,6 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                 warn!("{message}");
                 let _ = event_processor.process_event(TypedExecEvent::Warning(message));
             }
-            InProcessServerEvent::LegacyNotification(_) => {}
         }
     }
 

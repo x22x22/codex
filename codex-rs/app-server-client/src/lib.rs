@@ -86,9 +86,6 @@ impl From<InProcessServerEvent> for AppServerEvent {
             InProcessServerEvent::ServerNotification(notification) => {
                 Self::ServerNotification(notification)
             }
-            InProcessServerEvent::LegacyNotification(notification) => {
-                Self::LegacyNotification(notification)
-            }
             InProcessServerEvent::ServerRequest(request) => Self::ServerRequest(request),
         }
     }
@@ -98,19 +95,12 @@ fn event_requires_delivery(event: &InProcessServerEvent) -> bool {
     // These terminal events drive surface shutdown/completion state. Dropping
     // them under backpressure can leave exec/TUI waiting forever even though
     // the underlying turn has already ended.
-    match event {
+    matches!(
+        event,
         InProcessServerEvent::ServerNotification(
             codex_app_server_protocol::ServerNotification::TurnCompleted(_),
-        ) => true,
-        InProcessServerEvent::LegacyNotification(notification) => matches!(
-            notification
-                .method
-                .strip_prefix("codex/event/")
-                .unwrap_or(&notification.method),
-            "task_complete" | "turn_aborted" | "shutdown_complete"
-        ),
-        _ => false,
-    }
+        )
+    )
 }
 
 /// Layered error for [`InProcessAppServerClient::request_typed`].
@@ -1621,14 +1611,6 @@ mod tests {
                         },
                     }
                 )
-            )
-        ));
-        assert!(event_requires_delivery(
-            &InProcessServerEvent::LegacyNotification(
-                codex_app_server_protocol::JSONRPCNotification {
-                    method: "codex/event/turn_aborted".to_string(),
-                    params: None,
-                }
             )
         ));
         assert!(!event_requires_delivery(&InProcessServerEvent::Lagged {
