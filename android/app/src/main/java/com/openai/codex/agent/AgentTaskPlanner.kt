@@ -1,4 +1,4 @@
-package com.openai.codexd
+package com.openai.codex.agent
 
 import android.content.Context
 import android.util.Log
@@ -119,7 +119,7 @@ object AgentTaskPlanner {
                 packageName !in setOf(
                     "com.android.shell",
                     "com.android.systemui",
-                    "com.openai.codexd",
+                    "com.openai.codex.agent",
                     "com.openai.codex.genie",
                 )
         }

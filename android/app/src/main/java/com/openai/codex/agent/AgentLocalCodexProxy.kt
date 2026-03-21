@@ -1,4 +1,4 @@
-package com.openai.codexd
+package com.openai.codex.agent
 
 import android.util.Log
 import java.io.ByteArrayOutputStream

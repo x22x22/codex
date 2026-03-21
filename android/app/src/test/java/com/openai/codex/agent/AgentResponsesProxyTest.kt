@@ -1,4 +1,4 @@
-package com.openai.codexd
+package com.openai.codex.agent
 
 import java.io.File
 import org.junit.Assert.assertEquals

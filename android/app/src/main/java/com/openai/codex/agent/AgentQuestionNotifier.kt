@@ -1,4 +1,4 @@
-package com.openai.codexd
+package com.openai.codex.agent
 
 import android.app.Notification
 import android.app.NotificationChannel

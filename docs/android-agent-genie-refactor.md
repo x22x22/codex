@@ -185,15 +185,15 @@ Agent/Genie APK flow.
   - Agent scaffold and hosted Agent Codex runtime
 - `android/genie`
   - standalone Genie scaffold APK with hosted `codex app-server`
-- `android/app/src/main/java/com/openai/codexd/CodexAgentService.kt`
+- `android/app/src/main/java/com/openai/codex/agent/CodexAgentService.kt`
   - framework `AgentService`
-- `android/app/src/main/java/com/openai/codexd/AgentSessionController.kt`
+- `android/app/src/main/java/com/openai/codex/agent/AgentSessionController.kt`
   - Agent-side `AgentManager` orchestration helper
-- `android/app/src/main/java/com/openai/codexd/AgentFrameworkToolBridge.kt`
+- `android/app/src/main/java/com/openai/codex/agent/AgentFrameworkToolBridge.kt`
   - hosted Agent bridge for framework session APIs
-- `android/app/src/main/java/com/openai/codexd/MainActivity.kt`
+- `android/app/src/main/java/com/openai/codex/agent/MainActivity.kt`
   - Agent session UI, Agent clarification dialogs, and Agent-native auth controls
-- `android/app/src/main/java/com/openai/codexd/AgentUserInputPrompter.kt`
+- `android/app/src/main/java/com/openai/codex/agent/AgentUserInputPrompter.kt`
   - Android dialog bridge for hosted Agent `request_user_input` calls
 - `android/genie/src/main/java/com/openai/codex/genie/CodexGenieService.kt`
   - Genie lifecycle host for the embedded `codex app-server`
@@ -203,13 +203,13 @@ Agent/Genie APK flow.
 - `android/genie/src/main/java/com/openai/codex/genie/GenieLocalCodexProxy.kt`
   - Genie-local loopback HTTP proxy that forwards hosted `codex` HTTP traffic to
     the Agent framework session bridge
-- `android/app/src/main/java/com/openai/codexd/AgentSessionBridgeServer.kt`
+- `android/app/src/main/java/com/openai/codex/agent/AgentSessionBridgeServer.kt`
   - Agent-side server for the framework-managed per-session bridge
-- `android/app/src/main/java/com/openai/codexd/AgentResponsesProxy.kt`
+- `android/app/src/main/java/com/openai/codex/agent/AgentResponsesProxy.kt`
   - Agent-owned Responses transport used by Genie model traffic
 - `android/genie/src/main/java/com/openai/codex/genie/AgentBridgeClient.kt`
   - Genie-side client for the framework-managed session bridge
-- `android/app/src/main/java/com/openai/codexd/AgentCodexAppServerClient.kt`
+- `android/app/src/main/java/com/openai/codex/agent/AgentCodexAppServerClient.kt`
   - hosted Agent `codex app-server` client for planning, orchestration, auto-answering, runtime metadata, and narrow Agent tool calls
 
 ## Build

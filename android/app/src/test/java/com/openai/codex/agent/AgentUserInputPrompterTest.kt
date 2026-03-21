@@ -1,4 +1,4 @@
-package com.openai.codexd
+package com.openai.codex.agent
 
 import org.json.JSONArray
 import org.json.JSONObject

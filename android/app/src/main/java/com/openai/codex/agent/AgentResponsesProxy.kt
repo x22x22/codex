@@ -1,4 +1,4 @@
-package com.openai.codexd
+package com.openai.codex.agent
 
 import android.content.Context
 import android.os.ParcelFileDescriptor

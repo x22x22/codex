@@ -18,11 +18,11 @@ val androidJavaTargetVersion = hostJavaMajorVersion.coerceAtMost(maxAndroidJavaV
 val androidJavaVersion = JavaVersion.toVersion(androidJavaTargetVersion)
 
 android {
-    namespace = "com.openai.codexd"
+    namespace = "com.openai.codex.agent"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.openai.codexd"
+        applicationId = "com.openai.codex.agent"
         minSdk = 26
         targetSdk = 34
         versionCode = 1

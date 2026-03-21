@@ -1,4 +1,4 @@
-package com.openai.codexd
+package com.openai.codex.agent
 
 import android.Manifest
 import android.app.Activity
@@ -22,9 +22,9 @@ class MainActivity : Activity() {
     companion object {
         private const val TAG = "CodexMainActivity"
         private const val ACTION_DEBUG_START_AGENT_SESSION =
-            "com.openai.codexd.action.DEBUG_START_AGENT_SESSION"
+            "com.openai.codex.agent.action.DEBUG_START_AGENT_SESSION"
         private const val ACTION_DEBUG_CANCEL_ALL_AGENT_SESSIONS =
-            "com.openai.codexd.action.DEBUG_CANCEL_ALL_AGENT_SESSIONS"
+            "com.openai.codex.agent.action.DEBUG_CANCEL_ALL_AGENT_SESSIONS"
         private const val EXTRA_DEBUG_PROMPT = "prompt"
         private const val EXTRA_DEBUG_TARGET_PACKAGE = "targetPackage"
     }

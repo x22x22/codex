@@ -1,4 +1,4 @@
-package com.openai.codexd
+package com.openai.codex.agent
 
 import android.content.Context
 import android.util.Log
@@ -15,7 +15,7 @@ class AgentFrameworkToolBridge(
         private val DISALLOWED_TARGET_PACKAGES = setOf(
             "com.android.shell",
             "com.android.systemui",
-            "com.openai.codexd",
+            "com.openai.codex.agent",
             "com.openai.codex.genie",
         )
         const val START_DIRECT_SESSION_TOOL = "android_framework_sessions_start_direct"

@@ -14,7 +14,7 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "codexd-service"
+rootProject.name = "codex-agent-service"
 include(":bridge")
 include(":app")
 include(":genie")
