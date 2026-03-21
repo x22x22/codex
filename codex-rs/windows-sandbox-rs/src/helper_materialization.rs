@@ -16,18 +16,21 @@ use crate::sandbox_bin_dir;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum HelperExecutable {
     CommandRunner,
+    SetupHelper,
 }
 
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
             Self::CommandRunner => "codex-command-runner.exe",
+            Self::SetupHelper => "codex-windows-sandbox-setup.exe",
         }
     }
 
     fn label(self) -> &'static str {
         match self {
             Self::CommandRunner => "command-runner",
+            Self::SetupHelper => "setup-helper",
         }
     }
 }
@@ -376,5 +379,24 @@ mod tests {
             fs::read(&runner_destination).expect("read runner")
         );
     }
-}
 
+    #[test]
+    fn copy_setup_helper_into_shared_bin_dir() {
+        let tmp = TempDir::new().expect("tempdir");
+        let codex_home = tmp.path().join("codex-home");
+        let source_dir = tmp.path().join("sibling-source");
+        fs::create_dir_all(&source_dir).expect("create source dir");
+        let setup_source = source_dir.join("codex-windows-sandbox-setup.exe");
+        let setup_destination = helper_bin_dir(&codex_home).join("codex-windows-sandbox-setup.exe");
+        fs::write(&setup_source, b"setup").expect("setup helper");
+
+        let setup_outcome =
+            copy_from_source_if_needed(&setup_source, &setup_destination).expect("setup copy");
+
+        assert_eq!(CopyOutcome::ReCopied, setup_outcome);
+        assert_eq!(
+            b"setup".as_slice(),
+            fs::read(&setup_destination).expect("read setup helper")
+        );
+    }
+}
