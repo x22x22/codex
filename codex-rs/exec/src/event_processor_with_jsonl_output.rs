@@ -87,6 +87,10 @@ impl EventProcessorWithJsonOutput {
         }
     }
 
+    pub fn final_message(&self) -> Option<&str> {
+        self.final_message.as_deref()
+    }
+
     fn next_item_id(&self) -> String {
         format!("item_{}", self.next_item_id.fetch_add(1, Ordering::SeqCst))
     }
@@ -128,8 +132,7 @@ impl EventProcessorWithJsonOutput {
             .collect()
     }
 
-    fn map_item(item: ThreadItem) -> Option<ExecThreadItem> {
-        let id = item.id().to_string();
+    fn map_item_with_id(id: String, item: ThreadItem) -> Option<ExecThreadItem> {
         let details = match item {
             ThreadItem::AgentMessage { text, .. } => {
                 ThreadItemDetails::AgentMessage(AgentMessageItem { text })
@@ -279,6 +282,24 @@ impl EventProcessorWithJsonOutput {
         Some(ExecThreadItem { id, details })
     }
 
+    fn map_started_item(item: ThreadItem) -> Option<ExecThreadItem> {
+        match item {
+            ThreadItem::AgentMessage { .. }
+            | ThreadItem::Reasoning { .. }
+            | ThreadItem::FileChange { .. } => None,
+            other => Self::map_item_with_id(other.id().to_string(), other),
+        }
+    }
+
+    fn map_completed_item(&self, item: ThreadItem) -> Option<ExecThreadItem> {
+        match item {
+            ThreadItem::AgentMessage { .. } | ThreadItem::Reasoning { .. } => {
+                Self::map_item_with_id(self.next_item_id(), item)
+            }
+            other => Self::map_item_with_id(other.id().to_string(), other),
+        }
+    }
+
     fn final_message_from_turn_items(items: &[ThreadItem]) -> Option<String> {
         items
             .iter()
@@ -365,13 +386,13 @@ impl EventProcessorWithJsonOutput {
                 CodexStatus::Running
             }
             ServerNotification::ItemStarted(notification) => {
-                if let Some(item) = Self::map_item(notification.item) {
+                if let Some(item) = Self::map_started_item(notification.item) {
                     events.push(ThreadEvent::ItemStarted(ItemStartedEvent { item }));
                 }
                 CodexStatus::Running
             }
             ServerNotification::ItemCompleted(notification) => {
-                if let Some(item) = Self::map_item(notification.item) {
+                if let Some(item) = self.map_completed_item(notification.item) {
                     if let ThreadItemDetails::AgentMessage(AgentMessageItem { text }) =
                         &item.details
                     {

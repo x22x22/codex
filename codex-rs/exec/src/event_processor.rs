@@ -5,7 +5,7 @@ use codex_core::config::Config;
 use codex_protocol::protocol::SessionConfiguredEvent;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CodexStatus {
+pub enum CodexStatus {
     Running,
     InitiateShutdown,
 }

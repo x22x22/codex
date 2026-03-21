@@ -254,7 +254,7 @@ fn reasoning_items_emit_summary_not_raw_content() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
-                    id: "reasoning-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::Reasoning(ReasoningItem {
                         text: "safe summary".to_string(),
                     }),
@@ -802,7 +802,7 @@ fn agent_message_item_updates_final_message() {
         CollectedThreadEvents {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
-                    id: "msg-1".to_string(),
+                    id: "item_0".to_string(),
                     details: ThreadItemDetails::AgentMessage(AgentMessageItem {
                         text: "hello".to_string(),
                     }),
@@ -811,7 +811,64 @@ fn agent_message_item_updates_final_message() {
             status: CodexStatus::Running,
         }
     );
-    assert_eq!(processor.final_message.as_deref(), Some("hello"));
+    assert_eq!(processor.final_message(), Some("hello"));
+}
+
+#[test]
+fn agent_message_item_started_is_ignored() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let collected =
+        processor.collect_thread_events(ServerNotification::ItemStarted(ItemStartedNotification {
+            item: ThreadItem::AgentMessage {
+                id: "msg-1".to_string(),
+                text: "hello".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        }));
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: Vec::new(),
+            status: CodexStatus::Running,
+        }
+    );
+}
+
+#[test]
+fn reasoning_item_completed_uses_synthetic_id() {
+    let mut processor = EventProcessorWithJsonOutput::new(None);
+
+    let collected = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::Reasoning {
+                id: "rs-1".to_string(),
+                summary: vec!["thinking...".to_string()],
+                content: vec!["raw".to_string()],
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        },
+    ));
+
+    assert_eq!(
+        collected,
+        CollectedThreadEvents {
+            events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
+                item: ExecThreadItem {
+                    id: "item_0".to_string(),
+                    details: ThreadItemDetails::Reasoning(ReasoningItem {
+                        text: "thinking...".to_string(),
+                    }),
+                },
+            })],
+            status: CodexStatus::Running,
+        }
+    );
 }
 
 #[test]
@@ -1115,13 +1172,24 @@ fn turn_completion_recovers_final_message_from_turn_items() {
             status: CodexStatus::InitiateShutdown,
         }
     );
-    assert_eq!(processor.final_message.as_deref(), Some("final answer"));
+    assert_eq!(processor.final_message(), Some("final answer"));
 }
 
 #[test]
 fn turn_completion_overwrites_stale_final_message_from_turn_items() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
-    processor.final_message = Some("stale answer".to_string());
+    let _ = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::AgentMessage {
+                id: "msg-stale".to_string(),
+                text: "stale answer".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        },
+    ));
 
     let completed = processor.collect_thread_events(ServerNotification::TurnCompleted(
         TurnCompletedNotification {
@@ -1149,13 +1217,24 @@ fn turn_completion_overwrites_stale_final_message_from_turn_items() {
             status: CodexStatus::InitiateShutdown,
         }
     );
-    assert_eq!(processor.final_message.as_deref(), Some("final answer"));
+    assert_eq!(processor.final_message(), Some("final answer"));
 }
 
 #[test]
 fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() {
     let mut processor = EventProcessorWithJsonOutput::new(None);
-    processor.final_message = Some("streamed answer".to_string());
+    let _ = processor.collect_thread_events(ServerNotification::ItemCompleted(
+        ItemCompletedNotification {
+            item: ThreadItem::AgentMessage {
+                id: "msg-streamed".to_string(),
+                text: "streamed answer".to_string(),
+                phase: None,
+                memory_citation: None,
+            },
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+        },
+    ));
 
     let completed = processor.collect_thread_events(ServerNotification::TurnCompleted(
         TurnCompletedNotification {
@@ -1178,7 +1257,7 @@ fn turn_completion_preserves_streamed_final_message_when_turn_items_are_empty() 
             status: CodexStatus::InitiateShutdown,
         }
     );
-    assert_eq!(processor.final_message.as_deref(), Some("streamed answer"));
+    assert_eq!(processor.final_message(), Some("streamed answer"));
 }
 
 #[test]
@@ -1209,10 +1288,7 @@ fn turn_completion_falls_back_to_final_plan_text() {
             status: CodexStatus::InitiateShutdown,
         }
     );
-    assert_eq!(
-        processor.final_message.as_deref(),
-        Some("ship the typed adapter")
-    );
+    assert_eq!(processor.final_message(), Some("ship the typed adapter"));
 }
 
 #[test]
