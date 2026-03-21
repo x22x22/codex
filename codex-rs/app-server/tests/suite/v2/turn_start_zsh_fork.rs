@@ -102,6 +102,7 @@ async fn turn_start_shell_zsh_fork_executes_command_v2() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             ..Default::default()
@@ -221,6 +222,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_decline_v2() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             ..Default::default()
@@ -354,6 +356,7 @@ async fn turn_start_shell_zsh_fork_exec_approval_cancel_v2() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             ..Default::default()
@@ -513,6 +516,7 @@ async fn turn_start_shell_zsh_fork_subcommand_decline_marks_parent_declined_v2()
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             ..Default::default()

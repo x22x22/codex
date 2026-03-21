@@ -11,8 +11,13 @@ pub const EXEC_METHOD: &str = "process/start";
 pub const EXEC_READ_METHOD: &str = "process/read";
 pub const EXEC_WRITE_METHOD: &str = "process/write";
 pub const EXEC_TERMINATE_METHOD: &str = "process/terminate";
+pub const EXEC_RESIZE_METHOD: &str = "process/resize";
+pub const EXEC_WAIT_METHOD: &str = "process/wait";
 pub const EXEC_OUTPUT_DELTA_METHOD: &str = "process/output";
 pub const EXEC_EXITED_METHOD: &str = "process/exited";
+pub const ENVIRONMENT_LIST_METHOD: &str = "environment/list";
+pub const ENVIRONMENT_GET_METHOD: &str = "environment/get";
+pub const ENVIRONMENT_CAPABILITIES_METHOD: &str = "environment/capabilities";
 pub const FS_READ_FILE_METHOD: &str = "fs/readFile";
 pub const FS_WRITE_FILE_METHOD: &str = "fs/writeFile";
 pub const FS_CREATE_DIRECTORY_METHOD: &str = "fs/createDirectory";
@@ -58,6 +63,38 @@ pub struct ExecParams {
     pub env: HashMap<String, String>,
     pub tty: bool,
     pub arg0: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecTerminalSize {
+    pub rows: u16,
+    pub cols: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecResizeParams {
+    pub process_id: String,
+    pub size: ExecTerminalSize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecResizeResponse {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecWaitParams {
+    pub process_id: String,
+    pub wait_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecWaitResponse {
+    pub exited: bool,
+    pub exit_code: Option<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +177,67 @@ pub struct ExecExitedNotification {
     pub exit_code: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentCapabilities {
+    pub filesystem: bool,
+    pub process_resize: bool,
+    pub process_wait: bool,
+}
+
+impl Default for EnvironmentCapabilities {
+    fn default() -> Self {
+        Self {
+            filesystem: true,
+            process_resize: true,
+            process_wait: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentInfo {
+    pub environment_id: String,
+    pub experimental_exec_server_url: Option<String>,
+    pub capabilities: EnvironmentCapabilities,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentListParams {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentListResponse {
+    pub environments: Vec<EnvironmentInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentGetParams {
+    pub environment_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentGetResponse {
+    pub environment: EnvironmentInfo,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentCapabilitiesParams {
+    pub environment_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentCapabilitiesResponse {
+    pub environment_id: String,
+    pub capabilities: EnvironmentCapabilities,
+}
+
 mod base64_bytes {
     use super::BASE64_STANDARD;
     use base64::Engine as _;
@@ -162,5 +260,130 @@ mod base64_bytes {
         BASE64_STANDARD
             .decode(encoded)
             .map_err(serde::de::Error::custom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::EnvironmentCapabilities;
+    use super::EnvironmentCapabilitiesParams;
+    use super::EnvironmentCapabilitiesResponse;
+    use super::EnvironmentGetParams;
+    use super::EnvironmentGetResponse;
+    use super::EnvironmentInfo;
+    use super::EnvironmentListParams;
+    use super::EnvironmentListResponse;
+    use super::ExecResizeParams;
+    use super::ExecTerminalSize;
+    use super::ExecWaitParams;
+    use super::ExecWaitResponse;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn environment_payloads_round_trip() {
+        let capabilities = EnvironmentCapabilities::default();
+        let info = EnvironmentInfo {
+            environment_id: "local".to_string(),
+            experimental_exec_server_url: None,
+            capabilities: capabilities.clone(),
+        };
+        let list_response = EnvironmentListResponse {
+            environments: vec![info.clone()],
+        };
+        let get_response = EnvironmentGetResponse {
+            environment: info.clone(),
+        };
+        let capabilities_response = EnvironmentCapabilitiesResponse {
+            environment_id: info.environment_id,
+            capabilities,
+        };
+
+        assert_eq!(
+            serde_json::to_value(EnvironmentListParams {}).expect("serialize list params"),
+            serde_json::json!({})
+        );
+        assert_eq!(
+            serde_json::from_value::<EnvironmentListParams>(serde_json::json!({}))
+                .expect("deserialize list params"),
+            EnvironmentListParams {}
+        );
+        assert_eq!(
+            serde_json::from_value::<EnvironmentListResponse>(
+                serde_json::to_value(&list_response).expect("serialize list response"),
+            )
+            .expect("deserialize list response"),
+            list_response
+        );
+        assert_eq!(
+            serde_json::from_value::<EnvironmentGetParams>(serde_json::json!({
+                "environmentId": "local"
+            }))
+            .expect("deserialize get params"),
+            EnvironmentGetParams {
+                environment_id: "local".to_string(),
+            }
+        );
+        assert_eq!(
+            serde_json::from_value::<EnvironmentGetResponse>(
+                serde_json::to_value(&get_response).expect("serialize get response"),
+            )
+            .expect("deserialize get response"),
+            get_response
+        );
+        assert_eq!(
+            serde_json::from_value::<EnvironmentCapabilitiesParams>(serde_json::json!({
+                "environmentId": "local"
+            }))
+            .expect("deserialize capabilities params"),
+            EnvironmentCapabilitiesParams {
+                environment_id: "local".to_string(),
+            }
+        );
+        assert_eq!(
+            serde_json::from_value::<EnvironmentCapabilitiesResponse>(
+                serde_json::to_value(&capabilities_response)
+                    .expect("serialize capabilities response"),
+            )
+            .expect("deserialize capabilities response"),
+            capabilities_response
+        );
+    }
+
+    #[test]
+    fn process_payloads_round_trip() {
+        let resize_params = ExecResizeParams {
+            process_id: "proc-1".to_string(),
+            size: ExecTerminalSize { rows: 24, cols: 80 },
+        };
+        let wait_params = ExecWaitParams {
+            process_id: "proc-1".to_string(),
+            wait_ms: Some(250),
+        };
+        let wait_response = ExecWaitResponse {
+            exited: true,
+            exit_code: Some(0),
+        };
+
+        assert_eq!(
+            serde_json::from_value::<ExecResizeParams>(
+                serde_json::to_value(&resize_params).expect("serialize resize params"),
+            )
+            .expect("deserialize resize params"),
+            resize_params
+        );
+        assert_eq!(
+            serde_json::from_value::<ExecWaitParams>(
+                serde_json::to_value(&wait_params).expect("serialize wait params"),
+            )
+            .expect("deserialize wait params"),
+            wait_params
+        );
+        assert_eq!(
+            serde_json::from_value::<ExecWaitResponse>(
+                serde_json::to_value(&wait_response).expect("serialize wait response"),
+            )
+            .expect("deserialize wait response"),
+            wait_response
+        );
     }
 }

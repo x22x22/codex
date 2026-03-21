@@ -35,8 +35,14 @@ pub(crate) struct ExecServerFileSystem {
 
 impl Default for ExecServerFileSystem {
     fn default() -> Self {
+        Self::new(&Environment::default())
+    }
+}
+
+impl ExecServerFileSystem {
+    pub(crate) fn new(environment: &Environment) -> Self {
         Self {
-            file_system: Arc::new(Environment::default().get_filesystem()),
+            file_system: Arc::new(environment.get_filesystem()),
         }
     }
 }

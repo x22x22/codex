@@ -40,6 +40,7 @@ async fn thread_unarchive_moves_rollout_back_into_sessions_directory() -> Result
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

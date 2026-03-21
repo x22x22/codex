@@ -321,6 +321,7 @@ async fn thread_compact_start_rejects_unknown_thread_id() -> Result<()> {
 async fn start_thread(mcp: &mut McpProcess) -> Result<String> {
     let thread_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

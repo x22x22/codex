@@ -184,6 +184,7 @@ async fn send_thread_start_request(stream: &mut WsClient, id: i64) -> Result<()>
         "thread/start",
         id,
         Some(serde_json::to_value(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })?),

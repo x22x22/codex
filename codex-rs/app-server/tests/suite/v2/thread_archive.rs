@@ -39,6 +39,7 @@ async fn thread_archive_requires_materialized_rollout() -> Result<()> {
     // Start a thread.
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -171,6 +172,7 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -245,6 +247,7 @@ async fn thread_archive_clears_stale_subscriptions_before_resume() -> Result<()>
 
     let resume_id = secondary
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread.id.clone(),
             ..Default::default()
         })

@@ -22,7 +22,11 @@ use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::ExecParams;
+use crate::protocol::ExecResizeParams;
+use crate::protocol::ExecResizeResponse;
 use crate::protocol::ExecResponse;
+use crate::protocol::ExecWaitParams;
+use crate::protocol::ExecWaitResponse;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ProcessOutputChunk;
 use crate::protocol::ReadParams;
@@ -353,6 +357,88 @@ impl LocalProcess {
         Ok(WriteResponse { accepted: true })
     }
 
+    pub(crate) async fn resize_process(
+        &self,
+        params: ExecResizeParams,
+    ) -> Result<ExecResizeResponse, JSONRPCErrorError> {
+        self.require_initialized_for("exec")?;
+        let size = TerminalSize {
+            rows: params.size.rows,
+            cols: params.size.cols,
+        };
+        {
+            let process_map = self.inner.processes.lock().await;
+            let process = process_map.get(&params.process_id).ok_or_else(|| {
+                invalid_request(format!("unknown process id {}", params.process_id))
+            })?;
+            let ProcessEntry::Running(process) = process else {
+                return Err(invalid_request(format!(
+                    "process id {} is starting",
+                    params.process_id
+                )));
+            };
+            if process.exit_code.is_some() {
+                return Err(invalid_request(format!(
+                    "process id {} has already exited",
+                    params.process_id
+                )));
+            }
+            if !process.tty {
+                return Err(invalid_request(format!(
+                    "process id {} is not attached to a tty",
+                    params.process_id
+                )));
+            }
+            process
+                .session
+                .resize(size)
+                .map_err(|err| internal_error(err.to_string()))?;
+        }
+        Ok(ExecResizeResponse {})
+    }
+
+    pub(crate) async fn wait_process(
+        &self,
+        params: ExecWaitParams,
+    ) -> Result<ExecWaitResponse, JSONRPCErrorError> {
+        self.require_initialized_for("exec")?;
+        let wait = Duration::from_millis(params.wait_ms.unwrap_or(0));
+        let deadline = tokio::time::Instant::now() + wait;
+
+        loop {
+            let (response, output_notify) = {
+                let process_map = self.inner.processes.lock().await;
+                let process = process_map.get(&params.process_id).ok_or_else(|| {
+                    invalid_request(format!("unknown process id {}", params.process_id))
+                })?;
+                let ProcessEntry::Running(process) = process else {
+                    return Err(invalid_request(format!(
+                        "process id {} is starting",
+                        params.process_id
+                    )));
+                };
+
+                (
+                    ExecWaitResponse {
+                        exited: process.exit_code.is_some(),
+                        exit_code: process.exit_code,
+                    },
+                    Arc::clone(&process.output_notify),
+                )
+            };
+
+            if response.exited || tokio::time::Instant::now() >= deadline {
+                return Ok(response);
+            }
+
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(response);
+            }
+            let _ = tokio::time::timeout(remaining, output_notify.notified()).await;
+        }
+    }
+
     pub(crate) async fn terminate_process(
         &self,
         params: TerminateParams,
@@ -397,6 +483,17 @@ impl ExecProcess for LocalProcess {
         })
         .await
         .map_err(map_handler_error)
+    }
+
+    async fn resize(
+        &self,
+        params: ExecResizeParams,
+    ) -> Result<ExecResizeResponse, ExecServerError> {
+        self.resize_process(params).await.map_err(map_handler_error)
+    }
+
+    async fn wait(&self, params: ExecWaitParams) -> Result<ExecWaitResponse, ExecServerError> {
+        self.wait_process(params).await.map_err(map_handler_error)
     }
 
     async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError> {

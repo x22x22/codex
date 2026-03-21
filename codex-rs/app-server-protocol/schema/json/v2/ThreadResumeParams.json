@@ -1029,6 +1029,13 @@
         "null"
       ]
     },
+    "environmentId": {
+      "description": "Optional executor environment binding for the resumed thread.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "model": {
       "description": "Configuration overrides for the resumed thread, if any.",
       "type": [

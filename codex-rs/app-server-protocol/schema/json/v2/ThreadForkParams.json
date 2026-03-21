@@ -123,6 +123,13 @@
         "null"
       ]
     },
+    "environmentId": {
+      "description": "Optional executor environment binding for the forked thread.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "ephemeral": {
       "type": "boolean"
     },

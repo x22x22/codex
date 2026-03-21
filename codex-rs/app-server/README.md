@@ -69,6 +69,7 @@ Use the thread APIs to create, list, or archive conversations. Drive a conversat
 - Initialize once per connection: Immediately after opening a transport connection, send an `initialize` request with your client metadata, then emit an `initialized` notification. Any other request on that connection before this handshake gets rejected.
 - Start (or resume) a thread: Call `thread/start` to open a fresh conversation. The response returns the thread object and you’ll also get a `thread/started` notification. If you’re continuing an existing conversation, call `thread/resume` with its ID instead. If you want to branch from an existing conversation, call `thread/fork` to create a new thread id with copied history. Like `thread/start`, `thread/fork` also accepts `ephemeral: true` for an in-memory temporary thread.
   The returned `thread.ephemeral` flag tells you whether the session is intentionally in-memory only; when it is `true`, `thread.path` is `null`.
+  These methods also accept optional `environmentId` when you need to bind the session to a specific executor environment; omit it to use the server default environment.
 - Begin a turn: To send user input, call `turn/start` with the target `threadId` and the user's input. Optional fields let you override model, cwd, sandbox policy, approval policy, approvals reviewer, etc. This immediately returns the new turn object. The app-server emits `turn/started` when that turn actually begins running.
 - Stream events: After `turn/start`, keep reading JSON-RPC notifications on stdout. You’ll see `item/started`, `item/completed`, deltas like `item/agentMessage/delta`, tool progress, etc. These represent streaming model output plus any side effects (commands, tool calls, reasoning notes).
 - Finish the turn: When the model is done (or the turn is interrupted via making the `turn/interrupt` call), the server sends `turn/completed` with the final turn state and token usage.
@@ -147,7 +148,7 @@ Example with notification opt-out:
 - `thread/realtime/appendText` — append text input to the active realtime session (experimental); returns `{}`.
 - `thread/realtime/stop` — stop the active realtime session for the thread (experimental); returns `{}`.
 - `review/start` — kick off Codex’s automated reviewer for a thread; responds like `turn/start` and emits `item/started`/`item/completed` notifications with `enteredReviewMode` and `exitedReviewMode` items, plus a final assistant `agentMessage` containing the review.
-- `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation).
+- `command/exec` — run a single command under the server sandbox without starting a thread/turn (handy for utilities and validation); also accepts optional `environmentId` when the client needs to target a specific executor environment.
 - `command/exec/write` — write base64-decoded stdin bytes to a running `command/exec` session or close stdin; returns `{}`.
 - `command/exec/resize` — resize a running PTY-backed `command/exec` session by `processId`; returns `{}`.
 - `command/exec/terminate` — terminate a running `command/exec` session by `processId`; returns `{}`.
@@ -192,6 +193,7 @@ Start a fresh thread when you need a new Codex conversation.
     // Optionally set config settings. If not specified, will use the user's
     // current config settings.
     "model": "gpt-5.1-codex",
+    "environmentId": "local",                      // optional; binds this thread to a specific executor environment
     "cwd": "/Users/me/project",
     "approvalPolicy": "never",
     "sandbox": "workspaceWrite",
@@ -235,6 +237,7 @@ Example:
 ```json
 { "method": "thread/resume", "id": 11, "params": {
     "threadId": "thr_123",
+    "environmentId": "local",
     "personality": "friendly"
 } }
 { "id": 11, "result": { "thread": { "id": "thr_123", … } } }
@@ -243,7 +246,7 @@ Example:
 To branch from a stored session, call `thread/fork` with the `thread.id`. This creates a new thread id and emits a `thread/started` notification for it. Pass `ephemeral: true` when the fork should stay in-memory only:
 
 ```json
-{ "method": "thread/fork", "id": 12, "params": { "threadId": "thr_123", "ephemeral": true } }
+{ "method": "thread/fork", "id": 12, "params": { "threadId": "thr_123", "environmentId": "local", "ephemeral": true } }
 { "id": 12, "result": { "thread": { "id": "thr_456", … } } }
 { "method": "thread/started", "params": { "thread": { … } } }
 ```
@@ -665,6 +668,7 @@ Run a standalone command (argv vector) in the server’s sandbox without creatin
 ```json
 { "method": "command/exec", "id": 32, "params": {
     "command": ["ls", "-la"],
+    "environmentId": "local",                     // optional; binds this request to a specific executor environment
     "processId": "ls-1",                           // optional string; required for streaming and ability to terminate the process
     "cwd": "/Users/me/project",                    // optional; defaults to server cwd
     "env": { "FOO": "override" },                  // optional; merges into the server env and overrides matching names

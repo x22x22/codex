@@ -108,6 +108,7 @@ async fn thread_start_mock_field_requires_experimental_api_capability() -> Resul
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             mock_experimental_field: Some("mock".to_string()),
             ..Default::default()
         })
@@ -145,6 +146,7 @@ async fn thread_start_without_dynamic_tools_allows_without_experimental_api_capa
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -181,6 +183,7 @@ async fn thread_start_granular_approval_policy_requires_experimental_api_capabil
 
     let request_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             approval_policy: Some(AskForApproval::Granular {
                 sandbox_approval: true,
                 rules: false,

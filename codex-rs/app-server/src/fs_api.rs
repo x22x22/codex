@@ -54,7 +54,7 @@ impl FsApi {
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
         tracing::debug!(
             environment_id = %self.environment_id,
-            path = %params.path,
+            path = ?params.path,
             "fs/readFile"
         );
         let bytes = self
@@ -73,7 +73,7 @@ impl FsApi {
     ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
         tracing::debug!(
             environment_id = %self.environment_id,
-            path = %params.path,
+            path = ?params.path,
             "fs/writeFile"
         );
         let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
@@ -94,7 +94,7 @@ impl FsApi {
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
         tracing::debug!(
             environment_id = %self.environment_id,
-            path = %params.path,
+            path = ?params.path,
             "fs/createDirectory"
         );
         self.file_system
@@ -115,7 +115,7 @@ impl FsApi {
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
         tracing::debug!(
             environment_id = %self.environment_id,
-            path = %params.path,
+            path = ?params.path,
             "fs/getMetadata"
         );
         let metadata = self
@@ -137,7 +137,7 @@ impl FsApi {
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
         tracing::debug!(
             environment_id = %self.environment_id,
-            path = %params.path,
+            path = ?params.path,
             "fs/readDirectory"
         );
         let entries = self
@@ -163,7 +163,7 @@ impl FsApi {
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
         tracing::debug!(
             environment_id = %self.environment_id,
-            path = %params.path,
+            path = ?params.path,
             "fs/remove"
         );
         self.file_system
@@ -185,8 +185,8 @@ impl FsApi {
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
         tracing::debug!(
             environment_id = %self.environment_id,
-            source_path = %params.source_path,
-            destination_path = %params.destination_path,
+            source_path = ?params.source_path,
+            destination_path = ?params.destination_path,
             "fs/copy"
         );
         self.file_system

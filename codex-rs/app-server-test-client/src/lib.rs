@@ -715,6 +715,7 @@ async fn trigger_zsh_fork_multi_cmd_approval(
             println!("< initialize response: {initialize:?}");
 
             let thread_response = client.thread_start(ThreadStartParams {
+        environment_id: None,
                 dynamic_tools: dynamic_tools.clone(),
                 ..Default::default()
             })?;
@@ -809,6 +810,7 @@ async fn resume_message_v2(
         println!("< initialize response: {initialize:?}");
 
         let resume_response = client.thread_resume(ThreadResumeParams {
+            environment_id: None,
             thread_id,
             ..Default::default()
         })?;
@@ -841,6 +843,7 @@ async fn thread_resume_follow(
         println!("< initialize response: {initialize:?}");
 
         let resume_response = client.thread_resume(ThreadResumeParams {
+            environment_id: None,
             thread_id,
             ..Default::default()
         })?;
@@ -953,6 +956,7 @@ async fn send_message_v2_with_policies(
             println!("< initialize response: {initialize:?}");
 
             let thread_response = client.thread_start(ThreadStartParams {
+                environment_id: None,
                 dynamic_tools: policies.dynamic_tools.clone(),
                 ..Default::default()
             })?;
@@ -992,6 +996,7 @@ async fn send_follow_up_v2(
         println!("< initialize response: {initialize:?}");
 
         let thread_response = client.thread_start(ThreadStartParams {
+            environment_id: None,
             dynamic_tools: dynamic_tools.clone(),
             ..Default::default()
         })?;
@@ -1212,6 +1217,7 @@ fn live_elicitation_timeout_pause(
     println!("< initialize response: {initialize:?}");
 
     let thread_response = client.thread_start(ThreadStartParams {
+        environment_id: None,
         model: Some(model),
         ..Default::default()
     })?;

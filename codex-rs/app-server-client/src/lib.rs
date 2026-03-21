@@ -1039,6 +1039,7 @@ mod tests {
                 .request_typed(ClientRequest::ThreadStart {
                     request_id: RequestId::Integer(2),
                     params: ThreadStartParams {
+                        environment_id: None,
                         ephemeral: Some(true),
                         ..ThreadStartParams::default()
                     },
@@ -1058,6 +1059,7 @@ mod tests {
             .request_typed(ClientRequest::ThreadStart {
                 request_id: RequestId::Integer(3),
                 params: ThreadStartParams {
+                    environment_id: None,
                     ephemeral: Some(true),
                     ..ThreadStartParams::default()
                 },

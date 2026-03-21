@@ -77,6 +77,7 @@ async fn thread_fork_creates_new_thread_and_emits_started() -> Result<()> {
 
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
+            environment_id: None,
             thread_id: conversation_id.clone(),
             ..Default::default()
         })
@@ -188,6 +189,7 @@ async fn thread_fork_rejects_unmaterialized_thread() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -201,6 +203,7 @@ async fn thread_fork_rejects_unmaterialized_thread() -> Result<()> {
 
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
+            environment_id: None,
             thread_id: thread.id,
             ..Default::default()
         })
@@ -286,6 +289,7 @@ async fn thread_fork_surfaces_cloud_requirements_load_errors() -> Result<()> {
 
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
+            environment_id: None,
             thread_id: conversation_id,
             ..Default::default()
         })
@@ -339,6 +343,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
 
     let fork_id = mcp
         .send_thread_fork_request(ThreadForkParams {
+            environment_id: None,
             thread_id: conversation_id.clone(),
             ephemeral: true,
             ..Default::default()

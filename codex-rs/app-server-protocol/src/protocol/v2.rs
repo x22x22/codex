@@ -2292,6 +2292,9 @@ pub struct CommandExecTerminalSize {
 pub struct CommandExecParams {
     /// Command argv vector. Empty arrays are rejected.
     pub command: Vec<String>,
+    /// Optional executor environment binding for this command.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Optional client-supplied, connection-scoped process id.
     ///
     /// Required for `tty`, `streamStdin`, `streamStdoutStderr`, and follow-up
@@ -2459,6 +2462,9 @@ pub struct ThreadStartParams {
     pub model: Option<String>,
     #[ts(optional = nullable)]
     pub model_provider: Option<String>,
+    /// Optional executor environment binding for this thread.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_double_option",
@@ -2532,6 +2538,7 @@ pub struct MockExperimentalMethodResponse {
 #[ts(export_to = "v2/")]
 pub struct ThreadStartResponse {
     pub thread: Thread,
+    pub environment_id: String,
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
@@ -2560,6 +2567,9 @@ pub struct ThreadStartResponse {
 /// Prefer using thread_id whenever possible.
 pub struct ThreadResumeParams {
     pub thread_id: String,
+    /// Optional executor environment binding for the resumed thread.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 
     /// [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
     /// If specified, the thread will be resumed with the provided history
@@ -2618,6 +2628,7 @@ pub struct ThreadResumeParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadResumeResponse {
     pub thread: Thread,
+    pub environment_id: String,
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
@@ -2644,6 +2655,9 @@ pub struct ThreadResumeResponse {
 /// Prefer using thread_id whenever possible.
 pub struct ThreadForkParams {
     pub thread_id: String,
+    /// Optional executor environment binding for the forked thread.
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
 
     /// [UNSTABLE] Specify the rollout path to fork from.
     /// If specified, the thread_id param will be ignored.
@@ -2695,6 +2709,7 @@ pub struct ThreadForkParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadForkResponse {
     pub thread: Thread,
+    pub environment_id: String,
     pub model: String,
     pub model_provider: String,
     pub service_tier: Option<ServiceTier>,
@@ -5919,6 +5934,27 @@ mod tests {
             .expect("path must be absolute")
     }
 
+    fn thread_fixture() -> Thread {
+        Thread {
+            id: "thr_123".to_string(),
+            preview: "Preview".to_string(),
+            ephemeral: false,
+            model_provider: "openai".to_string(),
+            created_at: 1,
+            updated_at: 2,
+            status: ThreadStatus::Idle,
+            path: Some(absolute_path("tmp/thread").into()),
+            cwd: absolute_path("tmp").into(),
+            cli_version: "1.0.0".to_string(),
+            source: SessionSource::Exec,
+            agent_nickname: None,
+            agent_role: None,
+            git_info: None,
+            name: Some("Example".to_string()),
+            turns: Vec::new(),
+        }
+    }
+
     fn test_absolute_path() -> AbsolutePathBuf {
         absolute_path("readable")
     }
@@ -6428,6 +6464,7 @@ mod tests {
             params,
             CommandExecParams {
                 command: vec!["ls".to_string(), "-la".to_string()],
+                environment_id: None,
                 process_id: None,
                 tty: false,
                 stream_stdin: false,
@@ -6448,6 +6485,7 @@ mod tests {
     fn command_exec_params_round_trips_disable_timeout() {
         let params = CommandExecParams {
             command: vec!["sleep".to_string(), "30".to_string()],
+            environment_id: None,
             process_id: Some("sleep-1".to_string()),
             tty: false,
             stream_stdin: false,
@@ -6467,6 +6505,7 @@ mod tests {
             value,
             json!({
                 "command": ["sleep", "30"],
+                "environmentId": null,
                 "processId": "sleep-1",
                 "disableTimeout": true,
                 "timeoutMs": null,
@@ -6487,6 +6526,7 @@ mod tests {
     fn command_exec_params_round_trips_disable_output_cap() {
         let params = CommandExecParams {
             command: vec!["yes".to_string()],
+            environment_id: None,
             process_id: Some("yes-1".to_string()),
             tty: false,
             stream_stdin: false,
@@ -6506,6 +6546,7 @@ mod tests {
             value,
             json!({
                 "command": ["yes"],
+                "environmentId": null,
                 "processId": "yes-1",
                 "streamStdoutStderr": true,
                 "outputBytesCap": null,
@@ -6527,6 +6568,7 @@ mod tests {
     fn command_exec_params_round_trips_env_overrides_and_unsets() {
         let params = CommandExecParams {
             command: vec!["printenv".to_string(), "FOO".to_string()],
+            environment_id: Some("env-1".to_string()),
             process_id: Some("env-1".to_string()),
             tty: false,
             stream_stdin: false,
@@ -6550,6 +6592,7 @@ mod tests {
             value,
             json!({
                 "command": ["printenv", "FOO"],
+                "environmentId": "env-1",
                 "processId": "env-1",
                 "outputBytesCap": null,
                 "timeoutMs": null,
@@ -6615,6 +6658,7 @@ mod tests {
     fn command_exec_params_round_trip_with_size() {
         let params = CommandExecParams {
             command: vec!["top".to_string()],
+            environment_id: None,
             process_id: Some("pty-1".to_string()),
             tty: true,
             stream_stdin: false,
@@ -6637,6 +6681,7 @@ mod tests {
             value,
             json!({
                 "command": ["top"],
+                "environmentId": null,
                 "processId": "pty-1",
                 "tty": true,
                 "outputBytesCap": null,
@@ -6654,6 +6699,293 @@ mod tests {
         let decoded =
             serde_json::from_value::<CommandExecParams>(value).expect("deserialize round-trip");
         assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn thread_start_params_round_trips_environment_id() {
+        let params = ThreadStartParams {
+            environment_id: Some("env-1".to_string()),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize thread/start params");
+        assert_eq!(
+            value,
+            json!({
+                "model": null,
+                "modelProvider": null,
+                "environmentId": "env-1",
+                "cwd": null,
+                "approvalPolicy": null,
+                "approvalsReviewer": null,
+                "sandbox": null,
+                "config": null,
+                "serviceName": null,
+                "baseInstructions": null,
+                "developerInstructions": null,
+                "personality": null,
+                "ephemeral": null,
+                "dynamicTools": null,
+                "mockExperimentalField": null,
+                "experimentalRawEvents": false,
+                "persistExtendedHistory": false,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<ThreadStartParams>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn thread_resume_params_round_trips_environment_id() {
+        let params = ThreadResumeParams {
+            thread_id: "thr_1".to_string(),
+            environment_id: Some("env-2".to_string()),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize thread/resume params");
+        assert_eq!(
+            value,
+            json!({
+                "threadId": "thr_1",
+                "environmentId": "env-2",
+                "history": null,
+                "path": null,
+                "model": null,
+                "modelProvider": null,
+                "cwd": null,
+                "approvalPolicy": null,
+                "approvalsReviewer": null,
+                "sandbox": null,
+                "config": null,
+                "baseInstructions": null,
+                "developerInstructions": null,
+                "personality": null,
+                "persistExtendedHistory": false,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<ThreadResumeParams>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn thread_fork_params_round_trips_environment_id() {
+        let params = ThreadForkParams {
+            thread_id: "thr_2".to_string(),
+            environment_id: Some("env-3".to_string()),
+            ..Default::default()
+        };
+
+        let value = serde_json::to_value(&params).expect("serialize thread/fork params");
+        assert_eq!(
+            value,
+            json!({
+                "threadId": "thr_2",
+                "environmentId": "env-3",
+                "path": null,
+                "model": null,
+                "modelProvider": null,
+                "cwd": null,
+                "approvalPolicy": null,
+                "approvalsReviewer": null,
+                "sandbox": null,
+                "config": null,
+                "baseInstructions": null,
+                "developerInstructions": null,
+                "persistExtendedHistory": false,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<ThreadForkParams>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn thread_start_response_round_trips_environment_id() {
+        let response = ThreadStartResponse {
+            thread: thread_fixture(),
+            environment_id: "env-1".to_string(),
+            model: "gpt-5".to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: Some(ServiceTier::Fast),
+            cwd: absolute_path("tmp").into(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox: SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+            },
+            reasoning_effort: None,
+        };
+
+        let value = serde_json::to_value(&response).expect("serialize thread/start response");
+        assert_eq!(
+            value,
+            json!({
+                "thread": {
+                    "id": "thr_123",
+                    "preview": "Preview",
+                    "ephemeral": false,
+                    "modelProvider": "openai",
+                    "createdAt": 1,
+                    "updatedAt": 2,
+                    "status": {"type": "idle"},
+                    "path": absolute_path_string("tmp/thread"),
+                    "cwd": absolute_path_string("tmp"),
+                    "cliVersion": "1.0.0",
+                    "source": "exec",
+                    "agentNickname": null,
+                    "agentRole": null,
+                    "gitInfo": null,
+                    "name": "Example",
+                    "turns": [],
+                },
+                "environmentId": "env-1",
+                "model": "gpt-5",
+                "modelProvider": "openai",
+                "serviceTier": "fast",
+                "cwd": absolute_path_string("tmp"),
+                "approvalPolicy": "never",
+                "approvalsReviewer": "user",
+                "sandbox": {
+                    "type": "readOnly",
+                    "access": {"type": "fullAccess"},
+                    "networkAccess": false,
+                },
+                "reasoningEffort": null,
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<ThreadStartResponse>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn thread_resume_response_round_trips_environment_id() {
+        let response = ThreadResumeResponse {
+            thread: thread_fixture(),
+            environment_id: "env-2".to_string(),
+            model: "gpt-5".to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: Some(ServiceTier::Fast),
+            cwd: absolute_path("tmp").into(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox: SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+            },
+            reasoning_effort: Some(ReasoningEffort::Low),
+        };
+
+        let value = serde_json::to_value(&response).expect("serialize thread/resume response");
+        assert_eq!(
+            value,
+            json!({
+                "thread": {
+                    "id": "thr_123",
+                    "preview": "Preview",
+                    "ephemeral": false,
+                    "modelProvider": "openai",
+                    "createdAt": 1,
+                    "updatedAt": 2,
+                    "status": {"type": "idle"},
+                    "path": absolute_path_string("tmp/thread"),
+                    "cwd": absolute_path_string("tmp"),
+                    "cliVersion": "1.0.0",
+                    "source": "exec",
+                    "agentNickname": null,
+                    "agentRole": null,
+                    "gitInfo": null,
+                    "name": "Example",
+                    "turns": [],
+                },
+                "environmentId": "env-2",
+                "model": "gpt-5",
+                "modelProvider": "openai",
+                "serviceTier": "fast",
+                "cwd": absolute_path_string("tmp"),
+                "approvalPolicy": "never",
+                "approvalsReviewer": "user",
+                "sandbox": {
+                    "type": "readOnly",
+                    "access": {"type": "fullAccess"},
+                    "networkAccess": false,
+                },
+                "reasoningEffort": "low",
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<ThreadResumeResponse>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn thread_fork_response_round_trips_environment_id() {
+        let response = ThreadForkResponse {
+            thread: thread_fixture(),
+            environment_id: "env-3".to_string(),
+            model: "gpt-5".to_string(),
+            model_provider: "openai".to_string(),
+            service_tier: Some(ServiceTier::Fast),
+            cwd: absolute_path("tmp").into(),
+            approval_policy: AskForApproval::Never,
+            approvals_reviewer: ApprovalsReviewer::User,
+            sandbox: SandboxPolicy::ReadOnly {
+                access: ReadOnlyAccess::FullAccess,
+                network_access: false,
+            },
+            reasoning_effort: Some(ReasoningEffort::Medium),
+        };
+
+        let value = serde_json::to_value(&response).expect("serialize thread/fork response");
+        assert_eq!(
+            value,
+            json!({
+                "thread": {
+                    "id": "thr_123",
+                    "preview": "Preview",
+                    "ephemeral": false,
+                    "modelProvider": "openai",
+                    "createdAt": 1,
+                    "updatedAt": 2,
+                    "status": {"type": "idle"},
+                    "path": absolute_path_string("tmp/thread"),
+                    "cwd": absolute_path_string("tmp"),
+                    "cliVersion": "1.0.0",
+                    "source": "exec",
+                    "agentNickname": null,
+                    "agentRole": null,
+                    "gitInfo": null,
+                    "name": "Example",
+                    "turns": [],
+                },
+                "environmentId": "env-3",
+                "model": "gpt-5",
+                "modelProvider": "openai",
+                "serviceTier": "fast",
+                "cwd": absolute_path_string("tmp"),
+                "approvalPolicy": "never",
+                "approvalsReviewer": "user",
+                "sandbox": {
+                    "type": "readOnly",
+                    "access": {"type": "fullAccess"},
+                    "networkAccess": false,
+                },
+                "reasoningEffort": "medium",
+            })
+        );
+
+        let decoded =
+            serde_json::from_value::<ThreadForkResponse>(value).expect("deserialize round-trip");
+        assert_eq!(decoded, response);
     }
 
     #[test]

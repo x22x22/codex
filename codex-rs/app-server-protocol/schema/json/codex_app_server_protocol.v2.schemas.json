@@ -2557,6 +2557,13 @@
             "null"
           ]
         },
+        "environmentId": {
+          "description": "Optional executor environment binding for this command.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "outputBytesCap": {
           "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
           "format": "uint",
@@ -9582,6 +9589,13 @@
             "null"
           ]
         },
+        "environmentId": {
+          "description": "Optional executor environment binding for the forked thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ephemeral": {
           "type": "boolean"
         },
@@ -9652,6 +9666,9 @@
         "cwd": {
           "type": "string"
         },
+        "environmentId": {
+          "type": "string"
+        },
         "model": {
           "type": "string"
         },
@@ -9689,6 +9706,7 @@
         "approvalPolicy",
         "approvalsReviewer",
         "cwd",
+        "environmentId",
         "model",
         "modelProvider",
         "sandbox",
@@ -10776,6 +10794,13 @@
             "null"
           ]
         },
+        "environmentId": {
+          "description": "Optional executor environment binding for the resumed thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "model": {
           "description": "Configuration overrides for the resumed thread, if any.",
           "type": [
@@ -10853,6 +10878,9 @@
         "cwd": {
           "type": "string"
         },
+        "environmentId": {
+          "type": "string"
+        },
         "model": {
           "type": "string"
         },
@@ -10890,6 +10918,7 @@
         "approvalPolicy",
         "approvalsReviewer",
         "cwd",
+        "environmentId",
         "model",
         "modelProvider",
         "sandbox",
@@ -11052,6 +11081,13 @@
             "null"
           ]
         },
+        "environmentId": {
+          "description": "Optional executor environment binding for this thread.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "ephemeral": {
           "type": [
             "boolean",
@@ -11134,6 +11170,9 @@
         "cwd": {
           "type": "string"
         },
+        "environmentId": {
+          "type": "string"
+        },
         "model": {
           "type": "string"
         },
@@ -11171,6 +11210,7 @@
         "approvalPolicy",
         "approvalsReviewer",
         "cwd",
+        "environmentId",
         "model",
         "modelProvider",
         "sandbox",

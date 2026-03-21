@@ -814,6 +814,7 @@ mod tests {
                 .request(ClientRequest::ThreadStart {
                     request_id: RequestId::Integer(2),
                     params: ThreadStartParams {
+                        environment_id: None,
                         ephemeral: Some(true),
                         ..ThreadStartParams::default()
                     },

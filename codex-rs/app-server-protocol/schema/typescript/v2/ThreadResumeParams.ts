@@ -21,6 +21,9 @@ import type { SandboxMode } from "./SandboxMode";
  * Prefer using thread_id whenever possible.
  */
 export type ThreadResumeParams = {threadId: string, /**
+ * Optional executor environment binding for the resumed thread.
+ */
+environmentId?: string | null, /**
  * [UNSTABLE] FOR CODEX CLOUD - DO NOT USE.
  * If specified, the thread will be resumed with the provided history
  * instead of loaded from disk.

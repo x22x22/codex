@@ -1,10 +1,20 @@
 use std::sync::Arc;
 
+use crate::protocol::ENVIRONMENT_CAPABILITIES_METHOD;
+use crate::protocol::ENVIRONMENT_GET_METHOD;
+use crate::protocol::ENVIRONMENT_LIST_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_READ_METHOD;
+use crate::protocol::EXEC_RESIZE_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
+use crate::protocol::EXEC_WAIT_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
+use crate::protocol::EnvironmentCapabilitiesParams;
+use crate::protocol::EnvironmentGetParams;
+use crate::protocol::EnvironmentListParams;
 use crate::protocol::ExecParams;
+use crate::protocol::ExecResizeParams;
+use crate::protocol::ExecWaitParams;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
@@ -65,6 +75,36 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         },
     );
     router.request(
+        EXEC_RESIZE_METHOD,
+        |handler: Arc<ExecServerHandler>, params: ExecResizeParams| async move {
+            handler.resize(params).await
+        },
+    );
+    router.request(
+        EXEC_WAIT_METHOD,
+        |handler: Arc<ExecServerHandler>, params: ExecWaitParams| async move {
+            handler.wait(params).await
+        },
+    );
+    router.request(
+        ENVIRONMENT_LIST_METHOD,
+        |handler: Arc<ExecServerHandler>, params: EnvironmentListParams| async move {
+            handler.environment_list(params).await
+        },
+    );
+    router.request(
+        ENVIRONMENT_GET_METHOD,
+        |handler: Arc<ExecServerHandler>, params: EnvironmentGetParams| async move {
+            handler.environment_get(params).await
+        },
+    );
+    router.request(
+        ENVIRONMENT_CAPABILITIES_METHOD,
+        |handler: Arc<ExecServerHandler>, params: EnvironmentCapabilitiesParams| async move {
+            handler.environment_capabilities(params).await
+        },
+    );
+    router.request(
         FS_READ_FILE_METHOD,
         |handler: Arc<ExecServerHandler>, params: FsReadFileParams| async move {
             handler.fs_read_file(params).await
@@ -107,4 +147,28 @@ pub(crate) fn build_router() -> RpcRouter<ExecServerHandler> {
         },
     );
     router
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_router;
+    use crate::protocol::ENVIRONMENT_CAPABILITIES_METHOD;
+    use crate::protocol::ENVIRONMENT_GET_METHOD;
+    use crate::protocol::ENVIRONMENT_LIST_METHOD;
+    use crate::protocol::EXEC_RESIZE_METHOD;
+    use crate::protocol::EXEC_WAIT_METHOD;
+
+    #[test]
+    fn build_router_registers_process_control_and_environment_routes() {
+        let router = build_router();
+        assert!(router.request_route(EXEC_RESIZE_METHOD).is_some());
+        assert!(router.request_route(EXEC_WAIT_METHOD).is_some());
+        assert!(router.request_route(ENVIRONMENT_LIST_METHOD).is_some());
+        assert!(router.request_route(ENVIRONMENT_GET_METHOD).is_some());
+        assert!(
+            router
+                .request_route(ENVIRONMENT_CAPABILITIES_METHOD)
+                .is_some()
+        );
+    }
 }

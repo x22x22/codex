@@ -299,6 +299,7 @@ async fn thread_unsubscribe_clears_cached_status_before_resume() -> Result<()> {
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id,
             ..Default::default()
         })
@@ -425,6 +426,7 @@ stream_max_retries = 0
 async fn start_thread(mcp: &mut McpProcess) -> Result<String> {
     let req_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

@@ -3,6 +3,7 @@ use crate::protocol::v2;
 impl From<v1::ExecOneOffCommandParams> for v2::CommandExecParams {
     fn from(value: v1::ExecOneOffCommandParams) -> Self {
         Self {
+            environment_id: None,
             command: value.command,
             process_id: None,
             tty: false,

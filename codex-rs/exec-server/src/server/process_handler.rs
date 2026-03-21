@@ -2,7 +2,11 @@ use codex_app_server_protocol::JSONRPCErrorError;
 
 use crate::local_process::LocalProcess;
 use crate::protocol::ExecParams;
+use crate::protocol::ExecResizeParams;
+use crate::protocol::ExecResizeResponse;
 use crate::protocol::ExecResponse;
+use crate::protocol::ExecWaitParams;
+use crate::protocol::ExecWaitResponse;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
@@ -66,5 +70,19 @@ impl ExecServerProcess {
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
         self.process.terminate_process(params).await
+    }
+
+    pub(crate) async fn resize(
+        &self,
+        params: ExecResizeParams,
+    ) -> Result<ExecResizeResponse, JSONRPCErrorError> {
+        self.process.resize_process(params).await
+    }
+
+    pub(crate) async fn wait(
+        &self,
+        params: ExecWaitParams,
+    ) -> Result<ExecWaitResponse, JSONRPCErrorError> {
+        self.process.wait_process(params).await
     }
 }

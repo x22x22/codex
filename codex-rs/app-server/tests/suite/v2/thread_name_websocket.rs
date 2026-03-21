@@ -45,6 +45,7 @@ async fn thread_name_updated_broadcasts_for_loaded_threads() -> Result<()> {
             "thread/resume",
             10,
             Some(serde_json::to_value(ThreadResumeParams {
+                environment_id: None,
                 thread_id: conversation_id.clone(),
                 ..Default::default()
             })?),

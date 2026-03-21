@@ -45,6 +45,7 @@ async fn command_exec_without_streams_can_be_terminated() -> Result<()> {
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
             command: vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],
+            environment_id: None,
             process_id: Some(process_id.clone()),
             tty: false,
             stream_stdin: false,
@@ -97,6 +98,7 @@ async fn command_exec_without_process_id_keeps_buffered_compatibility() -> Resul
                 "-lc".to_string(),
                 "printf 'legacy-out'; printf 'legacy-err' >&2".to_string(),
             ],
+            environment_id: None,
             process_id: None,
             tty: false,
             stream_stdin: false,
@@ -148,6 +150,7 @@ async fn command_exec_env_overrides_merge_with_server_environment_and_support_un
                 "-lc".to_string(),
                 "printf '%s|%s|%s|%s' \"$COMMAND_EXEC_BASELINE\" \"$COMMAND_EXEC_EXTRA\" \"${RUST_LOG-unset}\" \"$CODEX_HOME\"".to_string(),
             ],
+            environment_id: None,
             process_id: None,
             tty: false,
             stream_stdin: false,
@@ -197,6 +200,7 @@ async fn command_exec_rejects_disable_timeout_with_timeout_ms() -> Result<()> {
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
             command: vec!["sh".to_string(), "-lc".to_string(), "sleep 1".to_string()],
+            environment_id: None,
             process_id: Some("invalid-timeout-1".to_string()),
             tty: false,
             stream_stdin: false,
@@ -234,6 +238,7 @@ async fn command_exec_rejects_disable_output_cap_with_output_bytes_cap() -> Resu
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
             command: vec!["sh".to_string(), "-lc".to_string(), "sleep 1".to_string()],
+            environment_id: None,
             process_id: Some("invalid-cap-1".to_string()),
             tty: false,
             stream_stdin: false,
@@ -271,6 +276,7 @@ async fn command_exec_rejects_negative_timeout_ms() -> Result<()> {
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
             command: vec!["sh".to_string(), "-lc".to_string(), "sleep 1".to_string()],
+            environment_id: None,
             process_id: Some("negative-timeout-1".to_string()),
             tty: false,
             stream_stdin: false,
@@ -308,6 +314,7 @@ async fn command_exec_without_process_id_rejects_streaming() -> Result<()> {
     let command_request_id = mcp
         .send_command_exec_request(CommandExecParams {
             command: vec!["sh".to_string(), "-lc".to_string(), "cat".to_string()],
+            environment_id: None,
             process_id: None,
             tty: false,
             stream_stdin: false,
@@ -349,6 +356,7 @@ async fn command_exec_non_streaming_respects_output_cap() -> Result<()> {
                 "-lc".to_string(),
                 "printf 'abcdef'; printf 'uvwxyz' >&2".to_string(),
             ],
+            environment_id: None,
             process_id: Some("cap-1".to_string()),
             tty: false,
             stream_stdin: false,
@@ -396,6 +404,7 @@ async fn command_exec_streaming_does_not_buffer_output() -> Result<()> {
                 "-lc".to_string(),
                 "printf 'abcdefghij'; sleep 30".to_string(),
             ],
+            environment_id: None,
             process_id: Some(process_id.clone()),
             tty: false,
             stream_stdin: false,
@@ -456,6 +465,7 @@ async fn command_exec_pipe_streams_output_and_accepts_write() -> Result<()> {
                 "-lc".to_string(),
                 "printf 'out-start\\n'; printf 'err-start\\n' >&2; IFS= read line; printf 'out:%s\\n' \"$line\"; printf 'err:%s\\n' \"$line\" >&2".to_string(),
             ],
+            environment_id: None,
             process_id: Some(process_id.clone()),
             tty: false,
             stream_stdin: true,
@@ -547,6 +557,7 @@ async fn command_exec_tty_implies_streaming_and_reports_pty_output() -> Result<(
                 "-lc".to_string(),
                 "stty -echo; if [ -t 0 ]; then printf 'tty\\n'; else printf 'notty\\n'; fi; IFS= read line; printf 'echo:%s\\n' \"$line\"".to_string(),
             ],
+            environment_id: None,
             process_id: Some(process_id.clone()),
             tty: true,
             stream_stdin: false,
@@ -625,6 +636,7 @@ async fn command_exec_tty_supports_initial_size_and_resize() -> Result<()> {
                 "-lc".to_string(),
                 "stty -echo; printf 'start:%s\\n' \"$(stty size)\"; IFS= read _line; printf 'after:%s\\n' \"$(stty size)\"".to_string(),
             ],
+            environment_id: None,
             process_id: Some(process_id.clone()),
             tty: true,
             stream_stdin: false,

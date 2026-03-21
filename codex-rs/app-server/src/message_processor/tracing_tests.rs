@@ -195,6 +195,7 @@ impl TracingHarness {
                 ClientRequest::ThreadStart {
                     request_id: RequestId::Integer(request_id),
                     params: ThreadStartParams {
+                        environment_id: None,
                         ephemeral: Some(true),
                         ..ThreadStartParams::default()
                     },

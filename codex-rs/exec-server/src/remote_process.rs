@@ -6,7 +6,11 @@ use crate::ExecServerClient;
 use crate::ExecServerError;
 use crate::ExecServerEvent;
 use crate::protocol::ExecParams;
+use crate::protocol::ExecResizeParams;
+use crate::protocol::ExecResizeResponse;
 use crate::protocol::ExecResponse;
+use crate::protocol::ExecWaitParams;
+use crate::protocol::ExecWaitResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::TerminateResponse;
@@ -39,6 +43,17 @@ impl ExecProcess for RemoteProcess {
         chunk: Vec<u8>,
     ) -> Result<WriteResponse, ExecServerError> {
         self.client.write(process_id, chunk).await
+    }
+
+    async fn resize(
+        &self,
+        params: ExecResizeParams,
+    ) -> Result<ExecResizeResponse, ExecServerError> {
+        self.client.resize(params).await
+    }
+
+    async fn wait(&self, params: ExecWaitParams) -> Result<ExecWaitResponse, ExecServerError> {
+        self.client.wait(params).await
     }
 
     async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError> {

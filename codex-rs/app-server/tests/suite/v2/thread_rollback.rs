@@ -41,6 +41,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     // Start a thread.
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -144,6 +145,7 @@ async fn thread_rollback_drops_last_turns_and_persists_to_rollout() -> Result<()
     // Resume and confirm the history is pruned.
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread.id,
             ..Default::default()
         })

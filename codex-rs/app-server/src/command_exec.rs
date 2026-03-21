@@ -89,6 +89,7 @@ struct CommandControlRequest {
 pub(crate) struct StartCommandExecParams {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) request_id: ConnectionRequestId,
+    pub(crate) environment_id: String,
     pub(crate) process_id: Option<String>,
     pub(crate) exec_request: ExecRequest,
     pub(crate) started_network_proxy: Option<StartedNetworkProxy>,
@@ -149,6 +150,7 @@ impl CommandExecManager {
         let StartCommandExecParams {
             outgoing,
             request_id,
+            environment_id,
             process_id,
             exec_request,
             started_network_proxy,
@@ -158,7 +160,6 @@ impl CommandExecManager {
             output_bytes_cap,
             size,
         } = params;
-        let environment_id = environment_id_from_cwd(exec_request.cwd.as_path());
         if process_id.is_none() && (tty || stream_stdin || stream_stdout_stderr) {
             return Err(invalid_request(
                 "command/exec tty or streaming requires a client-supplied processId".to_string(),
@@ -801,6 +802,7 @@ mod tests {
                     connection_id: ConnectionId(1),
                     request_id: codex_app_server_protocol::RequestId::Integer(42),
                 },
+                environment_id: "test-env".to_string(),
                 process_id: Some("proc-42".to_string()),
                 exec_request: windows_sandbox_exec_request(),
                 started_network_proxy: None,
@@ -834,6 +836,7 @@ mod tests {
             .start(StartCommandExecParams {
                 outgoing: Arc::new(OutgoingMessageSender::new(tx)),
                 request_id: request_id.clone(),
+                environment_id: "test-env".to_string(),
                 process_id: Some("proc-99".to_string()),
                 exec_request: windows_sandbox_exec_request(),
                 started_network_proxy: None,
@@ -883,6 +886,7 @@ mod tests {
             .start(StartCommandExecParams {
                 outgoing: Arc::new(OutgoingMessageSender::new(tx)),
                 request_id: request_id.clone(),
+                environment_id: "test-env".to_string(),
                 process_id: Some("proc-100".to_string()),
                 exec_request: ExecRequest {
                     command: vec!["sh".to_string(), "-lc".to_string(), "sleep 30".to_string()],

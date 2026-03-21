@@ -5,7 +5,11 @@ use crate::ExecServerError;
 use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
+use crate::protocol::ExecResizeParams;
+use crate::protocol::ExecResizeResponse;
 use crate::protocol::ExecResponse;
+use crate::protocol::ExecWaitParams;
+use crate::protocol::ExecWaitResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::TerminateResponse;
@@ -28,6 +32,11 @@ pub trait ExecProcess: Send + Sync {
         process_id: &str,
         chunk: Vec<u8>,
     ) -> Result<WriteResponse, ExecServerError>;
+
+    async fn resize(&self, params: ExecResizeParams)
+    -> Result<ExecResizeResponse, ExecServerError>;
+
+    async fn wait(&self, params: ExecWaitParams) -> Result<ExecWaitResponse, ExecServerError>;
 
     async fn terminate(&self, process_id: &str) -> Result<TerminateResponse, ExecServerError>;
 

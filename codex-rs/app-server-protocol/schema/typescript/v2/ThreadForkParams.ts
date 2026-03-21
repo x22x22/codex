@@ -17,6 +17,9 @@ import type { SandboxMode } from "./SandboxMode";
  * Prefer using thread_id whenever possible.
  */
 export type ThreadForkParams = {threadId: string, /**
+ * Optional executor environment binding for the forked thread.
+ */
+environmentId?: string | null, /**
  * [UNSTABLE] Specify the rollout path to fork from.
  * If specified, the thread_id param will be ignored.
  */

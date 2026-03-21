@@ -115,6 +115,7 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
     // Start a thread.
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("gpt-5.1-codex-max".to_string()),
             ..Default::default()
         })
@@ -129,6 +130,7 @@ async fn thread_resume_rejects_unmaterialized_thread() -> Result<()> {
     // Resume should fail before the first user message materializes rollout storage.
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread.id.clone(),
             ..Default::default()
         })
@@ -179,6 +181,7 @@ async fn thread_resume_returns_rollout_history() -> Result<()> {
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: conversation_id.clone(),
             ..Default::default()
         })
@@ -390,6 +393,7 @@ stream_max_retries = 0
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id,
             ..Default::default()
         })
@@ -466,6 +470,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: conversation_id,
             ..Default::default()
         })
@@ -485,6 +490,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
 
     let second_resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread.id.clone(),
             ..Default::default()
         })
@@ -539,6 +545,7 @@ async fn thread_resume_without_overrides_does_not_change_updated_at_or_mtime() -
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread_id.clone(),
             ..Default::default()
         })
@@ -594,6 +601,7 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("gpt-5.1-codex-max".to_string()),
             ..Default::default()
         })
@@ -653,6 +661,7 @@ async fn thread_resume_keeps_in_flight_turn_streaming() -> Result<()> {
 
     let resume_id = secondary
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread.id,
             ..Default::default()
         })
@@ -701,6 +710,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("gpt-5.1-codex-max".to_string()),
             ..Default::default()
         })
@@ -760,6 +770,7 @@ async fn thread_resume_rejects_history_when_thread_is_running() -> Result<()> {
 
     let resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread_id.clone(),
             history: Some(vec![ResponseItem::Message {
                 id: None,
@@ -817,6 +828,7 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("gpt-5.1-codex-max".to_string()),
             ..Default::default()
         })
@@ -876,6 +888,7 @@ async fn thread_resume_rejects_mismatched_path_when_thread_is_running() -> Resul
 
     let resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread_id.clone(),
             path: Some(PathBuf::from("/tmp/does-not-match-running-rollout.jsonl")),
             ..Default::default()
@@ -923,6 +936,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("gpt-5.1-codex-max".to_string()),
             ..Default::default()
         })
@@ -979,6 +993,7 @@ async fn thread_resume_rejoins_running_thread_even_with_override_mismatch() -> R
 
     let resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread.id.clone(),
             model: Some("not-the-running-model".to_string()),
             cwd: Some("/tmp".to_string()),
@@ -1036,6 +1051,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("gpt-5.1-codex-max".to_string()),
             ..Default::default()
         })
@@ -1097,6 +1113,7 @@ async fn thread_resume_replays_pending_command_execution_request_approval() -> R
 
     let resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread.id.clone(),
             ..Default::default()
         })
@@ -1173,6 +1190,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("gpt-5.1-codex-max".to_string()),
             cwd: Some(workspace.to_string_lossy().into_owned()),
             ..Default::default()
@@ -1263,6 +1281,7 @@ async fn thread_resume_replays_pending_file_change_request_approval() -> Result<
 
     let resume_id = primary
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread.id.clone(),
             ..Default::default()
         })
@@ -1333,6 +1352,7 @@ async fn thread_resume_with_overrides_defers_updated_at_until_turn_start() -> Re
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id,
             model: Some("mock-model".to_string()),
             ..Default::default()
@@ -1393,6 +1413,7 @@ async fn thread_resume_fails_when_required_mcp_server_fails_to_initialize() -> R
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: rollout.conversation_id,
             ..Default::default()
         })
@@ -1482,6 +1503,7 @@ async fn thread_resume_surfaces_cloud_requirements_load_errors() -> Result<()> {
 
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: conversation_id,
             ..Default::default()
         })
@@ -1522,6 +1544,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("gpt-5.1-codex-max".to_string()),
             ..Default::default()
         })
@@ -1557,6 +1580,7 @@ async fn thread_resume_prefers_path_over_thread_id() -> Result<()> {
     let thread_path = thread.path.clone().expect("thread path");
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: "not-a-valid-thread-id".to_string(),
             path: Some(thread_path),
             ..Default::default()
@@ -1602,6 +1626,7 @@ async fn thread_resume_supports_history_and_overrides() -> Result<()> {
     // Resume with explicit history and override the model.
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id,
             history: Some(history),
             model: Some("mock-model".to_string()),
@@ -1642,6 +1667,7 @@ async fn start_materialized_thread_and_restart(
 
     let start_id = first_mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("gpt-5.1-codex-max".to_string()),
             ..Default::default()
         })
@@ -1716,6 +1742,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
 
     let start_id = primary
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("gpt-5.2-codex".to_string()),
             ..Default::default()
         })
@@ -1753,6 +1780,7 @@ async fn thread_resume_accepts_personality_override() -> Result<()> {
 
     let resume_id = secondary
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: thread.id,
             model: Some("gpt-5.2-codex".to_string()),
             personality: Some(Personality::Friendly),

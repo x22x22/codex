@@ -918,6 +918,7 @@ fn sandbox_mode_from_policy(
 
 fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
     ThreadStartParams {
+        environment_id: None,
         model: config.model.clone(),
         model_provider: Some(config.model_provider_id.clone()),
         cwd: Some(config.cwd.to_string_lossy().to_string()),
@@ -932,6 +933,7 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
 
 fn thread_resume_params_from_config(config: &Config, path: Option<PathBuf>) -> ThreadResumeParams {
     ThreadResumeParams {
+        environment_id: None,
         thread_id: "resume".to_string(),
         path,
         model: config.model.clone(),
@@ -1904,6 +1906,7 @@ mod tests {
                 name: Some("thread".to_string()),
                 turns: vec![],
             },
+            environment_id: "local".to_string(),
             model: "gpt-5.4".to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,

@@ -238,6 +238,13 @@
         "null"
       ]
     },
+    "environmentId": {
+      "description": "Optional executor environment binding for this command.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "outputBytesCap": {
       "description": "Optional per-stream stdout/stderr capture cap in bytes.\n\nWhen omitted, the server default applies. Cannot be combined with `disableOutputCap`.",
       "format": "uint",

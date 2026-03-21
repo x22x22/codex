@@ -408,6 +408,7 @@ async fn review_start_rejects_empty_custom_instructions() -> Result<()> {
 async fn start_default_thread(mcp: &mut McpProcess) -> Result<String> {
     let thread_req = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })

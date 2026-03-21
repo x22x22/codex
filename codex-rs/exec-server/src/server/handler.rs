@@ -14,8 +14,21 @@ use codex_app_server_protocol::FsWriteFileParams;
 use codex_app_server_protocol::FsWriteFileResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
 
+use crate::Environment;
+use crate::EnvironmentCapabilities;
+use crate::EnvironmentCapabilitiesParams;
+use crate::EnvironmentCapabilitiesResponse;
+use crate::EnvironmentGetParams;
+use crate::EnvironmentGetResponse;
+use crate::EnvironmentInfo;
+use crate::EnvironmentListParams;
+use crate::EnvironmentListResponse;
 use crate::protocol::ExecParams;
+use crate::protocol::ExecResizeParams;
+use crate::protocol::ExecResizeResponse;
 use crate::protocol::ExecResponse;
+use crate::protocol::ExecWaitParams;
+use crate::protocol::ExecWaitResponse;
 use crate::protocol::InitializeResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
@@ -30,13 +43,20 @@ use crate::server::process_handler::ExecServerProcess;
 pub(crate) struct ExecServerHandler {
     process: ExecServerProcess,
     file_system: ExecServerFileSystem,
+    environment: EnvironmentInfo,
 }
 
 impl ExecServerHandler {
     pub(crate) fn new(notifications: RpcNotificationSender) -> Self {
+        let environment = EnvironmentInfo {
+            environment_id: Environment::default_environment_id(None),
+            experimental_exec_server_url: None,
+            capabilities: EnvironmentCapabilities::default(),
+        };
         Self {
             process: ExecServerProcess::new(notifications),
-            file_system: ExecServerFileSystem::default(),
+            file_system: ExecServerFileSystem::new(&Environment::default()),
+            environment,
         }
     }
 
@@ -75,6 +95,63 @@ impl ExecServerHandler {
         params: TerminateParams,
     ) -> Result<TerminateResponse, JSONRPCErrorError> {
         self.process.terminate(params).await
+    }
+
+    pub(crate) async fn resize(
+        &self,
+        params: ExecResizeParams,
+    ) -> Result<ExecResizeResponse, JSONRPCErrorError> {
+        self.process.resize(params).await
+    }
+
+    pub(crate) async fn wait(
+        &self,
+        params: ExecWaitParams,
+    ) -> Result<ExecWaitResponse, JSONRPCErrorError> {
+        self.process.wait(params).await
+    }
+
+    pub(crate) async fn environment_list(
+        &self,
+        _params: EnvironmentListParams,
+    ) -> Result<EnvironmentListResponse, JSONRPCErrorError> {
+        self.process.require_initialized_for("environment")?;
+        Ok(EnvironmentListResponse {
+            environments: vec![self.environment.clone()],
+        })
+    }
+
+    pub(crate) async fn environment_get(
+        &self,
+        params: EnvironmentGetParams,
+    ) -> Result<EnvironmentGetResponse, JSONRPCErrorError> {
+        self.process.require_initialized_for("environment")?;
+        if params.environment_id != self.environment.environment_id {
+            return Err(crate::rpc::invalid_request(format!(
+                "unknown environment id `{}`",
+                params.environment_id
+            )));
+        }
+        Ok(EnvironmentGetResponse {
+            environment: self.environment.clone(),
+        })
+    }
+
+    pub(crate) async fn environment_capabilities(
+        &self,
+        params: EnvironmentCapabilitiesParams,
+    ) -> Result<EnvironmentCapabilitiesResponse, JSONRPCErrorError> {
+        self.process.require_initialized_for("environment")?;
+        if params.environment_id != self.environment.environment_id {
+            return Err(crate::rpc::invalid_request(format!(
+                "unknown environment id `{}`",
+                params.environment_id
+            )));
+        }
+        Ok(EnvironmentCapabilitiesResponse {
+            environment_id: self.environment.environment_id.clone(),
+            capabilities: self.environment.capabilities.clone(),
+        })
     }
 
     pub(crate) async fn fs_read_file(

@@ -30,6 +30,7 @@ use crate::state_db::StateDbHandle;
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
+    pub environment_id: String,
     pub model: String,
     pub model_provider_id: String,
     pub service_tier: Option<ServiceTier>,

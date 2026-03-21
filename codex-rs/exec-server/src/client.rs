@@ -25,16 +25,31 @@ use tracing::warn;
 
 use crate::connection::JsonRpcConnection;
 use crate::process::ExecServerEvent;
+use crate::protocol::ENVIRONMENT_CAPABILITIES_METHOD;
+use crate::protocol::ENVIRONMENT_GET_METHOD;
+use crate::protocol::ENVIRONMENT_LIST_METHOD;
 use crate::protocol::EXEC_EXITED_METHOD;
 use crate::protocol::EXEC_METHOD;
 use crate::protocol::EXEC_OUTPUT_DELTA_METHOD;
 use crate::protocol::EXEC_READ_METHOD;
+use crate::protocol::EXEC_RESIZE_METHOD;
 use crate::protocol::EXEC_TERMINATE_METHOD;
+use crate::protocol::EXEC_WAIT_METHOD;
 use crate::protocol::EXEC_WRITE_METHOD;
+use crate::protocol::EnvironmentCapabilitiesParams;
+use crate::protocol::EnvironmentCapabilitiesResponse;
+use crate::protocol::EnvironmentGetParams;
+use crate::protocol::EnvironmentGetResponse;
+use crate::protocol::EnvironmentListParams;
+use crate::protocol::EnvironmentListResponse;
 use crate::protocol::ExecExitedNotification;
 use crate::protocol::ExecOutputDeltaNotification;
 use crate::protocol::ExecParams;
+use crate::protocol::ExecResizeParams;
+use crate::protocol::ExecResizeResponse;
 use crate::protocol::ExecResponse;
+use crate::protocol::ExecWaitParams;
+use crate::protocol::ExecWaitResponse;
 use crate::protocol::FS_COPY_METHOD;
 use crate::protocol::FS_CREATE_DIRECTORY_METHOD;
 use crate::protocol::FS_GET_METADATA_METHOD;
@@ -241,6 +256,55 @@ impl ExecServerClient {
                     process_id: process_id.to_string(),
                 },
             )
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn resize(
+        &self,
+        params: ExecResizeParams,
+    ) -> Result<ExecResizeResponse, ExecServerError> {
+        self.inner
+            .client
+            .call(EXEC_RESIZE_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn wait(&self, params: ExecWaitParams) -> Result<ExecWaitResponse, ExecServerError> {
+        self.inner
+            .client
+            .call(EXEC_WAIT_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn environment_list(&self) -> Result<EnvironmentListResponse, ExecServerError> {
+        self.inner
+            .client
+            .call(ENVIRONMENT_LIST_METHOD, &EnvironmentListParams::default())
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn environment_get(
+        &self,
+        params: EnvironmentGetParams,
+    ) -> Result<EnvironmentGetResponse, ExecServerError> {
+        self.inner
+            .client
+            .call(ENVIRONMENT_GET_METHOD, &params)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn environment_capabilities(
+        &self,
+        params: EnvironmentCapabilitiesParams,
+    ) -> Result<EnvironmentCapabilitiesResponse, ExecServerError> {
+        self.inner
+            .client
+            .call(ENVIRONMENT_CAPABILITIES_METHOD, &params)
             .await
             .map_err(Into::into)
     }

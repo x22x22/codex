@@ -807,6 +807,7 @@ fn thread_start_params_from_config(
     thread_params_mode: ThreadParamsMode,
 ) -> ThreadStartParams {
     ThreadStartParams {
+        environment_id: None,
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(config),
         cwd: thread_cwd_from_config(config, thread_params_mode),
@@ -826,6 +827,7 @@ fn thread_resume_params_from_config(
     thread_params_mode: ThreadParamsMode,
 ) -> ThreadResumeParams {
     ThreadResumeParams {
+        environment_id: None,
         thread_id: thread_id.to_string(),
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(&config),
@@ -845,6 +847,7 @@ fn thread_fork_params_from_config(
     thread_params_mode: ThreadParamsMode,
 ) -> ThreadForkParams {
     ThreadForkParams {
+        environment_id: None,
         thread_id: thread_id.to_string(),
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(&config),
@@ -1168,6 +1171,7 @@ mod tests {
                     error: None,
                 }],
             },
+            environment_id: "local".to_string(),
             model: "gpt-5.4".to_string(),
             model_provider: "openai".to_string(),
             service_tier: None,

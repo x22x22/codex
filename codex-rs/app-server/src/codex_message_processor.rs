@@ -239,6 +239,7 @@ use codex_core::state_db::reconcile_rollout;
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
 use codex_core::windows_sandbox::WindowsSandboxSetupMode as CoreWindowsSandboxSetupMode;
 use codex_core::windows_sandbox::WindowsSandboxSetupRequest;
+use codex_exec_server::Environment;
 use codex_feedback::CodexFeedback;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
@@ -1553,6 +1554,7 @@ impl CodexMessageProcessor {
 
         let CommandExecParams {
             command,
+            environment_id,
             process_id,
             tty,
             stream_stdin,
@@ -1566,6 +1568,24 @@ impl CodexMessageProcessor {
             size,
             sandbox_policy,
         } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        let environment_id = match environment_id {
+            Some(environment_id) if environment_id != configured_environment_id => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!(
+                        "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                    ),
+                    data: None,
+                };
+                self.outgoing.send_error(request, error).await;
+                return;
+            }
+            Some(environment_id) => environment_id,
+            None => configured_environment_id,
+        };
 
         if size.is_some() && !tty {
             let error = JSONRPCErrorError {
@@ -1751,6 +1771,7 @@ impl CodexMessageProcessor {
                     .start(StartCommandExecParams {
                         outgoing,
                         request_id: request_for_task,
+                        environment_id,
                         process_id,
                         exec_request,
                         started_network_proxy: started_network_proxy_for_task,
@@ -1830,6 +1851,7 @@ impl CodexMessageProcessor {
         let ThreadStartParams {
             model,
             model_provider,
+            environment_id,
             service_tier,
             cwd,
             approval_policy,
@@ -1846,6 +1868,21 @@ impl CodexMessageProcessor {
             ephemeral,
             persist_extended_history,
         } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
         let mut typesafe_overrides = self.build_thread_config_overrides(
             model,
             model_provider,
@@ -2077,6 +2114,7 @@ impl CodexMessageProcessor {
 
                 let response = ThreadStartResponse {
                     thread: thread.clone(),
+                    environment_id: config_snapshot.environment_id,
                     model: config_snapshot.model,
                     model_provider: config_snapshot.model_provider_id,
                     service_tier: config_snapshot.service_tier,
@@ -3400,6 +3438,7 @@ impl CodexMessageProcessor {
 
         let ThreadResumeParams {
             thread_id,
+            environment_id,
             history,
             path,
             model,
@@ -3415,6 +3454,21 @@ impl CodexMessageProcessor {
             personality,
             persist_extended_history,
         } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
 
         let thread_history = if let Some(history) = history {
             let Some(thread_history) = self
@@ -3549,9 +3603,9 @@ impl CodexMessageProcessor {
                     thread_status,
                     /*has_live_in_progress_turn*/ false,
                 );
-
                 let response = ThreadResumeResponse {
                     thread,
+                    environment_id: configured_environment_id,
                     model: session_configured.model,
                     model_provider: session_configured.model_provider_id,
                     service_tier: session_configured.service_tier,
@@ -3902,6 +3956,7 @@ impl CodexMessageProcessor {
     async fn thread_fork(&mut self, request_id: ConnectionRequestId, params: ThreadForkParams) {
         let ThreadForkParams {
             thread_id,
+            environment_id,
             path,
             model,
             model_provider,
@@ -3916,6 +3971,21 @@ impl CodexMessageProcessor {
             ephemeral,
             persist_extended_history,
         } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
 
         let (rollout_path, source_thread_id) = if let Some(path) = path {
             (path, None)
@@ -4156,6 +4226,7 @@ impl CodexMessageProcessor {
 
         let response = ThreadForkResponse {
             thread: thread.clone(),
+            environment_id: configured_environment_id,
             model: session_configured.model,
             model_provider: session_configured.model_provider_id,
             service_tier: session_configured.service_tier,
@@ -7309,6 +7380,7 @@ async fn handle_pending_thread_resume_request(
     }
 
     let ThreadConfigSnapshot {
+        environment_id,
         model,
         model_provider_id,
         service_tier,
@@ -7321,6 +7393,7 @@ async fn handle_pending_thread_resume_request(
     } = pending.config_snapshot;
     let response = ThreadResumeResponse {
         thread,
+        environment_id,
         model,
         model_provider: model_provider_id,
         service_tier,
@@ -8419,6 +8492,7 @@ mod tests {
     fn collect_resume_override_mismatches_includes_service_tier() {
         let request = ThreadResumeParams {
             thread_id: "thread-1".to_string(),
+            environment_id: None,
             history: None,
             path: None,
             model: None,
@@ -8435,6 +8509,7 @@ mod tests {
             persist_extended_history: false,
         };
         let config_snapshot = ThreadConfigSnapshot {
+            environment_id: "local".to_string(),
             model: "gpt-5".to_string(),
             model_provider_id: "openai".to_string(),
             service_tier: Some(codex_protocol::config_types::ServiceTier::Flex),

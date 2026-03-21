@@ -722,7 +722,13 @@ impl Codex {
 
     pub(crate) async fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
         let state = self.session.state.lock().await;
-        state.session_configuration.thread_config_snapshot()
+        state.session_configuration.thread_config_snapshot(
+            self.session
+                .services
+                .environment
+                .environment_id()
+                .to_string(),
+        )
     }
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
@@ -1063,8 +1069,9 @@ impl SessionConfiguration {
         &self.codex_home
     }
 
-    fn thread_config_snapshot(&self) -> ThreadConfigSnapshot {
+    fn thread_config_snapshot(&self, environment_id: String) -> ThreadConfigSnapshot {
         ThreadConfigSnapshot {
+            environment_id,
             model: self.collaboration_mode.model().to_string(),
             model_provider_id: self.original_config_do_not_use.model_provider_id.clone(),
             service_tier: self.service_tier,

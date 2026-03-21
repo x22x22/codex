@@ -2106,6 +2106,9 @@
     "cwd": {
       "type": "string"
     },
+    "environmentId": {
+      "type": "string"
+    },
     "model": {
       "type": "string"
     },
@@ -2143,6 +2146,7 @@
     "approvalPolicy",
     "approvalsReviewer",
     "cwd",
+    "environmentId",
     "model",
     "modelProvider",
     "sandbox",

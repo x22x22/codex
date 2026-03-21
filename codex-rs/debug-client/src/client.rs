@@ -385,6 +385,7 @@ pub fn build_thread_start_params(
     cwd: Option<String>,
 ) -> ThreadStartParams {
     ThreadStartParams {
+        environment_id: None,
         model,
         model_provider,
         cwd,
@@ -402,6 +403,7 @@ pub fn build_thread_resume_params(
     cwd: Option<String>,
 ) -> ThreadResumeParams {
     ThreadResumeParams {
+        environment_id: None,
         thread_id,
         model,
         model_provider,

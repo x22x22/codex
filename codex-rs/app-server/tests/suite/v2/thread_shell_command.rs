@@ -57,6 +57,7 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             persist_extended_history: true,
             ..Default::default()
         })
@@ -186,6 +187,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             persist_extended_history: true,
             ..Default::default()
         })

@@ -163,6 +163,7 @@ async fn thread_read_loaded_thread_returns_precomputed_path_before_materializati
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -323,6 +324,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
     // Resume should also surface the name.
     let resume_id = mcp
         .send_thread_resume_request(ThreadResumeParams {
+            environment_id: None,
             thread_id: conversation_id.clone(),
             ..Default::default()
         })
@@ -367,6 +369,7 @@ async fn thread_read_include_turns_rejects_unmaterialized_loaded_thread() -> Res
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
@@ -423,6 +426,7 @@ async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Resul
 
     let start_id = mcp
         .send_thread_start_request(ThreadStartParams {
+            environment_id: None,
             model: Some("mock-model".to_string()),
             ..Default::default()
         })
