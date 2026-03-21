@@ -6030,22 +6030,10 @@ impl ChatWidget {
                     notification.action,
                 );
             }
-            ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
-                self.on_guardian_review_notification(
-                    notification.target_item_id,
-                    notification.turn_id,
-                    notification.review,
-                    notification.action,
-                );
-            }
-            ServerNotification::ItemGuardianApprovalReviewCompleted(notification) => {
-                self.on_guardian_review_notification(
-                    notification.target_item_id,
-                    notification.turn_id,
-                    notification.review,
-                    notification.action,
-                );
-            }
+            // Ignore deprecated aliases so the same guardian review does not render twice
+            // when the app-server emits both legacy and parent-scoped notifications.
+            ServerNotification::ItemGuardianApprovalReviewStarted(_)
+            | ServerNotification::ItemGuardianApprovalReviewCompleted(_) => {}
             ServerNotification::ThreadClosed(_) => {
                 if !from_replay {
                     self.on_shutdown_complete();
