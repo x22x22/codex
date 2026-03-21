@@ -315,6 +315,7 @@ impl ApprovalOverlay {
                     permissions: granted_permissions,
                     scope,
                 },
+                persist_permissions: None,
             },
         });
     }
