@@ -1009,7 +1009,9 @@ fn stamp_user_message_type_on_input_item(item: &mut ResponseInputItem, kind: Use
     if role != "user" {
         return;
     }
-    let mut metadata_value = metadata.take().unwrap_or_default();
+    let mut metadata_value = metadata
+        .take()
+        .unwrap_or_else(|| ResponseItemMessageMetadata::new(None));
     metadata_value.user_message_type = Some(kind);
     *metadata = Some(metadata_value);
 }
