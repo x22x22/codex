@@ -29,6 +29,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     show_raw_agent_reasoning: bool,
     last_message_path: Option<PathBuf>,
     final_message: Option<String>,
+    final_message_rendered: bool,
     last_total_token_usage: Option<ThreadTokenUsage>,
 }
 
@@ -51,6 +52,7 @@ impl EventProcessorWithHumanOutput {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
             last_message_path,
             final_message: None,
+            final_message_rendered: false,
             last_total_token_usage: None,
         }
     }
@@ -103,6 +105,7 @@ impl EventProcessorWithHumanOutput {
             ThreadItem::AgentMessage { text, .. } => {
                 eprintln!("{}\n{}", "assistant".style(self.cyan), text);
                 self.final_message = Some(text);
+                self.final_message_rendered = true;
             }
             ThreadItem::Reasoning {
                 summary, content, ..
@@ -306,9 +309,15 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             ServerNotification::TurnCompleted(notification) => match notification.turn.status {
                 TurnStatus::Completed => {
+                    let rendered_message = self
+                        .final_message_rendered
+                        .then(|| self.final_message.clone())
+                        .flatten();
                     if let Some(final_message) =
                         final_message_from_turn_items(notification.turn.items.as_slice())
                     {
+                        self.final_message_rendered =
+                            rendered_message.as_deref() == Some(final_message.as_str());
                         self.final_message = Some(final_message);
                     }
                     self.print_usage();
@@ -367,6 +376,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
         ) && let Some(message) = self.final_message.as_deref()
         {
             println!("{message}");
+        } else if should_print_final_message_to_tty(
+            self.final_message.as_deref(),
+            self.final_message_rendered,
+            std::io::stdout().is_terminal(),
+            std::io::stderr().is_terminal(),
+        ) && let Some(message) = self.final_message.as_deref()
+        {
+            eprintln!("{}\n{}", "assistant".style(self.cyan), message);
         }
     }
 }
@@ -412,6 +429,15 @@ fn should_print_final_message_to_stdout(
     final_message.is_some() && !(stdout_is_terminal && stderr_is_terminal)
 }
 
+fn should_print_final_message_to_tty(
+    final_message: Option<&str>,
+    final_message_rendered: bool,
+    stdout_is_terminal: bool,
+    stderr_is_terminal: bool,
+) -> bool {
+    final_message.is_some() && !final_message_rendered && stdout_is_terminal && stderr_is_terminal
+}
+
 #[cfg(test)]
 mod tests {
     use codex_app_server_protocol::ThreadItem;
@@ -423,6 +449,7 @@ mod tests {
     use super::final_message_from_turn_items;
     use super::reasoning_text;
     use super::should_print_final_message_to_stdout;
+    use super::should_print_final_message_to_tty;
     use crate::event_processor::EventProcessor;
     use codex_app_server_protocol::ServerNotification;
 
@@ -456,6 +483,26 @@ mod tests {
     #[test]
     fn suppresses_final_stdout_message_when_missing() {
         assert!(!should_print_final_message_to_stdout(None, false, false));
+    }
+
+    #[test]
+    fn prints_final_tty_message_when_not_yet_rendered() {
+        assert!(should_print_final_message_to_tty(
+            Some("hello"),
+            false,
+            true,
+            true
+        ));
+    }
+
+    #[test]
+    fn suppresses_final_tty_message_when_already_rendered() {
+        assert!(!should_print_final_message_to_tty(
+            Some("hello"),
+            true,
+            true,
+            true
+        ));
     }
 
     #[test]
@@ -538,6 +585,7 @@ mod tests {
             show_raw_agent_reasoning: false,
             last_message_path: None,
             final_message: None,
+            final_message_rendered: false,
             last_total_token_usage: None,
         };
 
@@ -578,6 +626,7 @@ mod tests {
             show_raw_agent_reasoning: false,
             last_message_path: None,
             final_message: Some("stale answer".to_string()),
+            final_message_rendered: true,
             last_total_token_usage: None,
         };
 
@@ -603,6 +652,7 @@ mod tests {
             crate::event_processor::CodexStatus::InitiateShutdown
         );
         assert_eq!(processor.final_message.as_deref(), Some("final answer"));
+        assert!(!processor.final_message_rendered);
     }
 
     #[test]
@@ -618,6 +668,7 @@ mod tests {
             show_raw_agent_reasoning: false,
             last_message_path: None,
             final_message: Some("streamed answer".to_string()),
+            final_message_rendered: false,
             last_total_token_usage: None,
         };
 
