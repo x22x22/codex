@@ -38,7 +38,7 @@ fn ignores_non_proc_mount_errors() {
 }
 
 #[test]
-fn inserts_bwrap_argv0_before_command_separator() {
+fn inserts_bwrap_argv0_before_command_separator_for_non_helper_programs() {
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
     let argv = build_bwrap_argv(
         vec!["/bin/true".to_string()],
@@ -70,6 +70,42 @@ fn inserts_bwrap_argv0_before_command_separator() {
             "codex-linux-sandbox".to_string(),
             "--".to_string(),
             "/bin/true".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn skips_bwrap_argv0_when_command_already_uses_helper_basename() {
+    let sandbox_policy = SandboxPolicy::new_read_only_policy();
+    let argv = build_bwrap_argv(
+        vec!["/tmp/codex-linux-sandbox".to_string(), "--flag".to_string()],
+        &FileSystemSandboxPolicy::from(&sandbox_policy),
+        Path::new("/"),
+        Path::new("/"),
+        BwrapOptions {
+            mount_proc: true,
+            network_mode: BwrapNetworkMode::FullAccess,
+        },
+    )
+    .args;
+    assert_eq!(
+        argv,
+        vec![
+            "bwrap".to_string(),
+            "--new-session".to_string(),
+            "--die-with-parent".to_string(),
+            "--ro-bind".to_string(),
+            "/".to_string(),
+            "/".to_string(),
+            "--dev".to_string(),
+            "/dev".to_string(),
+            "--unshare-user".to_string(),
+            "--unshare-pid".to_string(),
+            "--proc".to_string(),
+            "/proc".to_string(),
+            "--".to_string(),
+            "/tmp/codex-linux-sandbox".to_string(),
+            "--flag".to_string(),
         ]
     );
 }

@@ -18,6 +18,8 @@ use codex_protocol::protocol::FileSystemSandboxPolicy;
 use codex_protocol::protocol::NetworkSandboxPolicy;
 use codex_protocol::protocol::SandboxPolicy;
 
+const LINUX_SANDBOX_ARG0: &str = "codex-linux-sandbox";
+
 #[derive(Debug, Parser)]
 /// CLI surface for the Linux sandbox helper.
 ///
@@ -465,15 +467,17 @@ fn build_bwrap_argv(
     )
     .unwrap_or_else(|err| panic!("error building bubblewrap command: {err:?}"));
 
-    let command_separator_index = bwrap_args
-        .args
-        .iter()
-        .position(|arg| arg == "--")
-        .unwrap_or_else(|| panic!("bubblewrap argv is missing command separator '--'"));
-    bwrap_args.args.splice(
-        command_separator_index..command_separator_index,
-        ["--argv0".to_string(), "codex-linux-sandbox".to_string()],
-    );
+    if should_set_bwrap_argv0(&bwrap_args.args) {
+        let command_separator_index = bwrap_args
+            .args
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap_or_else(|| panic!("bubblewrap argv is missing command separator '--'"));
+        bwrap_args.args.splice(
+            command_separator_index..command_separator_index,
+            ["--argv0".to_string(), LINUX_SANDBOX_ARG0.to_string()],
+        );
+    }
 
     let mut argv = vec!["bwrap".to_string()];
     argv.extend(bwrap_args.args);
@@ -481,6 +485,19 @@ fn build_bwrap_argv(
         args: argv,
         preserved_files: bwrap_args.preserved_files,
     }
+}
+
+fn should_set_bwrap_argv0(bwrap_args: &[String]) -> bool {
+    let Some(command_separator_index) = bwrap_args.iter().position(|arg| arg == "--") else {
+        panic!("bubblewrap argv is missing command separator '--'");
+    };
+    let Some(program) = bwrap_args.get(command_separator_index + 1) else {
+        panic!("bubblewrap argv is missing sandbox program after '--'");
+    };
+    Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_none_or(|name| name != LINUX_SANDBOX_ARG0)
 }
 
 fn preflight_proc_mount_support(
