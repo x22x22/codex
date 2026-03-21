@@ -4502,7 +4502,11 @@ async fn steer_input_returns_active_turn_id() {
 #[tokio::test]
 async fn steer_input_emits_prompt_steering_metadata_when_item_metadata_enabled() {
     let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
-    let _ = sess.features.enable(Feature::ItemMetadata);
+    Arc::get_mut(&mut sess)
+        .expect("session should be uniquely owned in this test")
+        .features
+        .enable(Feature::ItemMetadata)
+        .expect("feature flag should be enabled for this test");
 
     let input = vec![UserInput::Text {
         text: "hello".to_string(),
