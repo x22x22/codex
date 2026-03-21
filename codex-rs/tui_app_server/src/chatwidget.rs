@@ -316,6 +316,8 @@ use crate::render::renderable::Renderable;
 use crate::render::renderable::RenderableExt;
 use crate::render::renderable::RenderableItem;
 use crate::slash_command::SlashCommand;
+use crate::slash_command_input::FastSlashCommandArgs;
+use crate::slash_command_input::ParsedSlashCommand;
 use crate::status::RateLimitSnapshotDisplay;
 use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
@@ -4895,34 +4897,25 @@ impl ChatWidget {
             return;
         }
 
-        let trimmed = args.trim();
-        if trimmed.is_empty() {
-            self.dispatch_command(cmd);
-            return;
-        }
-        match cmd {
-            SlashCommand::Fast => {
-                match trimmed.to_ascii_lowercase().as_str() {
-                    "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
-                    "off" => self.set_service_tier_selection(/*service_tier*/ None),
-                    "status" => {
-                        let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast))
-                        {
-                            "on"
-                        } else {
-                            "off"
-                        };
-                        self.add_info_message(
-                            format!("Fast mode is {status}."),
-                            /*hint*/ None,
-                        );
-                    }
-                    _ => {
-                        self.add_error_message("Usage: /fast [on|off|status]".to_string());
-                    }
-                }
+        match cmd.parse_invocation(&args) {
+            Ok(ParsedSlashCommand::Bare(_)) => {
+                self.dispatch_command(cmd);
             }
-            SlashCommand::Rename if !trimmed.is_empty() => {
+            Ok(ParsedSlashCommand::Fast(FastSlashCommandArgs::On)) => {
+                self.set_service_tier_selection(Some(ServiceTier::Fast));
+            }
+            Ok(ParsedSlashCommand::Fast(FastSlashCommandArgs::Off)) => {
+                self.set_service_tier_selection(/*service_tier*/ None);
+            }
+            Ok(ParsedSlashCommand::Fast(FastSlashCommandArgs::Status)) => {
+                let status = if matches!(self.config.service_tier, Some(ServiceTier::Fast)) {
+                    "on"
+                } else {
+                    "off"
+                };
+                self.add_info_message(format!("Fast mode is {status}."), /*hint*/ None);
+            }
+            Ok(ParsedSlashCommand::Rename) => {
                 self.session_telemetry
                     .counter("codex.thread.rename", /*inc*/ 1, &[]);
                 let Some((prepared_args, _prepared_elements)) = self
@@ -4941,7 +4934,7 @@ impl ChatWidget {
                 self.app_event_tx.set_thread_name(name);
                 self.bottom_pane.drain_pending_submission_state();
             }
-            SlashCommand::Plan if !trimmed.is_empty() => {
+            Ok(ParsedSlashCommand::Plan) => {
                 self.dispatch_command(cmd);
                 if self.active_mode_kind() != ModeKind::Plan {
                     return;
@@ -4972,7 +4965,7 @@ impl ChatWidget {
                     self.queue_user_message(user_message);
                 }
             }
-            SlashCommand::Review if !trimmed.is_empty() => {
+            Ok(ParsedSlashCommand::Review) => {
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
@@ -4987,7 +4980,7 @@ impl ChatWidget {
                 }));
                 self.bottom_pane.drain_pending_submission_state();
             }
-            SlashCommand::SandboxReadRoot if !trimmed.is_empty() => {
+            Ok(ParsedSlashCommand::SandboxReadRoot) => {
                 let Some((prepared_args, _prepared_elements)) = self
                     .bottom_pane
                     .prepare_inline_args_submission(/*record_history*/ false)
@@ -5000,12 +4993,8 @@ impl ChatWidget {
                     });
                 self.bottom_pane.drain_pending_submission_state();
             }
-            _ => {
-                let usage = cmd.usage_lines().join(" | ");
-                self.add_error_message(format!(
-                    "'/{}' does not accept inline arguments. Usage: {usage}",
-                    cmd.command()
-                ));
+            Err(err) => {
+                self.add_error_message(err.message());
             }
         }
     }
