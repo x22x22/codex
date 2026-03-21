@@ -452,7 +452,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         auto_handle_chatgpt_auth_refresh: true,
-        allow_legacy_notifications: false,
     };
     run_exec_session(ExecRunArgs {
         in_process_start_args,

@@ -282,7 +282,6 @@ async fn start_plugin_request_client(
         client_version: env!("CARGO_PKG_VERSION").to_string(),
         experimental_api: true,
         auto_handle_chatgpt_auth_refresh: false,
-        allow_legacy_notifications: true,
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
     })

@@ -193,8 +193,6 @@ pub struct InProcessClientStartArgs {
     /// Whether the client worker should satisfy local ChatGPT auth refresh
     /// requests instead of surfacing them to the embedder.
     pub auto_handle_chatgpt_auth_refresh: bool,
-    /// Whether legacy `codex/event/*` notifications should be forwarded.
-    pub allow_legacy_notifications: bool,
 }
 
 impl InProcessClientStartArgs {
@@ -233,7 +231,6 @@ impl InProcessClientStartArgs {
             enable_codex_api_key_env: self.enable_codex_api_key_env,
             initialize,
             channel_capacity: self.channel_capacity,
-            allow_legacy_notifications: self.allow_legacy_notifications,
         }
     }
 }
@@ -1006,7 +1003,6 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             auto_handle_chatgpt_auth_refresh: false,
-            allow_legacy_notifications: true,
             opt_out_notification_methods: Vec::new(),
             channel_capacity,
         })
@@ -1658,13 +1654,11 @@ mod tests {
             client_version: "0.0.0-test".to_string(),
             experimental_api: true,
             auto_handle_chatgpt_auth_refresh: true,
-            allow_legacy_notifications: false,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         }
         .into_runtime_start_args();
 
-        assert_eq!(runtime_args.allow_legacy_notifications, false);
         assert_eq!(runtime_args.config, config);
     }
 
