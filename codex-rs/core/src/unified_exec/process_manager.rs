@@ -537,78 +537,102 @@ impl UnifiedExecProcessManager {
         mut spawn_lifecycle: SpawnLifecycleHandle,
     ) -> Result<Arc<ProcessBackend>, UnifiedExecError> {
         if use_exec_server {
-            let executor = executor
-                .take()
-                .ok_or_else(|| UnifiedExecError::create_process("exec-server unavailable".to_string()))?;
-            let response = executor
-                .start(ExecParams {
-                    process_id: process_id.to_string(),
-                    argv: env.command.clone(),
-                    cwd: env.cwd.clone(),
-                    env: env.env.clone(),
-                    tty,
-                    arg0: env.arg0.clone(),
-                })
-                .await
-                .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-            let _ = response.process_id;
-
-            let process = Arc::new(ProcessBackend::ExecServer {
-                process_id: process_id.to_string(),
-                executor,
-                output_buffer: Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default())),
-                output_notify: Arc::new(Notify::new()),
-                output_closed: Arc::new(AtomicBool::new(false)),
-                output_closed_notify: Arc::new(Notify::new()),
-                output_drained: Arc::new(Notify::new()),
-                cancellation_token: CancellationToken::new(),
-                exit_code: Arc::new(RwLock::new(None)),
-                has_exited: Arc::new(AtomicBool::new(false)),
-                sandbox_type: env.sandbox,
-                output_seq: Arc::new(AtomicU64::new(0)),
-            });
-
-            spawn_lifecycle.after_spawn();
-            Self::spawn_exec_server_output_watcher(Arc::clone(&process));
-
-            Ok(process)
-        } else {
-            let (program, args) = env
-                .command
-                .split_first()
-                .ok_or(UnifiedExecError::MissingCommandLine)?;
-            let inherited_fds = spawn_lifecycle.inherited_fds();
-
-            let spawn_result = if tty {
-                codex_utils_pty::pty::spawn_process_with_inherited_fds(
-                    program,
-                    args,
-                    env.cwd.as_path(),
-                    &env.env,
-                    &env.arg0,
-                    codex_utils_pty::TerminalSize::default(),
-                    &inherited_fds,
-                )
-                .await
-            } else {
-                codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
-                    program,
-                    args,
-                    env.cwd.as_path(),
-                    &env.env,
-                    &env.arg0,
-                    &inherited_fds,
-                )
-                .await
-            };
-            let spawned =
-                spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-            spawn_lifecycle.after_spawn();
-            let process = UnifiedExecProcess::from_spawned(spawned, env.sandbox, spawn_lifecycle).await?;
-            Ok(Arc::new(ProcessBackend::Local {
-                process: Arc::new(process),
-            }))
+            return self
+                .open_session_with_exec_server(env, process_id, tty, &mut executor, spawn_lifecycle)
+                .await;
         }
+
+        self.open_session_with_local_process(env, process_id, tty, spawn_lifecycle)
+            .await
+    }
+
+    async fn open_session_with_local_process(
+        &self,
+        env: &ExecRequest,
+        process_id: i32,
+        tty: bool,
+        spawn_lifecycle: SpawnLifecycleHandle,
+    ) -> Result<Arc<ProcessBackend>, UnifiedExecError> {
+        let (program, args) = env
+            .command
+            .split_first()
+            .ok_or(UnifiedExecError::MissingCommandLine)?;
+        let inherited_fds = spawn_lifecycle.inherited_fds();
+
+        let spawn_result = if tty {
+            codex_utils_pty::pty::spawn_process_with_inherited_fds(
+                program,
+                args,
+                env.cwd.as_path(),
+                &env.env,
+                &env.arg0,
+                codex_utils_pty::TerminalSize::default(),
+                &inherited_fds,
+            )
+            .await
+        } else {
+            codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
+                program,
+                args,
+                env.cwd.as_path(),
+                &env.env,
+                &env.arg0,
+                &inherited_fds,
+            )
+            .await
+        };
+
+        let spawned = spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+        spawn_lifecycle.after_spawn();
+        let process = UnifiedExecProcess::from_spawned(spawned, env.sandbox, spawn_lifecycle).await?;
+        Ok(Arc::new(ProcessBackend::Local {
+            process: Arc::new(process),
+        }))
+    }
+
+    async fn open_session_with_exec_server(
+        &self,
+        env: &ExecRequest,
+        process_id: i32,
+        tty: bool,
+        mut executor: &mut Option<Arc<dyn ExecProcess>>,
+        spawn_lifecycle: SpawnLifecycleHandle,
+    ) -> Result<Arc<ProcessBackend>, UnifiedExecError> {
+        let executor = executor
+            .take()
+            .ok_or_else(|| UnifiedExecError::create_process("exec-server unavailable".to_string()))?;
+        let response = executor
+            .start(ExecParams {
+                process_id: process_id.to_string(),
+                argv: env.command.clone(),
+                cwd: env.cwd.clone(),
+                env: env.env.clone(),
+                tty,
+                arg0: env.arg0.clone(),
+            })
+            .await
+            .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+        let _ = response.process_id;
+
+        let process = Arc::new(ProcessBackend::ExecServer {
+            process_id: process_id.to_string(),
+            executor,
+            output_buffer: Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default())),
+            output_notify: Arc::new(Notify::new()),
+            output_closed: Arc::new(AtomicBool::new(false)),
+            output_closed_notify: Arc::new(Notify::new()),
+            output_drained: Arc::new(Notify::new()),
+            cancellation_token: CancellationToken::new(),
+            exit_code: Arc::new(RwLock::new(None)),
+            has_exited: Arc::new(AtomicBool::new(false)),
+            sandbox_type: env.sandbox,
+            output_seq: Arc::new(AtomicU64::new(0)),
+        });
+
+        spawn_lifecycle.after_spawn();
+        Self::spawn_exec_server_output_watcher(Arc::clone(&process));
+
+        Ok(process)
     }
 
     pub(super) async fn open_session_with_sandbox(
@@ -622,10 +646,14 @@ impl UnifiedExecProcessManager {
             Some(context.session.conversation_id),
         ));
         let mut orchestrator = ToolOrchestrator::new();
-        let mut runtime = UnifiedExecRuntime::new(
-            self,
-            context.turn.tools_config.unified_exec_shell_mode.clone(),
-        );
+        let mut runtime = if context.turn.config.experimental_exec_server_url.is_some() {
+            UnifiedExecRuntime::with_exec_server(
+                self,
+                context.turn.tools_config.unified_exec_shell_mode.clone(),
+            )
+        } else {
+            UnifiedExecRuntime::new(self, context.turn.tools_config.unified_exec_shell_mode.clone())
+        };
         let exec_approval_requirement = context
             .session
             .services

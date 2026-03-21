@@ -73,6 +73,7 @@ pub struct UnifiedExecApprovalKey {
 pub struct UnifiedExecRuntime<'a> {
     manager: &'a UnifiedExecProcessManager,
     shell_mode: UnifiedExecShellMode,
+    use_exec_server: bool,
 }
 
 impl<'a> UnifiedExecRuntime<'a> {
@@ -80,6 +81,18 @@ impl<'a> UnifiedExecRuntime<'a> {
         Self {
             manager,
             shell_mode,
+            use_exec_server: false,
+        }
+    }
+
+    pub fn with_exec_server(
+        manager: &'a UnifiedExecProcessManager,
+        shell_mode: UnifiedExecShellMode,
+    ) -> Self {
+        Self {
+            manager,
+            shell_mode,
+            use_exec_server: true,
         }
     }
 }
@@ -193,6 +206,12 @@ impl<'a> ToolRuntime<UnifiedExecRequest, Arc<ProcessBackend>> for UnifiedExecRun
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
     ) -> Result<Arc<ProcessBackend>, ToolError> {
+        let use_exec_server = if self.use_exec_server {
+            true
+        } else {
+            req.use_exec_server
+        };
+
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
         let command = maybe_wrap_shell_lc_with_snapshot(
@@ -241,7 +260,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, Arc<ProcessBackend>> for UnifiedExecRun
                             &prepared.exec_request,
                             req.process_id,
                             req.tty,
-                            req.use_exec_server,
+                            use_exec_server,
                             Some(ctx.session.services.environment.get_executor()),
                             prepared.spawn_lifecycle,
                         )
@@ -281,8 +300,8 @@ impl<'a> ToolRuntime<UnifiedExecRequest, Arc<ProcessBackend>> for UnifiedExecRun
                 &exec_env,
                 req.process_id,
                 req.tty,
-                req.use_exec_server,
-                if req.use_exec_server {
+                use_exec_server,
+                if use_exec_server {
                     Some(ctx.session.services.environment.get_executor())
                 } else {
                     None
