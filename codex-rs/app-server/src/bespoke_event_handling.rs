@@ -610,6 +610,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 proposed_execpolicy_amendment,
                 proposed_network_policy_amendments,
                 additional_permissions,
+                permissions_profile_persistence,
                 skill_metadata,
                 parsed_cmd,
                 ..
@@ -680,8 +681,13 @@ pub(crate) async fn apply_bespoke_event_handling(
                                 .map(V2NetworkPolicyAmendment::from)
                                 .collect()
                         });
-                    let additional_permissions =
-                        additional_permissions.map(V2AdditionalPermissionProfile::from);
+                    let additional_permissions_for_request = additional_permissions
+                        .clone()
+                        .map(V2AdditionalPermissionProfile::from);
+                    let permissions_profile_persistence_for_request =
+                        permissions_profile_persistence
+                            .clone()
+                            .map(codex_app_server_protocol::PermissionProfilePersistence::from);
                     let skill_metadata =
                         skill_metadata.map(CommandExecutionRequestApprovalSkillMetadata::from);
 
@@ -695,7 +701,9 @@ pub(crate) async fn apply_bespoke_event_handling(
                         command,
                         cwd,
                         command_actions,
-                        additional_permissions,
+                        additional_permissions: additional_permissions_for_request,
+                        permissions_profile_persistence:
+                            permissions_profile_persistence_for_request,
                         skill_metadata,
                         proposed_execpolicy_amendment: proposed_execpolicy_amendment_v2,
                         proposed_network_policy_amendments: proposed_network_policy_amendments_v2,
@@ -706,6 +714,11 @@ pub(crate) async fn apply_bespoke_event_handling(
                             params,
                         ))
                         .await;
+                    let additional_permissions = additional_permissions.and_then(|permissions| {
+                        serde_json::to_value(permissions)
+                            .ok()
+                            .and_then(|value| serde_json::from_value(value).ok())
+                    });
                     tokio::spawn(async move {
                         on_command_execution_request_approval_response(
                             event_turn_id,
@@ -713,6 +726,8 @@ pub(crate) async fn apply_bespoke_event_handling(
                             approval_id,
                             call_id,
                             completion_item,
+                            additional_permissions,
+                            permissions_profile_persistence,
                             pending_request_id,
                             rx,
                             conversation,
@@ -2295,6 +2310,7 @@ async fn on_exec_approval_response(
             id: call_id,
             turn_id: Some(turn_id),
             decision: response.decision,
+            persist_permissions: None,
         })
         .await
     {
@@ -2655,6 +2671,8 @@ async fn on_command_execution_request_approval_response(
     approval_id: Option<String>,
     item_id: String,
     completion_item: Option<CommandExecutionCompletionItem>,
+    additional_permissions: Option<codex_protocol::models::PermissionProfile>,
+    permissions_profile_persistence: Option<CorePermissionProfilePersistence>,
     pending_request_id: RequestId,
     receiver: oneshot::Receiver<ClientRequestResult>,
     conversation: Arc<CodexThread>,
@@ -2681,6 +2699,9 @@ async fn on_command_execution_request_approval_response(
                 CommandExecutionApprovalDecision::Accept => (ReviewDecision::Approved, None),
                 CommandExecutionApprovalDecision::AcceptForSession => {
                     (ReviewDecision::ApprovedForSession, None)
+                }
+                CommandExecutionApprovalDecision::AcceptAndPersist => {
+                    (ReviewDecision::ApprovedPersistToProfile, None)
                 }
                 CommandExecutionApprovalDecision::AcceptWithExecpolicyAmendment {
                     execpolicy_amendment,
@@ -2760,11 +2781,23 @@ async fn on_command_execution_request_approval_response(
         .await;
     }
 
+    let persist_permissions = if matches!(decision, ReviewDecision::ApprovedPersistToProfile) {
+        permissions_profile_persistence.and_then(|target| {
+            additional_permissions.map(|permissions| PersistPermissionProfileAction {
+                profile_name: target.profile_name,
+                permissions,
+            })
+        })
+    } else {
+        None
+    };
+
     if let Err(err) = conversation
         .submit(Op::ExecApproval {
             id: approval_id.unwrap_or_else(|| item_id.clone()),
             turn_id: Some(event_turn_id),
             decision,
+            persist_permissions,
         })
         .await
     {

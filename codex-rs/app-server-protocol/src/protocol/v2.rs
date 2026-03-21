@@ -969,6 +969,9 @@ pub enum CommandExecutionApprovalDecision {
     /// User approved the command and future prompts in the same session-scoped
     /// approval cache should run without prompting.
     AcceptForSession,
+    /// User approved the command and wants to persist the filesystem access in
+    /// the active named permissions profile.
+    AcceptAndPersist,
     /// User approved the command, and wants to apply the proposed execpolicy amendment so future
     /// matching commands can run without prompting.
     AcceptWithExecpolicyAmendment {
@@ -988,6 +991,7 @@ impl From<CoreReviewDecision> for CommandExecutionApprovalDecision {
     fn from(value: CoreReviewDecision) -> Self {
         match value {
             CoreReviewDecision::Approved => Self::Accept,
+            CoreReviewDecision::ApprovedPersistToProfile => Self::AcceptAndPersist,
             CoreReviewDecision::ApprovedExecpolicyAmendment {
                 proposed_execpolicy_amendment,
             } => Self::AcceptWithExecpolicyAmendment {
@@ -5145,6 +5149,11 @@ pub struct CommandExecutionRequestApprovalParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional = nullable)]
     pub additional_permissions: Option<AdditionalPermissionProfile>,
+    /// Optional named permissions profile that can persist the requested
+    /// filesystem access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub permissions_profile_persistence: Option<PermissionProfilePersistence>,
     /// Optional skill metadata when the approval was triggered by a skill script.
     #[experimental("item/commandExecution/requestApproval.skillMetadata")]
     #[serde(default, skip_serializing_if = "Option::is_none")]

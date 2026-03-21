@@ -57,6 +57,7 @@ pub(crate) enum ApprovalRequest {
         available_decisions: Vec<ReviewDecision>,
         network_approval_context: Option<NetworkApprovalContext>,
         additional_permissions: Option<PermissionProfile>,
+        permissions_profile_persistence: Option<PermissionProfilePersistence>,
     },
     Permissions {
         thread_id: ThreadId,
@@ -154,12 +155,14 @@ impl ApprovalOverlay {
                 available_decisions,
                 network_approval_context,
                 additional_permissions,
+                permissions_profile_persistence,
                 ..
             } => (
                 exec_options(
                     available_decisions,
                     network_approval_context.as_ref(),
                     additional_permissions.as_ref(),
+                    permissions_profile_persistence.as_ref(),
                 ),
                 network_approval_context.as_ref().map_or_else(
                     || "Would you like to run the following command?".to_string(),
@@ -225,8 +228,23 @@ impl ApprovalOverlay {
         };
         if let Some(request) = self.current_request.as_ref() {
             match (request, &option.decision) {
-                (ApprovalRequest::Exec { id, command, .. }, ApprovalDecision::Review(decision)) => {
-                    self.handle_exec_decision(id, command, decision.clone());
+                (
+                    ApprovalRequest::Exec {
+                        id,
+                        command,
+                        additional_permissions,
+                        permissions_profile_persistence,
+                        ..
+                    },
+                    ApprovalDecision::Review(decision),
+                ) => {
+                    self.handle_exec_decision(
+                        id,
+                        command,
+                        additional_permissions.as_ref(),
+                        permissions_profile_persistence.as_ref(),
+                        decision.clone(),
+                    );
                 }
                 (
                     ApprovalRequest::Permissions {
@@ -263,7 +281,14 @@ impl ApprovalOverlay {
         self.advance_queue();
     }
 
-    fn handle_exec_decision(&self, id: &str, command: &[String], decision: ReviewDecision) {
+    fn handle_exec_decision(
+        &self,
+        id: &str,
+        command: &[String],
+        additional_permissions: Option<&PermissionProfile>,
+        permissions_profile_persistence: Option<&PermissionProfilePersistence>,
+        decision: ReviewDecision,
+    ) {
         let Some(request) = self.current_request.as_ref() else {
             return;
         };
@@ -276,12 +301,18 @@ impl ApprovalOverlay {
             self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
         let thread_id = request.thread_id();
+        let persist_permissions = persist_permissions_for_exec_decision(
+            &decision,
+            additional_permissions,
+            permissions_profile_persistence,
+        );
         self.app_event_tx.send(AppEvent::SubmitThreadOp {
             thread_id,
             op: Op::ExecApproval {
                 id: id.to_string(),
                 turn_id: None,
                 decision,
+                persist_permissions,
             },
         });
     }
@@ -458,8 +489,20 @@ impl BottomPaneView for ApprovalOverlay {
             && let Some(request) = self.current_request.as_ref()
         {
             match request {
-                ApprovalRequest::Exec { id, command, .. } => {
-                    self.handle_exec_decision(id, command, ReviewDecision::Abort);
+                ApprovalRequest::Exec {
+                    id,
+                    command,
+                    additional_permissions,
+                    permissions_profile_persistence,
+                    ..
+                } => {
+                    self.handle_exec_decision(
+                        id,
+                        command,
+                        additional_permissions.as_ref(),
+                        permissions_profile_persistence.as_ref(),
+                        ReviewDecision::Abort,
+                    );
                 }
                 ApprovalRequest::Permissions {
                     call_id,
@@ -688,6 +731,7 @@ fn exec_options(
     available_decisions: &[ReviewDecision],
     network_approval_context: Option<&NetworkApprovalContext>,
     additional_permissions: Option<&PermissionProfile>,
+    permissions_profile_persistence: Option<&PermissionProfilePersistence>,
 ) -> Vec<ApprovalOption> {
     available_decisions
         .iter()
@@ -736,6 +780,14 @@ fn exec_options(
                 display_shortcut: None,
                 additional_shortcuts: vec![key_hint::plain(KeyCode::Char('a'))],
             }),
+            ReviewDecision::ApprovedPersistToProfile => {
+                permissions_profile_persistence.map(|_| ApprovalOption {
+                    label: "Yes, always allow these permissions".to_string(),
+                    decision: ApprovalDecision::Review(ReviewDecision::ApprovedPersistToProfile),
+                    display_shortcut: None,
+                    additional_shortcuts: vec![key_hint::plain(KeyCode::Char('p'))],
+                })
+            }
             ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment,
             } => {
@@ -1031,6 +1083,7 @@ mod tests {
             available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
             additional_permissions: None,
+            permissions_profile_persistence: None,
         }
     }
 
@@ -1049,6 +1102,7 @@ mod tests {
                     write: Some(vec![absolute_path("/tmp/out.txt")]),
                 }),
             },
+            permissions_profile_persistence: None,
         }
     }
 
@@ -1096,6 +1150,7 @@ mod tests {
                 available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
                 network_approval_context: None,
                 additional_permissions: None,
+                permissions_profile_persistence: None,
             },
             tx,
             Features::with_defaults(),
@@ -1124,6 +1179,7 @@ mod tests {
                 available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
                 network_approval_context: None,
                 additional_permissions: None,
+                permissions_profile_persistence: None,
             },
             tx,
             Features::with_defaults(),
@@ -1157,6 +1213,7 @@ mod tests {
                 ],
                 network_approval_context: None,
                 additional_permissions: None,
+                permissions_profile_persistence: None,
             },
             tx,
             Features::with_defaults(),
@@ -1214,6 +1271,7 @@ mod tests {
                     protocol: NetworkApprovalProtocol::Https,
                 }),
                 additional_permissions: None,
+                permissions_profile_persistence: None,
             },
             tx,
             Features::with_defaults(),
@@ -1240,6 +1298,7 @@ mod tests {
             available_decisions: vec![ReviewDecision::Approved, ReviewDecision::Abort],
             network_approval_context: None,
             additional_permissions: None,
+            permissions_profile_persistence: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
@@ -1281,6 +1340,7 @@ mod tests {
             ],
             Some(&network_context),
             None,
+            None,
         );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
@@ -1303,6 +1363,7 @@ mod tests {
                 ReviewDecision::ApprovedForSession,
                 ReviewDecision::Abort,
             ],
+            None,
             None,
             None,
         );
@@ -1331,6 +1392,7 @@ mod tests {
             &[ReviewDecision::Approved, ReviewDecision::Abort],
             None,
             Some(&additional_permissions),
+            None,
         );
 
         let labels: Vec<String> = options.into_iter().map(|option| option.label).collect();
@@ -1345,7 +1407,7 @@ mod tests {
 
     #[test]
     fn permissions_options_use_expected_labels() {
-        let labels: Vec<String> = permissions_options()
+        let labels: Vec<String> = permissions_options(None)
             .into_iter()
             .map(|option| option.label)
             .collect();
@@ -1457,6 +1519,7 @@ mod tests {
                 }),
                 ..Default::default()
             }),
+            permissions_profile_persistence: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
@@ -1504,6 +1567,7 @@ mod tests {
                 }),
                 ..Default::default()
             }),
+            permissions_profile_persistence: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());
@@ -1539,6 +1603,7 @@ mod tests {
                 protocol: NetworkApprovalProtocol::Https,
             }),
             additional_permissions: None,
+            permissions_profile_persistence: None,
         };
 
         let view = ApprovalOverlay::new(exec_request, tx, Features::with_defaults());

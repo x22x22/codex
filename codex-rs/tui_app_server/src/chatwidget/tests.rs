@@ -3324,6 +3324,7 @@ async fn exec_approval_emits_proposed_command_and_decision_history() {
         additional_permissions: None,
         skill_metadata: None,
         available_decisions: None,
+        permissions_profile_persistence: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -3375,6 +3376,7 @@ async fn exec_approval_uses_approval_id_when_present() {
             additional_permissions: None,
             skill_metadata: None,
             available_decisions: None,
+            permissions_profile_persistence: None,
             parsed_cmd: vec![],
         }),
     });
@@ -3417,6 +3419,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         additional_permissions: None,
         skill_metadata: None,
         available_decisions: None,
+        permissions_profile_persistence: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -3473,6 +3476,7 @@ async fn exec_approval_decision_truncates_multiline_and_long_commands() {
         additional_permissions: None,
         skill_metadata: None,
         available_decisions: None,
+        permissions_profile_persistence: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -9578,6 +9582,7 @@ async fn approval_modal_exec_snapshot() -> anyhow::Result<()> {
         additional_permissions: None,
         skill_metadata: None,
         available_decisions: None,
+        permissions_profile_persistence: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -9640,6 +9645,7 @@ async fn approval_modal_exec_without_reason_snapshot() -> anyhow::Result<()> {
         additional_permissions: None,
         skill_metadata: None,
         available_decisions: None,
+        permissions_profile_persistence: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -9689,6 +9695,7 @@ async fn approval_modal_exec_multiline_prefix_hides_execpolicy_option_snapshot()
         additional_permissions: None,
         skill_metadata: None,
         available_decisions: None,
+        permissions_profile_persistence: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
@@ -10073,6 +10080,7 @@ async fn status_widget_and_approval_modal_snapshot() {
         additional_permissions: None,
         skill_metadata: None,
         available_decisions: None,
+        permissions_profile_persistence: None,
         parsed_cmd: vec![],
     };
     chat.handle_codex_event(Event {
