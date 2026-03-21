@@ -141,7 +141,7 @@ impl CommandPopup {
         if filter.is_empty() {
             // Built-ins first, in presentation order.
             for (_, cmd) in self.builtins.iter() {
-                if !cmd.show_in_command_popup() {
+                if cmd.hide_in_command_popup() {
                     continue;
                 }
                 out.push((CommandItem::Builtin(*cmd), None));

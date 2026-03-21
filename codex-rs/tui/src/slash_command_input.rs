@@ -83,6 +83,7 @@ impl SlashCommand {
             | SlashCommand::Title
             | SlashCommand::Mcp
             | SlashCommand::Apps
+            | SlashCommand::Plugins
             | SlashCommand::Logout
             | SlashCommand::Quit
             | SlashCommand::Exit
@@ -143,6 +144,7 @@ impl SlashCommand {
             | SlashCommand::Theme
             | SlashCommand::Mcp
             | SlashCommand::Apps
+            | SlashCommand::Plugins
             | SlashCommand::Logout
             | SlashCommand::Quit
             | SlashCommand::Exit
