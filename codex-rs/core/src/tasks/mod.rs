@@ -252,7 +252,7 @@ impl Session {
             && at.remove_task(&turn_context.sub_id)
         {
             let mut ts = at.turn_state.lock().await;
-            pending_input = ts.take_pending_input_with_metadata();
+            pending_input = ts.take_pending_input();
             turn_tool_calls = ts.tool_calls;
             token_usage_at_turn_start = Some(ts.token_usage_at_turn_start.clone());
             should_clear_active_turn = true;
@@ -263,7 +263,7 @@ impl Session {
         drop(active);
         if !pending_input.is_empty() {
             for pending_input_item in pending_input {
-                match inspect_pending_input(self, &turn_context, pending_input_item.input).await {
+                match inspect_pending_input(self, &turn_context, pending_input_item).await {
                     PendingInputHookDisposition::Accepted(pending_input) => {
                         record_pending_input(self, &turn_context, *pending_input).await;
                     }

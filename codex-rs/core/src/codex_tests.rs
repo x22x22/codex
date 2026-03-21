@@ -4495,12 +4495,17 @@ async fn steer_input_returns_active_turn_id() {
 
     assert_eq!(turn_id, tc.sub_id);
     assert!(sess.has_pending_input().await);
-    let pending_input = sess.get_pending_input_with_metadata().await;
+    let pending_input = sess.get_pending_input().await;
     assert_eq!(pending_input.len(), 1);
+    let ResponseInputItem::Message { metadata, .. } =
+        pending_input.first().expect("pending input should exist")
+    else {
+        panic!("expected pending input message");
+    };
     assert_eq!(
-        pending_input
-            .first()
-            .and_then(|(_, user_message_type)| user_message_type.as_ref()),
+        metadata
+            .as_ref()
+            .and_then(|metadata| metadata.user_message_type.as_ref()),
         Some(&codex_protocol::models::UserMessageType::PromptSteering)
     );
 }
@@ -4579,20 +4584,8 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
         .await
         .expect("inject initial pending input into active turn");
 
-    let drained = sess.get_pending_input_with_metadata().await;
-    assert_eq!(
-        drained,
-        vec![
-            (
-                blocked,
-                Some(codex_protocol::models::UserMessageType::PromptQueued),
-            ),
-            (
-                later.clone(),
-                Some(codex_protocol::models::UserMessageType::PromptQueued),
-            ),
-        ]
-    );
+    let drained = sess.get_pending_input().await;
+    assert_eq!(drained, vec![blocked, later.clone()]);
 
     sess.inject_response_items(vec![newer.clone()])
         .await
@@ -4600,23 +4593,11 @@ async fn prepend_pending_input_keeps_older_tail_ahead_of_newer_input() {
 
     let mut drained_iter = drained.into_iter();
     let _blocked = drained_iter.next().expect("blocked prompt should exist");
-    sess.prepend_pending_input_with_metadata(drained_iter.collect())
+    sess.prepend_pending_input(drained_iter.collect())
         .await
         .expect("requeue later pending input at the front of the queue");
 
-    assert_eq!(
-        sess.get_pending_input_with_metadata().await,
-        vec![
-            (
-                later,
-                Some(codex_protocol::models::UserMessageType::PromptQueued),
-            ),
-            (
-                newer,
-                Some(codex_protocol::models::UserMessageType::PromptQueued),
-            ),
-        ]
-    );
+    assert_eq!(sess.get_pending_input().await, vec![later, newer]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

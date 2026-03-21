@@ -10,7 +10,6 @@ use tokio_util::task::AbortOnDropHandle;
 
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::models::ResponseInputItem;
-use codex_protocol::models::UserMessageType;
 use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
@@ -57,12 +56,6 @@ pub(crate) struct RunningTask {
     pub(crate) _timer: Option<codex_otel::Timer>,
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct PendingInputItem {
-    pub(crate) input: ResponseInputItem,
-    pub(crate) user_message_type: Option<UserMessageType>,
-}
-
 impl ActiveTurn {
     pub(crate) fn add_task(&mut self, task: RunningTask) {
         let sub_id = task.turn_context.sub_id.clone();
@@ -87,7 +80,7 @@ pub(crate) struct TurnState {
     pending_user_input: HashMap<String, oneshot::Sender<RequestUserInputResponse>>,
     pending_elicitations: HashMap<(String, RequestId), oneshot::Sender<ElicitationResponse>>,
     pending_dynamic_tools: HashMap<String, oneshot::Sender<DynamicToolResponse>>,
-    pending_input: Vec<PendingInputItem>,
+    pending_input: Vec<ResponseInputItem>,
     granted_permissions: Option<PermissionProfile>,
     pub(crate) tool_calls: u64,
     pub(crate) token_usage_at_turn_start: TokenUsage,
@@ -182,18 +175,11 @@ impl TurnState {
         self.pending_dynamic_tools.remove(key)
     }
 
-    pub(crate) fn push_pending_input(
-        &mut self,
-        input: ResponseInputItem,
-        user_message_type: Option<UserMessageType>,
-    ) {
-        self.pending_input.push(PendingInputItem {
-            input,
-            user_message_type,
-        });
+    pub(crate) fn push_pending_input(&mut self, input: ResponseInputItem) {
+        self.pending_input.push(input);
     }
 
-    pub(crate) fn take_pending_input_with_metadata(&mut self) -> Vec<PendingInputItem> {
+    pub(crate) fn take_pending_input(&mut self) -> Vec<ResponseInputItem> {
         if self.pending_input.is_empty() {
             Vec::with_capacity(0)
         } else {
@@ -203,7 +189,7 @@ impl TurnState {
         }
     }
 
-    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<PendingInputItem>) {
+    pub(crate) fn prepend_pending_input(&mut self, mut input: Vec<ResponseInputItem>) {
         if input.is_empty() {
             return;
         }

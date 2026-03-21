@@ -3314,7 +3314,9 @@ impl Session {
                         role,
                         content,
                         metadata: Some(
-                            metadata.unwrap_or_else(|| ResponseItemMessageMetadata::new(None)),
+                            metadata.unwrap_or_else(|| {
+                                ResponseItemMessageMetadata::new(/*user_message_type*/ None)
+                            }),
                         ),
                         end_turn,
                         phase,
@@ -3913,7 +3915,7 @@ impl Session {
         }
 
         let mut turn_state = active_turn.turn_state.lock().await;
-        turn_state.push_pending_input(input_item, Some(UserMessageType::PromptSteering));
+        turn_state.push_pending_input(input_item);
         Ok(active_turn_id.clone())
     }
 
@@ -3927,16 +3929,15 @@ impl Session {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
                 for mut item in input {
-                    let user_message_type = match &item {
-                        ResponseInputItem::Message { .. } => Some(UserMessageType::PromptQueued),
-                        _ => None,
-                    };
                     if self.enabled(Feature::ItemMetadata)
-                        && let Some(kind) = user_message_type.clone()
+                        && matches!(&item, ResponseInputItem::Message { .. })
                     {
-                        stamp_user_message_type_on_input_item(&mut item, kind);
+                        stamp_user_message_type_on_input_item(
+                            &mut item,
+                            UserMessageType::PromptQueued,
+                        );
                     }
-                    ts.push_pending_input(item, user_message_type);
+                    ts.push_pending_input(item);
                 }
                 Ok(())
             }
@@ -3944,41 +3945,26 @@ impl Session {
         }
     }
 
-    pub async fn get_pending_input_with_metadata(
-        &self,
-    ) -> Vec<(ResponseInputItem, Option<UserMessageType>)> {
+    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
-                ts.take_pending_input_with_metadata()
-                    .into_iter()
-                    .map(|item| (item.input, item.user_message_type))
-                    .collect()
+                ts.take_pending_input()
             }
             None => Vec::with_capacity(0),
         }
     }
 
-    pub(crate) async fn prepend_pending_input_with_metadata(
+    pub(crate) async fn prepend_pending_input(
         &self,
-        input: Vec<(ResponseInputItem, Option<UserMessageType>)>,
+        input: Vec<ResponseInputItem>,
     ) -> Result<(), ()> {
         let mut active = self.active_turn.lock().await;
         match active.as_mut() {
             Some(at) => {
                 let mut ts = at.turn_state.lock().await;
-                ts.prepend_pending_input(
-                    input
-                        .into_iter()
-                        .map(
-                            |(input, user_message_type)| crate::state::PendingInputItem {
-                                input,
-                                user_message_type,
-                            },
-                        )
-                        .collect(),
-                );
+                ts.prepend_pending_input(input);
                 Ok(())
             }
             None => Err(()),
@@ -5695,26 +5681,24 @@ pub(crate) async fn run_turn(
         // Note that pending_input would be something like a message the user
         // submitted through the UI while the model was running. Though the UI
         // may support this, the model might not.
-        let pending_response_items = sess.get_pending_input_with_metadata().await;
+        let pending_response_items = sess.get_pending_input().await;
         let mut blocked_pending_input = false;
         let mut blocked_pending_input_contexts = Vec::new();
         let mut requeued_pending_input = false;
         let mut accepted_pending_input = Vec::new();
         if !pending_response_items.is_empty() {
             let mut pending_input_iter = pending_response_items.into_iter();
-            while let Some((pending_input_item, user_message_type)) = pending_input_iter.next() {
+            while let Some(pending_input_item) = pending_input_iter.next() {
                 match inspect_pending_input(&sess, &turn_context, pending_input_item).await {
                     PendingInputHookDisposition::Accepted(pending_input) => {
-                        accepted_pending_input.push((*pending_input, user_message_type));
+                        accepted_pending_input.push(*pending_input);
                     }
                     PendingInputHookDisposition::Blocked {
                         additional_contexts,
                     } => {
                         let remaining_pending_input = pending_input_iter.collect::<Vec<_>>();
                         if !remaining_pending_input.is_empty() {
-                            let _ = sess
-                                .prepend_pending_input_with_metadata(remaining_pending_input)
-                                .await;
+                            let _ = sess.prepend_pending_input(remaining_pending_input).await;
                             requeued_pending_input = true;
                         }
                         blocked_pending_input_contexts = additional_contexts;
@@ -5726,7 +5710,7 @@ pub(crate) async fn run_turn(
         }
 
         let has_accepted_pending_input = !accepted_pending_input.is_empty();
-        for (pending_input, _user_message_type) in accepted_pending_input {
+        for pending_input in accepted_pending_input {
             record_pending_input(&sess, &turn_context, pending_input).await;
         }
         record_additional_contexts(&sess, &turn_context, blocked_pending_input_contexts).await;
