@@ -1658,6 +1658,7 @@ impl App {
                     call_id: ev.call_id.clone(),
                     reason: ev.reason.clone(),
                     permissions: ev.permissions.clone(),
+                    permissions_profile_persistence: ev.permissions_profile_persistence.clone(),
                 },
             )),
             _ => None,

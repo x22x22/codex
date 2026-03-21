@@ -239,7 +239,11 @@ impl AppCommand {
         id: String,
         response: RequestPermissionsResponse,
     ) -> Self {
-        Self(Op::RequestPermissionsResponse { id, response })
+        Self(Op::RequestPermissionsResponse {
+            id,
+            response,
+            persist_permissions: None,
+        })
     }
 
     pub(crate) fn reload_user_config() -> Self {
@@ -375,7 +379,7 @@ impl AppCommand {
             Op::UserInputAnswer { id, response } => {
                 AppCommandView::UserInputAnswer { id, response }
             }
-            Op::RequestPermissionsResponse { id, response } => {
+            Op::RequestPermissionsResponse { id, response, .. } => {
                 AppCommandView::RequestPermissionsResponse { id, response }
             }
             Op::ReloadUserConfig => AppCommandView::ReloadUserConfig,
