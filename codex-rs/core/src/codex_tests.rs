@@ -4497,6 +4497,39 @@ async fn steer_input_returns_active_turn_id() {
     assert!(sess.has_pending_input().await);
     let pending_input = sess.get_pending_input().await;
     assert_eq!(pending_input.len(), 1);
+}
+
+#[tokio::test]
+async fn steer_input_emits_prompt_steering_metadata_when_item_metadata_enabled() {
+    let (mut sess, tc, _rx) = make_session_and_context_with_rx().await;
+    let _ = sess.features.enable(Feature::ItemMetadata);
+
+    let input = vec![UserInput::Text {
+        text: "hello".to_string(),
+        text_elements: Vec::new(),
+    }];
+    sess.spawn_task(
+        Arc::clone(&tc),
+        input,
+        NeverEndingTask {
+            kind: TaskKind::Regular,
+            listen_to_cancellation_token: false,
+        },
+    )
+    .await;
+
+    let steer_input = vec![UserInput::Text {
+        text: "steer".to_string(),
+        text_elements: Vec::new(),
+    }];
+    let turn_id = sess
+        .steer_input(steer_input, Some(&tc.sub_id))
+        .await
+        .expect("steering with matching expected turn id should succeed");
+
+    assert_eq!(turn_id, tc.sub_id);
+    let pending_input = sess.get_pending_input().await;
+    assert_eq!(pending_input.len(), 1);
     let ResponseInputItem::Message { metadata, .. } =
         pending_input.first().expect("pending input should exist")
     else {
