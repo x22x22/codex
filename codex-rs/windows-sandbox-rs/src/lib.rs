@@ -58,6 +58,8 @@ pub use acl::fetch_dacl_handle;
 #[cfg(target_os = "windows")]
 pub use acl::path_mask_allows;
 #[cfg(target_os = "windows")]
+pub use acl::revoke_ace;
+#[cfg(target_os = "windows")]
 pub use audit::apply_world_writable_scan_and_denies;
 #[cfg(target_os = "windows")]
 pub use cap::load_or_create_cap_sids;
@@ -105,6 +107,8 @@ pub use process::StderrMode;
 pub use process::StdinMode;
 #[cfg(target_os = "windows")]
 pub use setup::run_elevated_setup;
+#[cfg(target_os = "windows")]
+pub use setup::run_elevated_teardown;
 #[cfg(target_os = "windows")]
 pub use setup::run_setup_refresh;
 #[cfg(target_os = "windows")]

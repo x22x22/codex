@@ -15,10 +15,14 @@ use std::path::PathBuf;
 use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
+use windows_sys::Win32::NetworkManagement::NetManagement::NERR_GroupNotFound;
 use windows_sys::Win32::NetworkManagement::NetManagement::NERR_Success;
+use windows_sys::Win32::NetworkManagement::NetManagement::NERR_UserNotFound;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAdd;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupAddMembers;
+use windows_sys::Win32::NetworkManagement::NetManagement::NetLocalGroupDel;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetUserAdd;
+use windows_sys::Win32::NetworkManagement::NetManagement::NetUserDel;
 use windows_sys::Win32::NetworkManagement::NetManagement::NetUserSetInfo;
 use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_INFO_1;
 use windows_sys::Win32::NetworkManagement::NetManagement::LOCALGROUP_MEMBERS_INFO_3;
@@ -202,6 +206,39 @@ pub fn ensure_local_group_member(group_name: &str, member_name: &str) -> Result<
             &member as *const _ as *mut u8,
             1,
         );
+    }
+    Ok(())
+}
+
+pub fn remove_local_user(name: &str, log: &mut File) -> Result<()> {
+    let name_w = to_wide(OsStr::new(name));
+    unsafe {
+        let status = NetUserDel(std::ptr::null(), name_w.as_ptr());
+        if status != NERR_Success && status != NERR_UserNotFound {
+            super::log_line(log, &format!("NetUserDel failed for {name} code {status}"))?;
+            return Err(anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperUserCreateOrUpdateFailed,
+                format!("failed to delete user {name}, code {status}"),
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub fn remove_local_group(name: &str, log: &mut File) -> Result<()> {
+    let name_w = to_wide(OsStr::new(name));
+    unsafe {
+        let status = NetLocalGroupDel(std::ptr::null(), name_w.as_ptr());
+        if status != NERR_Success && status != NERR_GroupNotFound {
+            super::log_line(
+                log,
+                &format!("NetLocalGroupDel failed for {name} code {status}"),
+            )?;
+            return Err(anyhow::Error::new(SetupFailure::new(
+                SetupErrorCode::HelperUsersGroupCreateFailed,
+                format!("failed to delete local group {name}, code {status}"),
+            )));
+        }
     }
     Ok(())
 }

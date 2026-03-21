@@ -18,6 +18,7 @@ use codex_windows_sandbox::log_note;
 use codex_windows_sandbox::path_mask_allows;
 use codex_windows_sandbox::protect_workspace_agents_dir;
 use codex_windows_sandbox::protect_workspace_codex_dir;
+use codex_windows_sandbox::revoke_ace;
 use codex_windows_sandbox::sandbox_bin_dir;
 use codex_windows_sandbox::sandbox_dir;
 use codex_windows_sandbox::sandbox_secrets_dir;
@@ -71,9 +72,25 @@ mod sandbox_users;
 use read_acl_mutex::acquire_read_acl_mutex;
 use read_acl_mutex::read_acl_mutex_exists;
 use sandbox_users::provision_sandbox_users;
+use sandbox_users::remove_local_group;
+use sandbox_users::remove_local_user;
 use sandbox_users::resolve_sandbox_users_group_sid;
 use sandbox_users::resolve_sid;
 use sandbox_users::sid_bytes_to_psid;
+use sandbox_users::SANDBOX_USERS_GROUP;
+
+const USERPROFILE_CLEANUP_ROOTS: &[&str] = &[
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".azure",
+    ".kube",
+    ".docker",
+    ".config",
+    ".npm",
+    ".pki",
+    ".terraform.d",
+];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Payload {
@@ -89,6 +106,8 @@ struct Payload {
     mode: SetupMode,
     #[serde(default)]
     refresh_only: bool,
+    #[serde(default)]
+    action: SetupAction,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
@@ -97,6 +116,14 @@ enum SetupMode {
     #[default]
     Full,
     ReadAclsOnly,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+enum SetupAction {
+    #[default]
+    Setup,
+    Teardown,
 }
 
 fn log_line(log: &mut File, msg: &str) -> Result<()> {
@@ -437,10 +464,84 @@ fn real_main() -> Result<()> {
 }
 
 fn run_setup(payload: &Payload, log: &mut File, sbx_dir: &Path) -> Result<()> {
+    if payload.action == SetupAction::Teardown {
+        return run_teardown(payload, log);
+    }
     match payload.mode {
         SetupMode::ReadAclsOnly => run_read_acl_only(payload, log),
         SetupMode::Full => run_setup_full(payload, log, sbx_dir),
     }
+}
+
+fn revoke_path_for_sid(path: &Path, sid_str: &str) {
+    if !path.exists() {
+        return;
+    }
+    if let Some(psid) = unsafe { convert_string_sid_to_sid(sid_str) } {
+        unsafe {
+            revoke_ace(path, psid);
+            LocalFree(psid as HLOCAL);
+        }
+    }
+}
+
+fn revoke_path_tree_for_sid(path: &Path, sid_str: &str) {
+    revoke_path_for_sid(path, sid_str);
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let child = entry.path();
+            if child.is_dir() {
+                revoke_path_tree_for_sid(&child, sid_str);
+            } else {
+                revoke_path_for_sid(&child, sid_str);
+            }
+        }
+    }
+}
+
+fn remove_path_if_exists(path: &Path, log: &mut File) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)
+            .map_err(|err| anyhow::anyhow!("remove {} failed: {err}", path.display()))?;
+    } else {
+        std::fs::remove_file(path)
+            .map_err(|err| anyhow::anyhow!("remove {} failed: {err}", path.display()))?;
+    }
+    log_line(log, &format!("removed {}", path.display()))?;
+    Ok(())
+}
+
+fn run_teardown(payload: &Payload, log: &mut File) -> Result<()> {
+    log_line(log, "running windows sandbox teardown")?;
+
+    let sandbox_group_sid = resolve_sandbox_users_group_sid().ok();
+    let sandbox_group_sid_str = sandbox_group_sid
+        .as_deref()
+        .and_then(|sid| string_from_sid_bytes(sid).ok());
+
+    if let Some(user_profile) = std::env::var_os("USERPROFILE") {
+        let user_profile = PathBuf::from(user_profile);
+        if let Some(sandbox_group_sid_str) = sandbox_group_sid_str.as_deref() {
+            revoke_path_for_sid(&user_profile, sandbox_group_sid_str);
+            for relative in USERPROFILE_CLEANUP_ROOTS {
+                revoke_path_tree_for_sid(&user_profile.join(relative), sandbox_group_sid_str);
+            }
+        }
+    }
+
+    firewall::remove_offline_outbound_block(log)?;
+    remove_local_user(&payload.offline_username, log)?;
+    remove_local_user(&payload.online_username, log)?;
+    remove_local_group(SANDBOX_USERS_GROUP, log)?;
+
+    remove_path_if_exists(&sandbox_secrets_dir(&payload.codex_home), log)?;
+    remove_path_if_exists(&sandbox_bin_dir(&payload.codex_home), log)?;
+    remove_path_if_exists(&sandbox_dir(&payload.codex_home), log)?;
+
+    Ok(())
 }
 
 fn run_read_acl_only(payload: &Payload, log: &mut File) -> Result<()> {

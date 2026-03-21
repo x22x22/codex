@@ -152,6 +152,7 @@ fn run_setup_refresh_inner(
         write_roots,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: true,
+        action: SetupAction::Setup,
     };
     let json = serde_json::to_vec(&payload)?;
     let b64 = BASE64_STANDARD.encode(json);
@@ -393,6 +394,16 @@ struct ElevationPayload {
     real_user: String,
     #[serde(default)]
     refresh_only: bool,
+    #[serde(default)]
+    action: SetupAction,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+enum SetupAction {
+    #[default]
+    Setup,
+    Teardown,
 }
 
 fn quote_arg(arg: &str) -> String {
@@ -609,6 +620,36 @@ pub fn run_elevated_setup(
         write_roots,
         real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
         refresh_only: false,
+        action: SetupAction::Setup,
+    };
+    let needs_elevation = !is_elevated().map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorElevationCheckFailed,
+            format!("failed to determine elevation state: {err}"),
+        )
+    })?;
+    run_setup_exe(&payload, needs_elevation, codex_home)
+}
+
+pub fn run_elevated_teardown(codex_home: &Path) -> Result<()> {
+    let sbx_dir = sandbox_dir(codex_home);
+    std::fs::create_dir_all(&sbx_dir).map_err(|err| {
+        failure(
+            SetupErrorCode::OrchestratorSandboxDirCreateFailed,
+            format!("failed to create sandbox dir {}: {err}", sbx_dir.display()),
+        )
+    })?;
+    let payload = ElevationPayload {
+        version: SETUP_VERSION,
+        offline_username: OFFLINE_USERNAME.to_string(),
+        online_username: ONLINE_USERNAME.to_string(),
+        codex_home: codex_home.to_path_buf(),
+        command_cwd: codex_home.to_path_buf(),
+        read_roots: Vec::new(),
+        write_roots: Vec::new(),
+        real_user: std::env::var("USERNAME").unwrap_or_else(|_| "Administrators".to_string()),
+        refresh_only: false,
+        action: SetupAction::Teardown,
     };
     let needs_elevation = !is_elevated().map_err(|err| {
         failure(

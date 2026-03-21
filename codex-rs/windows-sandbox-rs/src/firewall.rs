@@ -9,6 +9,7 @@ use windows::core::BSTR;
 use windows::Win32::Foundation::VARIANT_TRUE;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwPolicy2;
 use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRule3;
+use windows::Win32::NetworkManagement::WindowsFirewall::INetFwRules;
 use windows::Win32::NetworkManagement::WindowsFirewall::NetFwPolicy2;
 use windows::Win32::NetworkManagement::WindowsFirewall::NetFwRule;
 use windows::Win32::NetworkManagement::WindowsFirewall::NET_FW_ACTION_BLOCK;
@@ -67,6 +68,46 @@ pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut File) -> Resul
                 &local_user_spec,
                 offline_sid,
                 log,
+            )?;
+            Ok(())
+        })()
+    };
+
+    unsafe {
+        CoUninitialize();
+    }
+    result
+}
+
+pub fn remove_offline_outbound_block(log: &mut File) -> Result<()> {
+    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    if hr.is_err() {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperFirewallComInitFailed,
+            format!("CoInitializeEx failed: {hr:?}"),
+        )));
+    }
+
+    let result = unsafe {
+        (|| -> Result<()> {
+            let policy: INetFwPolicy2 = CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER)
+                .map_err(|err| {
+                    anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperFirewallPolicyAccessFailed,
+                        format!("CoCreateInstance NetFwPolicy2 failed: {err:?}"),
+                    ))
+                })?;
+            let rules = policy.Rules().map_err(|err| {
+                anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallPolicyAccessFailed,
+                    format!("INetFwPolicy2::Rules failed: {err:?}"),
+                ))
+            })?;
+
+            remove_rule(&rules, OFFLINE_BLOCK_RULE_NAME)?;
+            log_line(
+                log,
+                &format!("firewall rule removed name={OFFLINE_BLOCK_RULE_NAME}"),
             )?;
             Ok(())
         })()
@@ -139,6 +180,24 @@ fn ensure_block_rule(
         ),
     )?;
     Ok(())
+}
+
+fn remove_rule(rules: &INetFwRules, internal_name: &str) -> Result<()> {
+    let name = BSTR::from(internal_name);
+    match unsafe { rules.Remove(&name) } {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let msg = format!("{err:?}");
+            if msg.contains("0x80070002") {
+                Ok(())
+            } else {
+                Err(anyhow::Error::new(SetupFailure::new(
+                    SetupErrorCode::HelperFirewallRuleCreateOrAddFailed,
+                    format!("Rules::Remove failed: {err:?}"),
+                )))
+            }
+        }
+    }
 }
 
 fn configure_rule(

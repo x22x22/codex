@@ -31,6 +31,7 @@ use codex_tui::update_action::UpdateAction;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
 use std::io::IsTerminal;
+use std::io::Write;
 use std::path::PathBuf;
 use supports_color::Stream;
 
@@ -254,7 +255,14 @@ enum SandboxCommand {
 
     /// Run a command under Windows restricted token (Windows only).
     Windows(WindowsCommand),
+
+    /// Remove Windows sandbox setup state created by Codex.
+    #[clap(name = "windows-uninstall")]
+    WindowsUninstall(WindowsUninstallCommand),
 }
+
+#[derive(Debug, Parser)]
+struct WindowsUninstallCommand {}
 
 #[derive(Debug, Parser)]
 struct ExecpolicyCommand {
@@ -492,6 +500,40 @@ fn run_update_action(action: UpdateAction) -> anyhow::Result<()> {
 
 fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
+}
+
+fn run_windows_sandbox_uninstall() -> anyhow::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let codex_home = find_codex_home()?;
+        codex_windows_sandbox::run_elevated_teardown(&codex_home)?;
+        ConfigEditsBuilder::new(&codex_home)
+            .with_edits([
+                codex_core::config::edit::ConfigEdit::ClearPath {
+                    segments: vec!["windows".to_string(), "sandbox".to_string()],
+                },
+                codex_core::config::edit::ConfigEdit::ClearPath {
+                    segments: vec!["windows".to_string(), "sandbox_private_desktop".to_string()],
+                },
+            ])
+            .set_feature_enabled(codex_core::features::Feature::WindowsSandbox.key(), false)
+            .set_feature_enabled(
+                codex_core::features::Feature::WindowsSandboxElevated.key(),
+                false,
+            )
+            .clear_legacy_windows_sandbox_keys()
+            .apply_blocking()?;
+        writeln!(
+            std::io::stdout(),
+            "Windows sandbox state removed from Codex and local sandbox setup cleaned up."
+        )?;
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        anyhow::bail!("`codex sandbox windows-uninstall` is only available on Windows");
+    }
 }
 
 async fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
@@ -822,6 +864,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                     arg0_paths.codex_linux_sandbox_exe.clone(),
                 )
                 .await?;
+            }
+            SandboxCommand::WindowsUninstall(_) => {
+                reject_remote_mode_for_subcommand(
+                    root_remote.as_deref(),
+                    "sandbox windows-uninstall",
+                )?;
+                run_windows_sandbox_uninstall()?;
             }
         },
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
