@@ -2997,8 +2997,8 @@ fn loads_compact_prompt_from_file() -> std::io::Result<()> {
     Ok(())
 }
 
-#[test]
-fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+#[tokio::test]
+async fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
@@ -3012,6 +3012,7 @@ fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::R
     )
     .map_err(std::io::Error::other)?;
 
+    let file_system = codex_exec_server::Environment::default().get_filesystem();
     let config = Config::load_config_with_layer_stack(
         ConfigToml::default(),
         ConfigOverrides {
@@ -3020,7 +3021,9 @@ fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::R
         },
         codex_home.path().to_path_buf(),
         config_layer_stack,
-    )?;
+        file_system,
+    )
+    .await?;
 
     assert_eq!(
         config.guardian_developer_instructions.as_deref(),
@@ -3030,8 +3033,9 @@ fn load_config_uses_requirements_guardian_developer_instructions() -> std::io::R
     Ok(())
 }
 
-#[test]
-fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> std::io::Result<()> {
+#[tokio::test]
+async fn load_config_ignores_empty_requirements_guardian_developer_instructions()
+-> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let config_layer_stack = ConfigLayerStack::new(
         Vec::new(),
@@ -3043,6 +3047,7 @@ fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> s
     )
     .map_err(std::io::Error::other)?;
 
+    let file_system = codex_exec_server::Environment::default().get_filesystem();
     let config = Config::load_config_with_layer_stack(
         ConfigToml::default(),
         ConfigOverrides {
@@ -3051,7 +3056,9 @@ fn load_config_ignores_empty_requirements_guardian_developer_instructions() -> s
         },
         codex_home.path().to_path_buf(),
         config_layer_stack,
-    )?;
+        file_system,
+    )
+    .await?;
 
     assert_eq!(config.guardian_developer_instructions, None);
 
@@ -4773,8 +4780,9 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
     Ok(())
 }
 
-#[test]
-fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> anyhow::Result<()> {
+#[tokio::test]
+async fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> anyhow::Result<()>
+{
     let fixture = create_test_fixture()?;
 
     let requirements_toml = crate::config_loader::ConfigRequirementsToml {
@@ -4817,6 +4825,7 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         crate::config_loader::ConfigLayerStack::new(Vec::new(), requirements, requirements_toml)
             .expect("config layer stack");
 
+    let file_system = codex_exec_server::Environment::default().get_filesystem();
     let config = Config::load_config_with_layer_stack(
         fixture.cfg.clone(),
         ConfigOverrides {
@@ -4825,7 +4834,9 @@ fn test_requirements_web_search_mode_allowlist_does_not_warn_when_unset() -> any
         },
         fixture.codex_home(),
         config_layer_stack,
-    )?;
+        file_system,
+    )
+    .await?;
 
     assert!(
         !config

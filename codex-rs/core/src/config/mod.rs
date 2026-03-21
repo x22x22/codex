@@ -61,6 +61,8 @@ use crate::windows_sandbox::resolve_windows_sandbox_mode;
 use crate::windows_sandbox::resolve_windows_sandbox_private_desktop;
 use codex_app_server_protocol::Tools;
 use codex_app_server_protocol::UserSavedConfig;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
 use codex_features::Feature;
 use codex_features::FeatureConfigSource;
 use codex_features::FeatureOverrides;
@@ -96,6 +98,7 @@ use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crate::config::permissions::compile_permission_profile;
 use crate::config::permissions::network_proxy_config_from_profile_network;
@@ -151,6 +154,10 @@ const RESERVED_MODEL_PROVIDER_IDS: [&str; 3] = [
     OLLAMA_OSS_PROVIDER_ID,
     LMSTUDIO_OSS_PROVIDER_ID,
 ];
+
+fn local_executor_file_system() -> Arc<dyn ExecutorFileSystem> {
+    codex_exec_server::Environment::default().get_filesystem()
+}
 
 #[cfg(target_os = "linux")]
 pub fn missing_system_bwrap_warning() -> Option<String> {
@@ -692,12 +699,15 @@ impl ConfigBuilder {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
             }
         };
+        let file_system = local_executor_file_system();
         Config::load_config_with_layer_stack(
             config_toml,
             harness_overrides,
             codex_home,
             config_layer_stack,
+            file_system,
         )
+        .await
     }
 }
 
@@ -759,11 +769,12 @@ fn push_smart_approvals_alias_migration_edits(
 /// loads only see the canonical feature flag name.
 async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Result<bool> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
-    if !tokio::fs::try_exists(&config_path).await? {
-        return Ok(false);
-    }
-
-    let config_contents = tokio::fs::read_to_string(&config_path).await?;
+    let file_system = local_executor_file_system();
+    let config_contents = match read_text_file(config_path.as_path(), &*file_system).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err),
+    };
     let Ok(config_toml) = toml::from_str::<ConfigToml>(&config_contents) else {
         return Ok(false);
     };
@@ -818,8 +829,9 @@ impl Config {
     }
 
     /// Load a default configuration when user config files are invalid.
-    pub fn load_default_with_cli_overrides(
+    pub async fn load_default_with_cli_overrides(
         cli_overrides: Vec<(String, TomlValue)>,
+        file_system: Arc<dyn ExecutorFileSystem>,
     ) -> std::io::Result<Self> {
         let codex_home = find_codex_home()?;
         let mut merged = toml::Value::try_from(ConfigToml::default()).map_err(|e| {
@@ -836,7 +848,9 @@ impl Config {
             ConfigOverrides::default(),
             codex_home,
             ConfigLayerStack::default(),
+            file_system,
         )
+        .await
     }
 
     /// This is a secondary way of creating [Config], which is appropriate when
@@ -900,8 +914,45 @@ pub(crate) fn deserialize_config_toml_with_base(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
-fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> {
-    let file_contents = std::fs::read_to_string(path)?;
+fn absolute_path_for_filesystem_read(path: &Path) -> std::io::Result<AbsolutePathBuf> {
+    let absolute_path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    AbsolutePathBuf::try_from(absolute_path.as_path())
+        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))
+}
+
+async fn read_text_file_with_executor_filesystem(
+    file_system: &dyn ExecutorFileSystem,
+    path: &Path,
+) -> std::io::Result<String> {
+    let absolute_path = absolute_path_for_filesystem_read(path)?;
+    let bytes = file_system.read_file(&absolute_path).await?;
+    String::from_utf8(bytes).map_err(|err| {
+        std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "failed to decode UTF-8 from {}: {err}",
+                absolute_path.display()
+            ),
+        )
+    })
+}
+
+async fn read_text_file(
+    path: &Path,
+    file_system: &dyn ExecutorFileSystem,
+) -> std::io::Result<String> {
+    read_text_file_with_executor_filesystem(file_system, path).await
+}
+
+async fn load_catalog_json(
+    path: &AbsolutePathBuf,
+    file_system: &dyn ExecutorFileSystem,
+) -> std::io::Result<ModelsResponse> {
+    let file_contents = read_text_file(path.as_path(), file_system).await?;
     let catalog = serde_json::from_str::<ModelsResponse>(&file_contents).map_err(|err| {
         std::io::Error::new(
             ErrorKind::InvalidData,
@@ -923,12 +974,14 @@ fn load_catalog_json(path: &AbsolutePathBuf) -> std::io::Result<ModelsResponse> 
     Ok(catalog)
 }
 
-fn load_model_catalog(
+async fn load_model_catalog(
     model_catalog_json: Option<AbsolutePathBuf>,
+    file_system: &dyn ExecutorFileSystem,
 ) -> std::io::Result<Option<ModelsResponse>> {
-    model_catalog_json
-        .map(|path| load_catalog_json(&path))
-        .transpose()
+    let Some(path) = model_catalog_json else {
+        return Ok(None);
+    };
+    load_catalog_json(&path, file_system).await.map(Some)
 }
 
 fn filter_mcp_servers_by_requirements(
@@ -2113,14 +2166,37 @@ impl Config {
     ) -> std::io::Result<Self> {
         // Note this ignores requirements.toml enforcement for tests.
         let config_layer_stack = ConfigLayerStack::default();
-        Self::load_config_with_layer_stack(cfg, overrides, codex_home, config_layer_stack)
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .map_err(|err| {
+                std::io::Error::other(format!("failed to build tokio runtime: {err}"))
+            })?;
+        let file_system = local_executor_file_system();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        runtime.spawn(async move {
+            let result = Self::load_config_with_layer_stack(
+                cfg,
+                overrides,
+                codex_home,
+                config_layer_stack,
+                file_system,
+            )
+            .await;
+            let _ = tx.send(result);
+        });
+        rx.recv().map_err(|err| {
+            std::io::Error::other(format!("failed to receive config from runtime: {err}"))
+        })?
     }
 
-    pub(crate) fn load_config_with_layer_stack(
+    pub(crate) async fn load_config_with_layer_stack(
         cfg: ConfigToml,
         overrides: ConfigOverrides,
         codex_home: PathBuf,
         config_layer_stack: ConfigLayerStack,
+        file_system: Arc<dyn ExecutorFileSystem>,
     ) -> std::io::Result<Self> {
         validate_reserved_model_provider_ids(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
@@ -2137,7 +2213,7 @@ impl Config {
             network: network_requirements,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions = Self::load_instructions(Some(&codex_home));
+        let user_instructions = Self::load_instructions(Some(&codex_home), &*file_system).await;
         let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -2265,8 +2341,10 @@ impl Config {
             None => WindowsSandboxLevel::from_features(&features),
         };
         let memories_root = memory_root(&codex_home);
-        std::fs::create_dir_all(&memories_root)?;
         let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
+        file_system
+            .create_directory(&memories_root, CreateDirectoryOptions { recursive: true })
+            .await?;
         if !additional_writable_roots
             .iter()
             .any(|existing| existing == &memories_root)
@@ -2380,8 +2458,13 @@ impl Config {
             .unwrap_or(WebSearchMode::Cached);
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
 
-        let agent_roles =
-            agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
+        let agent_roles = agent_roles::load_agent_roles(
+            &cfg,
+            &config_layer_stack,
+            &mut startup_warnings,
+            &*file_system,
+        )
+        .await?;
 
         let openai_base_url = cfg
             .openai_base_url
@@ -2546,8 +2629,12 @@ impl Config {
             .model_instructions_file
             .as_ref()
             .or(cfg.model_instructions_file.as_ref());
-        let file_base_instructions =
-            Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
+        let file_base_instructions = Self::try_read_non_empty_file(
+            model_instructions_path,
+            "model instructions file",
+            &*file_system,
+        )
+        .await?;
         let base_instructions = base_instructions.or(file_base_instructions);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let guardian_developer_instructions = guardian_developer_instructions_from_requirements(
@@ -2569,7 +2656,9 @@ impl Config {
         let file_compact_prompt = Self::try_read_non_empty_file(
             experimental_compact_prompt_path,
             "experimental compact prompt file",
-        )?;
+            &*file_system,
+        )
+        .await?;
         let compact_prompt = compact_prompt.or(file_compact_prompt);
         let js_repl_node_path = js_repl_node_path_override
             .or(config_profile.js_repl_node_path.map(Into::into))
@@ -2597,7 +2686,9 @@ impl Config {
                 .model_catalog_json
                 .clone()
                 .or(cfg.model_catalog_json.clone()),
-        )?;
+            &*file_system,
+        )
+        .await?;
 
         let log_dir = cfg
             .log_dir
@@ -2868,12 +2959,15 @@ impl Config {
         Ok(config)
     }
 
-    fn load_instructions(codex_dir: Option<&Path>) -> Option<String> {
+    async fn load_instructions(
+        codex_dir: Option<&Path>,
+        file_system: &dyn ExecutorFileSystem,
+    ) -> Option<String> {
         let base = codex_dir?;
         for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
             let mut path = base.to_path_buf();
             path.push(candidate);
-            if let Ok(contents) = std::fs::read_to_string(&path) {
+            if let Ok(contents) = read_text_file(path.as_path(), file_system).await {
                 let trimmed = contents.trim();
                 if !trimmed.is_empty() {
                     return Some(trimmed.to_string());
@@ -2886,20 +2980,23 @@ impl Config {
     /// If `path` is `Some`, attempts to read the file at the given path and
     /// returns its contents as a trimmed `String`. If the file is empty, or
     /// is `Some` but cannot be read, returns an `Err`.
-    fn try_read_non_empty_file(
+    async fn try_read_non_empty_file(
         path: Option<&AbsolutePathBuf>,
         context: &str,
+        file_system: &dyn ExecutorFileSystem,
     ) -> std::io::Result<Option<String>> {
         let Some(path) = path else {
             return Ok(None);
         };
 
-        let contents = std::fs::read_to_string(path).map_err(|e| {
-            std::io::Error::new(
-                e.kind(),
-                format!("failed to read {context} {}: {e}", path.display()),
-            )
-        })?;
+        let contents = read_text_file(path.as_path(), file_system)
+            .await
+            .map_err(|e| {
+                std::io::Error::new(
+                    e.kind(),
+                    format!("failed to read {context} {}: {e}", path.display()),
+                )
+            })?;
 
         let s = contents.trim().to_string();
         if s.is_empty() {

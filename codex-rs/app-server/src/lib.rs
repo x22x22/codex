@@ -448,12 +448,15 @@ pub async fn run_main_with_transport(
         Err(err) => {
             let message = config_warning_from_error("Invalid configuration; using defaults.", &err);
             config_warnings.push(message);
-            Config::load_default_with_cli_overrides(cli_kv_overrides.clone()).map_err(|e| {
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    format!("error loading default config after config error: {e}"),
-                )
-            })?
+            let file_system = codex_exec_server::Environment::default().get_filesystem();
+            Config::load_default_with_cli_overrides(cli_kv_overrides.clone(), file_system)
+                .await
+                .map_err(|e| {
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        format!("error loading default config after config error: {e}"),
+                    )
+                })?
         }
     };
 

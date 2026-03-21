@@ -128,7 +128,11 @@ async fn write_workspace_png(
     height: u32,
     rgba: [u8; 4],
 ) -> anyhow::Result<PathBuf> {
-    write_workspace_file(test, rel_path, png_bytes(width, height, rgba)?).await
+    let image = ImageBuffer::from_pixel(width, height, Rgba(rgba));
+    let mut cursor = Cursor::new(Vec::new());
+    DynamicImage::ImageRgba8(image).write_to(&mut cursor, image::ImageFormat::Png)?;
+    let bytes = cursor.into_inner();
+    write_workspace_file(test, rel_path, bytes)?.await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

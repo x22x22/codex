@@ -872,8 +872,12 @@ mod tests {
     async fn build_test_config() -> Config {
         match ConfigBuilder::default().build().await {
             Ok(config) => config,
-            Err(_) => Config::load_default_with_cli_overrides(Vec::new())
-                .expect("default config should load"),
+            Err(_) => Config::load_default_with_cli_overrides(
+                Vec::new(),
+                codex_exec_server::Environment::default().get_filesystem(),
+            )
+            .await
+            .expect("default config should load"),
         }
     }
 
