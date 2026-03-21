@@ -79,7 +79,7 @@ class CodexAppServerHost(
             deleteRecursively()
             mkdirs()
         }
-        HostedCodexConfig.installAgentsFile(codexHome)
+        HostedCodexConfig.installAgentsFile(codexHome, bridgeClient.readInstalledAgentsMarkdown())
         val proxy = GenieLocalCodexProxy(
             sessionId = request.sessionId,
             socketDirectory = context.cacheDir,

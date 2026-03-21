@@ -157,7 +157,7 @@ object AgentCodexAppServerClient {
         }.also(AgentLocalCodexProxy::start)
         val proxyBaseUrl = localProxy?.baseUrl
             ?: throw IOException("local Agent proxy did not start")
-        HostedCodexConfig.write(codexHome, proxyBaseUrl)
+        HostedCodexConfig.write(context, codexHome, proxyBaseUrl)
         val startedProcess = ProcessBuilder(
             listOf(
                 CodexCliBinaryLocator.resolve(context).absolutePath,

@@ -68,7 +68,7 @@ class CodexdForegroundService : Service() {
 
             val socketPath = intent.getStringExtra(EXTRA_SOCKET_PATH) ?: defaultSocketPath()
             val codexHome = intent.getStringExtra(EXTRA_CODEX_HOME) ?: defaultCodexHome()
-            HostedCodexConfig.installAgentsFile(File(codexHome))
+            HostedCodexConfig.installBundledAgentsFile(this, File(codexHome))
 
             val codexdBinary = resolveCodexdBinary()
             val args = mutableListOf(

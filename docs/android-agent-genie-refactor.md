@@ -28,9 +28,9 @@ The current repo now contains these implementation slices:
 - The current session bridge exposes small fixed-form calls, and the Genie
   runtime already uses it to fetch Agent-owned runtime metadata from the
   hosted Agent Codex runtime, including auth status and configured model/provider.
-- The Android host layer now installs a generated `AGENTS.md` into the Agent
-  Codex home and every per-session Genie Codex home so the hosted runtimes get
-  the same device-operating guidance at startup.
+- The Android host layer now copies a checked-in `AGENTS.md` asset into the
+  Agent Codex home at bootstrap, and each Genie session copies that installed
+  Agent file into its per-session Codex home over the framework session bridge.
 - Target-package planning now relies on the hosted Agent Codex runtime using
   standard Android shell tools already available on-device (`cmd package`, `pm`,
   `am`) instead of Kotlin-side app discovery wrappers.

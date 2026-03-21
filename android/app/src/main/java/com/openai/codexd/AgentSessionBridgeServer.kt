@@ -4,6 +4,7 @@ import android.app.agent.AgentManager
 import android.content.Context
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.openai.codex.bridge.HostedCodexConfig
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.Closeable
@@ -13,6 +14,7 @@ import java.io.EOFException
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.File
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -49,6 +51,7 @@ object AgentSessionBridgeServer {
             private const val TAG = "AgentSessionBridge"
             private const val METHOD_GET_RUNTIME_STATUS = "getRuntimeStatus"
             private const val METHOD_SEND_RESPONSES_REQUEST = "sendResponsesRequest"
+            private const val METHOD_READ_INSTALLED_AGENTS_FILE = "readInstalledAgentsFile"
         }
 
         private val closed = AtomicBoolean(false)
@@ -137,6 +140,14 @@ object AgentSessionBridgeServer {
                                     .put("statusCode", httpResponse.statusCode)
                                     .put("body", httpResponse.body),
                             )
+                    }
+                    METHOD_READ_INSTALLED_AGENTS_FILE -> {
+                        val codexHome = File(context.filesDir, "codex-home")
+                        HostedCodexConfig.installBundledAgentsFile(context, codexHome)
+                        JSONObject()
+                            .put("requestId", requestId)
+                            .put("ok", true)
+                            .put("agentsMarkdown", HostedCodexConfig.readInstalledAgentsMarkdown(codexHome))
                     }
                     else -> {
                         JSONObject()

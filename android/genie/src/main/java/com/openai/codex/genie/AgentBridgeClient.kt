@@ -29,6 +29,7 @@ class AgentBridgeClient(
         private const val TAG = "AgentBridgeClient"
         private const val OP_GET_RUNTIME_STATUS = "getRuntimeStatus"
         private const val OP_SEND_RESPONSES_REQUEST = "sendResponsesRequest"
+        private const val OP_READ_INSTALLED_AGENTS_FILE = "readInstalledAgentsFile"
     }
 
     private val bridgeFd: ParcelFileDescriptor = callback.openSessionBridge(sessionId)
@@ -53,6 +54,12 @@ class AgentBridgeClient(
             effectiveModel = status.optNullableString("effectiveModel"),
             upstreamBaseUrl = status.optString("upstreamBaseUrl"),
         )
+    }
+
+    fun readInstalledAgentsMarkdown(): String {
+        return request(
+            JSONObject().put("method", OP_READ_INSTALLED_AGENTS_FILE),
+        ).getString("agentsMarkdown")
     }
 
     override fun openResponsesStream(body: String): InputStream {
