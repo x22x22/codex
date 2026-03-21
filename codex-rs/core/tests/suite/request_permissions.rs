@@ -1087,6 +1087,7 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
                 permissions: normalized_requested_permissions.clone(),
                 scope: PermissionGrantScope::Turn,
             },
+            persist_permissions: None,
         })
         .await?;
 
@@ -1201,6 +1202,7 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
                 permissions: normalized_requested_permissions,
                 scope: PermissionGrantScope::Turn,
             },
+            persist_permissions: None,
         })
         .await?;
 
@@ -1314,6 +1316,7 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Resu
                 permissions: normalized_requested_permissions.clone(),
                 scope: PermissionGrantScope::Turn,
             },
+            persist_permissions: None,
         })
         .await?;
 
@@ -1423,6 +1426,7 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls_without_i
                 permissions: normalized_requested_permissions.clone(),
                 scope: PermissionGrantScope::Turn,
             },
+            persist_permissions: None,
         })
         .await?;
 
@@ -1569,6 +1573,7 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
                 permissions: granted_permissions.clone(),
                 scope: PermissionGrantScope::Turn,
             },
+            persist_permissions: None,
         })
         .await?;
 
@@ -1687,6 +1692,7 @@ async fn request_permissions_grants_do_not_carry_across_turns() -> Result<()> {
                 permissions: normalized_requested_permissions,
                 scope: PermissionGrantScope::Turn,
             },
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -1804,6 +1810,7 @@ async fn request_permissions_session_grants_carry_across_turns() -> Result<()> {
                 permissions: normalized_requested_permissions,
                 scope: PermissionGrantScope::Session,
             },
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
