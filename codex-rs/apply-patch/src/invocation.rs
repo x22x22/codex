@@ -55,37 +55,54 @@ fn classify_shell_name(shell: &str) -> Option<String> {
         .map(str::to_ascii_lowercase)
 }
 
-fn classify_shell(shell: &str, flag: &str) -> Option<ApplyPatchShell> {
-    classify_shell_name(shell).and_then(|name| match name.as_str() {
-        "bash" | "zsh" | "sh" if matches!(flag, "-lc" | "-c") => Some(ApplyPatchShell::Unix),
-        "pwsh" | "powershell" if flag.eq_ignore_ascii_case("-command") => {
-            Some(ApplyPatchShell::PowerShell)
-        }
-        "cmd" if flag.eq_ignore_ascii_case("/c") => Some(ApplyPatchShell::Cmd),
-        _ => None,
-    })
-}
-
-fn can_skip_flag(shell: &str, flag: &str) -> bool {
-    classify_shell_name(shell).is_some_and(|name| {
-        matches!(name.as_str(), "pwsh" | "powershell") && flag.eq_ignore_ascii_case("-noprofile")
-    })
-}
-
 fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
-    match argv {
-        [shell, flag, script] => classify_shell(shell, flag).map(|shell_type| {
-            let script = script.as_str();
-            (shell_type, script)
-        }),
-        [shell, skip_flag, flag, script] if can_skip_flag(shell, skip_flag) => {
-            classify_shell(shell, flag).map(|shell_type| {
-                let script = script.as_str();
-                (shell_type, script)
-            })
-        }
+    let [shell, rest @ ..] = argv else {
+        return None;
+    };
+
+    match classify_shell_name(shell)?.as_str() {
+        "bash" | "zsh" | "sh" => match rest {
+            [flag, script] if matches!(flag.as_str(), "-lc" | "-c") => {
+                Some((ApplyPatchShell::Unix, script.as_str()))
+            }
+            _ => None,
+        },
+        "cmd" => match rest {
+            [flag, script] if flag.eq_ignore_ascii_case("/c") => {
+                Some((ApplyPatchShell::Cmd, script.as_str()))
+            }
+            _ => None,
+        },
+        "pwsh" | "powershell" => parse_powershell_script(rest)
+            .map(|script| (ApplyPatchShell::PowerShell, script)),
         _ => None,
     }
+}
+
+fn parse_powershell_script(args: &[String]) -> Option<&str> {
+    let mut index = 0usize;
+    while index + 1 < args.len() {
+        let flag = &args[index];
+        if is_skippable_powershell_flag(flag) {
+            index += 1;
+            continue;
+        }
+
+        if flag.eq_ignore_ascii_case("-command") || flag.eq_ignore_ascii_case("-c") {
+            return (index + 2 == args.len()).then_some(args[index + 1].as_str());
+        }
+
+        return None;
+    }
+
+    None
+}
+
+fn is_skippable_powershell_flag(flag: &str) -> bool {
+    matches!(
+        flag.to_ascii_lowercase().as_str(),
+        "-nologo" | "-noprofile" | "-noninteractive"
+    )
 }
 
 fn extract_apply_patch_from_shell(
@@ -400,8 +417,30 @@ mod tests {
         strs_to_strings(&["powershell.exe", "-NoProfile", "-Command", script])
     }
 
+    fn args_powershell_common_flags(script: &str) -> Vec<String> {
+        strs_to_strings(&[
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+    }
+
     fn args_pwsh(script: &str) -> Vec<String> {
         strs_to_strings(&["pwsh", "-NoProfile", "-Command", script])
+    }
+
+    fn args_pwsh_common_flags(script: &str) -> Vec<String> {
+        strs_to_strings(&[
+            "pwsh",
+            "-NoLogo",
+            "-NonInteractive",
+            "-NoProfile",
+            "-c",
+            script,
+        ])
     }
 
     fn args_cmd(script: &str) -> Vec<String> {
@@ -573,9 +612,33 @@ PATCH"#,
         assert_match_args(args_powershell_no_profile(&script), None);
     }
     #[test]
+    fn test_powershell_heredoc_common_flags() {
+        let script = heredoc_script("");
+        assert_match_args(args_powershell_common_flags(&script), None);
+    }
+    #[test]
     fn test_pwsh_heredoc() {
         let script = heredoc_script("");
         assert_match_args(args_pwsh(&script), None);
+    }
+    #[test]
+    fn test_pwsh_heredoc_common_flags() {
+        let script = heredoc_script("");
+        assert_match_args(args_pwsh_common_flags(&script), None);
+    }
+    #[test]
+    fn test_powershell_rejects_trailing_args_after_command_body() {
+        let script = heredoc_script("");
+        assert_eq!(
+            maybe_parse_apply_patch(&strs_to_strings(&[
+                "powershell.exe",
+                "-NoLogo",
+                "-Command",
+                &script,
+                "extra",
+            ])),
+            MaybeApplyPatch::NotApplyPatch
+        );
     }
 
     #[test]
