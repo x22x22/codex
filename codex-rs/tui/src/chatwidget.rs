@@ -3445,6 +3445,7 @@ impl ChatWidget {
             call_id: ev.call_id,
             reason: ev.reason,
             permissions: ev.permissions,
+            permissions_profile_persistence: ev.permissions_profile_persistence,
         };
         self.bottom_pane
             .push_approval_request(request, &self.config.features);
