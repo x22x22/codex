@@ -30,7 +30,6 @@
 use crate::apps::render_apps_section;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
-use crate::features::Feature;
 use crate::model_visible_context::CHILD_AGENTS_INSTRUCTIONS_CLOSE_TAG;
 use crate::model_visible_context::CHILD_AGENTS_INSTRUCTIONS_OPEN_TAG;
 use crate::model_visible_context::ContextualUserContextRole;
@@ -59,6 +58,7 @@ use crate::project_doc::render_js_repl_instructions;
 use crate::shell::Shell;
 use crate::skills::render_skills_section;
 use crate::tools::format_exec_output_str;
+use codex_features::Feature;
 use codex_protocol::items::HookPromptItem;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;

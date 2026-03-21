@@ -147,7 +147,7 @@ async fn wait_for_subagent_notification(parent_thread: &Arc<CodexThread>) -> boo
 
 async fn persist_thread_for_tree_resume(thread: &Arc<CodexThread>, message: &str) {
     thread
-        .inject_user_message_without_turn(message.to_string())
+        .inject_message_without_turn(MessageRole::User, message.to_string())
         .await;
     thread.codex.session.ensure_rollout_materialized().await;
     thread.codex.session.flush_rollout().await;
@@ -913,7 +913,7 @@ async fn completion_watcher_notifies_parent_when_child_is_missing() {
     assert_eq!(
         history_contains_text(
             &history_items,
-            &format!("\"agent_path\":\"{child_thread_id}\"")
+            &format!("\"agent_id\":\"{child_thread_id}\"")
         ),
         true
     );
@@ -1080,6 +1080,12 @@ async fn resume_thread_subagent_restores_stored_nickname_and_role() {
         .session_source
         .get_nickname()
         .expect("spawned sub-agent should have a nickname");
+    child_thread
+        .codex
+        .session
+        .ensure_rollout_materialized()
+        .await;
+    child_thread.codex.session.flush_rollout().await;
     let state_db = child_thread
         .state_db()
         .expect("sqlite state db should be available for nickname resume test");

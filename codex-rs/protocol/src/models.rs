@@ -30,6 +30,31 @@ use schemars::JsonSchema;
 
 use crate::mcp::CallToolResult;
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum MessageRole {
+    User,
+    Assistant,
+    System,
+    Developer,
+}
+
+impl MessageRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            Self::System => "system",
+            Self::Developer => "developer",
+        }
+    }
+}
+
+impl std::fmt::Display for MessageRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Controls the per-command sandbox override requested by a shell-like tool call.
 #[derive(
     Debug, Clone, Copy, Default, Eq, Hash, PartialEq, Serialize, Deserialize, JsonSchema, TS,
@@ -884,7 +909,7 @@ impl From<DeveloperInstructions> for ResponseItem {
     fn from(di: DeveloperInstructions) -> Self {
         ResponseItem::Message {
             id: None,
-            role: "developer".to_string(),
+            role: MessageRole::Developer.to_string(),
             content: vec![ContentItem::InputText {
                 text: di.into_text(),
             }],

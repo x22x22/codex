@@ -674,10 +674,9 @@ impl AgentControl {
             let Ok(parent_thread) = state.get_thread(parent_thread_id).await else {
                 return;
             };
-            let child_thread_id_string = child_thread_id.to_string();
             parent_thread
                 .inject_model_visible_fragment_without_turn(SubagentNotification::new(
-                    &child_thread_id_string,
+                    &child_reference,
                     &status,
                 ))
                 .await;
