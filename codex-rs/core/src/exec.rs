@@ -35,10 +35,10 @@ use crate::text_encoding::bytes_to_string_smart;
 use crate::tools::sandboxing::SandboxablePreference;
 use codex_exec_server::Environment as ExecutorEnvironment;
 use codex_exec_server::ExecOutputStream as ExecutorOutputStream;
-use codex_exec_server::ExecParams as ExecutorExecParams;
 use codex_exec_server::ExecProcess;
 use codex_exec_server::ProcessOutputChunk as ExecutorProcessOutputChunk;
 use codex_exec_server::ReadParams as ExecutorReadParams;
+use codex_exec_server::ShellExecParams as ExecutorShellExecParams;
 use codex_network_proxy::NetworkProxy;
 #[cfg(any(target_os = "windows", test))]
 use codex_protocol::permissions::FileSystemSandboxKind;
@@ -46,8 +46,6 @@ use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use codex_utils_pty::process_group::kill_child_process_group;
-use uuid::Uuid;
-
 pub const DEFAULT_EXEC_COMMAND_TIMEOUT_MS: u64 = 10_000;
 
 // Hardcode these since it does not seem worth including the libc crate just
@@ -414,38 +412,61 @@ async fn execute_exec_request_via_environment(
         arg0,
     } = exec_request;
 
+    if matches!(expiration, ExecExpiration::Cancellation(_)) {
+        return Err(CodexErr::Io(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "remote shell/exec does not yet support cancellation-backed expiration",
+        )));
+    }
+
     if let Some(network) = network.as_ref() {
         network.apply_to_env(&mut env);
     }
 
-    let process_id = format!("shell-{}", Uuid::new_v4());
-    let params = ExecutorExecParams {
-        process_id: process_id.clone(),
-        argv: command,
+    let params = ExecutorShellExecParams {
+        command,
         cwd,
         env,
-        tty: false,
+        timeout_ms: expiration.timeout_ms(),
+        output_bytes_cap: capture_policy.retained_bytes_cap(),
         arg0,
     };
 
-    let executor = environment.get_executor();
     let start = Instant::now();
-    executor
-        .start(params)
+    let response = environment
+        .shell_exec(params)
         .await
         .map_err(exec_server_error_to_codex)?;
     if let Some(after_spawn) = after_spawn {
         after_spawn();
     }
+    if let Some(stream) = stdout_stream.as_ref() {
+        let stdout = response.stdout.clone().into_inner();
+        if !stdout.is_empty() {
+            emit_output_delta(Some(stream), /*is_stderr*/ false, stdout).await;
+        }
+        let stderr = response.stderr.clone().into_inner();
+        if !stderr.is_empty() {
+            emit_output_delta(Some(stream), /*is_stderr*/ true, stderr).await;
+        }
+    }
 
-    let raw_output_result = consume_exec_server_output(
-        executor,
-        &process_id,
-        expiration,
-        capture_policy,
-        stdout_stream,
-    )
-    .await;
+    let raw_output_result = Ok(RawExecToolCallOutput {
+        exit_status: synthetic_exit_status(response.exit_code),
+        stdout: StreamOutput {
+            text: response.stdout.into_inner(),
+            truncated_after_lines: None,
+        },
+        stderr: StreamOutput {
+            text: response.stderr.into_inner(),
+            truncated_after_lines: None,
+        },
+        aggregated_output: StreamOutput {
+            text: response.aggregated_output.into_inner(),
+            truncated_after_lines: None,
+        },
+        timed_out: response.timed_out,
+    });
     let duration = start.elapsed();
     finalize_exec_result(raw_output_result, sandbox, duration)
 }
