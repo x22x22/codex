@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 
@@ -100,7 +101,7 @@ impl ToolHandler for ReadFileHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -140,11 +141,34 @@ impl ToolHandler for ReadFileHandler {
             ));
         }
 
-        let collected = match mode {
-            ReadMode::Slice => slice::read(&path, offset, limit).await?,
-            ReadMode::Indentation => {
-                let indentation = indentation.unwrap_or_default();
-                indentation::read_block(&path, offset, limit, indentation).await?
+        let collected = if turn.environment.experimental_exec_server_url().is_some() {
+            let absolute_path = AbsolutePathBuf::try_from(path.clone()).map_err(|err| {
+                FunctionCallError::RespondToModel(format!("failed to normalize file_path: {err}"))
+            })?;
+            let filesystem = turn.environment.get_filesystem();
+            match mode {
+                ReadMode::Slice => {
+                    slice::read_with_filesystem(&filesystem, &absolute_path, offset, limit).await?
+                }
+                ReadMode::Indentation => {
+                    let indentation = indentation.unwrap_or_default();
+                    indentation::read_block_with_filesystem(
+                        &filesystem,
+                        &absolute_path,
+                        offset,
+                        limit,
+                        indentation,
+                    )
+                    .await?
+                }
+            }
+        } else {
+            match mode {
+                ReadMode::Slice => slice::read(&path, offset, limit).await?,
+                ReadMode::Indentation => {
+                    let indentation = indentation.unwrap_or_default();
+                    indentation::read_block(&path, offset, limit, indentation).await?
+                }
             }
         };
         Ok(FunctionToolOutput::from_text(
@@ -156,7 +180,10 @@ impl ToolHandler for ReadFileHandler {
 
 mod slice {
     use crate::function_tool::FunctionCallError;
+    use crate::tools::handlers::read_file::collect_line_bytes;
     use crate::tools::handlers::read_file::format_line;
+    use codex_exec_server::ExecutorFileSystem;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use std::path::Path;
     use tokio::fs::File;
     use tokio::io::AsyncBufReadExt;
@@ -219,6 +246,35 @@ mod slice {
 
         Ok(collected)
     }
+
+    pub async fn read_with_filesystem<F>(
+        filesystem: &F,
+        path: &AbsolutePathBuf,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<String>, FunctionCallError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let bytes = filesystem.read_file(path).await.map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to read file: {err}"))
+        })?;
+
+        let lines = collect_line_bytes(&bytes);
+        if lines.len() < offset {
+            return Err(FunctionCallError::RespondToModel(
+                "offset exceeds file length".to_string(),
+            ));
+        }
+
+        Ok(lines
+            .into_iter()
+            .enumerate()
+            .skip(offset.saturating_sub(1))
+            .take(limit)
+            .map(|(idx, line)| format!("L{}: {}", idx + 1, format_line(line)))
+            .collect())
+    }
 }
 
 mod indentation {
@@ -226,8 +282,11 @@ mod indentation {
     use crate::tools::handlers::read_file::IndentationArgs;
     use crate::tools::handlers::read_file::LineRecord;
     use crate::tools::handlers::read_file::TAB_WIDTH;
+    use crate::tools::handlers::read_file::collect_line_bytes;
     use crate::tools::handlers::read_file::format_line;
     use crate::tools::handlers::read_file::trim_empty_lines;
+    use codex_exec_server::ExecutorFileSystem;
+    use codex_utils_absolute_path::AbsolutePathBuf;
     use std::collections::VecDeque;
     use std::path::Path;
     use tokio::fs::File;
@@ -366,6 +425,127 @@ mod indentation {
             .collect())
     }
 
+    pub async fn read_block_with_filesystem<F>(
+        filesystem: &F,
+        path: &AbsolutePathBuf,
+        offset: usize,
+        limit: usize,
+        options: IndentationArgs,
+    ) -> Result<Vec<String>, FunctionCallError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let anchor_line = options.anchor_line.unwrap_or(offset);
+        if anchor_line == 0 {
+            return Err(FunctionCallError::RespondToModel(
+                "anchor_line must be a 1-indexed line number".to_string(),
+            ));
+        }
+
+        let guard_limit = options.max_lines.unwrap_or(limit);
+        if guard_limit == 0 {
+            return Err(FunctionCallError::RespondToModel(
+                "max_lines must be greater than zero".to_string(),
+            ));
+        }
+
+        let collected = collect_file_lines_with_filesystem(filesystem, path).await?;
+        if collected.is_empty() || anchor_line > collected.len() {
+            return Err(FunctionCallError::RespondToModel(
+                "anchor_line exceeds file length".to_string(),
+            ));
+        }
+
+        let anchor_index = anchor_line - 1;
+        let effective_indents = compute_effective_indents(&collected);
+        let anchor_indent = effective_indents[anchor_index];
+        let min_indent = if options.max_levels == 0 {
+            0
+        } else {
+            anchor_indent.saturating_sub(options.max_levels * TAB_WIDTH)
+        };
+        let final_limit = limit.min(guard_limit).min(collected.len());
+
+        if final_limit == 1 {
+            return Ok(vec![format!(
+                "L{}: {}",
+                collected[anchor_index].number, collected[anchor_index].display
+            )]);
+        }
+
+        let mut i: isize = anchor_index as isize - 1;
+        let mut j: usize = anchor_index + 1;
+        let mut i_counter_min_indent = 0;
+        let mut j_counter_min_indent = 0;
+
+        let mut out = VecDeque::with_capacity(limit);
+        out.push_back(&collected[anchor_index]);
+
+        while out.len() < final_limit {
+            let mut progressed = 0;
+
+            if i >= 0 {
+                let iu = i as usize;
+                if effective_indents[iu] >= min_indent {
+                    out.push_front(&collected[iu]);
+                    progressed += 1;
+                    i -= 1;
+
+                    if effective_indents[iu] == min_indent && !options.include_siblings {
+                        let allow_header_comment =
+                            options.include_header && collected[iu].is_comment();
+                        let can_take_line = allow_header_comment || i_counter_min_indent == 0;
+
+                        if can_take_line {
+                            i_counter_min_indent += 1;
+                        } else {
+                            out.pop_front();
+                            progressed -= 1;
+                            i = -1;
+                        }
+                    }
+
+                    if out.len() >= final_limit {
+                        break;
+                    }
+                } else {
+                    i = -1;
+                }
+            }
+
+            if j < collected.len() {
+                let ju = j;
+                if effective_indents[ju] >= min_indent {
+                    out.push_back(&collected[ju]);
+                    progressed += 1;
+                    j += 1;
+
+                    if effective_indents[ju] == min_indent && !options.include_siblings {
+                        if j_counter_min_indent > 0 {
+                            out.pop_back();
+                            progressed -= 1;
+                            j = collected.len();
+                        }
+                        j_counter_min_indent += 1;
+                    }
+                } else {
+                    j = collected.len();
+                }
+            }
+
+            if progressed == 0 {
+                break;
+            }
+        }
+
+        trim_empty_lines(&mut out);
+
+        Ok(out
+            .into_iter()
+            .map(|record| format!("L{}: {}", record.number, record.display))
+            .collect())
+    }
+
     async fn collect_file_lines(path: &Path) -> Result<Vec<LineRecord>, FunctionCallError> {
         let file = File::open(path).await.map_err(|err| {
             FunctionCallError::RespondToModel(format!("failed to read file: {err}"))
@@ -408,6 +588,34 @@ mod indentation {
         Ok(lines)
     }
 
+    async fn collect_file_lines_with_filesystem<F>(
+        filesystem: &F,
+        path: &AbsolutePathBuf,
+    ) -> Result<Vec<LineRecord>, FunctionCallError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let bytes = filesystem.read_file(path).await.map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to read file: {err}"))
+        })?;
+
+        Ok(collect_line_bytes(&bytes)
+            .into_iter()
+            .enumerate()
+            .map(|(idx, line)| {
+                let raw = String::from_utf8_lossy(line).into_owned();
+                let indent = measure_indent(&raw);
+                let display = format_line(line);
+                LineRecord {
+                    number: idx + 1,
+                    raw,
+                    display,
+                    indent,
+                }
+            })
+            .collect())
+    }
+
     fn compute_effective_indents(records: &[LineRecord]) -> Vec<usize> {
         let mut effective = Vec::with_capacity(records.len());
         let mut previous_indent = 0usize;
@@ -437,6 +645,30 @@ fn format_line(bytes: &[u8]) -> String {
     } else {
         decoded.into_owned()
     }
+}
+
+fn collect_line_bytes(bytes: &[u8]) -> Vec<&[u8]> {
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+
+    for idx in 0..=bytes.len() {
+        if idx != bytes.len() && bytes[idx] != b'\n' {
+            continue;
+        }
+
+        if idx == bytes.len() && start == bytes.len() {
+            break;
+        }
+
+        let mut line = &bytes[start..idx];
+        if line.last() == Some(&b'\r') {
+            line = &line[..line.len() - 1];
+        }
+        lines.push(line);
+        start = idx.saturating_add(1);
+    }
+
+    lines
 }
 
 fn trim_empty_lines(out: &mut VecDeque<&LineRecord>) {

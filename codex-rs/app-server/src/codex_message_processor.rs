@@ -232,7 +232,6 @@ use codex_core::plugins::PluginInstallError as CorePluginInstallError;
 use codex_core::plugins::PluginInstallRequest;
 use codex_core::plugins::PluginReadRequest;
 use codex_core::plugins::PluginUninstallError as CorePluginUninstallError;
-use codex_core::plugins::load_plugin_apps;
 use codex_core::read_head_for_summary;
 use codex_core::read_session_meta_line;
 use codex_core::rollout_date_parts;
@@ -6081,6 +6080,15 @@ impl CodexMessageProcessor {
             return;
         }
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
+        let config_for_auth = match self.load_latest_config(config_cwd.clone()).await {
+            Ok(config) => config,
+            Err(err) => {
+                warn!(
+                    "failed to load config for plugin/install auth context, using current config: {err:?}"
+                );
+                self.config.as_ref().clone()
+            }
+        };
         let environment =
             match Environment::create(self.config.experimental_exec_server_url.clone()).await {
                 Ok(environment) => environment,
@@ -6102,17 +6110,10 @@ impl CodexMessageProcessor {
         };
 
         let install_result = if force_remote_sync {
-            let config = match self.load_latest_config(config_cwd.clone()).await {
-                Ok(config) => config,
-                Err(err) => {
-                    self.outgoing.send_error(request_id, err).await;
-                    return;
-                }
-            };
             let auth = self.auth_manager.auth().await;
             plugins_manager
                 .install_plugin_with_remote_sync_with_filesystem(
-                    &config,
+                    &config_for_auth,
                     auth.as_ref(),
                     request,
                     &environment_filesystem,
@@ -6126,16 +6127,8 @@ impl CodexMessageProcessor {
 
         match install_result {
             Ok(result) => {
-                let config = match self.load_latest_config(config_cwd).await {
-                    Ok(config) => config,
-                    Err(err) => {
-                        warn!(
-                            "failed to reload config after plugin install, using current config: {err:?}"
-                        );
-                        self.config.as_ref().clone()
-                    }
-                };
-                let plugin_apps = load_plugin_apps(result.installed_path.as_path());
+                let config = config_for_auth;
+                let plugin_apps = result.apps.clone();
                 let apps_needing_auth = if plugin_apps.is_empty()
                     || !config.features.apps_enabled(Some(&self.auth_manager)).await
                 {
@@ -6186,7 +6179,6 @@ impl CodexMessageProcessor {
                             "codex_apps MCP not ready after plugin install; skipping appsNeedingAuth check"
                         );
                     }
-
                     plugin_app_helpers::plugin_apps_needing_auth(
                         &all_connectors,
                         &accessible_connectors,
@@ -7399,21 +7391,29 @@ impl CodexMessageProcessor {
             "" => vec![],
             _ if self.config.experimental_exec_server_url.is_some() => {
                 let environment =
-                    match Environment::create(self.config.experimental_exec_server_url.clone()).await
+                    match Environment::create(self.config.experimental_exec_server_url.clone())
+                        .await
                     {
                         Ok(environment) => environment,
                         Err(error) => {
                             self.send_invalid_request_error(
                                 request_id,
-                                format!("failed to bind environment for fuzzy file search: {error}"),
+                                format!(
+                                    "failed to bind environment for fuzzy file search: {error}"
+                                ),
                             )
                             .await;
                             return;
                         }
                     };
                 let filesystem = environment.get_filesystem();
-                run_fuzzy_file_search_with_filesystem(query, roots, &filesystem, cancel_flag.clone())
-                    .await
+                run_fuzzy_file_search_with_filesystem(
+                    query,
+                    roots,
+                    &filesystem,
+                    cancel_flag.clone(),
+                )
+                .await
             }
             _ => run_fuzzy_file_search(query, roots, cancel_flag.clone()).await,
         };

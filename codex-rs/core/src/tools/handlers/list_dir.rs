@@ -5,6 +5,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
+use codex_exec_server::ExecutorFileSystem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_string::take_bytes_at_char_boundary;
 use serde::Deserialize;
 use tokio::fs;
@@ -54,7 +56,7 @@ impl ToolHandler for ListDirHandler {
     }
 
     async fn handle(&self, invocation: ToolInvocation) -> Result<Self::Output, FunctionCallError> {
-        let ToolInvocation { payload, .. } = invocation;
+        let ToolInvocation { payload, turn, .. } = invocation;
 
         let arguments = match payload {
             ToolPayload::Function { arguments } => arguments,
@@ -99,7 +101,16 @@ impl ToolHandler for ListDirHandler {
             ));
         }
 
-        let entries = list_dir_slice(&path, offset, limit, depth).await?;
+        let entries = if turn.environment.experimental_exec_server_url().is_some() {
+            let absolute_path = AbsolutePathBuf::try_from(path.clone()).map_err(|err| {
+                FunctionCallError::RespondToModel(format!("failed to normalize dir_path: {err}"))
+            })?;
+            let filesystem = turn.environment.get_filesystem();
+            list_dir_slice_with_filesystem(&filesystem, &absolute_path, offset, limit, depth)
+                .await?
+        } else {
+            list_dir_slice(&path, offset, limit, depth).await?
+        };
         let mut output = Vec::with_capacity(entries.len() + 1);
         output.push(format!("Absolute path: {}", path.display()));
         output.extend(entries);
@@ -115,6 +126,49 @@ async fn list_dir_slice(
 ) -> Result<Vec<String>, FunctionCallError> {
     let mut entries = Vec::new();
     collect_entries(path, Path::new(""), depth, &mut entries).await?;
+
+    if entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+
+    let start_index = offset - 1;
+    if start_index >= entries.len() {
+        return Err(FunctionCallError::RespondToModel(
+            "offset exceeds directory entry count".to_string(),
+        ));
+    }
+
+    let remaining_entries = entries.len() - start_index;
+    let capped_limit = limit.min(remaining_entries);
+    let end_index = start_index + capped_limit;
+    let selected_entries = &entries[start_index..end_index];
+    let mut formatted = Vec::with_capacity(selected_entries.len());
+
+    for entry in selected_entries {
+        formatted.push(format_entry_line(entry));
+    }
+
+    if end_index < entries.len() {
+        formatted.push(format!("More than {capped_limit} entries found"));
+    }
+
+    Ok(formatted)
+}
+
+async fn list_dir_slice_with_filesystem<F>(
+    filesystem: &F,
+    path: &AbsolutePathBuf,
+    offset: usize,
+    limit: usize,
+    depth: usize,
+) -> Result<Vec<String>, FunctionCallError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut entries = Vec::new();
+    collect_entries_with_filesystem(filesystem, path, Path::new(""), depth, &mut entries).await?;
 
     if entries.is_empty() {
         return Ok(Vec::new());
@@ -192,6 +246,73 @@ async fn collect_entries(
                 },
             ));
         }
+
+        dir_entries.sort_unstable_by(|a, b| a.3.name.cmp(&b.3.name));
+
+        for (entry_path, relative_path, kind, dir_entry) in dir_entries {
+            if kind == DirEntryKind::Directory && remaining_depth > 1 {
+                queue.push_back((entry_path, relative_path, remaining_depth - 1));
+            }
+            entries.push(dir_entry);
+        }
+    }
+
+    Ok(())
+}
+
+async fn collect_entries_with_filesystem<F>(
+    filesystem: &F,
+    dir_path: &AbsolutePathBuf,
+    relative_prefix: &Path,
+    depth: usize,
+    entries: &mut Vec<DirEntry>,
+) -> Result<(), FunctionCallError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut queue = VecDeque::new();
+    queue.push_back((dir_path.clone(), relative_prefix.to_path_buf(), depth));
+
+    while let Some((current_dir, prefix, remaining_depth)) = queue.pop_front() {
+        let mut dir_entries = filesystem
+            .read_directory(&current_dir)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("failed to read directory: {err}"))
+            })?
+            .into_iter()
+            .filter_map(|entry| {
+                let relative_path = if prefix.as_os_str().is_empty() {
+                    PathBuf::from(&entry.file_name)
+                } else {
+                    prefix.join(&entry.file_name)
+                };
+                let display_name = format_entry_component(OsStr::new(&entry.file_name));
+                let display_depth = prefix.components().count();
+                let sort_key = format_entry_name(&relative_path);
+                let kind = if entry.is_directory {
+                    DirEntryKind::Directory
+                } else {
+                    DirEntryKind::File
+                };
+                let Ok(entry_path) =
+                    AbsolutePathBuf::try_from(current_dir.as_path().join(&entry.file_name))
+                else {
+                    return None;
+                };
+                Some((
+                    entry_path,
+                    relative_path,
+                    kind,
+                    DirEntry {
+                        name: sort_key,
+                        display_name,
+                        depth: display_depth,
+                        kind,
+                    },
+                ))
+            })
+            .collect::<Vec<_>>();
 
         dir_entries.sort_unstable_by(|a, b| a.3.name.cmp(&b.3.name));
 

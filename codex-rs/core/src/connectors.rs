@@ -264,6 +264,9 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
         mcp_connection_manager.list_all_tools().await
     };
     let mut should_reload_tools = false;
+    let has_codex_apps_tools = tools
+        .values()
+        .any(|tool| tool.server_name == CODEX_APPS_MCP_SERVER_NAME);
     let codex_apps_ready = if refreshed_tools_succeeded {
         true
     } else if let Some(cfg) = mcp_servers.get(CODEX_APPS_MCP_SERVER_NAME) {
@@ -271,6 +274,11 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
             .wait_for_server_ready(CODEX_APPS_MCP_SERVER_NAME, Duration::ZERO)
             .await;
         if immediate_ready {
+            true
+        } else if has_codex_apps_tools {
+            // If codex_apps tools are already visible, treat the server as
+            // ready enough for auth-state derivation instead of returning a
+            // false negative appsNeedingAuth result.
             true
         } else if tools.is_empty() {
             let timeout = cfg

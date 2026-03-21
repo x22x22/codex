@@ -843,6 +843,7 @@ async fn install_plugin_updates_config_with_relative_path_and_plugin_key() {
             plugin_version: "local".to_string(),
             installed_path: AbsolutePathBuf::try_from(installed_path).unwrap(),
             auth_policy: MarketplacePluginAuthPolicy::OnUse,
+            apps: Vec::new(),
         }
     );
 

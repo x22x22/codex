@@ -582,7 +582,21 @@ async fn run_command_with_executor(params: RunExecutorCommandParams) {
                                 handle_executor_resize(&executor, &executor_process_id, tty, size).await
                             }
                             CommandControl::Terminate => {
-                                handle_executor_terminate(&executor, &executor_process_id).await
+                                let result =
+                                    handle_executor_terminate(&executor, &executor_process_id)
+                                        .await;
+                                if result.is_ok()
+                                    && let Some(waited_exit_code) = wait_for_executor_exit(
+                                        &executor,
+                                        &executor_process_id,
+                                        /*wait_ms*/ 500,
+                                    )
+                                    .await
+                                {
+                                    exit_code = waited_exit_code;
+                                    exit_deadline.get_or_insert_with(Instant::now);
+                                }
+                                result
                             }
                         };
                         if let Some(response_tx) = response_tx {
@@ -598,6 +612,15 @@ async fn run_command_with_executor(params: RunExecutorCommandParams) {
             _ = &mut expiration, if !timed_out => {
                 timed_out = true;
                 let _ = handle_executor_terminate(&executor, &executor_process_id).await;
+                if wait_for_executor_exit(&executor, &executor_process_id, /*wait_ms*/ 50)
+                    .await
+                    .is_some()
+                {
+                    exit_code = EXEC_TIMEOUT_EXIT_CODE;
+                    exit_deadline.get_or_insert_with(|| {
+                        Instant::now() + Duration::from_millis(IO_DRAIN_TIMEOUT_MS)
+                    });
+                }
             }
             read = executor.read(ExecutorReadParams {
                 process_id: executor_process_id.clone(),
@@ -762,6 +785,21 @@ async fn handle_executor_terminate(
         .await
         .map_err(|err| invalid_request(format!("failed to terminate command: {err}")))?;
     Ok(())
+}
+
+async fn wait_for_executor_exit(
+    executor: &Arc<dyn ExecProcess>,
+    process_id: &str,
+    wait_ms: u64,
+) -> Option<i32> {
+    let response = executor
+        .wait(ExecutorExecWaitParams {
+            process_id: process_id.to_string(),
+            wait_ms: Some(wait_ms),
+        })
+        .await
+        .ok()?;
+    response.exited.then_some(response.exit_code.unwrap_or(-1))
 }
 
 fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHandle<String> {

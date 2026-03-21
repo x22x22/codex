@@ -37,6 +37,7 @@ pub use manager::PluginsManager;
 pub use manager::RemotePluginSyncResult;
 pub use manager::installed_plugin_telemetry_metadata;
 pub use manager::load_plugin_apps;
+pub use manager::load_plugin_apps_with_filesystem;
 pub(crate) use manager::plugin_namespace_for_skill_path;
 pub use manager::plugin_telemetry_metadata_from_root;
 pub use manifest::PluginManifestInterface;

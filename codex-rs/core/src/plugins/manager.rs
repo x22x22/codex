@@ -202,6 +202,7 @@ pub struct PluginInstallOutcome {
     pub plugin_version: String,
     pub installed_path: AbsolutePathBuf,
     pub auth_policy: MarketplacePluginAuthPolicy,
+    pub apps: Vec<AppConnectorId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -796,6 +797,7 @@ impl PluginsManager {
         &self,
         resolved: ResolvedMarketplacePlugin,
     ) -> Result<PluginInstallOutcome, PluginInstallError> {
+        let apps = load_plugin_apps(resolved.source_path.as_path());
         let auth_policy = resolved.auth_policy;
         let plugin_version =
             if resolved.plugin_id.marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
@@ -851,6 +853,7 @@ impl PluginsManager {
             plugin_version: result.plugin_version,
             installed_path: result.installed_path,
             auth_policy,
+            apps,
         })
     }
 
@@ -862,6 +865,8 @@ impl PluginsManager {
     where
         F: ExecutorFileSystem + ?Sized,
     {
+        let apps =
+            load_plugin_apps_with_filesystem(resolved.source_path.as_path(), filesystem).await;
         let auth_policy = resolved.auth_policy;
         let plugin_version =
             if resolved.plugin_id.marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
@@ -922,6 +927,7 @@ impl PluginsManager {
             plugin_version: result.plugin_version,
             installed_path: result.installed_path,
             auth_policy,
+            apps,
         })
     }
 
@@ -2451,7 +2457,7 @@ pub fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
     load_apps_from_paths(plugin_root, default_app_config_paths(plugin_root))
 }
 
-async fn load_plugin_apps_with_filesystem<F>(
+pub async fn load_plugin_apps_with_filesystem<F>(
     plugin_root: &Path,
     filesystem: &F,
 ) -> Vec<AppConnectorId>
