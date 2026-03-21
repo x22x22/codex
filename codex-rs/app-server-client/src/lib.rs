@@ -38,7 +38,6 @@ use codex_app_server_protocol::ConfigWarningNotification;
 use codex_app_server_protocol::InitializeCapabilities;
 use codex_app_server_protocol::InitializeParams;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::JSONRPCNotification;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::Result as JsonRpcResult;
 use codex_app_server_protocol::ServerNotification;
@@ -74,7 +73,6 @@ pub type RequestResult = std::result::Result<JsonRpcResult, JSONRPCErrorError>;
 pub enum AppServerEvent {
     Lagged { skipped: usize },
     ServerNotification(ServerNotification),
-    LegacyNotification(JSONRPCNotification),
     ServerRequest(ServerRequest),
     Disconnected { message: String },
 }
