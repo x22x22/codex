@@ -34,7 +34,7 @@ use crate::tools::sandboxing::with_cached_approval;
 use crate::tools::spec::UnifiedExecShellMode;
 use crate::unified_exec::NoopSpawnLifecycle;
 use crate::unified_exec::UnifiedExecError;
-use crate::unified_exec::UnifiedExecProcess;
+use crate::unified_exec::ProcessBackend;
 use crate::unified_exec::UnifiedExecProcessManager;
 use codex_network_proxy::NetworkProxy;
 use codex_protocol::models::PermissionProfile;
@@ -53,6 +53,8 @@ pub struct UnifiedExecRequest {
     pub tty: bool,
     pub sandbox_permissions: SandboxPermissions,
     pub additional_permissions: Option<PermissionProfile>,
+    pub process_id: i32,
+    pub use_exec_server: bool,
     #[cfg(unix)]
     pub additional_permissions_preapproved: bool,
     pub justification: Option<String>,
@@ -172,7 +174,7 @@ impl Approvable<UnifiedExecRequest> for UnifiedExecRuntime<'_> {
     }
 }
 
-impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRuntime<'a> {
+impl<'a> ToolRuntime<UnifiedExecRequest, Arc<ProcessBackend>> for UnifiedExecRuntime<'a> {
     fn network_approval_spec(
         &self,
         req: &UnifiedExecRequest,
@@ -190,7 +192,7 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
         req: &UnifiedExecRequest,
         attempt: &SandboxAttempt<'_>,
         ctx: &ToolCtx,
-    ) -> Result<UnifiedExecProcess, ToolError> {
+    ) -> Result<Arc<ProcessBackend>, ToolError> {
         let base_command = &req.command;
         let session_shell = ctx.session.user_shell();
         let command = maybe_wrap_shell_lc_with_snapshot(
@@ -237,7 +239,10 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
                         .manager
                         .open_session_with_exec_env(
                             &prepared.exec_request,
+                            req.process_id,
                             req.tty,
+                            req.use_exec_server,
+                            Some(ctx.session.services.environment.get_executor()),
                             prepared.spawn_lifecycle,
                         )
                         .await
@@ -272,7 +277,18 @@ impl<'a> ToolRuntime<UnifiedExecRequest, UnifiedExecProcess> for UnifiedExecRunt
             .env_for(spec, req.network.as_ref())
             .map_err(|err| ToolError::Codex(err.into()))?;
         self.manager
-            .open_session_with_exec_env(&exec_env, req.tty, Box::new(NoopSpawnLifecycle))
+            .open_session_with_exec_env(
+                &exec_env,
+                req.process_id,
+                req.tty,
+                req.use_exec_server,
+                if req.use_exec_server {
+                    Some(ctx.session.services.environment.get_executor())
+                } else {
+                    None
+                },
+                Box::new(NoopSpawnLifecycle),
+            )
             .await
             .map_err(|err| match err {
                 UnifiedExecError::SandboxDenied { output, .. } => {

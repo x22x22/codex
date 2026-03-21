@@ -4,14 +4,18 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::atomic::AtomicU64;
 use tokio::sync::Notify;
-use tokio::sync::mpsc;
 use tokio::sync::watch;
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use codex_exec_server::process::ExecProcess;
+use codex_exec_server::protocol::ExecParams;
+use codex_exec_server::protocol::ReadParams;
 
 use crate::exec_env::create_env;
 use crate::exec_policy::ExecApprovalRequest;
@@ -34,6 +38,7 @@ use crate::unified_exec::MAX_YIELD_TIME_MS;
 use crate::unified_exec::MIN_EMPTY_YIELD_TIME_MS;
 use crate::unified_exec::MIN_YIELD_TIME_MS;
 use crate::unified_exec::ProcessEntry;
+use crate::unified_exec::ProcessBackend;
 use crate::unified_exec::ProcessStore;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecError;
@@ -49,7 +54,6 @@ use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
-use crate::unified_exec::process::UnifiedExecProcess;
 
 const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
     ("NO_COLOR", "1"),
@@ -90,7 +94,7 @@ fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, S
 }
 
 struct PreparedProcessHandles {
-    writer_tx: mpsc::Sender<Vec<u8>>,
+    process: Arc<ProcessBackend>,
     output_buffer: OutputBuffer,
     output_notify: Arc<Notify>,
     output_closed: Arc<AtomicBool>,
@@ -166,9 +170,7 @@ impl UnifiedExecProcessManager {
             .await;
 
         let (process, mut deferred_network_approval) = match process {
-            Ok((process, deferred_network_approval)) => {
-                (Arc::new(process), deferred_network_approval)
-            }
+            Ok((process, deferred_network_approval)) => (process, deferred_network_approval),
             Err(err) => {
                 self.release_process_id(request.process_id).await;
                 return Err(err);
@@ -190,7 +192,7 @@ impl UnifiedExecProcessManager {
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
-        start_streaming_output(&process, context, Arc::clone(&transcript));
+        start_streaming_output(process.clone(), context, Arc::clone(&transcript));
         let start = Instant::now();
         // Persist live sessions before the initial yield wait so interrupting the
         // turn cannot drop the last Arc and terminate the background process.
@@ -312,7 +314,6 @@ impl UnifiedExecProcessManager {
         let process_id = request.process_id;
 
         let PreparedProcessHandles {
-            writer_tx,
             output_buffer,
             output_notify,
             output_closed,
@@ -329,7 +330,7 @@ impl UnifiedExecProcessManager {
             if !tty {
                 return Err(UnifiedExecError::StdinClosed);
             }
-            Self::send_input(&writer_tx, request.input.as_bytes()).await?;
+            process.write_stdin(request.input.as_bytes()).await?;
             // Give the remote process a brief window to react so that we are
             // more likely to capture its output in the poll below.
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -407,10 +408,10 @@ impl UnifiedExecProcessManager {
                 return ProcessStatus::Unknown;
             };
 
-            let exit_code = entry.process.exit_code();
+            let exit_code = entry.backend.exit_code();
             let process_id = entry.process_id;
 
-            if entry.process.has_exited() {
+            if entry.backend.has_exited() {
                 let Some(entry) = store.remove(process_id) else {
                     return ProcessStatus::Unknown;
                 };
@@ -448,14 +449,13 @@ impl UnifiedExecProcessManager {
             output_closed,
             output_closed_notify,
             cancellation_token,
-        } = entry.process.output_handles();
+        } = entry.backend.output_handles();
         let pause_state = entry
             .session
             .upgrade()
             .map(|session| session.subscribe_out_of_band_elicitation_pause_state());
 
         Ok(PreparedProcessHandles {
-            writer_tx: entry.process.writer_sender(),
             output_buffer,
             output_notify,
             output_closed,
@@ -468,20 +468,10 @@ impl UnifiedExecProcessManager {
         })
     }
 
-    async fn send_input(
-        writer_tx: &mpsc::Sender<Vec<u8>>,
-        data: &[u8],
-    ) -> Result<(), UnifiedExecError> {
-        writer_tx
-            .send(data.to_vec())
-            .await
-            .map_err(|_| UnifiedExecError::WriteToStdin)
-    }
-
     #[allow(clippy::too_many_arguments)]
     async fn store_process(
         &self,
-        process: Arc<UnifiedExecProcess>,
+        process: Arc<ProcessBackend>,
         context: &UnifiedExecContext,
         command: &[String],
         cwd: PathBuf,
@@ -492,7 +482,7 @@ impl UnifiedExecProcessManager {
         transcript: Arc<tokio::sync::Mutex<HeadTailBuffer>>,
     ) {
         let entry = ProcessEntry {
-            process: Arc::clone(&process),
+            backend: Arc::clone(&process),
             call_id: context.call_id.clone(),
             process_id,
             command: command.to_vec(),
@@ -511,7 +501,7 @@ impl UnifiedExecProcessManager {
         // network-approval cleanup only after dropping that lock.
         if let Some(pruned_entry) = pruned_entry {
             Self::unregister_network_approval_for_entry(&pruned_entry).await;
-            pruned_entry.process.terminate();
+            pruned_entry.backend.terminate();
         }
 
         if number_processes >= WARNING_UNIFIED_EXEC_PROCESSES {
@@ -540,41 +530,85 @@ impl UnifiedExecProcessManager {
     pub(crate) async fn open_session_with_exec_env(
         &self,
         env: &ExecRequest,
+        process_id: i32,
         tty: bool,
+        use_exec_server: bool,
+        mut executor: Option<Arc<dyn ExecProcess>>,
         mut spawn_lifecycle: SpawnLifecycleHandle,
-    ) -> Result<UnifiedExecProcess, UnifiedExecError> {
-        let (program, args) = env
-            .command
-            .split_first()
-            .ok_or(UnifiedExecError::MissingCommandLine)?;
-        let inherited_fds = spawn_lifecycle.inherited_fds();
+    ) -> Result<Arc<ProcessBackend>, UnifiedExecError> {
+        if use_exec_server {
+            let executor = executor
+                .take()
+                .ok_or_else(|| UnifiedExecError::create_process("exec-server unavailable".to_string()))?;
+            let response = executor
+                .start(ExecParams {
+                    process_id: process_id.to_string(),
+                    argv: env.command.clone(),
+                    cwd: env.cwd.clone(),
+                    env: env.env.clone(),
+                    tty,
+                    arg0: env.arg0.clone(),
+                })
+                .await
+                .map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+            let _ = response.process_id;
 
-        let spawn_result = if tty {
-            codex_utils_pty::pty::spawn_process_with_inherited_fds(
-                program,
-                args,
-                env.cwd.as_path(),
-                &env.env,
-                &env.arg0,
-                codex_utils_pty::TerminalSize::default(),
-                &inherited_fds,
-            )
-            .await
+            let process = Arc::new(ProcessBackend::ExecServer {
+                process_id: process_id.to_string(),
+                executor,
+                output_buffer: Arc::new(tokio::sync::Mutex::new(HeadTailBuffer::default())),
+                output_notify: Arc::new(Notify::new()),
+                output_closed: Arc::new(AtomicBool::new(false)),
+                output_closed_notify: Arc::new(Notify::new()),
+                output_drained: Arc::new(Notify::new()),
+                cancellation_token: CancellationToken::new(),
+                exit_code: Arc::new(RwLock::new(None)),
+                has_exited: Arc::new(AtomicBool::new(false)),
+                sandbox_type: env.sandbox,
+                output_seq: Arc::new(AtomicU64::new(0)),
+            });
+
+            spawn_lifecycle.after_spawn();
+            Self::spawn_exec_server_output_watcher(Arc::clone(&process));
+
+            Ok(process)
         } else {
-            codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
-                program,
-                args,
-                env.cwd.as_path(),
-                &env.env,
-                &env.arg0,
-                &inherited_fds,
-            )
-            .await
-        };
-        let spawned =
-            spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
-        spawn_lifecycle.after_spawn();
-        UnifiedExecProcess::from_spawned(spawned, env.sandbox, spawn_lifecycle).await
+            let (program, args) = env
+                .command
+                .split_first()
+                .ok_or(UnifiedExecError::MissingCommandLine)?;
+            let inherited_fds = spawn_lifecycle.inherited_fds();
+
+            let spawn_result = if tty {
+                codex_utils_pty::pty::spawn_process_with_inherited_fds(
+                    program,
+                    args,
+                    env.cwd.as_path(),
+                    &env.env,
+                    &env.arg0,
+                    codex_utils_pty::TerminalSize::default(),
+                    &inherited_fds,
+                )
+                .await
+            } else {
+                codex_utils_pty::pipe::spawn_process_no_stdin_with_inherited_fds(
+                    program,
+                    args,
+                    env.cwd.as_path(),
+                    &env.env,
+                    &env.arg0,
+                    &inherited_fds,
+                )
+                .await
+            };
+            let spawned =
+                spawn_result.map_err(|err| UnifiedExecError::create_process(err.to_string()))?;
+            spawn_lifecycle.after_spawn();
+            let process = UnifiedExecProcess::from_spawned(spawned, env.sandbox, spawn_lifecycle).await?;
+            Ok(Arc::new(ProcessBackend::Local {
+                process: Arc::new(process),
+            }))
+        }
     }
 
     pub(super) async fn open_session_with_sandbox(
@@ -582,7 +616,7 @@ impl UnifiedExecProcessManager {
         request: &ExecCommandRequest,
         cwd: PathBuf,
         context: &UnifiedExecContext,
-    ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
+    ) -> Result<(Arc<ProcessBackend>, Option<DeferredNetworkApproval>), UnifiedExecError> {
         let env = apply_unified_exec_env(create_env(
             &context.turn.shell_environment_policy,
             Some(context.session.conversation_id),
@@ -618,6 +652,8 @@ impl UnifiedExecProcessManager {
             tty: request.tty,
             sandbox_permissions: request.sandbox_permissions,
             additional_permissions: request.additional_permissions.clone(),
+            process_id: request.process_id,
+            use_exec_server: context.turn.config.experimental_exec_server_url.is_some(),
             #[cfg(unix)]
             additional_permissions_preapproved: request.additional_permissions_preapproved,
             justification: request.justification.clone(),
@@ -775,7 +811,7 @@ impl UnifiedExecProcessManager {
         let meta: Vec<(i32, Instant, bool)> = store
             .processes
             .iter()
-            .map(|(id, entry)| (*id, entry.last_used, entry.process.has_exited()))
+            .map(|(id, entry)| (*id, entry.last_used, entry.backend.has_exited()))
             .collect();
 
         if let Some(process_id) = Self::process_id_to_prune_from_meta(&meta) {
@@ -828,8 +864,126 @@ impl UnifiedExecProcessManager {
 
         for entry in entries {
             Self::unregister_network_approval_for_entry(&entry).await;
-            entry.process.terminate();
+            entry.backend.terminate();
         }
+    }
+}
+
+impl UnifiedExecProcessManager {
+    fn spawn_exec_server_output_watcher(process: Arc<ProcessBackend>) {
+        let (
+            process_id,
+            executor,
+            output_buffer,
+            output_notify,
+            output_closed,
+            output_closed_notify,
+            output_drained,
+            output_seq,
+            has_exited,
+            exit_code,
+            cancellation_token,
+        ) = {
+            if let ProcessBackend::ExecServer {
+                process_id,
+                executor,
+                output_buffer,
+                output_notify,
+                output_closed,
+                output_closed_notify,
+                output_drained,
+                output_seq,
+                has_exited,
+                exit_code,
+                cancellation_token,
+                ..
+            } = process.as_ref()
+            {
+                (
+                    process_id.clone(),
+                    Arc::clone(executor),
+                    Arc::clone(output_buffer),
+                    Arc::clone(output_notify),
+                    Arc::clone(output_closed),
+                    Arc::clone(output_closed_notify),
+                    Arc::clone(output_drained),
+                    Arc::clone(output_seq),
+                    Arc::clone(has_exited),
+                    Arc::clone(exit_code),
+                    cancellation_token.clone(),
+                )
+            } else {
+                return;
+            }
+        };
+
+        tokio::spawn(async move {
+            let mut after_seq = None;
+            loop {
+                if cancellation_token.is_cancelled() {
+                    output_closed.store(true, Ordering::Release);
+                    output_closed_notify.notify_waiters();
+                    output_drained.notify_waiters();
+                    break;
+                }
+
+                let response = match executor
+                    .read(ReadParams {
+                        process_id: process_id.clone(),
+                        after_seq,
+                        max_bytes: Some(64 * 1024),
+                        wait_ms: Some(100),
+                    })
+                    .await
+                {
+                    Ok(response) => response,
+                    Err(_) => {
+                        let mut guard = exit_code.write().unwrap_or_else(|err| err.into_inner());
+                        if guard.is_none() {
+                            *guard = Some(-1);
+                        }
+                        has_exited.store(true, Ordering::Release);
+                        output_closed.store(true, Ordering::Release);
+                        output_closed_notify.notify_waiters();
+                        output_drained.notify_waiters();
+                        cancellation_token.cancel();
+                        break;
+                    }
+                };
+
+                if !response.chunks.is_empty() {
+                    let mut current_seq = output_seq.load(Ordering::Acquire);
+                    for chunk in response.chunks {
+                        if chunk.seq < current_seq {
+                            continue;
+                        }
+
+                        {
+                            let mut guard = output_buffer.lock().await;
+                            guard.push_chunk(chunk.chunk.into_inner());
+                        }
+                        current_seq = chunk.seq.saturating_add(1);
+                        output_seq.store(current_seq, Ordering::Release);
+                        output_notify.notify_waiters();
+                    }
+                }
+
+                if let Some(code) = response.exit_code {
+                    let mut guard = exit_code.write().unwrap_or_else(|err| err.into_inner());
+                    *guard = Some(code);
+                }
+                after_seq = Some(response.next_seq);
+
+                if response.exited {
+                    has_exited.store(true, Ordering::Release);
+                    output_closed.store(true, Ordering::Release);
+                    output_closed_notify.notify_waiters();
+                    output_drained.notify_waiters();
+                    cancellation_token.cancel();
+                    break;
+                }
+            }
+        });
     }
 }
 
