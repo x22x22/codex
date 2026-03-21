@@ -68,7 +68,11 @@ fn classify_shell(shell: &str, flag: &str) -> Option<ApplyPatchShell> {
 
 fn can_skip_flag(shell: &str, flag: &str) -> bool {
     classify_shell_name(shell).is_some_and(|name| {
-        matches!(name.as_str(), "pwsh" | "powershell") && flag.eq_ignore_ascii_case("-noprofile")
+        matches!(name.as_str(), "pwsh" | "powershell")
+            && matches!(
+                flag.to_ascii_lowercase().as_str(),
+                "-noprofile" | "-nologo" | "-noninteractive"
+            )
     })
 }
 
@@ -78,11 +82,16 @@ fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
             let script = script.as_str();
             (shell_type, script)
         }),
-        [shell, skip_flag, flag, script] if can_skip_flag(shell, skip_flag) => {
-            classify_shell(shell, flag).map(|shell_type| {
-                let script = script.as_str();
-                (shell_type, script)
-            })
+        [shell, flags @ .., script] if !flags.is_empty() => {
+            let (flag, skip_flags) = flags.split_last()?;
+            if skip_flags.iter().all(|skip_flag| can_skip_flag(shell, skip_flag)) {
+                classify_shell(shell, flag).map(|shell_type| {
+                    let script = script.as_str();
+                    (shell_type, script)
+                })
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -400,6 +409,17 @@ mod tests {
         strs_to_strings(&["powershell.exe", "-NoProfile", "-Command", script])
     }
 
+    fn args_powershell_noninteractive(script: &str) -> Vec<String> {
+        strs_to_strings(&[
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+    }
+
     fn args_pwsh(script: &str) -> Vec<String> {
         strs_to_strings(&["pwsh", "-NoProfile", "-Command", script])
     }
@@ -572,6 +592,13 @@ PATCH"#,
         let script = heredoc_script("");
         assert_match_args(args_powershell_no_profile(&script), None);
     }
+
+    #[test]
+    fn test_powershell_heredoc_noninteractive() {
+        let script = heredoc_script("");
+        assert_match_args(args_powershell_noninteractive(&script), None);
+    }
+
     #[test]
     fn test_pwsh_heredoc() {
         let script = heredoc_script("");

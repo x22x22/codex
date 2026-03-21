@@ -5,7 +5,8 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use crate::shell_detect::ShellType;
 use crate::shell_detect::detect_shell_type;
 
-const POWERSHELL_FLAGS: &[&str] = &["-nologo", "-noprofile", "-command", "-c"];
+const POWERSHELL_FLAGS: &[&str] =
+    &["-nologo", "-noprofile", "-noninteractive", "-command", "-c"];
 
 /// Prefixed command for powershell shell calls to force UTF-8 console output.
 pub const UTF8_OUTPUT_PREFIX: &str = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;\n";
@@ -200,5 +201,19 @@ mod tests {
         ];
         let (_shell, script) = extract_powershell_command(&cmd).expect("extract");
         assert_eq!(script, "Get-ChildItem | Select-String foo");
+    }
+
+    #[test]
+    fn extracts_with_noninteractive_wrapper() {
+        let cmd = vec![
+            "powershell.exe".to_string(),
+            "-NoLogo".to_string(),
+            "-NoProfile".to_string(),
+            "-NonInteractive".to_string(),
+            "-Command".to_string(),
+            "Write-Host hi".to_string(),
+        ];
+        let (_shell, script) = extract_powershell_command(&cmd).expect("extract");
+        assert_eq!(script, "Write-Host hi");
     }
 }
