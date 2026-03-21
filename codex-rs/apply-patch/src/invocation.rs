@@ -66,23 +66,38 @@ fn classify_shell(shell: &str, flag: &str) -> Option<ApplyPatchShell> {
     })
 }
 
-fn can_skip_flag(shell: &str, flag: &str) -> bool {
-    classify_shell_name(shell).is_some_and(|name| {
-        matches!(name.as_str(), "pwsh" | "powershell") && flag.eq_ignore_ascii_case("-noprofile")
-    })
+fn is_powershell_preamble_flag(flag: &str) -> bool {
+    matches!(
+        flag.to_ascii_lowercase().as_str(),
+        "-noprofile" | "-nologo" | "-noninteractive"
+    )
 }
 
 fn parse_shell_script(argv: &[String]) -> Option<(ApplyPatchShell, &str)> {
     match argv {
-        [shell, flag, script] => classify_shell(shell, flag).map(|shell_type| {
-            let script = script.as_str();
-            (shell_type, script)
-        }),
-        [shell, skip_flag, flag, script] if can_skip_flag(shell, skip_flag) => {
-            classify_shell(shell, flag).map(|shell_type| {
+        [shell, flag, script] => {
+            return classify_shell(shell, flag).map(|shell_type| {
                 let script = script.as_str();
                 (shell_type, script)
-            })
+            });
+        }
+        [shell, ..]
+            if classify_shell_name(shell)
+                .is_some_and(|name| matches!(name.as_str(), "pwsh" | "powershell")) =>
+        {
+            let mut i = 1usize;
+            while i < argv.len() {
+                let flag = &argv[i];
+                if flag.eq_ignore_ascii_case("-command") || flag.eq_ignore_ascii_case("-c") {
+                    return (i + 1 == argv.len() - 1)
+                        .then(|| (ApplyPatchShell::PowerShell, argv[i + 1].as_str()));
+                }
+                if !is_powershell_preamble_flag(flag) {
+                    return None;
+                }
+                i += 1;
+            }
+            None
         }
         _ => None,
     }
@@ -572,6 +587,33 @@ PATCH"#,
         let script = heredoc_script("");
         assert_match_args(args_powershell_no_profile(&script), None);
     }
+    #[test]
+    fn test_powershell_heredoc_with_nologo_and_noprofile() {
+        let script = heredoc_script("");
+        let args = strs_to_strings(&[
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-Command",
+            &script,
+        ]);
+        assert_match_args(args, None);
+    }
+
+    #[test]
+    fn test_powershell_heredoc_with_common_preamble_flags() {
+        let script = heredoc_script("");
+        let args = strs_to_strings(&[
+            "pwsh",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &script,
+        ]);
+        assert_match_args(args, None);
+    }
+
     #[test]
     fn test_pwsh_heredoc() {
         let script = heredoc_script("");
