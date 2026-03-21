@@ -32,6 +32,11 @@ object AgentCodexAppServerClient {
         val upstreamBaseUrl: String,
     )
 
+    data class ChatGptLoginSession(
+        val loginId: String,
+        val authUrl: String,
+    )
+
     fun interface RuntimeStatusListener {
         fun onRuntimeStatusChanged(status: RuntimeStatus?)
     }
@@ -51,6 +56,8 @@ object AgentCodexAppServerClient {
     private var initialized = false
     @Volatile
     private var cachedRuntimeStatus: RuntimeStatus? = null
+    @Volatile
+    private var applicationContext: Context? = null
     private val runtimeStatusRefreshInFlight = AtomicBoolean(false)
 
     fun currentRuntimeStatus(): RuntimeStatus? = cachedRuntimeStatus
@@ -144,11 +151,36 @@ object AgentCodexAppServerClient {
         }
     }
 
+    fun startChatGptLogin(context: Context): ChatGptLoginSession = synchronized(lifecycleLock) {
+        ensureStarted(context.applicationContext)
+        val response = request(
+            method = "account/login/start",
+            params = JSONObject().put("type", "chatgpt"),
+        )
+        if (response.optString("type") != "chatgpt") {
+            throw IOException("Unexpected login response type: ${response.optString("type")}")
+        }
+        return ChatGptLoginSession(
+            loginId = response.optString("loginId"),
+            authUrl = response.optString("authUrl"),
+        )
+    }
+
+    fun logoutAccount(context: Context) = synchronized(lifecycleLock) {
+        ensureStarted(context.applicationContext)
+        request(
+            method = "account/logout",
+            params = null,
+        )
+        refreshRuntimeStatusAsync(context.applicationContext)
+    }
+
     private fun ensureStarted(context: Context) {
         if (process?.isAlive == true && writer != null && initialized) {
             return
         }
         closeProcess()
+        applicationContext = context
         notifications.clear()
         pendingResponses.clear()
         val codexHome = File(context.filesDir, "codex-home").apply(File::mkdirs)
@@ -438,18 +470,19 @@ object AgentCodexAppServerClient {
 
     private fun request(
         method: String,
-        params: JSONObject,
+        params: JSONObject?,
     ): JSONObject {
         val requestId = requestIdSequence.getAndIncrement().toString()
         val responseQueue = LinkedBlockingQueue<JSONObject>(1)
         pendingResponses[requestId] = responseQueue
         try {
-            sendMessage(
-                JSONObject()
-                    .put("id", requestId)
-                    .put("method", method)
-                    .put("params", params),
-            )
+            val message = JSONObject()
+                .put("id", requestId)
+                .put("method", method)
+            if (params != null) {
+                message.put("params", params)
+            }
+            sendMessage(message)
             val response = responseQueue.poll(REQUEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
                 ?: throw IOException("Timed out waiting for $method response")
             val error = response.optJSONObject("error")
@@ -519,7 +552,23 @@ object AgentCodexAppServerClient {
             pendingResponses[message.get("id").toString()]?.offer(message)
             return
         }
+        handleInboundSideEffects(message)
         notifications.offer(message)
+    }
+
+    private fun handleInboundSideEffects(message: JSONObject) {
+        when (message.optString("method")) {
+            "account/updated" -> {
+                applicationContext?.let { context ->
+                    refreshRuntimeStatusAsync(context)
+                }
+            }
+            "account/login/completed" -> {
+                applicationContext?.let { context ->
+                    refreshRuntimeStatusAsync(context, refreshToken = true)
+                }
+            }
+        }
     }
 
     private fun checkProcessAlive() {

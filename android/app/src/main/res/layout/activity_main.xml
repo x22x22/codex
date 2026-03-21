@@ -195,83 +195,21 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:paddingTop="24dp"
-            android:text="Legacy Codexd Bridge"
+            android:text="Agent Authentication"
             android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingTop="12dp"
-            android:text="Socket path" />
-
-        <TextView
-            android:id="@+id/socket_path"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingTop="12dp"
-            android:text="Codex home" />
-
-        <TextView
-            android:id="@+id/codex_home"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="" />
 
         <TextView
             android:id="@+id/auth_status"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingTop="12dp"
-            android:text="Codexd status: unknown" />
-
-        <TextView
-            android:id="@+id/connected_clients_heading"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:paddingTop="12dp"
-            android:text="Connected clients (unknown)" />
-
-        <TableLayout
-            android:id="@+id/clients_table"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="4dp"
-            android:stretchColumns="1">
-
-            <TableRow>
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Client ID"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Data (kB)"
-                    android:textStyle="bold" />
-            </TableRow>
-        </TableLayout>
-
-        <Button
-            android:id="@+id/service_toggle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:onClick="toggleCodexd"
-            android:text="Start codexd" />
+            android:text="Agent auth: probing..." />
 
         <Button
             android:id="@+id/auth_action"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
+            android:layout_marginTop="12dp"
             android:onClick="authAction"
             android:text="Start sign-in" />
     </LinearLayout>

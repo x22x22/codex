@@ -7,7 +7,6 @@ import java.io.File
 import java.io.IOException
 import java.io.OutputStream
 import java.net.HttpURLConnection
-import java.net.UnknownHostException
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import kotlin.concurrent.thread
@@ -28,25 +27,22 @@ object AgentResponsesProxy {
         val accountId: String?,
     )
 
+    data class HttpResponse(
+        val statusCode: Int,
+        val body: String,
+    )
+
     fun sendResponsesRequest(
         context: Context,
         requestBody: String,
-    ): CodexdLocalClient.HttpResponse {
+    ): HttpResponse {
         val authSnapshot = loadAuthSnapshot(File(context.filesDir, "codex-home/auth.json"))
         val upstreamUrl = buildResponsesUrl(
             upstreamBaseUrl = "provider-default",
             authSnapshot.authMode,
         )
         Log.i(TAG, "Proxying /v1/responses -> $upstreamUrl (auth_mode=${authSnapshot.authMode})")
-        return try {
-            executeRequest(upstreamUrl, requestBody, authSnapshot)
-        } catch (err: IOException) {
-            if (!shouldFallbackToCodexd(err)) {
-                throw err
-            }
-            Log.w(TAG, "Falling back to codexd for /v1/responses after direct proxy DNS failure", err)
-            CodexdLocalClient.waitForResponse(context, "POST", "/v1/responses", requestBody)
-        }
+        return executeRequest(upstreamUrl, requestBody, authSnapshot)
     }
 
     fun openResponsesStream(
@@ -73,15 +69,7 @@ object AgentResponsesProxy {
             authSnapshot.authMode,
         )
         Log.i(TAG, "Streaming /v1/responses -> $upstreamUrl (auth_mode=${authSnapshot.authMode})")
-        try {
-            streamRequest(upstreamUrl, requestBody, authSnapshot, output)
-        } catch (err: IOException) {
-            if (!shouldFallbackToCodexd(err)) {
-                throw err
-            }
-            Log.w(TAG, "Falling back to codexd stream for /v1/responses after direct proxy DNS failure", err)
-            CodexdLocalClient.streamResponse(context, "POST", "/v1/responses", requestBody, output)
-        }
+        streamRequest(upstreamUrl, requestBody, authSnapshot, output)
     }
 
     internal fun buildResponsesUrl(
@@ -138,7 +126,7 @@ object AgentResponsesProxy {
         upstreamUrl: String,
         requestBody: String,
         authSnapshot: AuthSnapshot,
-    ): CodexdLocalClient.HttpResponse {
+    ): HttpResponse {
         val connection = openConnection(upstreamUrl, authSnapshot)
         return try {
             connection.outputStream.use { output ->
@@ -149,7 +137,7 @@ object AgentResponsesProxy {
             val stream = if (statusCode >= 400) connection.errorStream else connection.inputStream
             val responseBody = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { it.readText() }
                 .orEmpty()
-            CodexdLocalClient.HttpResponse(
+            HttpResponse(
                 statusCode = statusCode,
                 body = responseBody,
             )
@@ -251,28 +239,10 @@ object AgentResponsesProxy {
         }
     }
 
-    internal fun shouldFallbackToCodexd(error: Throwable): Boolean {
-        return error.causeSequence().any { cause ->
-            when (cause) {
-                is UnknownHostException -> true
-                is IOException -> {
-                    val message = cause.message.orEmpty()
-                    message.contains("Unable to resolve host", ignoreCase = true) ||
-                        message.contains("No address associated with hostname", ignoreCase = true)
-                }
-                else -> false
-            }
-        }
-    }
-
     private fun JSONObject.stringOrNull(key: String): String? {
         if (!has(key) || isNull(key)) {
             return null
         }
         return optString(key).ifBlank { null }
-    }
-
-    private fun Throwable.causeSequence(): Sequence<Throwable> {
-        return generateSequence(this) { cause -> cause.cause }
     }
 }

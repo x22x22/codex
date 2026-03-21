@@ -4,12 +4,9 @@ import android.Manifest
 import android.app.Activity
 import android.app.agent.AgentManager
 import android.app.agent.AgentSessionInfo
-import android.content.BroadcastReceiver
-import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.net.LocalSocket
+import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.Bundle
@@ -17,17 +14,8 @@ import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
-import android.widget.TableLayout
-import android.widget.TableRow
 import android.widget.TextView
 import android.widget.Toast
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.BufferedInputStream
-import java.io.File
-import java.io.IOException
-import java.nio.charset.StandardCharsets
-import java.util.Locale
 import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
@@ -44,30 +32,25 @@ class MainActivity : Activity() {
     @Volatile
     private var isAuthenticated = false
     @Volatile
-    private var isServiceRunning = false
-    @Volatile
-    private var statusRefreshInFlight = false
-    @Volatile
     private var agentRefreshInFlight = false
     @Volatile
     private var latestAgentRuntimeStatus: AgentCodexAppServerClient.RuntimeStatus? = null
+    @Volatile
+    private var pendingAuthMessage: String? = null
 
     private val agentSessionController by lazy { AgentSessionController(this) }
     private val sessionUiLeaseToken = Binder()
     private val runtimeStatusListener = AgentCodexAppServerClient.RuntimeStatusListener { status ->
         latestAgentRuntimeStatus = status
+        if (status != null) {
+            pendingAuthMessage = null
+        }
         runOnUiThread {
             findViewById<TextView>(R.id.agent_runtime_status).text = renderAgentRuntimeStatus()
-        }
-    }
-    private val authStatusReceiver = object : BroadcastReceiver() {
-        override fun onReceive(
-            context: Context?,
-            intent: Intent?,
-        ) {
-            if (intent?.action == CodexdForegroundService.ACTION_AUTH_STATE_CHANGED) {
-                refreshAuthStatus()
-            }
+            updateAuthUi(
+                message = renderAuthStatus(),
+                authenticated = status?.authenticated == true,
+            )
         }
     }
     private val sessionListener = object : AgentManager.SessionListener {
@@ -87,7 +70,6 @@ class MainActivity : Activity() {
     }
 
     private var sessionListenerRegistered = false
-    private var authStatusReceiverRegistered = false
     private var focusedFrameworkSessionId: String? = null
     private var leasedParentSessionId: String? = null
     private var latestAgentSnapshot: AgentSnapshot = AgentSnapshot.unavailable
@@ -112,27 +94,24 @@ class MainActivity : Activity() {
         super.onResume()
         handleSessionIntent(intent)
         registerSessionListenerIfNeeded()
-        registerAuthStatusReceiverIfNeeded()
         AgentCodexAppServerClient.registerRuntimeStatusListener(runtimeStatusListener)
-        AgentCodexAppServerClient.refreshRuntimeStatusAsync(this)
-        refreshAuthStatus()
+        AgentCodexAppServerClient.refreshRuntimeStatusAsync(this, refreshToken = true)
         refreshAgentSessions(force = true)
     }
 
     override fun onPause() {
         AgentCodexAppServerClient.unregisterRuntimeStatusListener(runtimeStatusListener)
-        unregisterAuthStatusReceiverIfNeeded()
         unregisterSessionListenerIfNeeded()
         updateSessionUiLease(null)
         super.onPause()
     }
 
     private fun updatePaths() {
-        findViewById<TextView>(R.id.socket_path).text = defaultSocketPath()
-        findViewById<TextView>(R.id.codex_home).text = defaultCodexHome()
-        isServiceRunning = false
         latestAgentRuntimeStatus = AgentCodexAppServerClient.currentRuntimeStatus()
-        updateAuthUi("Codexd status: unknown", false, null, emptyList())
+        updateAuthUi(
+            message = renderAuthStatus(),
+            authenticated = latestAgentRuntimeStatus?.authenticated == true,
+        )
         updateAgentUi(AgentSnapshot.unavailable)
     }
 
@@ -196,28 +175,6 @@ class MainActivity : Activity() {
         }
         runCatching { agentSessionController.unregisterSessionListener(sessionListener) }
         sessionListenerRegistered = false
-    }
-
-    private fun registerAuthStatusReceiverIfNeeded() {
-        if (authStatusReceiverRegistered) {
-            return
-        }
-        val filter = IntentFilter(CodexdForegroundService.ACTION_AUTH_STATE_CHANGED)
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(authStatusReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            registerReceiver(authStatusReceiver, filter)
-        }
-        authStatusReceiverRegistered = true
-    }
-
-    private fun unregisterAuthStatusReceiverIfNeeded() {
-        if (!authStatusReceiverRegistered) {
-            return
-        }
-        unregisterReceiver(authStatusReceiver)
-        authStatusReceiverRegistered = false
     }
 
     private fun updateSessionUiLease(parentSessionId: String?) {
@@ -393,130 +350,59 @@ class MainActivity : Activity() {
         }
     }
 
-    fun toggleCodexd(@Suppress("UNUSED_PARAMETER") view: View) {
-        val intent = Intent(this, CodexdForegroundService::class.java).apply {
-            putExtra(CodexdForegroundService.EXTRA_SOCKET_PATH, defaultSocketPath())
-            putExtra(CodexdForegroundService.EXTRA_CODEX_HOME, defaultCodexHome())
-        }
-        if (isServiceRunning) {
-            intent.action = CodexdForegroundService.ACTION_STOP
-            startService(intent)
-            isServiceRunning = false
-            updateAuthUi("Codexd status: stopping service...", false, 0, emptyList())
-            AgentCodexAppServerClient.refreshRuntimeStatusAsync(this)
-            return
-        }
-
-        intent.action = CodexdForegroundService.ACTION_START
-        startForegroundService(intent)
-        isServiceRunning = true
-        updateAuthUi("Codexd status: starting service...", isAuthenticated, null, emptyList())
-        refreshAuthStatus()
-        AgentCodexAppServerClient.refreshRuntimeStatusAsync(this)
-    }
-
     fun authAction(@Suppress("UNUSED_PARAMETER") view: View) {
         if (isAuthenticated) {
-            startSignOut()
+            signOutAgent()
         } else {
-            startDeviceAuth()
+            startAgentSignIn()
         }
     }
 
-    private fun startDeviceAuth() {
-        val intent = Intent(this, CodexdForegroundService::class.java).apply {
-            action = CodexdForegroundService.ACTION_START
-            putExtra(CodexdForegroundService.EXTRA_SOCKET_PATH, defaultSocketPath())
-            putExtra(CodexdForegroundService.EXTRA_CODEX_HOME, defaultCodexHome())
-        }
-        startForegroundService(intent)
-        isServiceRunning = true
-        updateAuthUi("Codexd status: requesting device code...", false, null, emptyList())
+    private fun startAgentSignIn() {
+        pendingAuthMessage = "Agent auth: opening browser for sign-in..."
+        updateAuthUi(pendingAuthMessage.orEmpty(), false)
         thread {
-            val socketPath = defaultSocketPath()
-            val response = runCatching { postDeviceAuthWithRetry(socketPath) }
-            response.onFailure { err ->
-                isServiceRunning = false
-                updateAuthUi("Codexd status: failed (${err.message})", false, null, emptyList())
+            val result = runCatching { AgentCodexAppServerClient.startChatGptLogin(this) }
+            result.onFailure { err ->
+                pendingAuthMessage = null
+                updateAuthUi("Agent auth: sign-in failed (${err.message})", false)
             }
-            response.onSuccess { deviceResponse ->
-                when (deviceResponse.status) {
-                    "already_authenticated" -> {
-                        updateAuthUi("Codexd status: already authenticated", true, null, emptyList())
-                        AgentCodexAppServerClient.refreshRuntimeStatusAsync(this, refreshToken = true)
-                        showToast("Already signed in")
-                    }
-                    "pending", "in_progress" -> {
-                        val url = deviceResponse.verificationUrl.orEmpty()
-                        val code = deviceResponse.userCode.orEmpty()
-                        updateAuthUi(
-                            "Codexd status: open $url and enter code $code",
-                            false,
-                            null,
-                            emptyList(),
+            result.onSuccess { loginSession ->
+                pendingAuthMessage = "Agent auth: complete sign-in in the browser"
+                updateAuthUi(pendingAuthMessage.orEmpty(), false)
+                runOnUiThread {
+                    val browserResult = runCatching {
+                        startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(loginSession.authUrl)),
                         )
-                        pollForAuthSuccess(socketPath)
                     }
-                    else -> updateAuthUi(
-                        "Codexd status: ${deviceResponse.status}",
-                        false,
-                        null,
-                        emptyList(),
-                    )
+                    browserResult.onFailure { err ->
+                        pendingAuthMessage = "Agent auth: open ${loginSession.authUrl}"
+                        updateAuthUi(pendingAuthMessage.orEmpty(), false)
+                        showToast("Failed to open browser: ${err.message}")
+                    }
+                    browserResult.onSuccess {
+                        showToast("Complete sign-in in the browser")
+                    }
                 }
             }
         }
     }
 
-    private fun startSignOut() {
-        updateAuthUi("Codexd status: signing out...", false, null, emptyList())
+    private fun signOutAgent() {
+        pendingAuthMessage = "Agent auth: signing out..."
+        updateAuthUi(pendingAuthMessage.orEmpty(), false)
         thread {
-            val socketPath = defaultSocketPath()
-            val result = runCatching { postLogoutWithRetry(socketPath) }
+            val result = runCatching { AgentCodexAppServerClient.logoutAccount(this) }
             result.onFailure { err ->
-                updateAuthUi(
-                    "Codexd status: sign out failed (${err.message})",
-                    false,
-                    null,
-                    emptyList(),
-                )
+                pendingAuthMessage = null
+                updateAuthUi("Agent auth: sign out failed (${err.message})", isAuthenticated)
             }
             result.onSuccess {
-                showToast("Signed out")
-                refreshAuthStatus()
+                pendingAuthMessage = null
                 AgentCodexAppServerClient.refreshRuntimeStatusAsync(this)
+                showToast("Signed out")
             }
-        }
-    }
-
-    private fun refreshAuthStatus() {
-        if (statusRefreshInFlight) {
-            return
-        }
-        statusRefreshInFlight = true
-        thread {
-            val socketPath = defaultSocketPath()
-            val result = runCatching { fetchAuthStatusWithRetry(socketPath) }
-            result.onFailure { err ->
-                isServiceRunning = false
-                updateAuthUi(
-                    "Codexd status: stopped or unavailable (${err.message})",
-                    false,
-                    null,
-                    emptyList(),
-                )
-            }
-            result.onSuccess { status ->
-                isServiceRunning = true
-                val message = if (status.authenticated) {
-                    val emailSuffix = status.accountEmail?.let { " ($it)" } ?: ""
-                    "Codexd status: signed in$emailSuffix"
-                } else {
-                    "Codexd status: not signed in"
-                }
-                updateAuthUi(message, status.authenticated, status.clientCount, status.clients)
-            }
-            statusRefreshInFlight = false
         }
     }
 
@@ -539,26 +425,6 @@ class MainActivity : Activity() {
                 updateAgentUi(snapshot)
             }
             agentRefreshInFlight = false
-        }
-    }
-
-    private fun pollForAuthSuccess(socketPath: String) {
-        val deadline = System.currentTimeMillis() + 15 * 60 * 1000
-        while (System.currentTimeMillis() < deadline) {
-            val status = runCatching { fetchAuthStatusWithRetry(socketPath) }.getOrNull()
-            if (status?.authenticated == true) {
-                val emailSuffix = status.accountEmail?.let { " ($it)" } ?: ""
-                updateAuthUi(
-                    "Codexd status: signed in$emailSuffix",
-                    true,
-                    status.clientCount,
-                    status.clients,
-                )
-                AgentCodexAppServerClient.refreshRuntimeStatusAsync(this, refreshToken = true)
-                showToast("Signed in")
-                return
-            }
-            Thread.sleep(3000)
         }
     }
 
@@ -712,7 +578,7 @@ class MainActivity : Activity() {
         val authSummary = if (runtimeStatus.authenticated) {
             runtimeStatus.accountEmail?.let { "signed in ($it)" } ?: "signed in"
         } else {
-            "not signed in; use the codexd controls below to start sign-in"
+            "not signed in"
         }
         val configuredModelSuffix = runtimeStatus.configuredModel
             ?.takeIf { it != runtimeStatus.effectiveModel }
@@ -722,270 +588,37 @@ class MainActivity : Activity() {
         return "Agent runtime: $authSummary, provider=${runtimeStatus.modelProviderId}, effective=$effectiveModel$configuredModelSuffix, clients=${runtimeStatus.clientCount}, base=${runtimeStatus.upstreamBaseUrl}"
     }
 
+    private fun renderAuthStatus(): String {
+        pendingAuthMessage?.let { return it }
+        val runtimeStatus = latestAgentRuntimeStatus
+        if (runtimeStatus == null) {
+            return "Agent auth: probing..."
+        }
+        if (!runtimeStatus.authenticated) {
+            return "Agent auth: not signed in"
+        }
+        return runtimeStatus.accountEmail?.let { email ->
+            "Agent auth: signed in ($email)"
+        } ?: "Agent auth: signed in"
+    }
+
     private fun updateAuthUi(
         message: String,
         authenticated: Boolean,
-        clientCount: Int?,
-        clients: List<ClientStats>,
     ) {
         isAuthenticated = authenticated
         runOnUiThread {
             val statusView = findViewById<TextView>(R.id.auth_status)
             statusView.text = message
-            val serviceButton = findViewById<Button>(R.id.service_toggle)
-            serviceButton.text = if (isServiceRunning) "Stop codexd" else "Start codexd"
             val actionButton = findViewById<Button>(R.id.auth_action)
             actionButton.text = if (authenticated) "Sign out" else "Start sign-in"
-            actionButton.isEnabled = isServiceRunning
-            val headingView = findViewById<TextView>(R.id.connected_clients_heading)
-            val countSuffix = clientCount?.let { " ($it)" } ?: " (unknown)"
-            headingView.text = "Connected clients$countSuffix"
-            renderClientsTable(clientCount, clients)
+            actionButton.isEnabled = true
         }
-    }
-
-    private fun renderClientsTable(clientCount: Int?, clients: List<ClientStats>) {
-        val clientsTable = findViewById<TableLayout>(R.id.clients_table)
-        while (clientsTable.childCount > 1) {
-            clientsTable.removeViewAt(1)
-        }
-
-        if (clientCount == null) {
-            val row = TableRow(this)
-            val idCell = TextView(this)
-            idCell.text = "unavailable"
-            val trafficCell = TextView(this)
-            trafficCell.text = "n/a"
-            row.addView(idCell)
-            row.addView(trafficCell)
-            clientsTable.addView(row)
-            return
-        }
-
-        if (clients.isEmpty()) {
-            val row = TableRow(this)
-            val idCell = TextView(this)
-            idCell.text = "none"
-            val trafficCell = TextView(this)
-            trafficCell.text = "Tx 0.0 / Rx 0.0"
-            row.addView(idCell)
-            row.addView(trafficCell)
-            clientsTable.addView(row)
-            return
-        }
-
-        clients.sortedBy { it.id }.forEach { client ->
-            val row = TableRow(this)
-            val idCell = TextView(this)
-            idCell.text = if (client.activeConnections > 0) {
-                client.id
-            } else {
-                "${client.id} (idle)"
-            }
-            idCell.setPadding(0, 6, 24, 6)
-            val trafficCell = TextView(this)
-            trafficCell.text = formatTrafficKb(client.bytesSent, client.bytesReceived)
-            trafficCell.setPadding(0, 6, 0, 6)
-            row.addView(idCell)
-            row.addView(trafficCell)
-            clientsTable.addView(row)
-        }
-    }
-
-    private fun formatTrafficKb(bytesSent: Long, bytesReceived: Long): String {
-        val sentKb = bytesSent.toDouble() / 1024.0
-        val receivedKb = bytesReceived.toDouble() / 1024.0
-        return String.format(Locale.US, "Tx %.1f / Rx %.1f", sentKb, receivedKb)
     }
 
     private fun showToast(message: String) {
         runOnUiThread {
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
         }
-    }
-
-    private data class AuthStatus(
-        val authenticated: Boolean,
-        val accountEmail: String?,
-        val clientCount: Int,
-        val clients: List<ClientStats>,
-    )
-
-    private data class ClientStats(
-        val id: String,
-        val activeConnections: Int,
-        val bytesSent: Long,
-        val bytesReceived: Long,
-    )
-
-    private data class DeviceAuthResponse(
-        val status: String,
-        val verificationUrl: String?,
-        val userCode: String?,
-    )
-
-    private data class HttpResponse(val statusCode: Int, val body: String)
-
-    private fun postDeviceAuthWithRetry(socketPath: String): DeviceAuthResponse {
-        val response = executeSocketRequestWithRetry(
-            socketPath,
-            "POST",
-            "/internal/auth/device",
-            null,
-        )
-        if (response.statusCode != 200) {
-            throw IOException("HTTP ${response.statusCode}: ${response.body}")
-        }
-        val json = JSONObject(response.body)
-        val verificationUrl =
-            if (json.isNull("verification_url")) null else json.optString("verification_url")
-        val userCode = if (json.isNull("user_code")) null else json.optString("user_code")
-        return DeviceAuthResponse(
-            status = json.optString("status"),
-            verificationUrl = verificationUrl,
-            userCode = userCode,
-        )
-    }
-
-    private fun postLogoutWithRetry(socketPath: String) {
-        val response = executeSocketRequestWithRetry(
-            socketPath,
-            "POST",
-            "/internal/auth/logout",
-            null,
-        )
-        if (response.statusCode != 200) {
-            throw IOException("HTTP ${response.statusCode}: ${response.body}")
-        }
-    }
-
-    private fun fetchAuthStatusWithRetry(socketPath: String): AuthStatus {
-        val response = executeSocketRequestWithRetry(
-            socketPath,
-            "GET",
-            "/internal/auth/status",
-            null,
-        )
-        if (response.statusCode != 200) {
-            throw IOException("HTTP ${response.statusCode}: ${response.body}")
-        }
-        val json = JSONObject(response.body)
-        val accountEmail =
-            if (json.isNull("accountEmail")) null else json.optString("accountEmail")
-        val clientCount = if (json.has("clientCount")) {
-            json.optInt("clientCount", 0)
-        } else {
-            json.optInt("client_count", 0)
-        }
-        val clients = parseClients(json.optJSONArray("clients"))
-        return AuthStatus(
-            authenticated = json.optBoolean("authenticated", false),
-            accountEmail = accountEmail,
-            clientCount = clientCount,
-            clients = clients,
-        )
-    }
-
-    private fun parseClients(clientsJson: JSONArray?): List<ClientStats> {
-        if (clientsJson == null) {
-            return emptyList()
-        }
-        val clients = mutableListOf<ClientStats>()
-        for (index in 0 until clientsJson.length()) {
-            val clientJson = clientsJson.optJSONObject(index) ?: continue
-            val id = clientJson.optString("id", "unknown")
-            val activeConnections = if (clientJson.has("activeConnections")) {
-                clientJson.optInt("activeConnections", 0)
-            } else {
-                clientJson.optInt("active_connections", 0)
-            }
-            val bytesSent = if (clientJson.has("bytesSent")) {
-                clientJson.optLong("bytesSent", 0)
-            } else {
-                clientJson.optLong("bytes_sent", 0)
-            }
-            val bytesReceived = if (clientJson.has("bytesReceived")) {
-                clientJson.optLong("bytesReceived", 0)
-            } else {
-                clientJson.optLong("bytes_received", 0)
-            }
-            clients.add(
-                ClientStats(
-                    id = id,
-                    activeConnections = activeConnections,
-                    bytesSent = bytesSent,
-                    bytesReceived = bytesReceived,
-                ),
-            )
-        }
-        return clients
-    }
-
-    private fun executeSocketRequestWithRetry(
-        socketPath: String,
-        method: String,
-        path: String,
-        body: String?,
-    ): HttpResponse {
-        var lastError: Exception? = null
-        repeat(10) {
-            try {
-                return executeSocketRequest(socketPath, method, path, body)
-            } catch (err: Exception) {
-                lastError = err
-                Thread.sleep(250)
-            }
-        }
-        throw IOException("Failed to connect to codexd socket: ${lastError?.message}")
-    }
-
-    private fun executeSocketRequest(
-        socketPath: String,
-        method: String,
-        path: String,
-        body: String?,
-    ): HttpResponse {
-        val socket = LocalSocket()
-        val address = CodexSocketConfig.toLocalSocketAddress(socketPath)
-        socket.connect(address)
-
-        val payload = body ?: ""
-        val request = buildString {
-            append("$method $path HTTP/1.1\r\n")
-            append("Host: localhost\r\n")
-            append("Connection: close\r\n")
-            if (body != null) {
-                append("Content-Type: application/json\r\n")
-            }
-            append("Content-Length: ${payload.toByteArray(StandardCharsets.UTF_8).size}\r\n")
-            append("\r\n")
-            append(payload)
-        }
-        val output = socket.outputStream
-        output.write(request.toByteArray(StandardCharsets.UTF_8))
-        output.flush()
-
-        val responseBytes = BufferedInputStream(socket.inputStream).use { it.readBytes() }
-        socket.close()
-
-        val responseText = responseBytes.toString(StandardCharsets.UTF_8)
-        val splitIndex = responseText.indexOf("\r\n\r\n")
-        if (splitIndex == -1) {
-            throw IOException("Invalid HTTP response")
-        }
-        val headers = responseText.substring(0, splitIndex)
-        val statusLine = headers.lineSequence().firstOrNull().orEmpty()
-        val statusCode = statusLine.split(" ").getOrNull(1)?.toIntOrNull()
-            ?: throw IOException("Missing status code")
-        val responseBody = responseText.substring(splitIndex + 4)
-        return HttpResponse(statusCode, responseBody)
-    }
-
-    private fun defaultSocketPath(): String {
-        return CodexSocketConfig.DEFAULT_SOCKET_PATH
-    }
-
-    private fun defaultCodexHome(): String {
-        return File(filesDir, "codex-home").absolutePath
     }
 }

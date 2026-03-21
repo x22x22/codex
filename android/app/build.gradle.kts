@@ -68,12 +68,6 @@ val codexTargets = mapOf(
     "x86_64" to "x86_64-linux-android",
 )
 val codexJniDir = layout.buildDirectory.dir("generated/codex-jni")
-val codexdTargets = mapOf(
-    "arm64-v8a" to "aarch64-linux-android",
-    "x86_64" to "x86_64-linux-android",
-)
-val codexdJniDir = layout.buildDirectory.dir("generated/codexd-jni")
-
 val extractAgentPlatformStubSdk = tasks.register<Sync>("extractAgentPlatformStubSdk") {
     val sdkZip = agentPlatformStubSdkZip.orNull
         ?: throw GradleException(
@@ -112,36 +106,10 @@ val syncCodexCliJniLibs = tasks.register<Sync>("syncCodexCliJniLibs") {
     }
 }
 
-val syncCodexdJniLibs = tasks.register<Sync>("syncCodexdJniLibs") {
-    val outputDir = codexdJniDir
-    into(outputDir)
-
-    codexdTargets.forEach { (abi, triple) ->
-        val binary = file("${repoRoot}/codex-rs/target/android/${triple}/${codexCargoProfileDir}/codexd")
-        from(binary) {
-            into(abi)
-            rename { "libcodexd.so" }
-        }
-    }
-
-    doFirst {
-        codexdTargets.forEach { (abi, triple) ->
-            val binary = file("${repoRoot}/codex-rs/target/android/${triple}/${codexCargoProfileDir}/codexd")
-            if (!binary.exists()) {
-                throw GradleException(
-                    "Missing codexd binary for ${abi} at ${binary}. Run `just android-service-build` from the repo root with CODEX_ANDROID_SKIP_LTO=${if (skipAndroidLto) "1" else "0"}."
-                )
-            }
-        }
-    }
-}
-
 android.sourceSets["main"].jniLibs.srcDir(codexJniDir.get().asFile)
-android.sourceSets["main"].jniLibs.srcDir(codexdJniDir.get().asFile)
 
 tasks.named("preBuild").configure {
     dependsOn(syncCodexCliJniLibs)
-    dependsOn(syncCodexdJniLibs)
     dependsOn(extractAgentPlatformStubSdk)
 }
 

@@ -41,11 +41,15 @@ just android-build
 cd android
 ./gradlew :genie:assembleDebug :app:assembleDebug
 ```
-The Agent/Genie prototype modules require
+
+If you prefer the system Gradle install, use `gradle :app:assembleDebug` from
+`android/`.
+
+The Agent/Genie prototype modules also require
 `ANDROID_AGENT_PLATFORM_STUB_SDK_ZIP` (or `-PagentPlatformStubSdkZip=...`) so
-Gradle can compile against the stub SDK jar. The Genie APK now also packages
-the Android `codex` binary as `libcodex.so`, so `just android-build` must run
-before `:genie:assembleDebug`.
+Gradle can compile against the stub SDK jar. The Agent APK and Genie APK both
+package the Android `codex` binary as `libcodex.so`, so `just android-build`
+must run before `:app:assembleDebug` and `:genie:assembleDebug`.
 If `cargo-ndk` cannot find your NDK, set:
 
 ```bash
@@ -66,7 +70,6 @@ adb push target/android/aarch64-linux-android/release/codex /data/local/tmp/code
 adb shell chmod +x /data/local/tmp/codex
 adb shell /data/local/tmp/codex --help
 ```
-
 ## Authentication on Android
 
 There are two reliable approaches when running the CLI from `adb shell`:
@@ -76,7 +79,6 @@ There are two reliable approaches when running the CLI from `adb shell`:
 ```bash
 adb shell /data/local/tmp/codex --device-auth
 ```
-
 This prints a URL and code. Open the URL on your host and enter the code.
 
 2) MCP OAuth login via host browser + `adb forward`
@@ -104,3 +106,6 @@ adb forward --remove tcp:8765
 
 - On Android, keyring-backed credential storage is unavailable; Codex falls back to file-backed storage under `CODEX_HOME`.
 - If `CODEX_HOME` is not set, Codex defaults to `/data/local/tmp/codex` on Android.
+- Avoid naming the binary `/data/local/tmp/codex`; it collides with the default `CODEX_HOME`. Use `/data/local/tmp/codex-bin` or set `CODEX_HOME`.
+- The Android Agent app stores auth in its own `files/codex-home/auth.json` and
+  uses that state for Genie traffic forwarded over the framework session bridge.

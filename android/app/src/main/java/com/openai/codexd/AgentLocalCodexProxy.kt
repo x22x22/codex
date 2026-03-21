@@ -14,7 +14,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 
 class AgentLocalCodexProxy(
-    private val requestForwarder: (String) -> CodexdLocalClient.HttpResponse,
+    private val requestForwarder: (String) -> AgentResponsesProxy.HttpResponse,
 ) : Closeable {
     companion object {
         private const val TAG = "AgentLocalProxy"
@@ -94,15 +94,15 @@ class AgentLocalCodexProxy(
         }
     }
 
-    private fun forwardResponsesRequest(request: ParsedRequest): CodexdLocalClient.HttpResponse {
+    private fun forwardResponsesRequest(request: ParsedRequest): AgentResponsesProxy.HttpResponse {
         if (request.method != "POST") {
-            return CodexdLocalClient.HttpResponse(
+            return AgentResponsesProxy.HttpResponse(
                 statusCode = 405,
                 body = "Unsupported local proxy method: ${request.method}",
             )
         }
         if (request.forwardPath != "/v1/responses") {
-            return CodexdLocalClient.HttpResponse(
+            return AgentResponsesProxy.HttpResponse(
                 statusCode = 404,
                 body = "Unsupported local proxy path: ${request.forwardPath}",
             )

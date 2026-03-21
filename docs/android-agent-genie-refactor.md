@@ -3,8 +3,7 @@
 ## Status
 
 This document tracks the Android Agent Platform refactor that moves Codex from a
-single `codexd` foreground-service wrapper to a framework-native Agent/Genie
-architecture.
+single Android wrapper process to a framework-native Agent/Genie architecture.
 
 The current repo now contains these implementation slices:
 
@@ -49,7 +48,7 @@ The current repo now contains these implementation slices:
   without assuming the live Genie runtime can reach the Agent over direct
   cross-app bind or raw local sockets.
 - The session bridge now exposes a **narrow Responses transport** owned by the
-  Agent app itself, so Genie model traffic no longer depends on the legacy
+  Agent app itself, so Genie model traffic no longer depends on any separate
   `codexd` socket service.
 - The Genie runtime now keeps host dynamic tools limited to framework-only
   detached-target controls and frame capture, while standard Android shell and
@@ -69,8 +68,10 @@ The current repo now contains these implementation slices:
   correct, for example `cmd activity start-activity --user 0 ...` or
   `am start --user 0 ...`.
 
-The Rust `codexd` service/client split remains in place only for the legacy
-foreground-service auth/status surface while this refactor proceeds.
+The Android app now owns auth, runtime status, and Genie Responses forwarding
+directly through the hosted Agent runtime. The standalone Rust `codexd`
+service/client split remains only as a legacy compatibility path outside the
+Agent/Genie APK flow.
 
 ## Fixed Architecture Decisions
 
@@ -93,8 +94,6 @@ foreground-service auth/status surface while this refactor proceeds.
   - outbound network access
   - upstream provider selection
   - orchestration of parent + child sessions
-- The first milestone keeps the current local CLI/socket bridge internally so
-  the Rust runtime can migrate incrementally.
 - Internal Agent<->Genie coordination now splits into:
   - framework per-session bridges for fixed-form control/data RPC
   - AgentSDK session events for free-form product dialogue
@@ -177,16 +176,13 @@ foreground-service auth/status surface while this refactor proceeds.
 
 - Expanding the framework session bridge beyond the current fixed-form runtime
   bootstrap/status calls
-- Making the Agent the default product surface instead of the legacy service app
-- Consolidating the remaining auth/status responsibilities out of the legacy
-  `codexd` foreground service
 - Adding more Android-native tool surfaces and richer observation types to the
   hosted Genie runtime
 
 ## Current Code Layout
 
 - `android/app`
-  - Agent scaffold, hosted Agent Codex runtime, and legacy `codexd` bridge live together for now
+  - Agent scaffold and hosted Agent Codex runtime
 - `android/genie`
   - standalone Genie scaffold APK with hosted `codex app-server`
 - `android/app/src/main/java/com/openai/codexd/CodexAgentService.kt`
@@ -196,7 +192,7 @@ foreground-service auth/status surface while this refactor proceeds.
 - `android/app/src/main/java/com/openai/codexd/AgentFrameworkToolBridge.kt`
   - hosted Agent bridge for framework session APIs
 - `android/app/src/main/java/com/openai/codexd/MainActivity.kt`
-  - Agent session UI, Agent clarification dialogs, and existing `codexd` bridge controls
+  - Agent session UI, Agent clarification dialogs, and Agent-native auth controls
 - `android/app/src/main/java/com/openai/codexd/AgentUserInputPrompter.kt`
   - Android dialog bridge for hosted Agent `request_user_input` calls
 - `android/genie/src/main/java/com/openai/codex/genie/CodexGenieService.kt`
@@ -215,8 +211,6 @@ foreground-service auth/status surface while this refactor proceeds.
   - Genie-side client for the framework-managed session bridge
 - `android/app/src/main/java/com/openai/codexd/AgentCodexAppServerClient.kt`
   - hosted Agent `codex app-server` client for planning, orchestration, auto-answering, runtime metadata, and narrow Agent tool calls
-- `android/app/src/main/java/com/openai/codexd/CodexdLocalClient.kt`
-  - Agent-local client for the legacy `codexd` foreground-service surface
 
 ## Build
 
@@ -230,7 +224,6 @@ Build both Android binaries first:
 
 ```bash
 just android-build
-just android-service-build
 ```
 
 Build both Android apps:
@@ -240,17 +233,14 @@ cd android
 ./gradlew :genie:assembleDebug :app:assembleDebug
 ```
 
-The Agent app depends on both `just android-build` and
-`just android-service-build` for the packaged `codex` and `codexd` JNI
-binaries. The Genie app depends on `just android-build` for the packaged
-`codex` JNI binaries.
+The Agent app and Genie app both depend on `just android-build` for the
+packaged `codex` JNI binaries.
 
 ## Next Implementation Steps
 
 1. Route more Agent orchestration through the hosted runtime while keeping the
    host bridge limited to framework session APIs.
-2. Split the remaining legacy `codexd` auth/status concerns out of the Agent UI.
-3. Add more Android-native tool surfaces and richer observation types to the
+2. Add more Android-native tool surfaces and richer observation types to the
    hosted Genie runtime.
-4. Later, replace the framework-session host bridge with command-line
+3. Later, replace the framework-session host bridge with command-line
    equivalents once those are stable enough to rely on.

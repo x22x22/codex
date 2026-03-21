@@ -1,12 +1,8 @@
 package com.openai.codexd
 
 import java.io.File
-import java.io.IOException
-import java.net.UnknownHostException
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentResponsesProxyTest {
@@ -74,36 +70,6 @@ class AgentResponsesProxyTest {
         assertEquals("apiKey", snapshot.authMode)
         assertEquals("sk-test-key", snapshot.bearerToken)
         assertNull(snapshot.accountId)
-    }
-
-    @Test
-    fun shouldFallbackToCodexdForUnknownHost() {
-        assertTrue(
-            AgentResponsesProxy.shouldFallbackToCodexd(
-                UnknownHostException("Unable to resolve host \"chatgpt.com\""),
-            ),
-        )
-    }
-
-    @Test
-    fun shouldFallbackToCodexdForNestedDnsIoException() {
-        assertTrue(
-            AgentResponsesProxy.shouldFallbackToCodexd(
-                IOException(
-                    "stream failed",
-                    IOException("No address associated with hostname"),
-                ),
-            ),
-        )
-    }
-
-    @Test
-    fun shouldNotFallbackToCodexdForOrdinaryHttpFailure() {
-        assertFalse(
-            AgentResponsesProxy.shouldFallbackToCodexd(
-                IOException("unexpected status 500"),
-            ),
-        )
     }
 
     private fun writeTempAuthJson(contents: String): File {
