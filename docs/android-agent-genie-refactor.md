@@ -25,6 +25,9 @@ The current repo now contains these implementation slices:
   **per-session bridge** returned by `AgentManager.openSessionBridge(...)` on
   the Agent side and `GenieService.Callback.openSessionBridge(...)` on the
   Genie side, not framework question/answer events.
+- The older direct cross-app bind/socket bridge experiments have been removed
+  from the app code; the framework session bridge is now the only supported
+  Agent<->Genie control plane.
 - The current session bridge exposes small fixed-form calls, and the Genie
   runtime already uses it to fetch Agent-owned runtime metadata from the
   hosted Agent Codex runtime, including auth status and configured model/provider.

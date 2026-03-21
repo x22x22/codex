@@ -24,10 +24,6 @@ android {
         minSdk = 26
     }
 
-    buildFeatures {
-        aidl = true
-    }
-
     compileOptions {
         sourceCompatibility = androidJavaVersion
         targetCompatibility = androidJavaVersion

@@ -712,7 +712,7 @@ class MainActivity : Activity() {
         val authSummary = if (runtimeStatus.authenticated) {
             runtimeStatus.accountEmail?.let { "signed in ($it)" } ?: "signed in"
         } else {
-            "not signed in; use the legacy codexd controls below to start sign-in"
+            "not signed in; use the codexd controls below to start sign-in"
         }
         val configuredModelSuffix = runtimeStatus.configuredModel
             ?.takeIf { it != runtimeStatus.effectiveModel }
@@ -733,7 +733,7 @@ class MainActivity : Activity() {
             val statusView = findViewById<TextView>(R.id.auth_status)
             statusView.text = message
             val serviceButton = findViewById<Button>(R.id.service_toggle)
-            serviceButton.text = if (isServiceRunning) "Stop legacy codexd" else "Start legacy codexd"
+            serviceButton.text = if (isServiceRunning) "Stop codexd" else "Start codexd"
             val actionButton = findViewById<Button>(R.id.auth_action)
             actionButton.text = if (authenticated) "Sign out" else "Start sign-in"
             actionButton.isEnabled = isServiceRunning

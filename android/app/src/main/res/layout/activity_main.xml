@@ -265,7 +265,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
             android:onClick="toggleCodexd"
-            android:text="Start legacy codexd" />
+            android:text="Start codexd" />
 
         <Button
             android:id="@+id/auth_action"
