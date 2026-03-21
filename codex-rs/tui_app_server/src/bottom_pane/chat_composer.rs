@@ -2582,10 +2582,6 @@ impl ChatComposer {
         }
 
         let cmd = slash_commands::find_builtin_command(name, self.builtin_command_flags())?;
-
-        if !cmd.supports_inline_args() {
-            return None;
-        }
         if self.reject_slash_command_if_unavailable(cmd) {
             return Some(InputResult::None);
         }

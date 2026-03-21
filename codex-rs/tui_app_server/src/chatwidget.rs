@@ -4885,10 +4885,6 @@ impl ChatWidget {
         args: String,
         _text_elements: Vec<TextElement>,
     ) {
-        if !cmd.supports_inline_args() {
-            self.dispatch_command(cmd);
-            return;
-        }
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
                 "'/{}' is disabled while a task is in progress.",
@@ -4900,12 +4896,12 @@ impl ChatWidget {
         }
 
         let trimmed = args.trim();
+        if trimmed.is_empty() {
+            self.dispatch_command(cmd);
+            return;
+        }
         match cmd {
             SlashCommand::Fast => {
-                if trimmed.is_empty() {
-                    self.dispatch_command(cmd);
-                    return;
-                }
                 match trimmed.to_ascii_lowercase().as_str() {
                     "on" => self.set_service_tier_selection(Some(ServiceTier::Fast)),
                     "off" => self.set_service_tier_selection(/*service_tier*/ None),
@@ -5004,7 +5000,13 @@ impl ChatWidget {
                     });
                 self.bottom_pane.drain_pending_submission_state();
             }
-            _ => self.dispatch_command(cmd),
+            _ => {
+                let usage = cmd.usage_lines().join(" | ");
+                self.add_error_message(format!(
+                    "'/{}' does not accept inline arguments. Usage: {usage}",
+                    cmd.command()
+                ));
+            }
         }
     }
 
