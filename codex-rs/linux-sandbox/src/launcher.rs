@@ -4,6 +4,7 @@ use std::os::fd::AsRawFd;
 use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::process::Command;
 
 use crate::vendored_bwrap::exec_vendored_bwrap;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -28,11 +29,29 @@ fn preferred_bwrap_launcher() -> BubblewrapLauncher {
         return BubblewrapLauncher::Vendored;
     }
 
+    if !system_bwrap_supports_argv0() {
+        return BubblewrapLauncher::Vendored;
+    }
+
     let system_bwrap_path = match AbsolutePathBuf::from_absolute_path(SYSTEM_BWRAP_PATH) {
         Ok(path) => path,
         Err(err) => panic!("failed to normalize system bubblewrap path {SYSTEM_BWRAP_PATH}: {err}"),
     };
     BubblewrapLauncher::System(system_bwrap_path)
+}
+
+fn system_bwrap_supports_argv0() -> bool {
+    let output = Command::new(SYSTEM_BWRAP_PATH).arg("--help").output();
+    let Ok(output) = output else {
+        return false;
+    };
+    help_output_supports_argv0(&output.stdout, &output.stderr)
+}
+
+fn help_output_supports_argv0(stdout: &[u8], stderr: &[u8]) -> bool {
+    let stdout = String::from_utf8_lossy(stdout);
+    let stderr = String::from_utf8_lossy(stderr);
+    stdout.contains("--argv0") || stderr.contains("--argv0")
 }
 
 fn exec_system_bwrap(
@@ -110,6 +129,30 @@ mod tests {
         make_files_inheritable(std::slice::from_ref(file.as_file()));
 
         assert_eq!(fd_flags(file.as_file().as_raw_fd()) & libc::FD_CLOEXEC, 0);
+    }
+
+    #[test]
+    fn detects_argv0_support_in_help_stdout() {
+        assert!(help_output_supports_argv0(
+            b"usage: bwrap [OPTIONS]\n    --argv0 VALUE\n",
+            b""
+        ));
+    }
+
+    #[test]
+    fn detects_argv0_support_in_help_stderr() {
+        assert!(help_output_supports_argv0(
+            b"",
+            b"usage: bwrap [OPTIONS]\n    --argv0 VALUE\n"
+        ));
+    }
+
+    #[test]
+    fn rejects_bwrap_help_without_argv0() {
+        assert!(!help_output_supports_argv0(
+            b"usage: bwrap [OPTIONS]\n    --proc DEST\n",
+            b""
+        ));
     }
 
     fn set_cloexec(fd: libc::c_int) {
