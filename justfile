@@ -84,6 +84,7 @@ android-build:
       profile_args=(--profile android-release-no-lto)
     fi
     CARGO_TARGET_DIR=target/android cargo ndk --platform 26 -t arm64-v8a -t x86_64 build -p codex-cli "${profile_args[@]}" --bin codex
+
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"

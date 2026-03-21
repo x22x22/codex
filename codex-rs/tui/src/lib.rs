@@ -31,6 +31,7 @@ use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::find_thread_path_by_id_str;
 use codex_core::find_thread_path_by_name_str;
 use codex_core::format_exec_policy_error_with_source;
+use codex_core::openai_socket::openai_unix_socket_path;
 use codex_core::path_utils;
 use codex_core::read_session_meta_line;
 use codex_core::state_db::get_state_db;
@@ -644,7 +645,7 @@ async fn run_ratatui_app(
         /*enable_codex_api_key_env*/ false,
         initial_config.cli_auth_credentials_store_mode,
     );
-    let login_status = get_login_status(&initial_config);
+    let login_status = get_login_status(&initial_config).await;
     let should_show_trust_screen_flag = should_show_trust_screen(&initial_config);
     let should_show_onboarding =
         should_show_onboarding(login_status, &initial_config, should_show_trust_screen_flag);
@@ -1215,11 +1216,15 @@ fn determine_alt_screen_mode(no_alt_screen: bool, tui_alternate_screen: AltScree
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoginStatus {
     AuthMode(AuthMode),
+    ExternalProxy,
     NotAuthenticated,
 }
 
-fn get_login_status(config: &Config) -> LoginStatus {
+async fn get_login_status(config: &Config) -> LoginStatus {
     if config.model_provider.requires_openai_auth {
+        if openai_unix_socket_path().is_some() {
+            return LoginStatus::ExternalProxy;
+        }
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();

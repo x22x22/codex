@@ -49,7 +49,7 @@ The current repo now contains these implementation slices:
   cross-app bind or raw local sockets.
 - The session bridge now exposes a **narrow Responses transport** owned by the
   Agent app itself, so Genie model traffic no longer depends on any separate
-  `codexd` socket service.
+  sidecar socket service.
 - The Genie runtime now keeps host dynamic tools limited to framework-only
   detached-target controls and frame capture, while standard Android shell and
   device commands stay in the normal Codex tool path.
@@ -69,9 +69,9 @@ The current repo now contains these implementation slices:
   `am start --user 0 ...`.
 
 The Android app now owns auth, runtime status, and Genie Responses forwarding
-directly through the hosted Agent runtime. The standalone Rust `codexd`
-service/client split remains only as a legacy compatibility path outside the
-Agent/Genie APK flow.
+directly through the hosted Agent runtime. The older standalone
+service/client split has been removed from the repo and is no longer part of
+the Android Agent/Genie flow.
 
 ## Fixed Architecture Decisions
 
@@ -158,7 +158,7 @@ Agent/Genie APK flow.
 - Hosted `codex app-server` inside Genie, with model traffic routed through a
   Genie-local proxy backed by the Agent framework session bridge
 - Agent-owned `/v1/responses` proxying in
-  `android/app/src/main/java/com/openai/codexd/AgentResponsesProxy.kt`
+  `android/app/src/main/java/com/openai/codex/agent/AgentResponsesProxy.kt`
 - Framework-only Android dynamic tools registered on the Genie Codex thread with:
   - detached target show/hide/attach/close
   - detached frame capture

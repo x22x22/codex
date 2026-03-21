@@ -25,6 +25,7 @@ use crate::auth::storage::AuthStorageBackend;
 use crate::auth::storage::create_auth_storage;
 use crate::auth::util::try_parse_error_message;
 use crate::default_client::create_client;
+use crate::openai_socket::should_route_via_openai_socket_proxy;
 use crate::token_data::KnownPlan as InternalKnownPlan;
 use crate::token_data::PlanType as InternalPlanType;
 use crate::token_data::TokenData;
@@ -1127,6 +1128,9 @@ impl AuthManager {
     /// For stale managed ChatGPT auth, first performs a guarded reload and then
     /// refreshes only if the on-disk auth is unchanged.
     pub async fn auth(&self) -> Option<CodexAuth> {
+        if should_route_via_openai_socket_proxy() {
+            return self.auth_cached();
+        }
         let auth = self.auth_cached()?;
         if Self::is_stale_for_proactive_refresh(&auth)
             && let Err(err) = self.refresh_token().await
@@ -1312,6 +1316,10 @@ impl AuthManager {
     /// can assume that some other instance already refreshed it. If the persisted
     /// token is the same as the cached, then ask the token authority to refresh.
     pub async fn refresh_token(&self) -> Result<(), RefreshTokenError> {
+        let _refresh_guard = self.refresh_lock.lock().await;
+        if should_route_via_openai_socket_proxy() {
+            return Ok(());
+        }
         let _refresh_guard = self.refresh_lock.lock().await;
         let auth_before_reload = self.auth_cached();
         if auth_before_reload

@@ -577,8 +577,8 @@ mod tests {
     #[test]
     fn parse_socket_endpoint_preserves_filesystem_paths() {
         assert_eq!(
-            parse_socket_endpoint(Path::new("/tmp/codexd.sock")).expect("socket endpoint"),
-            UnixSocketEndpoint::Filesystem(PathBuf::from("/tmp/codexd.sock")),
+            parse_socket_endpoint(Path::new("/tmp/openai.sock")).expect("socket endpoint"),
+            UnixSocketEndpoint::Filesystem(PathBuf::from("/tmp/openai.sock")),
         );
     }
 

@@ -7,6 +7,7 @@ use chrono::Duration;
 use chrono::Utc;
 use codex_core::config::Config;
 use codex_core::default_client::create_client;
+use codex_core::openai_socket::should_route_via_openai_socket_proxy;
 use serde::Deserialize;
 use serde::Serialize;
 use std::path::Path;
@@ -15,6 +16,9 @@ use std::path::PathBuf;
 use crate::version::CODEX_CLI_VERSION;
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
+    if should_route_via_openai_socket_proxy() {
+        return None;
+    }
     if !config.check_for_update_on_startup {
         return None;
     }

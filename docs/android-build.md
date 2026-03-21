@@ -6,6 +6,7 @@
 - Treat keyring storage as unsupported on Android and use file-backed storage instead.
 - Add a `just android-build` helper that uses `cargo-ndk` to build `codex` for `arm64-v8a` and `x86_64` (API 26).
 - Document build and run steps for pushing the binary to a device.
+- Build the Android Agent/Genie apps directly on `codex`.
 
 ## Prerequisites
 
@@ -32,6 +33,10 @@ For faster local iteration, you can skip Android release LTO:
 ```bash
 CODEX_ANDROID_SKIP_LTO=1 just android-build
 ```
+
+The Agent and Genie APKs now package only `codex`, so Android app builds require
+only `just android-build`.
+
 Build the Android Agent/Genie prototype APKs with the Android Agent Platform
 stub SDK:
 
@@ -50,6 +55,7 @@ The Agent/Genie prototype modules also require
 Gradle can compile against the stub SDK jar. The Agent APK and Genie APK both
 package the Android `codex` binary as `libcodex.so`, so `just android-build`
 must run before `:app:assembleDebug` and `:genie:assembleDebug`.
+
 If `cargo-ndk` cannot find your NDK, set:
 
 ```bash
@@ -60,16 +66,16 @@ Build outputs:
 
 - `target/android/aarch64-linux-android/release/codex`
 - `target/android/x86_64-linux-android/release/codex`
-
 ## Run On Device
 
 Example for `arm64-v8a`:
 
 ```bash
-adb push target/android/aarch64-linux-android/release/codex /data/local/tmp/codex
-adb shell chmod +x /data/local/tmp/codex
-adb shell /data/local/tmp/codex --help
+adb push target/android/aarch64-linux-android/release/codex /data/local/tmp/codex-bin
+adb shell chmod +x /data/local/tmp/codex-bin
+adb shell /data/local/tmp/codex-bin --help
 ```
+
 ## Authentication on Android
 
 There are two reliable approaches when running the CLI from `adb shell`:
@@ -77,9 +83,10 @@ There are two reliable approaches when running the CLI from `adb shell`:
 1) ChatGPT login via device code (recommended)
 
 ```bash
-adb shell /data/local/tmp/codex --device-auth
+adb shell /data/local/tmp/codex-bin --device-auth
 ```
-This prints a URL and code. Open the URL on your host and enter the code.
+
+The Agent app now owns authentication directly through the hosted Agent runtime.
 
 2) MCP OAuth login via host browser + `adb forward`
 
@@ -91,7 +98,7 @@ from host to device so the redirect can reach the device.
 adb forward tcp:8765 tcp:8765
 
 # Start the login; the URL will be printed.
-adb shell /data/local/tmp/codex mcp login <server_name> --callback-port 8765 --host-browser
+adb shell /data/local/tmp/codex-bin mcp login <server_name> --callback-port 8765 --host-browser
 ```
 
 Open the printed URL on your host. When the provider redirects to

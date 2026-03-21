@@ -83,6 +83,7 @@ use crate::config::types::McpServerConfig;
 use crate::config::types::McpServerTransportConfig;
 use crate::connectors::is_connector_id_allowed;
 use crate::connectors::sanitize_name;
+use crate::openai_socket::should_route_via_openai_socket_proxy;
 
 /// Delimiter used to separate the server name from the tool name in a fully
 /// qualified tool name.
@@ -1455,6 +1456,11 @@ async fn make_rmcp_client(
             env_http_headers,
             bearer_token_env_var,
         } => {
+            if should_route_via_openai_socket_proxy() {
+                return Err(StartupOutcomeError::from(anyhow!(
+                    "streamable HTTP MCP servers are disabled when routing through an OpenAI socket proxy"
+                )));
+            }
             let resolved_bearer_token =
                 match resolve_bearer_token(server_name, bearer_token_env_var.as_deref()) {
                     Ok(token) => token,

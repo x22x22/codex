@@ -1,5 +1,4 @@
 use std::ffi::OsString;
-use std::path::Path;
 use std::path::PathBuf;
 
 pub const CODEX_OPENAI_UNIX_SOCKET_ENV_VAR: &str = "CODEX_OPENAI_UNIX_SOCKET";
@@ -11,43 +10,11 @@ pub fn openai_unix_socket_path() -> Option<PathBuf> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(default_android_socket_path)
 }
 
-pub fn should_route_via_codexd() -> bool {
-    (openai_unix_socket_path().is_some()
-        || should_use_agent_auth_proxy_env(std::env::var_os(CODEX_USE_AGENT_AUTH_PROXY_ENV_VAR)))
-        && !is_codexd_process()
-}
-
-fn is_codexd_process() -> bool {
-    std::env::args_os()
-        .next()
-        .and_then(|arg0| {
-            Path::new(&arg0)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(str::to_string)
-        })
-        .is_some_and(|arg0| arg0.contains("codexd"))
-}
-
-#[cfg(target_os = "android")]
-fn default_android_socket_path() -> Option<PathBuf> {
-    const CANDIDATES: [&str; 2] = [
-        "/data/data/com.openai.codexd/files/codexd.sock",
-        "/data/user/0/com.openai.codexd/files/codexd.sock",
-    ];
-
-    CANDIDATES
-        .iter()
-        .map(PathBuf::from)
-        .find(|path| path.exists())
-}
-
-#[cfg(not(target_os = "android"))]
-fn default_android_socket_path() -> Option<PathBuf> {
-    None
+pub fn should_route_via_openai_socket_proxy() -> bool {
+    openai_unix_socket_path().is_some()
+        || should_use_agent_auth_proxy_env(std::env::var_os(CODEX_USE_AGENT_AUTH_PROXY_ENV_VAR))
 }
 
 fn should_use_agent_auth_proxy_env(value: Option<OsString>) -> bool {
