@@ -383,6 +383,7 @@ mod tests {
                     .expect("valid permissions"),
                     scope: codex_protocol::request_permissions::PermissionGrantScope::Session,
                 },
+                persist_permissions: None,
             })
             .expect("permissions response should serialize")
             .expect("permissions request should be pending");

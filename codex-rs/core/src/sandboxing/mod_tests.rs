@@ -334,6 +334,33 @@ fn intersect_permission_profiles_preserves_default_macos_grants() {
     );
 }
 
+#[test]
+fn intersect_permission_profiles_preserves_explicit_empty_read_lists() {
+    let requested_dir = AbsolutePathBuf::try_from("/tmp/requested").expect("absolute path");
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(Vec::new()),
+            write: Some(vec![requested_dir.clone()]),
+        }),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(Vec::new()),
+            write: Some(vec![requested_dir.clone()]),
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted).file_system,
+        Some(FileSystemPermissions {
+            read: Some(Vec::new()),
+            write: Some(vec![requested_dir]),
+        })
+    );
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn normalize_additional_permissions_preserves_macos_permissions() {
