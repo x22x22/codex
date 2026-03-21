@@ -5,7 +5,6 @@ use codex_exec_server::Environment as ExecutorEnvironment;
 use codex_exec_server::ExecOutputStream as ExecutorOutputStream;
 use codex_exec_server::ExecParams as ExecutorExecParams;
 use codex_exec_server::ExecProcess;
-use codex_exec_server::ProcessOutputChunk as ExecutorProcessOutputChunk;
 use codex_exec_server::ReadParams as ExecutorReadParams;
 use uuid::Uuid;
 
@@ -90,7 +89,7 @@ pub(crate) async fn execute_exec_request_via_environment(
     finalize_exec_result(raw_output_result, sandbox, duration)
 }
 
-async fn consume_exec_server_output(
+pub(crate) async fn consume_exec_server_output(
     executor: std::sync::Arc<dyn ExecProcess>,
     process_id: &str,
     expiration: ExecExpiration,
@@ -142,15 +141,23 @@ async fn consume_exec_server_output(
         };
 
         after_seq = Some(read_response.next_seq.saturating_sub(1));
-        append_exec_server_chunks(
-            read_response.chunks,
-            &mut stdout,
-            &mut stderr,
-            retained_bytes_cap,
-            stdout_stream.as_ref(),
-            &mut emitted_deltas,
-        )
-        .await;
+        for chunk in read_response.chunks {
+            let bytes = chunk.chunk.into_inner();
+            let is_stderr = chunk.stream == ExecutorOutputStream::Stderr;
+            if emitted_deltas < MAX_EXEC_OUTPUT_DELTAS_PER_CALL {
+                emit_output_delta(stdout_stream.as_ref(), is_stderr, bytes.clone()).await;
+                emitted_deltas += 1;
+            }
+
+            match chunk.stream {
+                ExecutorOutputStream::Stderr => {
+                    append_with_cap(&mut stderr, &bytes, retained_bytes_cap)
+                }
+                ExecutorOutputStream::Stdout | ExecutorOutputStream::Pty => {
+                    append_with_cap(&mut stdout, &bytes, retained_bytes_cap)
+                }
+            }
+        }
 
         if read_response.exited {
             exit_status = Some(synthetic_exit_status(read_response.exit_code.unwrap_or(-1)));
@@ -168,15 +175,23 @@ async fn consume_exec_server_output(
                     break;
                 }
                 after_seq = Some(drain_response.next_seq.saturating_sub(1));
-                append_exec_server_chunks(
-                    drain_response.chunks,
-                    &mut stdout,
-                    &mut stderr,
-                    retained_bytes_cap,
-                    stdout_stream.as_ref(),
-                    &mut emitted_deltas,
-                )
-                .await;
+                for chunk in drain_response.chunks {
+                    let bytes = chunk.chunk.into_inner();
+                    let is_stderr = chunk.stream == ExecutorOutputStream::Stderr;
+                    if emitted_deltas < MAX_EXEC_OUTPUT_DELTAS_PER_CALL {
+                        emit_output_delta(stdout_stream.as_ref(), is_stderr, bytes.clone()).await;
+                        emitted_deltas += 1;
+                    }
+
+                    match chunk.stream {
+                        ExecutorOutputStream::Stderr => {
+                            append_with_cap(&mut stderr, &bytes, retained_bytes_cap)
+                        }
+                        ExecutorOutputStream::Stdout | ExecutorOutputStream::Pty => {
+                            append_with_cap(&mut stdout, &bytes, retained_bytes_cap)
+                        }
+                    }
+                }
             }
             break;
         }
@@ -200,31 +215,6 @@ async fn consume_exec_server_output(
         aggregated_output,
         timed_out,
     })
-}
-
-async fn append_exec_server_chunks(
-    chunks: Vec<ExecutorProcessOutputChunk>,
-    stdout: &mut Vec<u8>,
-    stderr: &mut Vec<u8>,
-    retained_bytes_cap: Option<usize>,
-    stdout_stream: Option<&StdoutStream>,
-    emitted_deltas: &mut usize,
-) {
-    for chunk in chunks {
-        let bytes = chunk.chunk.into_inner();
-        let is_stderr = chunk.stream == ExecutorOutputStream::Stderr;
-        if *emitted_deltas < MAX_EXEC_OUTPUT_DELTAS_PER_CALL {
-            emit_output_delta(stdout_stream, is_stderr, bytes.clone()).await;
-            *emitted_deltas += 1;
-        }
-
-        match chunk.stream {
-            ExecutorOutputStream::Stderr => append_with_cap(stderr, &bytes, retained_bytes_cap),
-            ExecutorOutputStream::Stdout | ExecutorOutputStream::Pty => {
-                append_with_cap(stdout, &bytes, retained_bytes_cap)
-            }
-        }
-    }
 }
 
 fn append_with_cap(dst: &mut Vec<u8>, src: &[u8], max_bytes: Option<usize>) {
