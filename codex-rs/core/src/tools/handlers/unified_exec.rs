@@ -1,9 +1,12 @@
+use crate::exec_env::create_env;
 use crate::function_tool::FunctionCallError;
 use crate::is_safe_command::is_known_safe_command;
+use crate::powershell::prefix_powershell_script_with_utf8;
 use crate::protocol::EventMsg;
 use crate::protocol::TerminalInteractionEvent;
 use crate::sandboxing::SandboxPermissions;
 use crate::shell::Shell;
+use crate::shell::ShellType;
 use crate::shell::get_shell_by_model_provided_path;
 use crate::skills::maybe_emit_implicit_skill_invocation;
 use crate::tools::context::ExecCommandToolOutput;
@@ -18,13 +21,18 @@ use crate::tools::handlers::parse_arguments_with_base_path;
 use crate::tools::handlers::resolve_workdir_base_path;
 use crate::tools::registry::ToolHandler;
 use crate::tools::registry::ToolKind;
+use crate::tools::runtimes::maybe_wrap_shell_lc_with_snapshot;
 use crate::tools::spec::UnifiedExecShellMode;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::UnifiedExecContext;
 use crate::unified_exec::UnifiedExecProcessManager;
-use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::apply_unified_exec_env;
+use crate::unified_exec::into_wire_exec_approval_requirement;
+use crate::unified_exec::resolve_max_tokens;
 use async_trait::async_trait;
 use codex_features::Feature;
+use codex_protocol::executor::UnifiedExecExecCommandRequest;
+use codex_protocol::executor::UnifiedExecWriteStdinRequest;
 use codex_protocol::models::PermissionProfile;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -152,7 +160,6 @@ impl ToolHandler for UnifiedExecHandler {
                     args.workdir.as_deref(),
                 )
                 .await;
-                let process_id = manager.allocate_process_id().await;
                 let command = get_command(
                     &args,
                     session.user_shell(),
@@ -163,7 +170,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let command_for_display = codex_shell_command::parse_command::shlex_join(&command);
 
                 let ExecCommandArgs {
-                    workdir,
+                    workdir: _,
                     tty,
                     yield_time_ms,
                     max_output_tokens,
@@ -199,16 +206,13 @@ impl ToolHandler for UnifiedExecHandler {
                     )
                 {
                     let approval_policy = context.turn.approval_policy.value();
-                    manager.release_process_id(process_id).await;
                     return Err(FunctionCallError::RespondToModel(format!(
                         "approval policy is {approval_policy:?}; reject command — you cannot ask for escalated permissions if the approval policy is {approval_policy:?}"
                     )));
                 }
 
-                let workdir = workdir.filter(|value| !value.is_empty());
-
-                let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
-                let cwd = workdir.clone().unwrap_or(cwd);
+                let explicit_env_overrides = context.turn.shell_environment_policy.r#set.clone();
+                let cwd = cwd.clone();
                 let normalized_additional_permissions = match implicit_granted_permissions(
                     sandbox_permissions,
                     requested_additional_permissions.as_ref(),
@@ -229,7 +233,6 @@ impl ToolHandler for UnifiedExecHandler {
                 ) {
                     Ok(normalized) => normalized,
                     Err(err) => {
-                        manager.release_process_id(process_id).await;
                         return Err(FunctionCallError::RespondToModel(err));
                     }
                 };
@@ -246,7 +249,6 @@ impl ToolHandler for UnifiedExecHandler {
                 )
                 .await?
                 {
-                    manager.release_process_id(process_id).await;
                     return Ok(ExecCommandToolOutput {
                         event_call_id: String::new(),
                         chunk_id: String::new(),
@@ -260,23 +262,61 @@ impl ToolHandler for UnifiedExecHandler {
                     });
                 }
 
+                let exec_approval_requirement = context
+                    .session
+                    .services
+                    .exec_policy
+                    .create_exec_approval_requirement_for_command(
+                        crate::exec_policy::ExecApprovalRequest {
+                            command: &command,
+                            approval_policy: context.turn.approval_policy.value(),
+                            sandbox_policy: context.turn.sandbox_policy.get(),
+                            file_system_sandbox_policy: &context.turn.file_system_sandbox_policy,
+                            sandbox_permissions: if effective_additional_permissions
+                                .permissions_preapproved
+                            {
+                                crate::sandboxing::SandboxPermissions::UseDefault
+                            } else {
+                                effective_additional_permissions.sandbox_permissions
+                            },
+                            prefix_rule: prefix_rule.clone(),
+                        },
+                    )
+                    .await;
+                let mut command = maybe_wrap_shell_lc_with_snapshot(
+                    &command,
+                    session.user_shell().as_ref(),
+                    cwd.as_path(),
+                    &explicit_env_overrides,
+                );
+                if matches!(session.user_shell().shell_type, ShellType::PowerShell) {
+                    command = prefix_powershell_script_with_utf8(&command);
+                }
+                let env = apply_unified_exec_env(create_env(
+                    &context.turn.shell_environment_policy,
+                    Some(context.session.conversation_id),
+                ));
                 manager
                     .exec_command(
                         ExecCommandRequest {
-                            command,
-                            process_id,
-                            yield_time_ms,
-                            max_output_tokens,
-                            workdir,
+                            wire_request: UnifiedExecExecCommandRequest {
+                                command,
+                                cwd,
+                                env,
+                                tty,
+                                yield_time_ms,
+                                max_output_tokens: resolve_max_tokens(max_output_tokens),
+                                sandbox_permissions: effective_additional_permissions
+                                    .sandbox_permissions,
+                                additional_permissions: normalized_additional_permissions,
+                                additional_permissions_preapproved:
+                                    effective_additional_permissions.permissions_preapproved,
+                                justification,
+                                exec_approval_requirement: into_wire_exec_approval_requirement(
+                                    exec_approval_requirement,
+                                ),
+                            },
                             network: context.turn.network.clone(),
-                            tty,
-                            sandbox_permissions: effective_additional_permissions
-                                .sandbox_permissions,
-                            additional_permissions: normalized_additional_permissions,
-                            additional_permissions_preapproved: effective_additional_permissions
-                                .permissions_preapproved,
-                            justification,
-                            prefix_rule,
                         },
                         &context,
                     )
@@ -290,11 +330,11 @@ impl ToolHandler for UnifiedExecHandler {
             "write_stdin" => {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;
                 let response = manager
-                    .write_stdin(WriteStdinRequest {
+                    .write_stdin(UnifiedExecWriteStdinRequest {
                         process_id: args.session_id,
-                        input: &args.chars,
+                        input: args.chars.clone(),
                         yield_time_ms: args.yield_time_ms,
-                        max_output_tokens: args.max_output_tokens,
+                        max_output_tokens: resolve_max_tokens(args.max_output_tokens),
                     })
                     .await
                     .map_err(|err| {

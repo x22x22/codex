@@ -1,6 +1,5 @@
 use rand::Rng;
 use std::cmp::Reverse;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,8 +12,6 @@ use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::exec_env::create_env;
-use crate::exec_policy::ExecApprovalRequest;
 use crate::protocol::ExecCommandSource;
 use crate::sandboxing::ExecRequest;
 use crate::tools::context::ExecCommandToolOutput;
@@ -44,25 +41,13 @@ use crate::unified_exec::async_watcher::emit_exec_end_for_unified_exec;
 use crate::unified_exec::async_watcher::spawn_exit_watcher;
 use crate::unified_exec::async_watcher::start_streaming_output;
 use crate::unified_exec::clamp_yield_time;
+use crate::unified_exec::from_wire_exec_approval_requirement;
 use crate::unified_exec::generate_chunk_id;
 use crate::unified_exec::head_tail_buffer::HeadTailBuffer;
 use crate::unified_exec::process::OutputBuffer;
 use crate::unified_exec::process::OutputHandles;
 use crate::unified_exec::process::SpawnLifecycleHandle;
 use crate::unified_exec::process::UnifiedExecProcess;
-
-const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
-    ("NO_COLOR", "1"),
-    ("TERM", "dumb"),
-    ("LANG", "C.UTF-8"),
-    ("LC_CTYPE", "C.UTF-8"),
-    ("LC_ALL", "C.UTF-8"),
-    ("COLORTERM", ""),
-    ("PAGER", "cat"),
-    ("GIT_PAGER", "cat"),
-    ("GH_PAGER", "cat"),
-    ("CODEX_CI", "1"),
-];
 
 /// Test-only override for deterministic unified exec process IDs.
 ///
@@ -82,13 +67,6 @@ fn should_use_deterministic_process_ids() -> bool {
     cfg!(test) || deterministic_process_ids_forced_for_tests()
 }
 
-fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, String> {
-    for (key, value) in UNIFIED_EXEC_ENV {
-        env.insert(key.to_string(), value.to_string());
-    }
-    env
-}
-
 struct PreparedProcessHandles {
     writer_tx: mpsc::Sender<Vec<u8>>,
     output_buffer: OutputBuffer,
@@ -103,7 +81,7 @@ struct PreparedProcessHandles {
 }
 
 impl UnifiedExecProcessManager {
-    pub(crate) async fn allocate_process_id(&self) -> i32 {
+    async fn allocate_process_id(&self) -> i32 {
         loop {
             let mut store = self.process_store.lock().await;
 
@@ -130,7 +108,7 @@ impl UnifiedExecProcessManager {
         }
     }
 
-    pub(crate) async fn release_process_id(&self, process_id: i32) {
+    async fn release_process_id(&self, process_id: i32) {
         let removed = {
             let mut store = self.process_store.lock().await;
             store.remove(process_id)
@@ -157,20 +135,16 @@ impl UnifiedExecProcessManager {
         request: ExecCommandRequest,
         context: &UnifiedExecContext,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
-        let cwd = request
-            .workdir
-            .clone()
-            .unwrap_or_else(|| context.turn.cwd.clone());
-        let process = self
-            .open_session_with_sandbox(&request, cwd.clone(), context)
-            .await;
+        let process_id = self.allocate_process_id().await;
+        let cwd = request.wire_request.cwd.clone();
+        let process = self.open_session_with_sandbox(&request, context).await;
 
         let (process, mut deferred_network_approval) = match process {
             Ok((process, deferred_network_approval)) => {
                 (Arc::new(process), deferred_network_approval)
             }
             Err(err) => {
-                self.release_process_id(request.process_id).await;
+                self.release_process_id(process_id).await;
                 return Err(err);
             }
         };
@@ -183,10 +157,10 @@ impl UnifiedExecProcessManager {
             /*turn_diff_tracker*/ None,
         );
         let emitter = ToolEmitter::unified_exec(
-            &request.command,
+            &request.wire_request.command,
             cwd.clone(),
             ExecCommandSource::UnifiedExecStartup,
-            Some(request.process_id.to_string()),
+            Some(process_id.to_string()),
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 
@@ -202,18 +176,18 @@ impl UnifiedExecProcessManager {
             self.store_process(
                 Arc::clone(&process),
                 context,
-                &request.command,
+                &request.wire_request.command,
                 cwd.clone(),
                 start,
-                request.process_id,
-                request.tty,
+                process_id,
+                request.wire_request.tty,
                 network_approval_id,
                 Arc::clone(&transcript),
             )
             .await;
         }
 
-        let yield_time_ms = clamp_yield_time(request.yield_time_ms);
+        let yield_time_ms = clamp_yield_time(request.wire_request.yield_time_ms);
         // For the initial exec_command call, we both stream output to events
         // (via start_streaming_output above) and collect a snapshot here for
         // the tool response body.
@@ -243,7 +217,6 @@ impl UnifiedExecProcessManager {
 
         let text = String::from_utf8_lossy(&collected).to_string();
         let chunk_id = generate_chunk_id();
-        let process_id = request.process_id;
         let (response_process_id, exit_code) = if process_started_alive {
             match self.refresh_process_state(process_id).await {
                 ProcessStatus::Alive {
@@ -269,7 +242,7 @@ impl UnifiedExecProcessManager {
                 Arc::clone(&context.session),
                 Arc::clone(&context.turn),
                 context.call_id.clone(),
-                request.command.clone(),
+                request.wire_request.command.clone(),
                 cwd.clone(),
                 Some(process_id.to_string()),
                 Arc::clone(&transcript),
@@ -279,7 +252,7 @@ impl UnifiedExecProcessManager {
             )
             .await;
 
-            self.release_process_id(request.process_id).await;
+            self.release_process_id(process_id).await;
             finish_deferred_network_approval(
                 context.session.as_ref(),
                 deferred_network_approval.take(),
@@ -295,11 +268,11 @@ impl UnifiedExecProcessManager {
             chunk_id,
             wall_time,
             raw_output: collected,
-            max_output_tokens: request.max_output_tokens,
+            max_output_tokens: Some(request.wire_request.max_output_tokens),
             process_id: response_process_id,
             exit_code,
             original_token_count: Some(original_token_count),
-            session_command: Some(request.command.clone()),
+            session_command: Some(request.wire_request.command.clone()),
         };
 
         Ok(response)
@@ -307,7 +280,7 @@ impl UnifiedExecProcessManager {
 
     pub(crate) async fn write_stdin(
         &self,
-        request: WriteStdinRequest<'_>,
+        request: WriteStdinRequest,
     ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
         let process_id = request.process_id;
 
@@ -390,7 +363,7 @@ impl UnifiedExecProcessManager {
             chunk_id,
             wall_time,
             raw_output: collected,
-            max_output_tokens: request.max_output_tokens,
+            max_output_tokens: Some(request.max_output_tokens),
             process_id,
             exit_code,
             original_token_count: Some(original_token_count),
@@ -580,48 +553,29 @@ impl UnifiedExecProcessManager {
     pub(super) async fn open_session_with_sandbox(
         &self,
         request: &ExecCommandRequest,
-        cwd: PathBuf,
         context: &UnifiedExecContext,
     ) -> Result<(UnifiedExecProcess, Option<DeferredNetworkApproval>), UnifiedExecError> {
-        let env = apply_unified_exec_env(create_env(
-            &context.turn.shell_environment_policy,
-            Some(context.session.conversation_id),
-        ));
         let mut orchestrator = ToolOrchestrator::new();
         let mut runtime = UnifiedExecRuntime::new(
             self,
             context.turn.tools_config.unified_exec_shell_mode.clone(),
         );
-        let exec_approval_requirement = context
-            .session
-            .services
-            .exec_policy
-            .create_exec_approval_requirement_for_command(ExecApprovalRequest {
-                command: &request.command,
-                approval_policy: context.turn.approval_policy.value(),
-                sandbox_policy: context.turn.sandbox_policy.get(),
-                file_system_sandbox_policy: &context.turn.file_system_sandbox_policy,
-                sandbox_permissions: if request.additional_permissions_preapproved {
-                    crate::sandboxing::SandboxPermissions::UseDefault
-                } else {
-                    request.sandbox_permissions
-                },
-                prefix_rule: request.prefix_rule.clone(),
-            })
-            .await;
         let req = UnifiedExecToolRequest {
-            command: request.command.clone(),
-            cwd,
-            env,
-            explicit_env_overrides: context.turn.shell_environment_policy.r#set.clone(),
+            command: request.wire_request.command.clone(),
+            cwd: request.wire_request.cwd.clone(),
+            env: request.wire_request.env.clone(),
             network: request.network.clone(),
-            tty: request.tty,
-            sandbox_permissions: request.sandbox_permissions,
-            additional_permissions: request.additional_permissions.clone(),
+            tty: request.wire_request.tty,
+            sandbox_permissions: request.wire_request.sandbox_permissions,
+            additional_permissions: request.wire_request.additional_permissions.clone(),
             #[cfg(unix)]
-            additional_permissions_preapproved: request.additional_permissions_preapproved,
-            justification: request.justification.clone(),
-            exec_approval_requirement,
+            additional_permissions_preapproved: request
+                .wire_request
+                .additional_permissions_preapproved,
+            justification: request.wire_request.justification.clone(),
+            exec_approval_requirement: from_wire_exec_approval_requirement(
+                &request.wire_request.exec_approval_requirement,
+            ),
         };
         let tool_ctx = ToolCtx {
             session: context.session.clone(),

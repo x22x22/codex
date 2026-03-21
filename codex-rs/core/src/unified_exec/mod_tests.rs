@@ -3,11 +3,16 @@ use super::*;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::make_session_and_context;
+use crate::exec_env::create_env;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::sandboxing::SandboxPermissions;
 use crate::tools::context::ExecCommandToolOutput;
 use crate::unified_exec::ExecCommandRequest;
 use crate::unified_exec::WriteStdinRequest;
+use crate::unified_exec::apply_unified_exec_env;
+use codex_protocol::executor::UnifiedExecApprovalRequirement;
+use codex_protocol::executor::UnifiedExecExecCommandRequest;
 use core_test_support::skip_if_sandbox;
 use std::sync::Arc;
 use tokio::time::Duration;
@@ -35,29 +40,32 @@ async fn exec_command(
 ) -> Result<ExecCommandToolOutput, UnifiedExecError> {
     let context =
         UnifiedExecContext::new(Arc::clone(session), Arc::clone(turn), "call".to_string());
-    let process_id = session
-        .services
-        .unified_exec_manager
-        .allocate_process_id()
-        .await;
 
     session
         .services
         .unified_exec_manager
         .exec_command(
             ExecCommandRequest {
-                command: vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()],
-                process_id,
-                yield_time_ms,
-                max_output_tokens: None,
-                workdir: None,
+                wire_request: UnifiedExecExecCommandRequest {
+                    command: vec!["bash".to_string(), "-lc".to_string(), cmd.to_string()],
+                    cwd: turn.cwd.clone(),
+                    env: apply_unified_exec_env(create_env(
+                        &turn.shell_environment_policy,
+                        Some(session.conversation_id),
+                    )),
+                    tty: true,
+                    yield_time_ms,
+                    max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+                    sandbox_permissions: SandboxPermissions::UseDefault,
+                    additional_permissions: None,
+                    additional_permissions_preapproved: false,
+                    justification: None,
+                    exec_approval_requirement: UnifiedExecApprovalRequirement::Skip {
+                        bypass_sandbox: false,
+                        proposed_exec_policy_amendment: None,
+                    },
+                },
                 network: None,
-                tty: true,
-                sandbox_permissions: SandboxPermissions::UseDefault,
-                additional_permissions: None,
-                additional_permissions_preapproved: false,
-                justification: None,
-                prefix_rule: None,
             },
             &context,
         )
@@ -75,9 +83,9 @@ async fn write_stdin(
         .unified_exec_manager
         .write_stdin(WriteStdinRequest {
             process_id,
-            input,
+            input: input.to_string(),
             yield_time_ms,
-            max_output_tokens: None,
+            max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
         })
         .await
 }

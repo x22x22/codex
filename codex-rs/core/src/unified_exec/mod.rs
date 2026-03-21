@@ -4,17 +4,21 @@
 //! - Manages interactive processes (create, reuse, buffer output with caps).
 //! - Uses the shared ToolOrchestrator to handle approval, sandbox selection, and
 //!   retry semantics in a single, descriptive flow.
+//! - Consumes a handler-built executor request so shell/env/output defaults are
+//!   resolved before the process manager runs, while the manager itself owns
+//!   unified-exec session ids.
 //! - Spawns the PTY from a sandbox-transformed `ExecRequest`; on sandbox denial,
 //!   retries without sandbox when policy allows (no re‑prompt thanks to caching).
 //! - Uses the shared `is_likely_sandbox_denied` heuristic to keep denial messages
 //!   consistent with other exec paths.
 //!
 //! Flow at a glance (open process)
-//! 1) Build a small request `{ command, cwd }`.
-//! 2) Orchestrator: approval (bypass/cache/prompt) → select sandbox → run.
-//! 3) Runtime: transform `CommandSpec` -> `ExecRequest` -> spawn PTY.
-//! 4) If denial, orchestrator retries with `SandboxType::None`.
-//! 5) Process handle is returned with streaming output + metadata.
+//! 1) Build a resolved executor request `{ command, cwd, env, approval, ... }`.
+//! 2) Manager allocates a unified-exec session id.
+//! 3) Orchestrator: approval (bypass/cache/prompt) → select sandbox → run.
+//! 4) Runtime: transform `CommandSpec` -> `ExecRequest` -> spawn PTY.
+//! 5) If denial, orchestrator retries with `SandboxType::None`.
+//! 6) Process handle is returned with streaming output + metadata.
 //!
 //! This keeps policy logic and user interaction centralized while the PTY/process
 //! concerns remain isolated here. The implementation is split between:
@@ -23,19 +27,21 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Weak;
 
 use codex_network_proxy::NetworkProxy;
-use codex_protocol::models::PermissionProfile;
+use codex_protocol::approvals::ExecPolicyAmendment;
+use codex_protocol::executor::UnifiedExecApprovalRequirement;
+use codex_protocol::executor::UnifiedExecExecCommandRequest;
+use codex_protocol::executor::UnifiedExecWriteStdinRequest;
 use rand::Rng;
 use rand::rng;
 use tokio::sync::Mutex;
 
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::sandboxing::SandboxPermissions;
+use crate::tools::sandboxing::ExecApprovalRequirement;
 
 mod async_watcher;
 mod errors;
@@ -63,6 +69,18 @@ pub(crate) const DEFAULT_MAX_OUTPUT_TOKENS: usize = 10_000;
 pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
 pub(crate) const UNIFIED_EXEC_OUTPUT_MAX_TOKENS: usize = UNIFIED_EXEC_OUTPUT_MAX_BYTES / 4;
 pub(crate) const MAX_UNIFIED_EXEC_PROCESSES: usize = 64;
+const UNIFIED_EXEC_ENV: [(&str, &str); 10] = [
+    ("NO_COLOR", "1"),
+    ("TERM", "dumb"),
+    ("LANG", "C.UTF-8"),
+    ("LC_CTYPE", "C.UTF-8"),
+    ("LC_ALL", "C.UTF-8"),
+    ("COLORTERM", ""),
+    ("PAGER", "cat"),
+    ("GIT_PAGER", "cat"),
+    ("GH_PAGER", "cat"),
+    ("CODEX_CI", "1"),
+];
 
 // Send a warning message to the models when it reaches this number of processes.
 pub(crate) const WARNING_UNIFIED_EXEC_PROCESSES: usize = 60;
@@ -85,27 +103,11 @@ impl UnifiedExecContext {
 
 #[derive(Debug)]
 pub(crate) struct ExecCommandRequest {
-    pub command: Vec<String>,
-    pub process_id: i32,
-    pub yield_time_ms: u64,
-    pub max_output_tokens: Option<usize>,
-    pub workdir: Option<PathBuf>,
+    pub wire_request: UnifiedExecExecCommandRequest,
     pub network: Option<NetworkProxy>,
-    pub tty: bool,
-    pub sandbox_permissions: SandboxPermissions,
-    pub additional_permissions: Option<PermissionProfile>,
-    pub additional_permissions_preapproved: bool,
-    pub justification: Option<String>,
-    pub prefix_rule: Option<Vec<String>>,
 }
 
-#[derive(Debug)]
-pub(crate) struct WriteStdinRequest<'a> {
-    pub process_id: i32,
-    pub input: &'a str,
-    pub yield_time_ms: u64,
-    pub max_output_tokens: Option<usize>,
-}
+pub(crate) type WriteStdinRequest = UnifiedExecWriteStdinRequest;
 
 #[derive(Default)]
 pub(crate) struct ProcessStore {
@@ -158,6 +160,73 @@ pub(crate) fn clamp_yield_time(yield_time_ms: u64) -> u64 {
 
 pub(crate) fn resolve_max_tokens(max_tokens: Option<usize>) -> usize {
     max_tokens.unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS)
+}
+
+pub(crate) fn apply_unified_exec_env(mut env: HashMap<String, String>) -> HashMap<String, String> {
+    for (key, value) in UNIFIED_EXEC_ENV {
+        env.insert(key.to_string(), value.to_string());
+    }
+    env
+}
+
+pub(crate) fn into_wire_exec_approval_requirement(
+    requirement: ExecApprovalRequirement,
+) -> UnifiedExecApprovalRequirement {
+    match requirement {
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox,
+            proposed_execpolicy_amendment,
+        } => UnifiedExecApprovalRequirement::Skip {
+            bypass_sandbox,
+            proposed_exec_policy_amendment: proposed_execpolicy_amendment,
+        },
+        ExecApprovalRequirement::NeedsApproval {
+            reason,
+            proposed_execpolicy_amendment,
+        } => UnifiedExecApprovalRequirement::NeedsApproval {
+            reason,
+            proposed_exec_policy_amendment: proposed_execpolicy_amendment,
+        },
+        ExecApprovalRequirement::Forbidden { reason } => {
+            UnifiedExecApprovalRequirement::Forbidden { reason }
+        }
+    }
+}
+
+pub(crate) fn from_wire_exec_approval_requirement(
+    requirement: &UnifiedExecApprovalRequirement,
+) -> ExecApprovalRequirement {
+    match requirement {
+        UnifiedExecApprovalRequirement::Skip {
+            bypass_sandbox,
+            proposed_exec_policy_amendment,
+        } => ExecApprovalRequirement::Skip {
+            bypass_sandbox: *bypass_sandbox,
+            proposed_execpolicy_amendment: clone_exec_policy_amendment(
+                proposed_exec_policy_amendment,
+            ),
+        },
+        UnifiedExecApprovalRequirement::NeedsApproval {
+            reason,
+            proposed_exec_policy_amendment,
+        } => ExecApprovalRequirement::NeedsApproval {
+            reason: reason.clone(),
+            proposed_execpolicy_amendment: clone_exec_policy_amendment(
+                proposed_exec_policy_amendment,
+            ),
+        },
+        UnifiedExecApprovalRequirement::Forbidden { reason } => {
+            ExecApprovalRequirement::Forbidden {
+                reason: reason.clone(),
+            }
+        }
+    }
+}
+
+fn clone_exec_policy_amendment(
+    amendment: &Option<ExecPolicyAmendment>,
+) -> Option<ExecPolicyAmendment> {
+    amendment.clone()
 }
 
 pub(crate) fn generate_chunk_id() -> String {

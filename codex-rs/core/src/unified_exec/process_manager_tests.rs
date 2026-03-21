@@ -1,7 +1,10 @@
 use super::*;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use tokio::time::Duration;
 use tokio::time::Instant;
+
+use crate::unified_exec::apply_unified_exec_env;
 
 #[test]
 fn unified_exec_env_injects_defaults() {
