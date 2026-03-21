@@ -3312,7 +3312,9 @@ impl Session {
                         role,
                         content,
                         metadata: Some(
-                            metadata.unwrap_or_else(|| ResponseItemMessageMetadata::new(None)),
+                            metadata.unwrap_or_else(|| {
+                                ResponseItemMessageMetadata::new(/*user_message_type*/ None)
+                            }),
                         ),
                         end_turn,
                         phase,
