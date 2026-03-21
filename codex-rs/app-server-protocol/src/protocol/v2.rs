@@ -4345,7 +4345,7 @@ impl From<CoreGuardianRiskLevel> for GuardianRiskLevel {
 }
 
 /// [UNSTABLE] Temporary guardian approval review payload used by guardian
-/// approval review notifications. This shape is expected to change soon.
+/// approval review notifications.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
@@ -4910,7 +4910,7 @@ pub struct McpToolCallGuardianApprovalReviewCompletedNotification {
 /// `item/*/guardianApprovalReview/*` notifications instead.
 ///
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// review.
 ///
 /// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
 /// lifecycle instead of sending separate standalone review notifications so the
@@ -4930,7 +4930,7 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 /// `item/*/guardianApprovalReview/*` notifications instead.
 ///
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
-/// review. This shape is expected to change soon.
+/// review.
 ///
 /// TODO(ccunningham): Attach guardian review state to the reviewed tool item's
 /// lifecycle instead of sending separate standalone review notifications so the

@@ -4705,7 +4705,7 @@
       "type": "object"
     },
     "GuardianApprovalReview": {
-      "description": "[UNSTABLE] Temporary guardian approval review payload used by guardian approval review notifications. This shape is expected to change soon.",
+      "description": "[UNSTABLE] Temporary guardian approval review payload used by guardian approval review notifications.",
       "properties": {
         "rationale": {
           "type": [
@@ -5052,7 +5052,7 @@
     },
     "ItemGuardianApprovalReviewCompletedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Deprecated: Use the parent item-specific `item/*/guardianApprovalReview/*` notifications instead.\n\n[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "description": "Deprecated: Use the parent item-specific `item/*/guardianApprovalReview/*` notifications instead.\n\n[UNSTABLE] Temporary notification payload for guardian automatic approval review.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
       "properties": {
         "action": true,
         "review": {
@@ -5079,7 +5079,7 @@
     },
     "ItemGuardianApprovalReviewStartedNotification": {
       "$schema": "http://json-schema.org/draft-07/schema#",
-      "description": "Deprecated: Use the parent item-specific `item/*/guardianApprovalReview/*` notifications instead.\n\n[UNSTABLE] Temporary notification payload for guardian automatic approval review. This shape is expected to change soon.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+      "description": "Deprecated: Use the parent item-specific `item/*/guardianApprovalReview/*` notifications instead.\n\n[UNSTABLE] Temporary notification payload for guardian automatic approval review.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
       "properties": {
         "action": true,
         "review": {

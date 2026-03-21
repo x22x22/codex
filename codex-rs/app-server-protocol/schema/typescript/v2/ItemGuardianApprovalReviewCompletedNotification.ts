@@ -9,7 +9,7 @@ import type { GuardianApprovalReview } from "./GuardianApprovalReview";
  * `item/*/guardianApprovalReview/*` notifications instead.
  *
  * [UNSTABLE] Temporary notification payload for guardian automatic approval
- * review. This shape is expected to change soon.
+ * review.
  *
  * TODO(ccunningham): Attach guardian review state to the reviewed tool item's
  * lifecycle instead of sending separate standalone review notifications so the
