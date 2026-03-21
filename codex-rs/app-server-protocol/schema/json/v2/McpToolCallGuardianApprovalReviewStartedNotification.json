@@ -57,7 +57,7 @@
       "type": "string"
     }
   },
-  "description": "[UNSTABLE] Temporary notification payload for guardian approval review on an MCP tool call item. This shape is expected to change soon.",
+  "description": "[UNSTABLE] Temporary notification payload for guardian approval review on an MCP tool call item.",
   "properties": {
     "action": true,
     "itemId": {

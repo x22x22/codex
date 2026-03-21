@@ -6,6 +6,6 @@ import type { GuardianApprovalReview } from "./GuardianApprovalReview";
 
 /**
  * [UNSTABLE] Temporary notification payload for guardian approval review on
- * an MCP tool call item. This shape is expected to change soon.
+ * an MCP tool call item.
  */
 export type McpToolCallGuardianApprovalReviewCompletedNotification = { threadId: string, turnId: string, itemId: string, review: GuardianApprovalReview, action: JsonValue | null, };

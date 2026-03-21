@@ -6,6 +6,6 @@ import type { GuardianApprovalReview } from "./GuardianApprovalReview";
 
 /**
  * [UNSTABLE] Temporary notification payload for guardian approval review on a
- * command execution item. This shape is expected to change soon.
+ * command execution item.
  */
 export type CommandExecutionGuardianApprovalReviewCompletedNotification = { threadId: string, turnId: string, itemId: string, review: GuardianApprovalReview, action: JsonValue | null, };

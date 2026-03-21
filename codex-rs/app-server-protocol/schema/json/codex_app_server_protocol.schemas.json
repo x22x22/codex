@@ -6291,7 +6291,7 @@
       },
       "CommandExecutionGuardianApprovalReviewCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a command execution item. This shape is expected to change soon.",
+        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a command execution item.",
         "properties": {
           "action": true,
           "itemId": {
@@ -6318,7 +6318,7 @@
       },
       "CommandExecutionGuardianApprovalReviewStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a command execution item. This shape is expected to change soon.",
+        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a command execution item.",
         "properties": {
           "action": true,
           "itemId": {
@@ -7549,7 +7549,7 @@
       },
       "FileChangeGuardianApprovalReviewCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a file change item. This shape is expected to change soon.",
+        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a file change item.",
         "properties": {
           "action": true,
           "itemId": {
@@ -7576,7 +7576,7 @@
       },
       "FileChangeGuardianApprovalReviewStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a file change item. This shape is expected to change soon.",
+        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a file change item.",
         "properties": {
           "action": true,
           "itemId": {
@@ -8924,7 +8924,7 @@
       },
       "McpToolCallGuardianApprovalReviewCompletedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on an MCP tool call item. This shape is expected to change soon.",
+        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on an MCP tool call item.",
         "properties": {
           "action": true,
           "itemId": {
@@ -8951,7 +8951,7 @@
       },
       "McpToolCallGuardianApprovalReviewStartedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on an MCP tool call item. This shape is expected to change soon.",
+        "description": "[UNSTABLE] Temporary notification payload for guardian approval review on an MCP tool call item.",
         "properties": {
           "action": true,
           "itemId": {

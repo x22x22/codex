@@ -6,6 +6,6 @@ import type { GuardianApprovalReview } from "./GuardianApprovalReview";
 
 /**
  * [UNSTABLE] Temporary notification payload for guardian approval review on a
- * file change item. This shape is expected to change soon.
+ * file change item.
  */
 export type FileChangeGuardianApprovalReviewCompletedNotification = { threadId: string, turnId: string, itemId: string, review: GuardianApprovalReview, action: JsonValue | null, };

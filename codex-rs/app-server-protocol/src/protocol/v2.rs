@@ -4829,7 +4829,7 @@ pub struct ItemStartedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian approval review on a
-/// command execution item. This shape is expected to change soon.
+/// command execution item.
 pub struct CommandExecutionGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -4842,7 +4842,7 @@ pub struct CommandExecutionGuardianApprovalReviewStartedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian approval review on a
-/// command execution item. This shape is expected to change soon.
+/// command execution item.
 pub struct CommandExecutionGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -4855,7 +4855,7 @@ pub struct CommandExecutionGuardianApprovalReviewCompletedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian approval review on a
-/// file change item. This shape is expected to change soon.
+/// file change item.
 pub struct FileChangeGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -4868,7 +4868,7 @@ pub struct FileChangeGuardianApprovalReviewStartedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian approval review on a
-/// file change item. This shape is expected to change soon.
+/// file change item.
 pub struct FileChangeGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -4881,7 +4881,7 @@ pub struct FileChangeGuardianApprovalReviewCompletedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian approval review on
-/// an MCP tool call item. This shape is expected to change soon.
+/// an MCP tool call item.
 pub struct McpToolCallGuardianApprovalReviewStartedNotification {
     pub thread_id: String,
     pub turn_id: String,
@@ -4894,7 +4894,7 @@ pub struct McpToolCallGuardianApprovalReviewStartedNotification {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 /// [UNSTABLE] Temporary notification payload for guardian approval review on
-/// an MCP tool call item. This shape is expected to change soon.
+/// an MCP tool call item.
 pub struct McpToolCallGuardianApprovalReviewCompletedNotification {
     pub thread_id: String,
     pub turn_id: String,

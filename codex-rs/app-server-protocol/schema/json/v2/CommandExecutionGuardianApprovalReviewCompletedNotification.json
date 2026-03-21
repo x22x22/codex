@@ -57,7 +57,7 @@
       "type": "string"
     }
   },
-  "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a command execution item. This shape is expected to change soon.",
+  "description": "[UNSTABLE] Temporary notification payload for guardian approval review on a command execution item.",
   "properties": {
     "action": true,
     "itemId": {
