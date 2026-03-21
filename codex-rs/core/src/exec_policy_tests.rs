@@ -1155,6 +1155,44 @@ async fn request_rule_falls_back_when_prefix_rule_does_not_approve_all_commands(
 }
 
 #[tokio::test]
+async fn powershell_wrapped_allow_rule_bypasses_sandbox_prompt() {
+    if !cfg!(windows) && which::which("pwsh").is_err() {
+        return;
+    }
+
+    let policy_src = r#"prefix_rule(pattern=["git", "add"], decision="allow")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+    let manager = ExecPolicyManager::new(Arc::new(parser.build()));
+    let command = vec![
+        "pwsh".to_string(),
+        "-Command".to_string(),
+        "git add -A".to_string(),
+    ];
+
+    let requirement = manager
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[tokio::test]
 async fn heuristics_apply_when_other_commands_match_policy() {
     let policy_src = r#"prefix_rule(pattern=["apple"], decision="allow")"#;
     let mut parser = PolicyParser::new();
