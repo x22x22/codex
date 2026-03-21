@@ -4,6 +4,7 @@ use std::os::fd::AsRawFd;
 use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::process::Command;
 
 use crate::vendored_bwrap::exec_vendored_bwrap;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -32,7 +33,25 @@ fn preferred_bwrap_launcher() -> BubblewrapLauncher {
         Ok(path) => path,
         Err(err) => panic!("failed to normalize system bubblewrap path {SYSTEM_BWRAP_PATH}: {err}"),
     };
+    if !system_bwrap_supports_argv0(system_bwrap_path.as_path()) {
+        return BubblewrapLauncher::Vendored;
+    }
     BubblewrapLauncher::System(system_bwrap_path)
+}
+
+fn system_bwrap_supports_argv0(path: &Path) -> bool {
+    let output = Command::new(path).arg("--help").output();
+    let Ok(output) = output else {
+        return false;
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    help_output_supports_argv0(stdout.as_ref()) || help_output_supports_argv0(stderr.as_ref())
+}
+
+fn help_output_supports_argv0(output: &str) -> bool {
+    output.lines().any(|line| line.contains("--argv0"))
 }
 
 fn exec_system_bwrap(
@@ -110,6 +129,20 @@ mod tests {
         make_files_inheritable(std::slice::from_ref(file.as_file()));
 
         assert_eq!(fd_flags(file.as_file().as_raw_fd()) & libc::FD_CLOEXEC, 0);
+    }
+
+    #[test]
+    fn detects_argv0_support_from_help_output() {
+        assert!(help_output_supports_argv0(
+            "Usage: bwrap [OPTIONS]\n  --argv0 VALUE  Set argv[0]\n"
+        ));
+    }
+
+    #[test]
+    fn rejects_help_output_without_argv0() {
+        assert!(!help_output_supports_argv0(
+            "Usage: bwrap [OPTIONS]\n  --proc DEST  Mount proc\n"
+        ));
     }
 
     fn set_cloexec(fd: libc::c_int) {
