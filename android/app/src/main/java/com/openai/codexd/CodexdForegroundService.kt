@@ -8,6 +8,7 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
+import com.openai.codex.bridge.HostedCodexConfig
 import java.io.File
 import java.io.InterruptedIOException
 import java.io.IOException
@@ -67,7 +68,7 @@ class CodexdForegroundService : Service() {
 
             val socketPath = intent.getStringExtra(EXTRA_SOCKET_PATH) ?: defaultSocketPath()
             val codexHome = intent.getStringExtra(EXTRA_CODEX_HOME) ?: defaultCodexHome()
-            File(codexHome).mkdirs()
+            HostedCodexConfig.installAgentsFile(File(codexHome))
 
             val codexdBinary = resolveCodexdBinary()
             val args = mutableListOf(

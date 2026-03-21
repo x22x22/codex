@@ -5,6 +5,7 @@ import android.app.agent.GenieRequest
 import android.app.agent.GenieService
 import android.content.Context
 import android.util.Log
+import com.openai.codex.bridge.HostedCodexConfig
 import java.io.BufferedWriter
 import java.io.Closeable
 import java.io.File
@@ -78,6 +79,7 @@ class CodexAppServerHost(
             deleteRecursively()
             mkdirs()
         }
+        HostedCodexConfig.installAgentsFile(codexHome)
         val proxy = GenieLocalCodexProxy(
             sessionId = request.sessionId,
             socketDirectory = context.cacheDir,
