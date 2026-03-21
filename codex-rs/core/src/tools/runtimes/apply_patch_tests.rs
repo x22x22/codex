@@ -68,3 +68,36 @@ fn guardian_review_request_includes_patch_context() {
         }
     );
 }
+
+#[test]
+fn build_command_spec_downgrades_preapproved_additional_permissions_to_default_sandbox() {
+    let path = std::env::temp_dir().join("apply-patch-preapproved.txt");
+    let action = ApplyPatchAction::new_add_for_test(&path, "hello".to_string());
+    let request = ApplyPatchRequest {
+        action,
+        file_paths: vec![
+            AbsolutePathBuf::from_absolute_path(&path).expect("temp path should be absolute"),
+        ],
+        changes: HashMap::from([(
+            path,
+            FileChange::Add {
+                content: "hello".to_string(),
+            },
+        )]),
+        exec_approval_requirement: ExecApprovalRequirement::Skip {
+            bypass_sandbox: false,
+            proposed_execpolicy_amendment: None,
+        },
+        sandbox_permissions: SandboxPermissions::WithAdditionalPermissions,
+        additional_permissions: None,
+        permissions_preapproved: true,
+        timeout_ms: None,
+        codex_exe: None,
+    };
+
+    let spec = ApplyPatchRuntime::build_command_spec(&request, std::path::Path::new("/tmp"))
+        .expect("spec should build");
+
+    assert_eq!(spec.sandbox_permissions, SandboxPermissions::UseDefault);
+    assert_eq!(spec.additional_permissions, None);
+}

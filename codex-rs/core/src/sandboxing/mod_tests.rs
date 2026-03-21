@@ -2,7 +2,6 @@
 use super::EffectiveSandboxPermissions;
 use super::SandboxManager;
 use super::effective_file_system_sandbox_policy;
-#[cfg(target_os = "macos")]
 use super::intersect_permission_profiles;
 use super::merge_file_system_policy_with_additional_permissions;
 use super::normalize_additional_permissions;
@@ -331,6 +330,33 @@ fn intersect_permission_profiles_preserves_default_macos_grants() {
             macos: Some(MacOsSeatbeltProfileExtensions::default()),
             ..Default::default()
         }
+    );
+}
+
+#[test]
+fn intersect_permission_profiles_preserves_explicit_empty_read_lists() {
+    let requested_dir = AbsolutePathBuf::try_from("/tmp/requested").expect("absolute path");
+    let requested = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(Vec::new()),
+            write: Some(vec![requested_dir.clone()]),
+        }),
+        ..Default::default()
+    };
+    let granted = PermissionProfile {
+        file_system: Some(FileSystemPermissions {
+            read: Some(Vec::new()),
+            write: Some(vec![requested_dir.clone()]),
+        }),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        intersect_permission_profiles(requested, granted).file_system,
+        Some(FileSystemPermissions {
+            read: Some(Vec::new()),
+            write: Some(vec![requested_dir]),
+        })
     );
 }
 
