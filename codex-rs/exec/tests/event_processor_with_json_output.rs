@@ -8,7 +8,7 @@ use codex_app_server_protocol::CommandAction;
 use codex_app_server_protocol::CommandExecutionSource;
 use codex_app_server_protocol::CommandExecutionStatus as ApiCommandExecutionStatus;
 use codex_app_server_protocol::ErrorNotification;
-use codex_app_server_protocol::FileUpdateChange;
+use codex_app_server_protocol::FileUpdateChange as ApiFileUpdateChange;
 use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::ItemStartedNotification;
 use codex_app_server_protocol::McpToolCallError;
@@ -38,11 +38,27 @@ use serde_json::json;
 use super::CollectedThreadEvents;
 use super::EventProcessorWithJsonOutput;
 use crate::event_processor::CodexStatus;
+use crate::exec_events::AgentMessageItem;
+use crate::exec_events::CollabAgentState;
+use crate::exec_events::CollabAgentStatus;
+use crate::exec_events::CollabTool;
+use crate::exec_events::CollabToolCallItem;
+use crate::exec_events::CollabToolCallStatus;
 use crate::exec_events::CommandExecutionItem;
 use crate::exec_events::CommandExecutionStatus;
+use crate::exec_events::ErrorItem;
+use crate::exec_events::FileChangeItem;
+use crate::exec_events::FileUpdateChange as ExecFileUpdateChange;
 use crate::exec_events::ItemCompletedEvent;
 use crate::exec_events::ItemStartedEvent;
 use crate::exec_events::ItemUpdatedEvent;
+use crate::exec_events::McpToolCallItem;
+use crate::exec_events::McpToolCallItemError;
+use crate::exec_events::McpToolCallItemResult;
+use crate::exec_events::McpToolCallStatus;
+use crate::exec_events::PatchApplyStatus;
+use crate::exec_events::PatchChangeKind;
+use crate::exec_events::ReasoningItem;
 use crate::exec_events::ThreadErrorEvent;
 use crate::exec_events::ThreadEvent;
 use crate::exec_events::ThreadItem as ExecThreadItem;
@@ -51,6 +67,7 @@ use crate::exec_events::ThreadStartedEvent;
 use crate::exec_events::TodoItem;
 use crate::exec_events::TodoListItem;
 use crate::exec_events::TurnCompletedEvent;
+use crate::exec_events::TurnFailedEvent;
 use crate::exec_events::TurnStartedEvent;
 use crate::exec_events::Usage;
 use crate::exec_events::WebSearchItem;
@@ -226,7 +243,7 @@ fn reasoning_items_emit_summary_not_raw_content() {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
                     id: "reasoning-1".to_string(),
-                    details: ThreadItemDetails::Reasoning(crate::exec_events::ReasoningItem {
+                    details: ThreadItemDetails::Reasoning(ReasoningItem {
                         text: "safe summary".to_string(),
                     }),
                 },
@@ -385,13 +402,13 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
             events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
                 item: ExecThreadItem {
                     id: "mcp-1".to_string(),
-                    details: ThreadItemDetails::McpToolCall(crate::exec_events::McpToolCallItem {
+                    details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                         server: "server_a".to_string(),
                         tool: "tool_x".to_string(),
                         arguments: json!({ "key": "value" }),
                         result: None,
                         error: None,
-                        status: crate::exec_events::McpToolCallStatus::InProgress,
+                        status: McpToolCallStatus::InProgress,
                     }),
                 },
             })],
@@ -404,16 +421,16 @@ fn mcp_tool_call_begin_and_end_emit_item_events() {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
                     id: "mcp-1".to_string(),
-                    details: ThreadItemDetails::McpToolCall(crate::exec_events::McpToolCallItem {
+                    details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                         server: "server_a".to_string(),
                         tool: "tool_x".to_string(),
                         arguments: json!({ "key": "value" }),
-                        result: Some(crate::exec_events::McpToolCallItemResult {
+                        result: Some(McpToolCallItemResult {
                             content: Vec::new(),
                             structured_content: None,
                         }),
                         error: None,
-                        status: crate::exec_events::McpToolCallStatus::Completed,
+                        status: McpToolCallStatus::Completed,
                     }),
                 },
             })],
@@ -450,15 +467,15 @@ fn mcp_tool_call_failure_sets_failed_status() {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
                     id: "mcp-2".to_string(),
-                    details: ThreadItemDetails::McpToolCall(crate::exec_events::McpToolCallItem {
+                    details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                         server: "server_b".to_string(),
                         tool: "tool_y".to_string(),
                         arguments: json!({ "param": 42 }),
                         result: None,
-                        error: Some(crate::exec_events::McpToolCallItemError {
+                        error: Some(McpToolCallItemError {
                             message: "tool exploded".to_string(),
                         }),
-                        status: crate::exec_events::McpToolCallStatus::Failed,
+                        status: McpToolCallStatus::Failed,
                     }),
                 },
             })],
@@ -514,13 +531,13 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
             events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
                 item: ExecThreadItem {
                     id: "mcp-3".to_string(),
-                    details: ThreadItemDetails::McpToolCall(crate::exec_events::McpToolCallItem {
+                    details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                         server: "server_c".to_string(),
                         tool: "tool_z".to_string(),
                         arguments: serde_json::Value::Null,
                         result: None,
                         error: None,
-                        status: crate::exec_events::McpToolCallStatus::InProgress,
+                        status: McpToolCallStatus::InProgress,
                     }),
                 },
             })],
@@ -533,11 +550,11 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
                     id: "mcp-3".to_string(),
-                    details: ThreadItemDetails::McpToolCall(crate::exec_events::McpToolCallItem {
+                    details: ThreadItemDetails::McpToolCall(McpToolCallItem {
                         server: "server_c".to_string(),
                         tool: "tool_z".to_string(),
                         arguments: serde_json::Value::Null,
-                        result: Some(crate::exec_events::McpToolCallItemResult {
+                        result: Some(McpToolCallItemResult {
                             content: vec![json!({
                                 "type": "text",
                                 "text": "done",
@@ -545,7 +562,7 @@ fn mcp_tool_call_defaults_arguments_and_preserves_structured_content() {
                             structured_content: Some(json!({ "status": "ok" })),
                         }),
                         error: None,
-                        status: crate::exec_events::McpToolCallStatus::Completed,
+                        status: McpToolCallStatus::Completed,
                     }),
                 },
             })],
@@ -603,16 +620,14 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             events: vec![ThreadEvent::ItemStarted(ItemStartedEvent {
                 item: ExecThreadItem {
                     id: "collab-1".to_string(),
-                    details: ThreadItemDetails::CollabToolCall(
-                        crate::exec_events::CollabToolCallItem {
-                            tool: crate::exec_events::CollabTool::SpawnAgent,
-                            sender_thread_id: "thread-parent".to_string(),
-                            receiver_thread_ids: Vec::new(),
-                            prompt: Some("draft a plan".to_string()),
-                            agents_states: std::collections::HashMap::new(),
-                            status: crate::exec_events::CollabToolCallStatus::InProgress,
-                        },
-                    ),
+                    details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
+                        tool: CollabTool::SpawnAgent,
+                        sender_thread_id: "thread-parent".to_string(),
+                        receiver_thread_ids: Vec::new(),
+                        prompt: Some("draft a plan".to_string()),
+                        agents_states: std::collections::HashMap::new(),
+                        status: CollabToolCallStatus::InProgress,
+                    },),
                 },
             })],
             status: CodexStatus::Running,
@@ -624,22 +639,20 @@ fn collab_spawn_begin_and_end_emit_item_events() {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
                     id: "collab-1".to_string(),
-                    details: ThreadItemDetails::CollabToolCall(
-                        crate::exec_events::CollabToolCallItem {
-                            tool: crate::exec_events::CollabTool::SpawnAgent,
-                            sender_thread_id: "thread-parent".to_string(),
-                            receiver_thread_ids: vec!["thread-child".to_string()],
-                            prompt: Some("draft a plan".to_string()),
-                            agents_states: std::collections::HashMap::from([(
-                                "thread-child".to_string(),
-                                crate::exec_events::CollabAgentState {
-                                    status: crate::exec_events::CollabAgentStatus::Running,
-                                    message: None,
-                                },
-                            )]),
-                            status: crate::exec_events::CollabToolCallStatus::Completed,
-                        },
-                    ),
+                    details: ThreadItemDetails::CollabToolCall(CollabToolCallItem {
+                        tool: CollabTool::SpawnAgent,
+                        sender_thread_id: "thread-parent".to_string(),
+                        receiver_thread_ids: vec!["thread-child".to_string()],
+                        prompt: Some("draft a plan".to_string()),
+                        agents_states: std::collections::HashMap::from([(
+                            "thread-child".to_string(),
+                            CollabAgentState {
+                                status: CollabAgentStatus::Running,
+                                message: None,
+                            },
+                        )]),
+                        status: CollabToolCallStatus::Completed,
+                    },),
                 },
             })],
             status: CodexStatus::Running,
@@ -656,17 +669,17 @@ fn file_change_completion_maps_change_kinds() {
             item: ThreadItem::FileChange {
                 id: "patch-1".to_string(),
                 changes: vec![
-                    FileUpdateChange {
+                    ApiFileUpdateChange {
                         path: "a/added.txt".to_string(),
                         kind: ApiPatchChangeKind::Add,
                         diff: String::new(),
                     },
-                    FileUpdateChange {
+                    ApiFileUpdateChange {
                         path: "b/deleted.txt".to_string(),
                         kind: ApiPatchChangeKind::Delete,
                         diff: String::new(),
                     },
-                    FileUpdateChange {
+                    ApiFileUpdateChange {
                         path: "c/modified.txt".to_string(),
                         kind: ApiPatchChangeKind::Update { move_path: None },
                         diff: "@@ -1 +1 @@".to_string(),
@@ -684,22 +697,22 @@ fn file_change_completion_maps_change_kinds() {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
                     id: "patch-1".to_string(),
-                    details: ThreadItemDetails::FileChange(crate::exec_events::FileChangeItem {
+                    details: ThreadItemDetails::FileChange(FileChangeItem {
                         changes: vec![
-                            crate::exec_events::FileUpdateChange {
+                            ExecFileUpdateChange {
                                 path: "a/added.txt".to_string(),
-                                kind: crate::exec_events::PatchChangeKind::Add,
+                                kind: PatchChangeKind::Add,
                             },
-                            crate::exec_events::FileUpdateChange {
+                            ExecFileUpdateChange {
                                 path: "b/deleted.txt".to_string(),
-                                kind: crate::exec_events::PatchChangeKind::Delete,
+                                kind: PatchChangeKind::Delete,
                             },
-                            crate::exec_events::FileUpdateChange {
+                            ExecFileUpdateChange {
                                 path: "c/modified.txt".to_string(),
-                                kind: crate::exec_events::PatchChangeKind::Update,
+                                kind: PatchChangeKind::Update,
                             },
                         ],
-                        status: crate::exec_events::PatchApplyStatus::Completed,
+                        status: PatchApplyStatus::Completed,
                     }),
                 },
             })],
@@ -716,7 +729,7 @@ fn file_change_declined_maps_to_failed_status() {
         processor.collect_thread_events(TypedExecEvent::ItemCompleted(ItemCompletedNotification {
             item: ThreadItem::FileChange {
                 id: "patch-2".to_string(),
-                changes: vec![FileUpdateChange {
+                changes: vec![ApiFileUpdateChange {
                     path: "file.txt".to_string(),
                     kind: ApiPatchChangeKind::Update { move_path: None },
                     diff: "@@ -1 +1 @@".to_string(),
@@ -733,12 +746,12 @@ fn file_change_declined_maps_to_failed_status() {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
                     id: "patch-2".to_string(),
-                    details: ThreadItemDetails::FileChange(crate::exec_events::FileChangeItem {
-                        changes: vec![crate::exec_events::FileUpdateChange {
+                    details: ThreadItemDetails::FileChange(FileChangeItem {
+                        changes: vec![ExecFileUpdateChange {
                             path: "file.txt".to_string(),
-                            kind: crate::exec_events::PatchChangeKind::Update,
+                            kind: PatchChangeKind::Update,
                         }],
-                        status: crate::exec_events::PatchApplyStatus::Failed,
+                        status: PatchApplyStatus::Failed,
                     }),
                 },
             })],
@@ -769,11 +782,9 @@ fn agent_message_item_updates_final_message() {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
                     id: "msg-1".to_string(),
-                    details: ThreadItemDetails::AgentMessage(
-                        crate::exec_events::AgentMessageItem {
-                            text: "hello".to_string(),
-                        }
-                    ),
+                    details: ThreadItemDetails::AgentMessage(AgentMessageItem {
+                        text: "hello".to_string(),
+                    }),
                 },
             })],
             status: CodexStatus::Running,
@@ -796,7 +807,7 @@ fn warning_event_produces_error_item() {
             events: vec![ThreadEvent::ItemCompleted(ItemCompletedEvent {
                 item: ExecThreadItem {
                     id: "item_0".to_string(),
-                    details: ThreadItemDetails::Error(crate::exec_events::ErrorItem {
+                    details: ThreadItemDetails::Error(ErrorItem {
                         message: "Heads up: Long conversations and multiple compactions can cause the model to be less accurate. Start a new conversation when possible to keep conversations small and targeted.".to_string(),
                     }),
                 },
@@ -1212,13 +1223,11 @@ fn turn_failure_prefers_structured_error_message() {
     assert_eq!(
         failed,
         CollectedThreadEvents {
-            events: vec![ThreadEvent::TurnFailed(
-                crate::exec_events::TurnFailedEvent {
-                    error: ThreadErrorEvent {
-                        message: "backend failed (request id abc)".to_string(),
-                    },
-                }
-            )],
+            events: vec![ThreadEvent::TurnFailed(TurnFailedEvent {
+                error: ThreadErrorEvent {
+                    message: "backend failed (request id abc)".to_string(),
+                },
+            })],
             status: CodexStatus::InitiateShutdown,
         }
     );
@@ -1246,7 +1255,7 @@ fn model_reroute_surfaces_as_error_item() {
     assert_eq!(item.id, "item_0");
     assert_eq!(
         item.details,
-        ThreadItemDetails::Error(crate::exec_events::ErrorItem {
+        ThreadItemDetails::Error(ErrorItem {
             message: "model rerouted: gpt-5 -> gpt-5-mini (HighRiskCyberActivity)".to_string(),
         })
     );
