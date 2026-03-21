@@ -662,7 +662,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
     if !json_mode && let Some(message) = codex_core::config::missing_system_bwrap_warning() {
-        let _ = event_processor.process_event(TypedExecEvent::Warning(message));
+        event_processor.process_event(TypedExecEvent::Warning(message));
     }
 
     info!("Codex initialized with event: {session_configured:?}");
@@ -817,7 +817,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
             InProcessServerEvent::Lagged { skipped } => {
                 let message = lagged_event_warning_message(skipped);
                 warn!("{message}");
-                let _ = event_processor.process_event(TypedExecEvent::Warning(message));
+                event_processor.process_event(TypedExecEvent::Warning(message));
             }
         }
     }
