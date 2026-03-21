@@ -1,29 +1,6 @@
+use crate::slash_command::ParsedSlashCommand;
 use crate::slash_command::SlashCommand;
-use crate::slash_command::SlashCommandBareBehavior;
-use crate::slash_command::SlashCommandParseKind;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FastSlashCommandArgs {
-    On,
-    Off,
-    Status,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ParsedSlashCommand {
-    Bare(SlashCommandBareBehavior),
-    Fast(FastSlashCommandArgs),
-    Rename,
-    Plan,
-    Review,
-    SandboxReadRoot,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SlashCommandUsageErrorKind {
-    UnexpectedInlineArgs,
-    InvalidInlineArgs,
-}
+use crate::slash_command::SlashCommandUsageErrorKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SlashCommandUsageError {
@@ -55,25 +32,12 @@ impl SlashCommand {
             return Ok(ParsedSlashCommand::Bare(spec.bare_behavior));
         }
 
-        match spec.parse_kind {
-            SlashCommandParseKind::NoArgs => Err(SlashCommandUsageError {
+        spec.args_parser
+            .parse(trimmed)
+            .map_err(|kind| SlashCommandUsageError {
                 command: self,
-                kind: SlashCommandUsageErrorKind::UnexpectedInlineArgs,
-            }),
-            SlashCommandParseKind::Fast => match trimmed.to_ascii_lowercase().as_str() {
-                "on" => Ok(ParsedSlashCommand::Fast(FastSlashCommandArgs::On)),
-                "off" => Ok(ParsedSlashCommand::Fast(FastSlashCommandArgs::Off)),
-                "status" => Ok(ParsedSlashCommand::Fast(FastSlashCommandArgs::Status)),
-                _ => Err(SlashCommandUsageError {
-                    command: self,
-                    kind: SlashCommandUsageErrorKind::InvalidInlineArgs,
-                }),
-            },
-            SlashCommandParseKind::Rename => Ok(ParsedSlashCommand::Rename),
-            SlashCommandParseKind::Plan => Ok(ParsedSlashCommand::Plan),
-            SlashCommandParseKind::Review => Ok(ParsedSlashCommand::Review),
-            SlashCommandParseKind::SandboxReadRoot => Ok(ParsedSlashCommand::SandboxReadRoot),
-        }
+                kind,
+            })
     }
 }
 
@@ -82,6 +46,8 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+    use crate::slash_command::FastSlashCommandArgs;
+    use crate::slash_command::SlashCommandBareBehavior;
 
     #[test]
     fn review_bare_form_is_marked_as_ui_driven() {

@@ -72,13 +72,71 @@ pub(crate) enum SlashCommandBareBehavior {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SlashCommandParseKind {
-    NoArgs,
-    Fast,
+pub(crate) enum FastSlashCommandArgs {
+    On,
+    Off,
+    Status,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParsedSlashCommand {
+    Bare(SlashCommandBareBehavior),
+    Fast(FastSlashCommandArgs),
     Rename,
     Plan,
     Review,
     SandboxReadRoot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlashCommandUsageErrorKind {
+    UnexpectedInlineArgs,
+    InvalidInlineArgs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SlashCommandArgsParser {
+    NoArgs,
+    Remainder(ParsedSlashCommand),
+    Tokens(&'static [SlashCommandTokenChoice]),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SlashCommandTokenChoice {
+    pub(crate) token: &'static str,
+    pub(crate) parsed: ParsedSlashCommand,
+}
+
+const FAST_TOKEN_CHOICES: &[SlashCommandTokenChoice] = &[
+    SlashCommandTokenChoice {
+        token: "on",
+        parsed: ParsedSlashCommand::Fast(FastSlashCommandArgs::On),
+    },
+    SlashCommandTokenChoice {
+        token: "off",
+        parsed: ParsedSlashCommand::Fast(FastSlashCommandArgs::Off),
+    },
+    SlashCommandTokenChoice {
+        token: "status",
+        parsed: ParsedSlashCommand::Fast(FastSlashCommandArgs::Status),
+    },
+];
+
+impl SlashCommandArgsParser {
+    pub(crate) fn parse(
+        self,
+        args: &str,
+    ) -> Result<ParsedSlashCommand, SlashCommandUsageErrorKind> {
+        match self {
+            SlashCommandArgsParser::NoArgs => Err(SlashCommandUsageErrorKind::UnexpectedInlineArgs),
+            SlashCommandArgsParser::Remainder(parsed) => Ok(parsed),
+            SlashCommandArgsParser::Tokens(choices) => choices
+                .iter()
+                .find(|choice| choice.token.eq_ignore_ascii_case(args))
+                .map(|choice| choice.parsed)
+                .ok_or(SlashCommandUsageErrorKind::InvalidInlineArgs),
+        }
+    }
 }
 
 impl SlashCommand {
@@ -91,7 +149,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/model"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Fast => SlashCommandSpec {
                 description: "toggle Fast mode to enable fastest inference at 2X plan usage",
@@ -100,7 +158,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/fast", "/fast [on|off|status]"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::Fast,
+                args_parser: SlashCommandArgsParser::Tokens(FAST_TOKEN_CHOICES),
             },
             SlashCommand::Approvals => SlashCommandSpec {
                 description: "choose what Codex is allowed to do",
@@ -109,7 +167,7 @@ impl SlashCommand {
                 hide_in_command_popup: true,
                 usage_lines: &["/approvals"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Permissions => SlashCommandSpec {
                 description: "choose what Codex is allowed to do",
@@ -118,7 +176,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/permissions"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::ElevateSandbox => SlashCommandSpec {
                 description: "set up elevated agent sandbox",
@@ -127,7 +185,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/setup-default-sandbox"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::SandboxReadRoot => SlashCommandSpec {
                 description: "let sandbox read a directory: /sandbox-add-read-dir <absolute_path>",
@@ -136,7 +194,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/sandbox-add-read-dir <absolute-path>"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::SandboxReadRoot,
+                args_parser: SlashCommandArgsParser::Remainder(ParsedSlashCommand::SandboxReadRoot),
             },
             SlashCommand::Experimental => SlashCommandSpec {
                 description: "toggle experimental features",
@@ -145,7 +203,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/experimental"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Skills => SlashCommandSpec {
                 description: "use skills to improve how Codex performs specific tasks",
@@ -154,7 +212,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/skills"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Review => SlashCommandSpec {
                 description: "review my current changes and find issues",
@@ -163,7 +221,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/review", "/review <instructions>"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::Review,
+                args_parser: SlashCommandArgsParser::Remainder(ParsedSlashCommand::Review),
             },
             SlashCommand::Rename => SlashCommandSpec {
                 description: "rename the current thread",
@@ -172,7 +230,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/rename", "/rename <title>"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::Rename,
+                args_parser: SlashCommandArgsParser::Remainder(ParsedSlashCommand::Rename),
             },
             SlashCommand::New => SlashCommandSpec {
                 description: "start a new chat during a conversation",
@@ -181,7 +239,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/new"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Resume => SlashCommandSpec {
                 description: "resume a saved chat",
@@ -190,7 +248,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/resume"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Fork => SlashCommandSpec {
                 description: "fork the current chat",
@@ -199,7 +257,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/fork"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Init => SlashCommandSpec {
                 description: "create an AGENTS.md file with instructions for Codex",
@@ -208,7 +266,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/init"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Compact => SlashCommandSpec {
                 description: "summarize conversation to prevent hitting the context limit",
@@ -217,7 +275,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/compact"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Plan => SlashCommandSpec {
                 description: "switch to Plan mode",
@@ -226,7 +284,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/plan", "/plan <prompt>"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::Plan,
+                args_parser: SlashCommandArgsParser::Remainder(ParsedSlashCommand::Plan),
             },
             SlashCommand::Collab => SlashCommandSpec {
                 description: "change collaboration mode (experimental)",
@@ -235,7 +293,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/collab"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Agent => SlashCommandSpec {
                 description: "switch the active agent thread",
@@ -244,7 +302,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/agent"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Diff => SlashCommandSpec {
                 description: "show git diff (including untracked files)",
@@ -253,7 +311,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/diff"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Copy => SlashCommandSpec {
                 description: "copy the latest Codex output to your clipboard",
@@ -262,7 +320,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/copy"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Mention => SlashCommandSpec {
                 description: "mention a file",
@@ -271,7 +329,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/mention"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Status => SlashCommandSpec {
                 description: "show current session configuration and token usage",
@@ -280,7 +338,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/status"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::DebugConfig => SlashCommandSpec {
                 description: "show config layers and requirement sources for debugging",
@@ -289,7 +347,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/debug-config"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Statusline => SlashCommandSpec {
                 description: "configure which items appear in the status line",
@@ -298,7 +356,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/statusline"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Theme => SlashCommandSpec {
                 description: "choose a syntax highlighting theme",
@@ -307,7 +365,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/theme"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Mcp => SlashCommandSpec {
                 description: "list configured MCP tools",
@@ -316,7 +374,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/mcp"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Apps => SlashCommandSpec {
                 description: "manage apps",
@@ -325,7 +383,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/apps"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Plugins => SlashCommandSpec {
                 description: "browse plugins",
@@ -334,7 +392,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/plugins"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Logout => SlashCommandSpec {
                 description: "log out of Codex",
@@ -343,7 +401,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/logout"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Quit => SlashCommandSpec {
                 description: "exit Codex",
@@ -352,7 +410,7 @@ impl SlashCommand {
                 hide_in_command_popup: true,
                 usage_lines: &["/quit"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Exit => SlashCommandSpec {
                 description: "exit Codex",
@@ -361,7 +419,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/exit"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Feedback => SlashCommandSpec {
                 description: "send logs to maintainers",
@@ -370,7 +428,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/feedback"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Rollout => SlashCommandSpec {
                 description: "print the rollout file path",
@@ -379,7 +437,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/rollout"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Ps => SlashCommandSpec {
                 description: "list background terminals",
@@ -388,7 +446,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/ps"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Stop => SlashCommandSpec {
                 description: "stop all background terminals",
@@ -397,7 +455,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/stop"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Clear => SlashCommandSpec {
                 description: "clear the terminal and start a new chat",
@@ -406,7 +464,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/clear"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Personality => SlashCommandSpec {
                 description: "choose a communication style for Codex",
@@ -415,7 +473,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/personality"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Realtime => SlashCommandSpec {
                 description: "toggle realtime voice mode (experimental)",
@@ -424,7 +482,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/realtime"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::Settings => SlashCommandSpec {
                 description: "configure realtime microphone/speaker",
@@ -433,7 +491,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/settings"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::TestApproval => SlashCommandSpec {
                 description: "test approval request",
@@ -442,7 +500,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/test-approval"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::MultiAgents => SlashCommandSpec {
                 description: "switch the active agent thread",
@@ -451,7 +509,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/subagents"],
                 bare_behavior: SlashCommandBareBehavior::OpensUi,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::MemoryDrop => SlashCommandSpec {
                 description: "DO NOT USE",
@@ -460,7 +518,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/debug-m-drop"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
             SlashCommand::MemoryUpdate => SlashCommandSpec {
                 description: "DO NOT USE",
@@ -469,7 +527,7 @@ impl SlashCommand {
                 hide_in_command_popup: false,
                 usage_lines: &["/debug-m-update"],
                 bare_behavior: SlashCommandBareBehavior::DispatchesDirectly,
-                parse_kind: SlashCommandParseKind::NoArgs,
+                args_parser: SlashCommandArgsParser::NoArgs,
             },
         }
     }
@@ -523,7 +581,7 @@ pub(crate) struct SlashCommandSpec {
     pub(crate) hide_in_command_popup: bool,
     pub(crate) usage_lines: &'static [&'static str],
     pub(crate) bare_behavior: SlashCommandBareBehavior,
-    pub(crate) parse_kind: SlashCommandParseKind,
+    pub(crate) args_parser: SlashCommandArgsParser,
 }
 
 #[cfg(test)]
