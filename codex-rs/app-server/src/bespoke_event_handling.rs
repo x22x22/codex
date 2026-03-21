@@ -3276,7 +3276,7 @@ mod tests {
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
                 assert_eq!(payload.review.rationale, None);
-                assert_eq!(payload.action, Some(action.clone()));
+                assert_eq!(payload.action, Some(action));
             }
             other => panic!("unexpected notification: {other:?}"),
         }

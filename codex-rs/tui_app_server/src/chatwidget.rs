@@ -5982,6 +5982,54 @@ impl ChatWidget {
                     .map(|details| format!("{}: {details}", notification.summary))
                     .unwrap_or(notification.summary),
             ),
+            ServerNotification::CommandExecutionGuardianApprovalReviewStarted(notification) => {
+                self.on_guardian_review_notification(
+                    notification.item_id,
+                    notification.turn_id,
+                    notification.review,
+                    notification.action,
+                );
+            }
+            ServerNotification::CommandExecutionGuardianApprovalReviewCompleted(notification) => {
+                self.on_guardian_review_notification(
+                    notification.item_id,
+                    notification.turn_id,
+                    notification.review,
+                    notification.action,
+                );
+            }
+            ServerNotification::FileChangeGuardianApprovalReviewStarted(notification) => {
+                self.on_guardian_review_notification(
+                    notification.item_id,
+                    notification.turn_id,
+                    notification.review,
+                    notification.action,
+                );
+            }
+            ServerNotification::FileChangeGuardianApprovalReviewCompleted(notification) => {
+                self.on_guardian_review_notification(
+                    notification.item_id,
+                    notification.turn_id,
+                    notification.review,
+                    notification.action,
+                );
+            }
+            ServerNotification::McpToolCallGuardianApprovalReviewStarted(notification) => {
+                self.on_guardian_review_notification(
+                    notification.item_id,
+                    notification.turn_id,
+                    notification.review,
+                    notification.action,
+                );
+            }
+            ServerNotification::McpToolCallGuardianApprovalReviewCompleted(notification) => {
+                self.on_guardian_review_notification(
+                    notification.item_id,
+                    notification.turn_id,
+                    notification.review,
+                    notification.action,
+                );
+            }
             ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
                 self.on_guardian_review_notification(
                     notification.target_item_id,
