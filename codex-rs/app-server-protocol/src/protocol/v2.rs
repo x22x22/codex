@@ -4906,8 +4906,10 @@ pub struct McpToolCallGuardianApprovalReviewCompletedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// Deprecated: Use the parent item-specific
-/// `item/*/guardianApprovalReview/*` notifications instead.
+/// Deprecated when app-server also emits the parent item-specific
+/// `item/*/guardianApprovalReview/*` notification for the same review.
+/// Continue handling this payload as a fallback for review kinds that are not
+/// yet parent-scoped (for example, network approvals / `network_access`).
 ///
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
 /// review.
@@ -4926,8 +4928,10 @@ pub struct ItemGuardianApprovalReviewStartedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// Deprecated: Use the parent item-specific
-/// `item/*/guardianApprovalReview/*` notifications instead.
+/// Deprecated when app-server also emits the parent item-specific
+/// `item/*/guardianApprovalReview/*` notification for the same review.
+/// Continue handling this payload as a fallback for review kinds that are not
+/// yet parent-scoped (for example, network approvals / `network_access`).
 ///
 /// [UNSTABLE] Temporary notification payload for guardian automatic approval
 /// review.

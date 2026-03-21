@@ -57,7 +57,7 @@
       "type": "string"
     }
   },
-  "description": "Deprecated: Use the parent item-specific `item/*/guardianApprovalReview/*` notifications instead.\n\n[UNSTABLE] Temporary notification payload for guardian automatic approval review.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
+  "description": "Deprecated when app-server also emits the parent item-specific `item/*/guardianApprovalReview/*` notification for the same review. Continue handling this payload as a fallback for review kinds that are not yet parent-scoped (for example, network approvals / `network_access`).\n\n[UNSTABLE] Temporary notification payload for guardian automatic approval review.\n\nTODO(ccunningham): Attach guardian review state to the reviewed tool item's lifecycle instead of sending separate standalone review notifications so the app-server API can persist and replay review state via `thread/read`.",
   "properties": {
     "action": true,
     "review": {

@@ -913,11 +913,15 @@ server_notification_definitions! {
     McpToolCallGuardianApprovalReviewCompleted =>
         "item/mcpToolCall/guardianApprovalReview/completed"
         (v2::McpToolCallGuardianApprovalReviewCompletedNotification),
-    /// Deprecated: Use the parent item-specific
-    /// `item/*/guardianApprovalReview/*` notifications instead.
+    /// Deprecated when app-server also emits the parent item-specific
+    /// `item/*/guardianApprovalReview/*` notification for the same review.
+    /// Continue handling this alias as a fallback for review kinds that are not
+    /// yet parent-scoped (for example, network approvals / `network_access`).
     ItemGuardianApprovalReviewStarted => "item/autoApprovalReview/started" (v2::ItemGuardianApprovalReviewStartedNotification),
-    /// Deprecated: Use the parent item-specific
-    /// `item/*/guardianApprovalReview/*` notifications instead.
+    /// Deprecated when app-server also emits the parent item-specific
+    /// `item/*/guardianApprovalReview/*` notification for the same review.
+    /// Continue handling this alias as a fallback for review kinds that are not
+    /// yet parent-scoped (for example, network approvals / `network_access`).
     ItemGuardianApprovalReviewCompleted => "item/autoApprovalReview/completed" (v2::ItemGuardianApprovalReviewCompletedNotification),
     ItemCompleted => "item/completed" (v2::ItemCompletedNotification),
     /// This event is internal-only. Used by Codex Cloud.

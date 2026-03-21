@@ -776,6 +776,11 @@ pub(crate) struct ChatWidget {
     // Guardian review keeps its own pending set so it can derive a single
     // footer summary from one or more in-flight review events.
     pending_guardian_review_status: PendingGuardianReviewStatus,
+    // Parent-scoped guardian review notifications overlap with the deprecated
+    // top-level alias for the same item. Track parent item ids so legacy
+    // notifications can remain a fallback for unmapped review kinds like
+    // network_access without double-rendering the overlapping cases.
+    parent_scoped_guardian_review_item_ids: HashSet<String>,
     // Previous status header to restore after a transient stream retry.
     retry_status_header: Option<String>,
     // Set when commentary output completes; once stream queues go idle we restore the status row.
@@ -1751,6 +1756,7 @@ impl ChatWidget {
         self.thread_id = Some(event.session_id);
         self.thread_name = event.thread_name.clone();
         self.forked_from = event.forked_from_id;
+        self.parent_scoped_guardian_review_item_ids.clear();
         self.current_rollout_path = event.rollout_path.clone();
         self.current_cwd = Some(event.cwd.clone());
         self.config.cwd = event.cwd.clone();
@@ -4229,6 +4235,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             current_status: StatusIndicatorState::working(),
             pending_guardian_review_status: PendingGuardianReviewStatus::default(),
+            parent_scoped_guardian_review_item_ids: HashSet::new(),
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
@@ -5983,6 +5990,8 @@ impl ChatWidget {
                     .unwrap_or(notification.summary),
             ),
             ServerNotification::CommandExecutionGuardianApprovalReviewStarted(notification) => {
+                self.parent_scoped_guardian_review_item_ids
+                    .insert(notification.item_id.clone());
                 self.on_guardian_review_notification(
                     notification.item_id,
                     notification.turn_id,
@@ -5991,6 +6000,8 @@ impl ChatWidget {
                 );
             }
             ServerNotification::CommandExecutionGuardianApprovalReviewCompleted(notification) => {
+                self.parent_scoped_guardian_review_item_ids
+                    .insert(notification.item_id.clone());
                 self.on_guardian_review_notification(
                     notification.item_id,
                     notification.turn_id,
@@ -5999,6 +6010,8 @@ impl ChatWidget {
                 );
             }
             ServerNotification::FileChangeGuardianApprovalReviewStarted(notification) => {
+                self.parent_scoped_guardian_review_item_ids
+                    .insert(notification.item_id.clone());
                 self.on_guardian_review_notification(
                     notification.item_id,
                     notification.turn_id,
@@ -6007,6 +6020,8 @@ impl ChatWidget {
                 );
             }
             ServerNotification::FileChangeGuardianApprovalReviewCompleted(notification) => {
+                self.parent_scoped_guardian_review_item_ids
+                    .insert(notification.item_id.clone());
                 self.on_guardian_review_notification(
                     notification.item_id,
                     notification.turn_id,
@@ -6015,6 +6030,8 @@ impl ChatWidget {
                 );
             }
             ServerNotification::McpToolCallGuardianApprovalReviewStarted(notification) => {
+                self.parent_scoped_guardian_review_item_ids
+                    .insert(notification.item_id.clone());
                 self.on_guardian_review_notification(
                     notification.item_id,
                     notification.turn_id,
@@ -6023,6 +6040,8 @@ impl ChatWidget {
                 );
             }
             ServerNotification::McpToolCallGuardianApprovalReviewCompleted(notification) => {
+                self.parent_scoped_guardian_review_item_ids
+                    .insert(notification.item_id.clone());
                 self.on_guardian_review_notification(
                     notification.item_id,
                     notification.turn_id,
@@ -6030,10 +6049,32 @@ impl ChatWidget {
                     notification.action,
                 );
             }
-            // Ignore deprecated aliases so the same guardian review does not render twice
-            // when the app-server emits both legacy and parent-scoped notifications.
-            ServerNotification::ItemGuardianApprovalReviewStarted(_)
-            | ServerNotification::ItemGuardianApprovalReviewCompleted(_) => {}
+            ServerNotification::ItemGuardianApprovalReviewStarted(notification) => {
+                if !self
+                    .parent_scoped_guardian_review_item_ids
+                    .contains(&notification.target_item_id)
+                {
+                    self.on_guardian_review_notification(
+                        notification.target_item_id,
+                        notification.turn_id,
+                        notification.review,
+                        notification.action,
+                    );
+                }
+            }
+            ServerNotification::ItemGuardianApprovalReviewCompleted(notification) => {
+                if !self
+                    .parent_scoped_guardian_review_item_ids
+                    .contains(&notification.target_item_id)
+                {
+                    self.on_guardian_review_notification(
+                        notification.target_item_id,
+                        notification.turn_id,
+                        notification.review,
+                        notification.action,
+                    );
+                }
+            }
             ServerNotification::ThreadClosed(_) => {
                 if !from_replay {
                     self.on_shutdown_complete();
