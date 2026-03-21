@@ -2,13 +2,14 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use tokio::sync::Mutex;
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::{Mutex, Notify};
 use tokio::time::Duration;
 use tokio::time::Instant;
 use tokio::time::Sleep;
+use tokio_util::sync::CancellationToken;
 
 use super::UnifiedExecContext;
-use super::process::UnifiedExecProcess;
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::exec::ExecToolCallOutput;
@@ -18,7 +19,8 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecCommandSource;
 use crate::protocol::ExecOutputStream;
-use crate::unified_exec::process::OutputHandles;
+use crate::unified_exec::process::OutputBuffer;
+use crate::unified_exec::process::StreamingSource;
 use crate::tools::events::ToolEmitter;
 use crate::tools::events::ToolEventCtx;
 use crate::tools::events::ToolEventStage;
@@ -46,128 +48,178 @@ pub(crate) fn start_streaming_output(
     let session_ref = Arc::clone(&context.session);
     let turn_ref = Arc::clone(&context.turn);
     let call_id = context.call_id.clone();
-    let OutputHandles {
-        output_buffer,
-        output_notify,
-        output_closed,
-        output_closed_notify,
-        cancellation_token,
-    } = process.output_handles();
+    match process.streaming_source() {
+        StreamingSource::Receiver {
+            receiver,
+            output_drained,
+            cancellation_token,
+        } => {
+            tokio::spawn(async move {
+                stream_output_from_receiver(
+                    session_ref,
+                    turn_ref,
+                    call_id,
+                    transcript,
+                    output_drained,
+                    receiver,
+                    cancellation_token,
+                )
+                .await;
+            });
+        }
+        StreamingSource::Buffered {
+            output_buffer,
+            output_notify,
+            output_closed,
+            output_closed_notify,
+            output_drained,
+            cancellation_token,
+        } => {
+            tokio::spawn(async move {
+                stream_output_from_buffer(
+                    session_ref,
+                    turn_ref,
+                    call_id,
+                    transcript,
+                    output_buffer,
+                    output_notify,
+                    output_closed,
+                    output_closed_notify,
+                    output_drained,
+                    cancellation_token,
+                )
+                .await;
+            });
+        }
+    }
+}
 
-    if let Some(local_process) = process.as_local_process() {
-        let mut receiver = local_process.output_receiver();
-        let output_drained = local_process.output_drained_notify();
-        tokio::spawn(async move {
-            use tokio::sync::broadcast::error::RecvError;
+async fn stream_output_from_receiver(
+    session_ref: Arc<Session>,
+    turn_ref: Arc<TurnContext>,
+    call_id: String,
+    transcript: Arc<Mutex<HeadTailBuffer>>,
+    output_drained: Arc<Notify>,
+    mut receiver: Receiver<Vec<u8>>,
+    cancellation_token: CancellationToken,
+) {
+    use tokio::sync::broadcast::error::RecvError;
 
-            let mut pending = Vec::<u8>::new();
-            let mut emitted_deltas: usize = 0;
+    let mut pending = Vec::<u8>::new();
+    let mut emitted_deltas: usize = 0;
 
-            let mut grace_sleep: Option<Pin<Box<Sleep>>> = None;
+    let mut grace_sleep: Option<Pin<Box<Sleep>>> = None;
 
-            loop {
-                tokio::select! {
-                    _ = cancellation_token.cancelled(), if grace_sleep.is_none() => {
-                        let deadline = Instant::now() + TRAILING_OUTPUT_GRACE;
-                        grace_sleep.replace(Box::pin(tokio::time::sleep_until(deadline)));
-                    }
+    loop {
+        tokio::select! {
+            _ = cancellation_token.cancelled(), if grace_sleep.is_none() => {
+                let deadline = Instant::now() + TRAILING_OUTPUT_GRACE;
+                grace_sleep.replace(Box::pin(tokio::time::sleep_until(deadline)));
+            }
 
-                    _ = async {
-                        if let Some(sleep) = grace_sleep.as_mut() {
-                            sleep.as_mut().await;
-                        }
-                    }, if grace_sleep.is_some() => {
+            _ = async {
+                if let Some(sleep) = grace_sleep.as_mut() {
+                    sleep.as_mut().await;
+                }
+            }, if grace_sleep.is_some() => {
+                output_drained.notify_one();
+                break;
+            }
+
+            received = receiver.recv() => {
+                let chunk = match received {
+                    Ok(chunk) => chunk,
+                    Err(RecvError::Lagged(_)) => {
+                        continue;
+                    },
+                    Err(RecvError::Closed) => {
                         output_drained.notify_one();
                         break;
                     }
+                };
 
-                    received = receiver.recv() => {
-                        let chunk = match received {
-                            Ok(chunk) => chunk,
-                            Err(RecvError::Lagged(_)) => {
-                                continue;
-                            },
-                            Err(RecvError::Closed) => {
-                                output_drained.notify_one();
-                                break;
-                            }
-                        };
-
-                        process_chunk(
-                            &mut pending,
-                            &transcript,
-                            &call_id,
-                            &session_ref,
-                            &turn_ref,
-                            &mut emitted_deltas,
-                            chunk,
-                        ).await;
-                    }
-                }
+                process_chunk(
+                    &mut pending,
+                    &transcript,
+                    &call_id,
+                    &session_ref,
+                    &turn_ref,
+                    &mut emitted_deltas,
+                    chunk,
+                ).await;
             }
-        });
-        return;
+        }
     }
+}
 
-    let output_drained = process
-        .output_drained()
-        .unwrap_or_else(|| Arc::new(Notify::new()));
+async fn stream_output_from_buffer(
+    session_ref: Arc<Session>,
+    turn_ref: Arc<TurnContext>,
+    call_id: String,
+    transcript: Arc<Mutex<HeadTailBuffer>>,
+    output_buffer: OutputBuffer,
+    output_notify: Arc<Notify>,
+    output_closed: Arc<std::sync::atomic::AtomicBool>,
+    output_closed_notify: Arc<Notify>,
+    output_drained: Arc<Notify>,
+    cancellation_token: CancellationToken,
+) {
+    let mut pending = Vec::<u8>::new();
+    let mut emitted_deltas: usize = 0;
 
-    tokio::spawn(async move {
-        let mut pending = Vec::<u8>::new();
-        let mut emitted_deltas: usize = 0;
+    let mut grace_sleep: Option<Pin<Box<Sleep>>> = None;
 
-        let mut grace_sleep: Option<Pin<Box<Sleep>>> = None;
+    loop {
+        tokio::select! {
+            _ = cancellation_token.cancelled(), if grace_sleep.is_none() => {
+                let deadline = Instant::now() + TRAILING_OUTPUT_GRACE;
+                grace_sleep.replace(Box::pin(tokio::time::sleep_until(deadline)));
+            }
 
-        loop {
-            tokio::select! {
-                _ = cancellation_token.cancelled(), if grace_sleep.is_none() => {
-                    let deadline = Instant::now() + TRAILING_OUTPUT_GRACE;
-                    grace_sleep.replace(Box::pin(tokio::time::sleep_until(deadline)));
+            _ = async {
+                if let Some(sleep) = grace_sleep.as_mut() {
+                    sleep.as_mut().await;
                 }
+            }, if grace_sleep.is_some() => {
+                output_drained.notify_one();
+                break;
+            }
 
-                _ = async {
-                    if let Some(sleep) = grace_sleep.as_mut() {
-                        sleep.as_mut().await;
-                    }
-                }, if grace_sleep.is_some() => {
-                    output_drained.notify_one();
-                    break;
-                }
-
-                _ = output_notify.notified() => {
-                    let drained_chunks = {
-                        let mut guard = output_buffer.lock().await;
-                        guard.drain_chunks()
-                    };
-                    if drained_chunks.is_empty() {
-                        if cancellation_token.is_cancelled() && output_closed.load(std::sync::atomic::Ordering::Acquire) {
-                            output_drained.notify_one();
-                            break;
-                        }
-                        continue;
-                    }
-
-                    for chunk in drained_chunks {
-                        process_chunk(
-                            &mut pending,
-                            &transcript,
-                            &call_id,
-                            &session_ref,
-                            &turn_ref,
-                            &mut emitted_deltas,
-                            chunk,
-                        ).await;
+            _ = output_notify.notified() => {
+                let drained_chunks = {
+                    let mut guard = output_buffer.lock().await;
+                    guard.drain_chunks()
+                };
+                if drained_chunks.is_empty() {
+                    if cancellation_token.is_cancelled()
+                        && output_closed.load(std::sync::atomic::Ordering::Acquire)
+                    {
+                        output_drained.notify_one();
+                        break;
                     }
                     continue;
                 }
 
-                _ = output_closed_notify.notified(), if grace_sleep.is_none() => {
-                    grace_sleep.replace(Box::pin(tokio::time::sleep_until(Instant::now() + TRAILING_OUTPUT_GRACE)));
+                for chunk in drained_chunks {
+                    process_chunk(
+                        &mut pending,
+                        &transcript,
+                        &call_id,
+                        &session_ref,
+                        &turn_ref,
+                        &mut emitted_deltas,
+                        chunk,
+                    ).await;
                 }
             }
+
+            _ = output_closed_notify.notified(), if grace_sleep.is_none() => {
+                grace_sleep.replace(Box::pin(tokio::time::sleep_until(
+                    Instant::now() + TRAILING_OUTPUT_GRACE,
+                )));
+            }
         }
-    });
+    }
 }
 
 /// Spawn a background watcher that waits for the PTY to exit and then emits a

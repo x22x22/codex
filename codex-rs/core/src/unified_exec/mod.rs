@@ -187,36 +187,41 @@ pub(crate) enum ProcessBackend {
 }
 
 impl ProcessBackend {
-    pub(crate) fn is_local(&self) -> bool {
-        matches!(self, Self::Local { .. })
-    }
-
-    pub(crate) fn as_local_process(&self) -> Option<&Arc<UnifiedExecProcess>> {
+    pub(crate) fn streaming_source(&self) -> crate::unified_exec::process::StreamingSource {
         match self {
-            Self::Local { process } => Some(process),
-            Self::ExecServer { .. } => None,
+            Self::Local { process } => process.streaming_source(),
+            Self::ExecServer {
+                output_buffer,
+                output_notify,
+                output_closed,
+                output_closed_notify,
+                output_drained,
+                cancellation_token,
+                ..
+            } => crate::unified_exec::process::StreamingSource::Buffered {
+                output_buffer: Arc::clone(output_buffer),
+                output_notify: Arc::clone(output_notify),
+                output_closed: Arc::clone(output_closed),
+                output_closed_notify: Arc::clone(output_closed_notify),
+                output_drained: Arc::clone(output_drained),
+                cancellation_token: cancellation_token.clone(),
+            },
         }
     }
 
     pub(crate) fn output_handles(
         &self,
-    ) -> (
-        crate::unified_exec::process::OutputBuffer,
-        Arc<Notify>,
-        Arc<AtomicBool>,
-        Arc<Notify>,
-        CancellationToken,
-    ) {
+    ) -> crate::unified_exec::process::OutputHandles {
         match self {
             Self::Local { process } => {
                 let handles = process.output_handles();
-                (
-                    handles.output_buffer,
-                    handles.output_notify,
-                    handles.output_closed,
-                    handles.output_closed_notify,
-                    handles.cancellation_token,
-                )
+                crate::unified_exec::process::OutputHandles {
+                    output_buffer: handles.output_buffer,
+                    output_notify: handles.output_notify,
+                    output_closed: handles.output_closed,
+                    output_closed_notify: handles.output_closed_notify,
+                    cancellation_token: handles.cancellation_token,
+                }
             }
             Self::ExecServer {
                 output_buffer,
@@ -225,13 +230,13 @@ impl ProcessBackend {
                 output_closed_notify,
                 cancellation_token,
                 ..
-            } => (
-                Arc::clone(output_buffer),
-                Arc::clone(output_notify),
-                Arc::clone(output_closed),
-                Arc::clone(output_closed_notify),
-                cancellation_token.clone(),
-            ),
+            } => crate::unified_exec::process::OutputHandles {
+                output_buffer: Arc::clone(output_buffer),
+                output_notify: Arc::clone(output_notify),
+                output_closed: Arc::clone(output_closed),
+                output_closed_notify: Arc::clone(output_closed_notify),
+                cancellation_token: cancellation_token.clone(),
+            },
         }
     }
 

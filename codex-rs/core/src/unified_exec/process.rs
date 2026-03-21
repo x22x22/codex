@@ -54,6 +54,22 @@ pub(crate) struct OutputHandles {
     pub(crate) cancellation_token: CancellationToken,
 }
 
+pub(crate) enum StreamingSource {
+    Receiver {
+        receiver: broadcast::Receiver<Vec<u8>>,
+        output_drained: Arc<Notify>,
+        cancellation_token: CancellationToken,
+    },
+    Buffered {
+        output_buffer: OutputBuffer,
+        output_notify: Arc<Notify>,
+        output_closed: Arc<AtomicBool>,
+        output_closed_notify: Arc<Notify>,
+        output_drained: Arc<Notify>,
+        cancellation_token: CancellationToken,
+    },
+}
+
 #[derive(Debug)]
 pub(crate) struct UnifiedExecProcess {
     process_handle: ExecCommandSession,
@@ -138,6 +154,14 @@ impl UnifiedExecProcess {
 
     pub(super) fn output_receiver(&self) -> tokio::sync::broadcast::Receiver<Vec<u8>> {
         self.output_rx.resubscribe()
+    }
+
+    pub(super) fn streaming_source(&self) -> StreamingSource {
+        StreamingSource::Receiver {
+            receiver: self.output_receiver(),
+            output_drained: Arc::clone(&self.output_drained),
+            cancellation_token: self.cancellation_token(),
+        }
     }
 
     pub(super) fn cancellation_token(&self) -> CancellationToken {
