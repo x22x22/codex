@@ -451,7 +451,6 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         experimental_api: true,
         opt_out_notification_methods: Vec::new(),
         channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
-        auto_handle_chatgpt_auth_refresh: true,
     };
     run_exec_session(ExecRunArgs {
         in_process_start_args,
@@ -1287,6 +1286,15 @@ async fn handle_server_request(
             )
             .await
         }
+        ServerRequest::ChatgptAuthTokensRefresh { request_id, .. } => {
+            reject_server_request(
+                client,
+                request_id,
+                &method,
+                "chatgpt auth token refresh is not supported in exec mode".to_string(),
+            )
+            .await
+        }
         ServerRequest::ApplyPatchApproval { request_id, params } => {
             reject_server_request(
                 client,
@@ -1320,16 +1328,6 @@ async fn handle_server_request(
                     "permissions approval is not supported in exec mode for thread `{}`",
                     params.thread_id
                 ),
-            )
-            .await
-        }
-        ServerRequest::ChatgptAuthTokensRefresh { request_id, .. } => {
-            reject_server_request(
-                client,
-                request_id,
-                &method,
-                "chatgpt auth refresh should be handled by the in-process app-server client"
-                    .to_string(),
             )
             .await
         }

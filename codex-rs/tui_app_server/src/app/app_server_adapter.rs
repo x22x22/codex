@@ -19,7 +19,6 @@ use crate::app_server_session::status_account_display_from_auth_mode;
 use codex_app_server_client::AppServerEvent;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
 #[cfg(test)]
@@ -973,6 +972,7 @@ fn split_command_string(command: &str) -> Vec<String> {
     }
 }
 
+#[cfg(test)]
 fn app_server_web_search_action_to_core(
     action: codex_app_server_protocol::WebSearchAction,
 ) -> Option<codex_protocol::models::WebSearchAction> {

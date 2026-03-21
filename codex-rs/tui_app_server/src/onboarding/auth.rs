@@ -922,7 +922,6 @@ mod tests {
             client_name: "test".to_string(),
             client_version: "test".to_string(),
             experimental_api: true,
-            auto_handle_chatgpt_auth_refresh: false,
             opt_out_notification_methods: Vec::new(),
             channel_capacity: DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
         })
