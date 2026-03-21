@@ -231,7 +231,7 @@ use crate::network_policy_decision::execpolicy_network_rule_amendment;
 use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
-use crate::project_doc::get_user_instructions;
+use crate::project_doc::get_user_instructions_with_filesystem;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
@@ -282,7 +282,7 @@ use crate::skills::SkillInjections;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::SkillMetadata;
 use crate::skills::SkillsManager;
-use crate::skills::build_skill_injections;
+use crate::skills::build_skill_injections_with_filesystem;
 use crate::skills::collect_env_var_dependencies;
 use crate::skills::collect_explicit_skill_mentions;
 use crate::skills::injection::ToolMentionKind;
@@ -437,7 +437,13 @@ impl Codex {
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
-        let loaded_skills = skills_manager.skills_for_config(&config);
+        let environment =
+            Arc::new(Environment::create(config.experimental_exec_server_url.clone()).await?);
+        let environment_filesystem = environment.get_filesystem();
+
+        let loaded_skills = skills_manager
+            .skills_for_config_with_filesystem(&config, &environment_filesystem)
+            .await;
 
         for err in &loaded_skills.errors {
             error!(
@@ -482,7 +488,8 @@ impl Codex {
             config.startup_warnings.push(message);
         }
 
-        let user_instructions = get_user_instructions(&config).await;
+        let user_instructions =
+            get_user_instructions_with_filesystem(&config, &environment_filesystem).await;
 
         let exec_policy = if crate::guardian::is_guardian_reviewer_source(&session_source) {
             // Guardian review should rely on the built-in shell safety checks,
@@ -1833,9 +1840,7 @@ impl Session {
             code_mode_service: crate::tools::code_mode::CodeModeService::new(
                 config.js_repl_node_path.clone(),
             ),
-            environment: Arc::new(
-                Environment::create(config.experimental_exec_server_url.clone()).await?,
-            ),
+            environment: Arc::clone(&environment),
         };
         let js_repl = Arc::new(JsReplHandle::with_node_path(
             config.js_repl_node_path.clone(),
@@ -2395,10 +2400,12 @@ impl Session {
                 &per_turn_config,
             )
             .await;
+        let environment_filesystem = self.services.environment.get_filesystem();
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_config(&per_turn_config),
+                .skills_for_config_with_filesystem(&per_turn_config, &environment_filesystem)
+                .await,
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
             Some(Arc::clone(&self.services.auth_manager)),
@@ -4792,10 +4799,16 @@ mod handlers {
 
         let skills_manager = &sess.services.skills_manager;
         let config = sess.get_config().await;
+        let environment_filesystem = sess.services.environment.get_filesystem();
         let mut skills = Vec::new();
         for cwd in cwds {
             let outcome = skills_manager
-                .skills_for_cwd(&cwd, config.as_ref(), force_reload)
+                .skills_for_cwd_with_filesystem(
+                    &cwd,
+                    config.as_ref(),
+                    force_reload,
+                    &environment_filesystem,
+                )
                 .await;
             let errors = super::errors_to_info(&outcome.errors);
             let skills_metadata = super::skills_to_info(&outcome.skills, &outcome.disabled_paths);
@@ -5471,11 +5484,13 @@ pub(crate) async fn run_turn(
         thread_id,
         turn_context.sub_id.clone(),
     );
+    let environment_filesystem = sess.services.environment.get_filesystem();
     let SkillInjections {
         items: skill_items,
         warnings: skill_warnings,
-    } = build_skill_injections(
+    } = build_skill_injections_with_filesystem(
         &mentioned_skills,
+        &environment_filesystem,
         Some(&session_telemetry),
         &sess.services.analytics_events_client,
         tracking.clone(),

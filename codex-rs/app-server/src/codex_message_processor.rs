@@ -5455,10 +5455,26 @@ impl CodexMessageProcessor {
 
     async fn skills_list(&self, request_id: ConnectionRequestId, params: SkillsListParams) {
         let SkillsListParams {
+            environment_id,
             cwds,
             force_reload,
             per_cwd_extra_user_roots,
         } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
         let cwds = if cwds.is_empty() {
             vec![self.config.cwd.clone()]
         } else {
@@ -5504,6 +5520,19 @@ impl CodexMessageProcessor {
                 return;
             }
         };
+        let environment =
+            match Environment::create(self.config.experimental_exec_server_url.clone()).await {
+                Ok(environment) => environment,
+                Err(error) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to bind environment for skills/list: {error}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+        let environment_filesystem = environment.get_filesystem();
         let skills_manager = self.thread_manager.skills_manager();
         let mut data = Vec::new();
         for cwd in cwds {
@@ -5511,7 +5540,13 @@ impl CodexMessageProcessor {
                 .get(&cwd)
                 .map_or(&[][..], std::vec::Vec::as_slice);
             let outcome = skills_manager
-                .skills_for_cwd_with_extra_user_roots(&cwd, &config, force_reload, extra_roots)
+                .skills_for_cwd_with_extra_user_roots_with_filesystem(
+                    &cwd,
+                    &config,
+                    force_reload,
+                    extra_roots,
+                    &environment_filesystem,
+                )
                 .await;
             let errors = errors_to_info(&outcome.errors);
             let skills = skills_to_info(&outcome.skills, &outcome.disabled_paths);
@@ -5522,7 +5557,13 @@ impl CodexMessageProcessor {
             });
         }
         self.outgoing
-            .send_response(request_id, SkillsListResponse { data })
+            .send_response(
+                request_id,
+                SkillsListResponse {
+                    environment_id: configured_environment_id,
+                    data,
+                },
+            )
             .await;
     }
 

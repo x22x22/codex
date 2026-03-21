@@ -14,12 +14,14 @@ use crate::skills::model::SkillPolicy;
 use crate::skills::model::SkillToolDependency;
 use crate::skills::system::system_cache_root_dir;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::models::FileSystemPermissions;
 use codex_protocol::models::MacOsSeatbeltProfileExtensions;
 use codex_protocol::models::NetworkPermissions;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dirs::home_dir;
 use dunce::canonicalize as canonicalize_path;
@@ -215,6 +217,49 @@ where
     outcome
 }
 
+pub(crate) async fn load_skills_from_roots_with_filesystem<I, F>(
+    roots: I,
+    filesystem: &F,
+) -> SkillLoadOutcome
+where
+    I: IntoIterator<Item = SkillRoot>,
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut outcome = SkillLoadOutcome::default();
+    for root in roots {
+        discover_skills_under_root_with_filesystem(
+            &root.path,
+            root.scope,
+            &mut outcome,
+            filesystem,
+        )
+        .await;
+    }
+
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    outcome
+        .skills
+        .retain(|skill| seen.insert(skill.path_to_skills_md.clone()));
+
+    fn scope_rank(scope: SkillScope) -> u8 {
+        match scope {
+            SkillScope::Repo => 0,
+            SkillScope::User => 1,
+            SkillScope::System => 2,
+            SkillScope::Admin => 3,
+        }
+    }
+
+    outcome.skills.sort_by(|a, b| {
+        scope_rank(a.scope)
+            .cmp(&scope_rank(b.scope))
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.path_to_skills_md.cmp(&b.path_to_skills_md))
+    });
+
+    outcome
+}
+
 pub(crate) fn skill_roots(
     config_layer_stack: &ConfigLayerStack,
     cwd: &Path,
@@ -226,6 +271,26 @@ pub(crate) fn skill_roots(
         home_dir().as_deref(),
         plugin_skill_roots,
     )
+}
+
+pub(crate) async fn skill_roots_with_filesystem<F>(
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &Path,
+    plugin_skill_roots: Vec<PathBuf>,
+    filesystem: &F,
+) -> Vec<SkillRoot>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut roots = skill_roots_from_layer_stack_inner(config_layer_stack, home_dir().as_deref());
+    roots.extend(plugin_skill_roots.into_iter().map(|path| SkillRoot {
+        path,
+        scope: SkillScope::User,
+    }));
+    roots
+        .extend(repo_agents_skill_roots_with_filesystem(config_layer_stack, cwd, filesystem).await);
+    dedupe_skill_roots_by_path(&mut roots);
+    roots
 }
 
 fn skill_roots_with_home_dir(
@@ -323,6 +388,31 @@ fn repo_agents_skill_roots(config_layer_stack: &ConfigLayerStack, cwd: &Path) ->
     roots
 }
 
+async fn repo_agents_skill_roots_with_filesystem<F>(
+    config_layer_stack: &ConfigLayerStack,
+    cwd: &Path,
+    filesystem: &F,
+) -> Vec<SkillRoot>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let project_root_markers = project_root_markers_from_stack(config_layer_stack);
+    let project_root =
+        find_project_root_with_filesystem(cwd, &project_root_markers, filesystem).await;
+    let dirs = dirs_between_project_root_and_cwd(cwd, &project_root);
+    let mut roots = Vec::new();
+    for dir in dirs {
+        let agents_skills = dir.join(AGENTS_DIR_NAME).join(SKILLS_DIR_NAME);
+        if path_is_directory_with_filesystem(&agents_skills, filesystem).await {
+            roots.push(SkillRoot {
+                path: agents_skills,
+                scope: SkillScope::Repo,
+            });
+        }
+    }
+    roots
+}
+
 fn project_root_markers_from_stack(config_layer_stack: &ConfigLayerStack) -> Vec<String> {
     let mut merged = TomlValue::Table(toml::map::Map::new());
     for layer in config_layer_stack.get_layers(
@@ -362,6 +452,30 @@ fn find_project_root(cwd: &Path, project_root_markers: &[String]) -> PathBuf {
     cwd.to_path_buf()
 }
 
+async fn find_project_root_with_filesystem<F>(
+    cwd: &Path,
+    project_root_markers: &[String],
+    filesystem: &F,
+) -> PathBuf
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    if project_root_markers.is_empty() {
+        return cwd.to_path_buf();
+    }
+
+    for ancestor in cwd.ancestors() {
+        for marker in project_root_markers {
+            let marker_path = ancestor.join(marker);
+            if path_exists_with_filesystem(&marker_path, filesystem).await {
+                return ancestor.to_path_buf();
+            }
+        }
+    }
+
+    cwd.to_path_buf()
+}
+
 fn dirs_between_project_root_and_cwd(cwd: &Path, project_root: &Path) -> Vec<PathBuf> {
     let mut dirs = cwd
         .ancestors()
@@ -383,6 +497,30 @@ fn dirs_between_project_root_and_cwd(cwd: &Path, project_root: &Path) -> Vec<Pat
 fn dedupe_skill_roots_by_path(roots: &mut Vec<SkillRoot>) {
     let mut seen: HashSet<PathBuf> = HashSet::new();
     roots.retain(|root| seen.insert(root.path.clone()));
+}
+
+async fn path_exists_with_filesystem<F>(path: &Path, filesystem: &F) -> bool
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let Ok(path) = AbsolutePathBuf::from_absolute_path(path) else {
+        return false;
+    };
+    filesystem.get_metadata(&path).await.is_ok()
+}
+
+async fn path_is_directory_with_filesystem<F>(path: &Path, filesystem: &F) -> bool
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let Ok(path) = AbsolutePathBuf::from_absolute_path(path) else {
+        return false;
+    };
+    filesystem
+        .get_metadata(&path)
+        .await
+        .map(|metadata| metadata.is_directory)
+        .unwrap_or(false)
 }
 
 fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut SkillLoadOutcome) {
@@ -524,10 +662,142 @@ fn discover_skills_under_root(root: &Path, scope: SkillScope, outcome: &mut Skil
     }
 }
 
+async fn discover_skills_under_root_with_filesystem<F>(
+    root: &Path,
+    scope: SkillScope,
+    outcome: &mut SkillLoadOutcome,
+    filesystem: &F,
+) where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let Ok(root) = AbsolutePathBuf::from_absolute_path(root) else {
+        return;
+    };
+
+    let metadata = match filesystem.get_metadata(&root).await {
+        Ok(metadata) => metadata,
+        Err(_) => return,
+    };
+    if !metadata.is_directory {
+        return;
+    }
+
+    fn enqueue_dir(
+        queue: &mut VecDeque<(PathBuf, usize)>,
+        visited_dirs: &mut HashSet<PathBuf>,
+        truncated_by_dir_limit: &mut bool,
+        path: PathBuf,
+        depth: usize,
+    ) {
+        if depth > MAX_SCAN_DEPTH {
+            return;
+        }
+        if visited_dirs.len() >= MAX_SKILLS_DIRS_PER_ROOT {
+            *truncated_by_dir_limit = true;
+            return;
+        }
+        if visited_dirs.insert(path.clone()) {
+            queue.push_back((path, depth));
+        }
+    }
+
+    let mut visited_dirs: HashSet<PathBuf> = HashSet::new();
+    visited_dirs.insert(root.as_path().to_path_buf());
+
+    let mut queue: VecDeque<(PathBuf, usize)> = VecDeque::from([(root.as_path().to_path_buf(), 0)]);
+    let mut truncated_by_dir_limit = false;
+
+    while let Some((dir, depth)) = queue.pop_front() {
+        let dir_abs = match AbsolutePathBuf::from_absolute_path(&dir) {
+            Ok(dir_abs) => dir_abs,
+            Err(_) => continue,
+        };
+        let entries = match filesystem.read_directory(&dir_abs).await {
+            Ok(entries) => entries,
+            Err(e) => {
+                error!("failed to read skills dir {}: {e:#}", dir.display());
+                continue;
+            }
+        };
+
+        for entry in entries {
+            let path = dir.join(&entry.file_name);
+            let file_name = entry.file_name.as_str();
+
+            if file_name.starts_with('.') {
+                continue;
+            }
+
+            if entry.is_directory {
+                enqueue_dir(
+                    &mut queue,
+                    &mut visited_dirs,
+                    &mut truncated_by_dir_limit,
+                    path,
+                    depth + 1,
+                );
+                continue;
+            }
+
+            if entry.is_file && file_name == SKILLS_FILENAME {
+                match parse_skill_file_with_filesystem(&path, scope, filesystem).await {
+                    Ok(skill) => {
+                        outcome.skills.push(skill);
+                    }
+                    Err(err) => {
+                        if scope != SkillScope::System {
+                            outcome.errors.push(SkillError {
+                                path,
+                                message: err.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if truncated_by_dir_limit {
+        tracing::warn!(
+            "skills scan truncated after {} directories (root: {})",
+            MAX_SKILLS_DIRS_PER_ROOT,
+            root.display()
+        );
+    }
+}
+
 fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, SkillParseError> {
     let contents = fs::read_to_string(path).map_err(SkillParseError::Read)?;
+    let loaded_metadata = load_skill_metadata(path);
+    parse_skill_file_from_contents(path, scope, &contents, loaded_metadata)
+}
 
-    let frontmatter = extract_frontmatter(&contents).ok_or(SkillParseError::MissingFrontmatter)?;
+async fn parse_skill_file_with_filesystem<F>(
+    path: &Path,
+    scope: SkillScope,
+    filesystem: &F,
+) -> Result<SkillMetadata, SkillParseError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let skill_path = AbsolutePathBuf::from_absolute_path(path)
+        .map_err(|err| SkillParseError::Read(std::io::Error::other(err.to_string())))?;
+    let contents = filesystem
+        .read_file(&skill_path)
+        .await
+        .map_err(SkillParseError::Read)?;
+    let contents = String::from_utf8_lossy(&contents).to_string();
+    let loaded_metadata = load_skill_metadata_with_filesystem(path, filesystem).await;
+    parse_skill_file_from_contents(path, scope, &contents, loaded_metadata)
+}
+
+fn parse_skill_file_from_contents(
+    path: &Path,
+    scope: SkillScope,
+    contents: &str,
+    loaded_metadata: LoadedSkillMetadata,
+) -> Result<SkillMetadata, SkillParseError> {
+    let frontmatter = extract_frontmatter(contents).ok_or(SkillParseError::MissingFrontmatter)?;
 
     let parsed: SkillFrontmatter =
         serde_yaml::from_str(&frontmatter).map_err(SkillParseError::InvalidYaml)?;
@@ -556,7 +826,7 @@ fn parse_skill_file(path: &Path, scope: SkillScope) -> Result<SkillMetadata, Ski
         policy,
         permission_profile,
         managed_network_override,
-    } = load_skill_metadata(path);
+    } = loaded_metadata;
 
     validate_len(&name, MAX_NAME_LEN, "name")?;
     validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
@@ -623,9 +893,54 @@ fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {
         }
     };
 
+    load_skill_metadata_from_contents(skill_dir, &metadata_path, &contents)
+}
+
+async fn load_skill_metadata_with_filesystem<F>(
+    skill_path: &Path,
+    filesystem: &F,
+) -> LoadedSkillMetadata
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    // Fail open: optional metadata should not block loading SKILL.md.
+    let Some(skill_dir) = skill_path.parent() else {
+        return LoadedSkillMetadata::default();
+    };
+    let metadata_path = skill_dir
+        .join(SKILLS_METADATA_DIR)
+        .join(SKILLS_METADATA_FILENAME);
+    let Ok(metadata_path) = AbsolutePathBuf::from_absolute_path(&metadata_path) else {
+        return LoadedSkillMetadata::default();
+    };
+
+    let contents = match filesystem.read_file(&metadata_path).await {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return LoadedSkillMetadata::default();
+        }
+        Err(error) => {
+            tracing::warn!(
+                "ignoring {path}: failed to read {label}: {error}",
+                path = metadata_path.display(),
+                label = SKILLS_METADATA_FILENAME
+            );
+            return LoadedSkillMetadata::default();
+        }
+    };
+
+    let contents = String::from_utf8_lossy(&contents).to_string();
+    load_skill_metadata_from_contents(skill_dir, metadata_path.as_path(), &contents)
+}
+
+fn load_skill_metadata_from_contents(
+    skill_dir: &Path,
+    metadata_path: &Path,
+    contents: &str,
+) -> LoadedSkillMetadata {
     let parsed: SkillMetadataFile = {
         let _guard = AbsolutePathBufGuard::new(skill_dir);
-        match serde_yaml::from_str(&contents) {
+        match serde_yaml::from_str(contents) {
             Ok(parsed) => parsed,
             Err(error) => {
                 tracing::warn!(

@@ -10,9 +10,11 @@ use crate::instructions::SkillInstructions;
 use crate::mention_syntax::TOOL_MENTION_SIGIL;
 use crate::mentions::build_skill_name_counts;
 use crate::skills::SkillMetadata;
+use codex_exec_server::ExecutorFileSystem;
 use codex_otel::SessionTelemetry;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tokio::fs;
 
 #[derive(Debug, Default)]
@@ -51,6 +53,69 @@ pub(crate) async fn build_skill_injections(
                     name: skill.name.clone(),
                     path: skill.path_to_skills_md.to_string_lossy().into_owned(),
                     contents,
+                }));
+            }
+            Err(err) => {
+                emit_skill_injected_metric(otel, skill, "error");
+                let message = format!(
+                    "Failed to load skill {name} at {path}: {err:#}",
+                    name = skill.name,
+                    path = skill.path_to_skills_md.display()
+                );
+                result.warnings.push(message);
+            }
+        }
+    }
+
+    analytics_client.track_skill_invocations(tracking, invocations);
+
+    result
+}
+
+pub(crate) async fn build_skill_injections_with_filesystem<F>(
+    mentioned_skills: &[SkillMetadata],
+    filesystem: &F,
+    otel: Option<&SessionTelemetry>,
+    analytics_client: &AnalyticsEventsClient,
+    tracking: TrackEventsContext,
+) -> SkillInjections
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    if mentioned_skills.is_empty() {
+        return SkillInjections::default();
+    }
+
+    let mut result = SkillInjections {
+        items: Vec::with_capacity(mentioned_skills.len()),
+        warnings: Vec::new(),
+    };
+    let mut invocations = Vec::new();
+
+    for skill in mentioned_skills {
+        let Ok(skill_path) = AbsolutePathBuf::from_absolute_path(&skill.path_to_skills_md) else {
+            emit_skill_injected_metric(otel, skill, "error");
+            result.warnings.push(format!(
+                "Failed to load skill {} at {}: invalid path",
+                skill.name,
+                skill.path_to_skills_md.display()
+            ));
+            continue;
+        };
+
+        match filesystem.read_file(&skill_path).await {
+            Ok(contents) => {
+                emit_skill_injected_metric(otel, skill, "ok");
+                invocations.push(SkillInvocation {
+                    skill_name: skill.name.clone(),
+                    skill_scope: skill.scope,
+                    skill_path: skill.path_to_skills_md.clone(),
+                    invocation_type: InvocationType::Explicit,
+                });
+                result.items.push(ResponseItem::from(SkillInstructions {
+                    name: skill.name.clone(),
+                    path: skill.path_to_skills_md.to_string_lossy().into_owned(),
+                    contents: String::from_utf8_lossy(&contents).to_string(),
                 }));
             }
             Err(err) => {

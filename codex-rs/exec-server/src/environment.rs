@@ -340,6 +340,10 @@ impl Environment {
         Arc::clone(&self.executor)
     }
 
+    pub fn filesystem(&self) -> Arc<dyn ExecutorFileSystem> {
+        Arc::clone(&self.filesystem)
+    }
+
     pub fn get_filesystem(&self) -> impl ExecutorFileSystem + use<> {
         EnvironmentFileSystem {
             filesystem: Arc::clone(&self.filesystem),

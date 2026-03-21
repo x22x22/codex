@@ -485,11 +485,17 @@ impl CoreShellActionProvider {
     /// any skills.
     async fn find_skill(&self, program: &AbsolutePathBuf) -> Option<SkillMetadata> {
         let force_reload = false;
+        let environment_filesystem = self.turn.environment.get_filesystem();
         let skills_outcome = self
             .session
             .services
             .skills_manager
-            .skills_for_cwd(&self.turn.cwd, self.turn.config.as_ref(), force_reload)
+            .skills_for_cwd_with_filesystem(
+                &self.turn.cwd,
+                self.turn.config.as_ref(),
+                force_reload,
+                &environment_filesystem,
+            )
             .await;
 
         let program_path = program.as_path();

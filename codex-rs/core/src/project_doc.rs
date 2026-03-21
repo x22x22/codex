@@ -22,6 +22,8 @@ use crate::config_loader::merge_toml_values;
 use crate::config_loader::project_root_markers_from_config;
 use crate::features::Feature;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_exec_server::ExecutorFileSystem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use dunce::canonicalize as normalize_path;
 use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
@@ -78,6 +80,56 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
 /// string of instructions.
 pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
     let project_docs = read_project_docs(config).await;
+
+    let mut output = String::new();
+
+    if let Some(instructions) = config.user_instructions.clone() {
+        output.push_str(&instructions);
+    }
+
+    match project_docs {
+        Ok(Some(docs)) => {
+            if !output.is_empty() {
+                output.push_str(PROJECT_DOC_SEPARATOR);
+            }
+            output.push_str(&docs);
+        }
+        Ok(None) => {}
+        Err(e) => {
+            error!("error trying to find project doc: {e:#}");
+        }
+    };
+
+    if let Some(js_repl_section) = render_js_repl_instructions(config) {
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(&js_repl_section);
+    }
+
+    if config.features.enabled(Feature::ChildAgentsMd) {
+        if !output.is_empty() {
+            output.push_str("\n\n");
+        }
+        output.push_str(HIERARCHICAL_AGENTS_MESSAGE);
+    }
+
+    if !output.is_empty() {
+        Some(output)
+    } else {
+        None
+    }
+}
+
+/// Combines `Config::instructions` and `AGENTS.md` using an explicit executor filesystem.
+pub(crate) async fn get_user_instructions_with_filesystem<F>(
+    config: &Config,
+    filesystem: &F,
+) -> Option<String>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let project_docs = read_project_docs_with_filesystem(config, filesystem).await;
 
     let mut output = String::new();
 
@@ -178,6 +230,69 @@ pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String
     }
 }
 
+/// Read AGENTS/project-doc files through an executor filesystem abstraction.
+pub async fn read_project_docs_with_filesystem<F>(
+    config: &Config,
+    filesystem: &F,
+) -> std::io::Result<Option<String>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let max_total = config.project_doc_max_bytes;
+
+    if max_total == 0 {
+        return Ok(None);
+    }
+
+    let paths = discover_project_doc_paths_with_filesystem(config, filesystem).await?;
+    if paths.is_empty() {
+        return Ok(None);
+    }
+
+    let mut remaining: u64 = max_total as u64;
+    let mut parts: Vec<String> = Vec::new();
+
+    for p in paths {
+        if remaining == 0 {
+            break;
+        }
+
+        let file_path = AbsolutePathBuf::from_absolute_path(&p).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("invalid project doc path `{}`: {err}", p.display()),
+            )
+        })?;
+        let data = match filesystem.read_file(&file_path).await {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+
+        let limit = usize::try_from(remaining).unwrap_or(usize::MAX);
+        let slice_len = data.len().min(limit);
+        if data.len() as u64 > remaining {
+            tracing::warn!(
+                "Project doc `{}` exceeds remaining budget ({} bytes) - truncating.",
+                p.display(),
+                remaining,
+            );
+        }
+
+        let text = String::from_utf8_lossy(&data[..slice_len]).to_string();
+        if !text.trim().is_empty() {
+            parts.push(text);
+            remaining = remaining.saturating_sub(slice_len as u64);
+        }
+    }
+
+    if parts.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(parts.join("\n\n")))
+    }
+}
+
 /// Discover the list of AGENTS.md files using the same search rules as
 /// `read_project_docs`, but return the file paths instead of concatenated
 /// contents. The list is ordered from project root to the current working
@@ -258,6 +373,105 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
                     // Allow regular files and symlinks; opening will later fail for dangling links.
                     if ft.is_file() || ft.is_symlink() {
                         found.push(candidate);
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    Ok(found)
+}
+
+/// Discover AGENTS/project-doc files using an executor filesystem abstraction.
+pub async fn discover_project_doc_paths_with_filesystem<F>(
+    config: &Config,
+    filesystem: &F,
+) -> std::io::Result<Vec<PathBuf>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let dir = config.cwd.clone();
+    let mut merged = TomlValue::Table(toml::map::Map::new());
+    for layer in config.config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
+        if matches!(layer.name, ConfigLayerSource::Project { .. }) {
+            continue;
+        }
+        merge_toml_values(&mut merged, &layer.config);
+    }
+    let project_root_markers = match project_root_markers_from_config(&merged) {
+        Ok(Some(markers)) => markers,
+        Ok(None) => default_project_root_markers(),
+        Err(err) => {
+            tracing::warn!("invalid project_root_markers: {err}");
+            default_project_root_markers()
+        }
+    };
+    let mut project_root = None;
+    if !project_root_markers.is_empty() {
+        for ancestor in dir.ancestors() {
+            for marker in &project_root_markers {
+                let marker_path = ancestor.join(marker);
+                let marker_path_abs =
+                    AbsolutePathBuf::from_absolute_path(&marker_path).map_err(|err| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "invalid project marker path `{}`: {err}",
+                                marker_path.display()
+                            ),
+                        )
+                    })?;
+                if filesystem.get_metadata(&marker_path_abs).await.is_ok() {
+                    project_root = Some(ancestor.to_path_buf());
+                    break;
+                }
+            }
+            if project_root.is_some() {
+                break;
+            }
+        }
+    }
+
+    let search_dirs: Vec<PathBuf> = if let Some(root) = project_root {
+        let mut dirs = Vec::new();
+        let mut cursor = dir.as_path();
+        loop {
+            dirs.push(cursor.to_path_buf());
+            if cursor == root {
+                break;
+            }
+            let Some(parent) = cursor.parent() else {
+                break;
+            };
+            cursor = parent;
+        }
+        dirs.reverse();
+        dirs
+    } else {
+        vec![dir]
+    };
+
+    let mut found: Vec<PathBuf> = Vec::new();
+    let candidate_filenames = candidate_filenames(config);
+    for d in search_dirs {
+        for name in &candidate_filenames {
+            let candidate = d.join(name);
+            let candidate = AbsolutePathBuf::from_absolute_path(&candidate).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid project doc path `{}`: {err}", candidate.display()),
+                )
+            })?;
+            match filesystem.get_metadata(&candidate).await {
+                Ok(metadata) => {
+                    if metadata.is_file {
+                        found.push(candidate.as_path().to_path_buf());
                         break;
                     }
                 }

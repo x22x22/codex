@@ -163,7 +163,7 @@ Example with notification opt-out:
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
-- `skills/list` — list skills for one or more `cwd` values (optional `forceReload`).
+- `skills/list` — list skills for one or more `cwd` values (optional `forceReload`) within an optional `environmentId`; the response echoes the resolved `environmentId`.
 - `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
 - `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/apps/MCP server names (**under development; do not call from production clients yet**).
 - `skills/changed` — notification emitted when watched local skill files change.
@@ -1093,14 +1093,15 @@ Example:
 $skill-creator Add a new skill for triaging flaky CI and include step-by-step usage.
 ```
 
-Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`).
+Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, with `forceReload`, and optionally bound to an `environmentId`).
 You can also add `perCwdExtraUserRoots` to scan additional absolute paths as `user` scope for specific `cwd` entries.
 Entries whose `cwd` is not present in `cwds` are ignored.
-`skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk.
+`skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk. The response includes the resolved `environmentId` so clients can cache and invalidate by execution environment.
 The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
+    "environmentId": "local",
     "cwds": ["/Users/me/project", "/Users/me/other-project"],
     "forceReload": true,
     "perCwdExtraUserRoots": [
@@ -1111,6 +1112,7 @@ The server also emits `skills/changed` notifications when watched local skill fi
     ]
 } }
 { "id": 25, "result": {
+    "environmentId": "local",
     "data": [{
         "cwd": "/Users/me/project",
         "skills": [

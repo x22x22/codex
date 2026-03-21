@@ -38,6 +38,7 @@ async fn skills_list_includes_skills_from_per_cwd_extra_user_roots() -> Result<(
 
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
+            environment_id: None,
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: true,
             per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
@@ -52,7 +53,11 @@ async fn skills_list_includes_skills_from_per_cwd_extra_user_roots() -> Result<(
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(response)?;
+    let SkillsListResponse {
+        environment_id,
+        data,
+    } = to_response(response)?;
+    assert_eq!(environment_id, "local");
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].cwd, cwd.path().to_path_buf());
     assert!(
@@ -74,6 +79,7 @@ async fn skills_list_rejects_relative_extra_user_roots() -> Result<()> {
 
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
+            environment_id: None,
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: true,
             per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
@@ -111,6 +117,7 @@ async fn skills_list_ignores_per_cwd_extra_roots_for_unknown_cwd() -> Result<()>
 
     let request_id = mcp
         .send_skills_list_request(SkillsListParams {
+            environment_id: None,
             cwds: vec![requested_cwd.path().to_path_buf()],
             force_reload: true,
             per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
@@ -125,7 +132,11 @@ async fn skills_list_ignores_per_cwd_extra_roots_for_unknown_cwd() -> Result<()>
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await??;
-    let SkillsListResponse { data } = to_response(response)?;
+    let SkillsListResponse {
+        environment_id,
+        data,
+    } = to_response(response)?;
+    assert_eq!(environment_id, "local");
     assert_eq!(data.len(), 1);
     assert_eq!(data[0].cwd, requested_cwd.path().to_path_buf());
     assert!(
@@ -150,6 +161,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
     // Seed the cwd cache first without extra roots.
     let first_request_id = mcp
         .send_skills_list_request(SkillsListParams {
+            environment_id: None,
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: false,
             per_cwd_extra_user_roots: None,
@@ -160,7 +172,11 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(first_request_id)),
     )
     .await??;
-    let SkillsListResponse { data: first_data } = to_response(first_response)?;
+    let SkillsListResponse {
+        environment_id: first_environment_id,
+        data: first_data,
+    } = to_response(first_response)?;
+    assert_eq!(first_environment_id, "local");
     assert_eq!(first_data.len(), 1);
     assert!(
         first_data[0]
@@ -171,6 +187,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
 
     let second_request_id = mcp
         .send_skills_list_request(SkillsListParams {
+            environment_id: None,
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: false,
             per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
@@ -184,7 +201,11 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(second_request_id)),
     )
     .await??;
-    let SkillsListResponse { data: second_data } = to_response(second_response)?;
+    let SkillsListResponse {
+        environment_id: second_environment_id,
+        data: second_data,
+    } = to_response(second_response)?;
+    assert_eq!(second_environment_id, "local");
     assert_eq!(second_data.len(), 1);
     assert!(
         second_data[0]
@@ -195,6 +216,7 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
 
     let third_request_id = mcp
         .send_skills_list_request(SkillsListParams {
+            environment_id: None,
             cwds: vec![cwd.path().to_path_buf()],
             force_reload: true,
             per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
@@ -208,7 +230,11 @@ async fn skills_list_uses_cached_result_until_force_reload() -> Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(third_request_id)),
     )
     .await??;
-    let SkillsListResponse { data: third_data } = to_response(third_response)?;
+    let SkillsListResponse {
+        environment_id: third_environment_id,
+        data: third_data,
+    } = to_response(third_response)?;
+    assert_eq!(third_environment_id, "local");
     assert_eq!(third_data.len(), 1);
     assert!(
         third_data[0]

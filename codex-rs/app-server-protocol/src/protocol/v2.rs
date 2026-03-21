@@ -3081,6 +3081,11 @@ pub struct ThreadReadResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsListParams {
+    /// Optional execution environment that owns the skill snapshot.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
+
     /// When empty, defaults to the current session working directory.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwds: Vec<PathBuf>,
@@ -3107,6 +3112,7 @@ pub struct SkillsListExtraRootsForCwd {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct SkillsListResponse {
+    pub environment_id: String,
     pub data: Vec<SkillsListEntry>,
 }
 
@@ -7987,18 +7993,21 @@ mod tests {
     fn skills_list_params_serialization_uses_force_reload() {
         assert_eq!(
             serde_json::to_value(SkillsListParams {
+                environment_id: None,
                 cwds: Vec::new(),
                 force_reload: false,
                 per_cwd_extra_user_roots: None,
             })
             .unwrap(),
             json!({
+                "environmentId": null,
                 "perCwdExtraUserRoots": null,
             }),
         );
 
         assert_eq!(
             serde_json::to_value(SkillsListParams {
+                environment_id: Some("env-1".to_string()),
                 cwds: vec![PathBuf::from("/repo")],
                 force_reload: true,
                 per_cwd_extra_user_roots: Some(vec![SkillsListExtraRootsForCwd {
@@ -8011,12 +8020,38 @@ mod tests {
             })
             .unwrap(),
             json!({
+                "environmentId": "env-1",
                 "cwds": ["/repo"],
                 "forceReload": true,
                 "perCwdExtraUserRoots": [
                     {
                         "cwd": "/repo",
                         "extraUserRoots": ["/shared/skills", "/tmp/x"],
+                    }
+                ],
+            }),
+        );
+    }
+
+    #[test]
+    fn skills_list_response_serialization_includes_environment_id() {
+        assert_eq!(
+            serde_json::to_value(SkillsListResponse {
+                environment_id: "env-1".to_string(),
+                data: vec![SkillsListEntry {
+                    cwd: PathBuf::from("/repo"),
+                    skills: Vec::new(),
+                    errors: Vec::new(),
+                }],
+            })
+            .unwrap(),
+            json!({
+                "environmentId": "env-1",
+                "data": [
+                    {
+                        "cwd": "/repo",
+                        "skills": [],
+                        "errors": [],
                     }
                 ],
             }),

@@ -24,9 +24,12 @@ use crate::skills::SkillLoadOutcome;
 use crate::skills::build_implicit_skill_path_indexes;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
+use crate::skills::loader::load_skills_from_roots_with_filesystem;
 use crate::skills::loader::skill_roots;
+use crate::skills::loader::skill_roots_with_filesystem;
 use crate::skills::system::install_system_skills;
 use crate::skills::system::uninstall_system_skills;
+use codex_exec_server::ExecutorFileSystem;
 
 pub struct SkillsManager {
     codex_home: PathBuf,
@@ -98,6 +101,59 @@ impl SkillsManager {
         outcome
     }
 
+    pub async fn skills_for_config_with_filesystem<F>(
+        &self,
+        config: &Config,
+        filesystem: &F,
+    ) -> SkillLoadOutcome
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let roots = self
+            .skill_roots_for_config_with_filesystem(config, filesystem)
+            .await;
+        let cache_key = config_skills_cache_key(&roots, &config.config_layer_stack);
+        if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
+            return outcome;
+        }
+
+        let outcome = crate::skills::filter_skill_load_outcome_for_product(
+            finalize_skill_outcome(
+                load_skills_from_roots_with_filesystem(roots, filesystem).await,
+                &config.config_layer_stack,
+            ),
+            self.restriction_product,
+        );
+        let mut cache = self
+            .cache_by_config
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.insert(cache_key, outcome.clone());
+        outcome
+    }
+
+    pub(crate) async fn skill_roots_for_config_with_filesystem<F>(
+        &self,
+        config: &Config,
+        filesystem: &F,
+    ) -> Vec<SkillRoot>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let loaded_plugins = self.plugins_manager.plugins_for_config(config);
+        let mut roots = skill_roots_with_filesystem(
+            &config.config_layer_stack,
+            &config.cwd,
+            loaded_plugins.effective_skill_roots(),
+            filesystem,
+        )
+        .await;
+        if !config.bundled_skills_enabled() {
+            roots.retain(|root| root.scope != SkillScope::System);
+        }
+        roots
+    }
+
     pub(crate) fn skill_roots_for_config(&self, config: &Config) -> Vec<SkillRoot> {
         let loaded_plugins = self.plugins_manager.plugins_for_config(config);
         let mut roots = skill_roots(
@@ -123,6 +179,26 @@ impl SkillsManager {
 
         self.skills_for_cwd_with_extra_user_roots(cwd, config, force_reload, &[])
             .await
+    }
+
+    pub async fn skills_for_cwd_with_filesystem<F>(
+        &self,
+        cwd: &Path,
+        config: &Config,
+        force_reload: bool,
+        filesystem: &F,
+    ) -> SkillLoadOutcome
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        self.skills_for_cwd_with_extra_user_roots_with_filesystem(
+            cwd,
+            config,
+            force_reload,
+            &[],
+            filesystem,
+        )
+        .await
     }
 
     pub async fn skills_for_cwd_with_extra_user_roots(
@@ -193,6 +269,94 @@ impl SkillsManager {
                 }),
         );
         let outcome = self.build_skill_outcome(roots, &config_layer_stack);
+        let mut cache = self
+            .cache_by_cwd
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.insert(cwd.to_path_buf(), outcome.clone());
+        outcome
+    }
+
+    pub async fn skills_for_cwd_with_extra_user_roots_with_filesystem<F>(
+        &self,
+        cwd: &Path,
+        config: &Config,
+        force_reload: bool,
+        extra_user_roots: &[PathBuf],
+        filesystem: &F,
+    ) -> SkillLoadOutcome
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+            return outcome;
+        }
+        let normalized_extra_user_roots = normalize_extra_user_roots(extra_user_roots);
+
+        let cwd_abs = match AbsolutePathBuf::try_from(cwd) {
+            Ok(cwd_abs) => cwd_abs,
+            Err(err) => {
+                return SkillLoadOutcome {
+                    errors: vec![crate::skills::model::SkillError {
+                        path: cwd.to_path_buf(),
+                        message: err.to_string(),
+                    }],
+                    ..Default::default()
+                };
+            }
+        };
+
+        let cli_overrides: Vec<(String, TomlValue)> = Vec::new();
+        let config_layer_stack = match load_config_layers_state(
+            &self.codex_home,
+            Some(cwd_abs),
+            &cli_overrides,
+            LoaderOverrides::default(),
+            CloudRequirementsLoader::default(),
+        )
+        .await
+        {
+            Ok(config_layer_stack) => config_layer_stack,
+            Err(err) => {
+                return SkillLoadOutcome {
+                    errors: vec![crate::skills::model::SkillError {
+                        path: cwd.to_path_buf(),
+                        message: err.to_string(),
+                    }],
+                    ..Default::default()
+                };
+            }
+        };
+
+        let loaded_plugins = self
+            .plugins_manager
+            .plugins_for_config_with_force_reload(config, force_reload);
+        let mut roots = skill_roots_with_filesystem(
+            &config_layer_stack,
+            cwd,
+            loaded_plugins.effective_skill_roots(),
+            filesystem,
+        )
+        .await;
+        if !bundled_skills_enabled_from_stack(&config_layer_stack) {
+            roots.retain(|root| root.scope != SkillScope::System);
+        }
+        roots.extend(
+            normalized_extra_user_roots
+                .iter()
+                .cloned()
+                .map(|path| SkillRoot {
+                    path,
+                    scope: SkillScope::User,
+                }),
+        );
+        let outcome = crate::skills::filter_skill_load_outcome_for_product(
+            finalize_skill_outcome(
+                load_skills_from_roots_with_filesystem(roots, filesystem).await,
+                &config_layer_stack,
+            ),
+            self.restriction_product,
+        );
         let mut cache = self
             .cache_by_cwd
             .write()
