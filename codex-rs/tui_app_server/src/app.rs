@@ -799,7 +799,7 @@ async fn prepare_startup_tooltip_override(
 
     if let Err(err) = ConfigEditsBuilder::new(&config.codex_home)
         .set_model_availability_nux_count(&updated_shown_count)
-        .apply()
+        .apply(codex_exec_server::Environment::default().get_filesystem())
         .await
     {
         tracing::error!(
@@ -1043,7 +1043,7 @@ impl App {
             .codex_home(self.config.codex_home.clone())
             .cli_overrides(self.cli_kv_overrides.clone())
             .harness_overrides(overrides)
-            .build()
+            .build(codex_exec_server::Environment::default().get_filesystem())
             .await
             .wrap_err_with(|| format!("Failed to rebuild config for cwd {cwd_display}"))
     }
@@ -1298,7 +1298,10 @@ impl App {
         // Persist first so the live session does not diverge from disk if the
         // config edit fails. Runtime/UI state is patched below only after the
         // durable config update succeeds.
-        if let Err(err) = builder.apply().await {
+        if let Err(err) = builder
+            .apply(codex_exec_server::Environment::default().get_filesystem())
+            .await
+        {
             tracing::error!(error = %err, "failed to persist feature flags");
             self.chat_widget
                 .add_error_message(format!("Failed to update experimental features: {err}"));
@@ -4002,7 +4005,10 @@ impl App {
                             "unelevated"
                         })
                         .clear_legacy_windows_sandbox_keys();
-                    match builder.apply().await {
+                    match builder
+                        .apply(codex_exec_server::Environment::default().get_filesystem())
+                        .await
+                    {
                         Ok(()) => {
                             if elevated_enabled {
                                 self.config.set_windows_sandbox_enabled(/*value*/ false);
@@ -4100,7 +4106,7 @@ impl App {
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
                     .set_model(Some(model.as_str()), effort)
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await
                 {
                     Ok(()) => {
@@ -4141,7 +4147,7 @@ impl App {
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
                     .set_personality(Some(personality))
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await
                 {
                     Ok(()) => {
@@ -4177,7 +4183,7 @@ impl App {
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_profile(profile)
                     .set_service_tier(service_tier)
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await
                 {
                     Ok(()) => {
@@ -4216,7 +4222,10 @@ impl App {
                     }
                 };
 
-                match builder.apply().await {
+                match builder
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
+                    .await
+                {
                     Ok(()) => {
                         match kind {
                             RealtimeAudioDeviceKind::Microphone => {
@@ -4347,7 +4356,7 @@ impl App {
                         segments,
                         value: policy.to_string().into(),
                     }])
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await
                 {
                     tracing::error!(
@@ -4382,7 +4391,7 @@ impl App {
             AppEvent::PersistFullAccessWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .set_hide_full_access_warning(/*acknowledged*/ true)
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await
                 {
                     tracing::error!(
@@ -4397,7 +4406,7 @@ impl App {
             AppEvent::PersistWorldWritableWarningAcknowledged => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .set_hide_world_writable_warning(/*acknowledged*/ true)
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await
                 {
                     tracing::error!(
@@ -4412,7 +4421,7 @@ impl App {
             AppEvent::PersistRateLimitSwitchPromptHidden => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .set_hide_rate_limit_model_nudge(/*acknowledged*/ true)
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await
                 {
                     tracing::error!(
@@ -4445,7 +4454,7 @@ impl App {
                 };
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits([edit])
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await
                 {
                     tracing::error!(
@@ -4469,7 +4478,7 @@ impl App {
             } => {
                 if let Err(err) = ConfigEditsBuilder::new(&self.config.codex_home)
                     .record_model_migration_seen(from_model.as_str(), to_model.as_str())
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await
                 {
                     tracing::error!(
@@ -4503,7 +4512,7 @@ impl App {
                 }];
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits(edits)
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await
                 {
                     Ok(()) => {
@@ -4555,7 +4564,7 @@ impl App {
                 };
                 match ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits(edits)
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await
                 {
                     Ok(()) => {
@@ -4675,7 +4684,7 @@ impl App {
                 let edit = codex_core::config::edit::status_line_items_edit(&ids);
                 let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits([edit])
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await;
                 match apply_result {
                     Ok(()) => {
@@ -4700,7 +4709,7 @@ impl App {
                 let edit = codex_core::config::edit::syntax_theme_edit(&name);
                 let apply_result = ConfigEditsBuilder::new(&self.config.codex_home)
                     .with_edits([edit])
-                    .apply()
+                    .apply(codex_exec_server::Environment::default().get_filesystem())
                     .await;
                 match apply_result {
                     Ok(()) => {
@@ -8421,7 +8430,7 @@ guardian_approval = true
         let codex_home = tempdir().expect("temp codex home");
         let config = ConfigBuilder::default()
             .codex_home(codex_home.path().to_path_buf())
-            .build()
+            .build(codex_exec_server::Environment::default().get_filesystem())
             .await
             .expect("config");
 
@@ -8519,7 +8528,7 @@ guardian_approval = true
                     value: "user".into(),
                 },
             ])
-            .apply()
+            .apply(codex_exec_server::Environment::default().get_filesystem())
             .await
             .expect("persist app toggle");
 
