@@ -28,12 +28,20 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 pub(crate) struct FsApi {
+    environment_id: String,
     file_system: Arc<dyn ExecutorFileSystem>,
 }
 
 impl Default for FsApi {
     fn default() -> Self {
+        Self::new(Environment::default_environment_id(None))
+    }
+}
+
+impl FsApi {
+    pub(crate) fn new(environment_id: String) -> Self {
         Self {
+            environment_id,
             file_system: Arc::new(Environment::default().get_filesystem()),
         }
     }
@@ -44,6 +52,11 @@ impl FsApi {
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
+        tracing::debug!(
+            environment_id = %self.environment_id,
+            path = %params.path,
+            "fs/readFile"
+        );
         let bytes = self
             .file_system
             .read_file(&params.path)
@@ -58,6 +71,11 @@ impl FsApi {
         &self,
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
+        tracing::debug!(
+            environment_id = %self.environment_id,
+            path = %params.path,
+            "fs/writeFile"
+        );
         let bytes = STANDARD.decode(params.data_base64).map_err(|err| {
             invalid_request(format!(
                 "fs/writeFile requires valid base64 dataBase64: {err}"
@@ -74,6 +92,11 @@ impl FsApi {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
+        tracing::debug!(
+            environment_id = %self.environment_id,
+            path = %params.path,
+            "fs/createDirectory"
+        );
         self.file_system
             .create_directory(
                 &params.path,
@@ -90,6 +113,11 @@ impl FsApi {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
+        tracing::debug!(
+            environment_id = %self.environment_id,
+            path = %params.path,
+            "fs/getMetadata"
+        );
         let metadata = self
             .file_system
             .get_metadata(&params.path)
@@ -107,6 +135,11 @@ impl FsApi {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
+        tracing::debug!(
+            environment_id = %self.environment_id,
+            path = %params.path,
+            "fs/readDirectory"
+        );
         let entries = self
             .file_system
             .read_directory(&params.path)
@@ -128,6 +161,11 @@ impl FsApi {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
+        tracing::debug!(
+            environment_id = %self.environment_id,
+            path = %params.path,
+            "fs/remove"
+        );
         self.file_system
             .remove(
                 &params.path,
@@ -145,6 +183,12 @@ impl FsApi {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
+        tracing::debug!(
+            environment_id = %self.environment_id,
+            source_path = %params.source_path,
+            destination_path = %params.destination_path,
+            "fs/copy"
+        );
         self.file_system
             .copy(
                 &params.source_path,

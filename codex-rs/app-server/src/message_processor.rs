@@ -64,6 +64,7 @@ use codex_core::default_client::set_default_client_residency_requirement;
 use codex_core::default_client::set_default_originator;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_feedback::CodexFeedback;
+use codex_exec_server::Environment;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::W3cTraceContext;
@@ -255,7 +256,9 @@ impl MessageProcessor {
             analytics_events_client,
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
-        let fs_api = FsApi::default();
+        let fs_api = FsApi::new(Environment::default_environment_id(
+            config.experimental_exec_server_url.as_deref(),
+        ));
 
         Self {
             outgoing,

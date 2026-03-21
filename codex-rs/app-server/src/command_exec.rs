@@ -67,9 +67,12 @@ struct ConnectionProcessId {
 #[derive(Clone)]
 enum CommandExecSession {
     Active {
+        environment_id: String,
         control_tx: mpsc::Sender<CommandControlRequest>,
     },
-    UnsupportedWindowsSandbox,
+    UnsupportedWindowsSandbox {
+        environment_id: String,
+    },
 }
 
 enum CommandControl {
@@ -155,6 +158,7 @@ impl CommandExecManager {
             output_bytes_cap,
             size,
         } = params;
+        let environment_id = environment_id_from_cwd(exec_request.cwd.as_path());
         if process_id.is_none() && (tty || stream_stdin || stream_stdout_stderr) {
             return Err(invalid_request(
                 "command/exec tty or streaming requires a client-supplied processId".to_string(),
@@ -195,7 +199,9 @@ impl CommandExecManager {
                 }
                 sessions.insert(
                     process_key.clone(),
-                    CommandExecSession::UnsupportedWindowsSandbox,
+                    CommandExecSession::UnsupportedWindowsSandbox {
+                        environment_id: environment_id.clone(),
+                    },
                 );
             }
             let sessions = Arc::clone(&self.sessions);
@@ -259,9 +265,17 @@ impl CommandExecManager {
             }
             sessions.insert(
                 process_key.clone(),
-                CommandExecSession::Active { control_tx },
+                CommandExecSession::Active {
+                    environment_id: environment_id.clone(),
+                    control_tx,
+                },
             );
         }
+        tracing::debug!(
+            environment_id = %environment_id,
+            process_id = %process_key.process_id.error_repr(),
+            "command/exec start"
+        );
         let spawned = if tty {
             codex_utils_pty::spawn_pty_process(
                 program,
@@ -389,13 +403,28 @@ impl CommandExecManager {
         };
 
         for control in controls {
-            if let CommandExecSession::Active { control_tx } = control {
-                let _ = control_tx
-                    .send(CommandControlRequest {
-                        control: CommandControl::Terminate,
-                        response_tx: None,
-                    })
-                    .await;
+            match control {
+                CommandExecSession::Active {
+                    environment_id,
+                    control_tx,
+                } => {
+                    tracing::debug!(
+                        environment_id = %environment_id,
+                        "command/exec connection closed"
+                    );
+                    let _ = control_tx
+                        .send(CommandControlRequest {
+                            control: CommandControl::Terminate,
+                            response_tx: None,
+                        })
+                        .await;
+                }
+                CommandExecSession::UnsupportedWindowsSandbox { environment_id } => {
+                    tracing::debug!(
+                        environment_id = %environment_id,
+                        "command/exec connection closed for windows sandbox"
+                    );
+                }
             }
         }
     }
@@ -418,10 +447,26 @@ impl CommandExecManager {
                     ))
                 })?
         };
-        let CommandExecSession::Active { control_tx } = session else {
-            return Err(invalid_request(
-                "command/exec/write, command/exec/terminate, and command/exec/resize are not supported for windows sandbox processes".to_string(),
-            ));
+        let control_tx = match session {
+            CommandExecSession::Active {
+                environment_id,
+                control_tx,
+            } => {
+                tracing::debug!(
+                    environment_id = %environment_id,
+                    "command/exec control"
+                );
+                control_tx
+            }
+            CommandExecSession::UnsupportedWindowsSandbox { environment_id } => {
+                tracing::debug!(
+                    environment_id = %environment_id,
+                    "command/exec control rejected for windows sandbox"
+                );
+                return Err(invalid_request(
+                    "command/exec/write, command/exec/terminate, and command/exec/resize are not supported for windows sandbox processes".to_string(),
+                ));
+            }
         };
         let (response_tx, response_rx) = oneshot::channel();
         let request = CommandControlRequest {
@@ -917,11 +962,12 @@ mod tests {
             connection_id: request_id.connection_id,
             process_id: InternalProcessId::Client("proc-11".to_string()),
         };
-        manager
-            .sessions
-            .lock()
-            .await
-            .insert(process_id, CommandExecSession::UnsupportedWindowsSandbox);
+        manager.sessions.lock().await.insert(
+            process_id,
+            CommandExecSession::UnsupportedWindowsSandbox {
+                environment_id: "test-env".to_string(),
+            },
+        );
 
         let err = manager
             .write(
@@ -953,11 +999,12 @@ mod tests {
             connection_id: request_id.connection_id,
             process_id: InternalProcessId::Client("proc-12".to_string()),
         };
-        manager
-            .sessions
-            .lock()
-            .await
-            .insert(process_id, CommandExecSession::UnsupportedWindowsSandbox);
+        manager.sessions.lock().await.insert(
+            process_id,
+            CommandExecSession::UnsupportedWindowsSandbox {
+                environment_id: "test-env".to_string(),
+            },
+        );
 
         let err = manager
             .terminate(
@@ -990,7 +1037,10 @@ mod tests {
                 connection_id: request_id.connection_id,
                 process_id: process_id.clone(),
             },
-            CommandExecSession::Active { control_tx },
+            CommandExecSession::Active {
+                environment_id: "test-env".to_string(),
+                control_tx,
+            },
         );
 
         tokio::spawn(async move {
