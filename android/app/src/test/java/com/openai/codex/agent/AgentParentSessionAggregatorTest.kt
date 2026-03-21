@@ -1,84 +1,76 @@
 package com.openai.codex.agent
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AgentParentSessionAggregatorTest {
     @Test
-    fun rollupReturnsCompletedSummaryWhenChildrenComplete() {
+    fun rollupRequestsAttachWhenAttachedPresentationIsRequired() {
         val rollup = AgentParentSessionAggregator.rollup(
             listOf(
                 ParentSessionChildSummary(
                     sessionId = "child-1",
                     targetPackage = "com.android.deskclock",
                     state = AgentSessionStateValues.COMPLETED,
-                    latestResult = "Alarm set for 2:07 PM.",
+                    targetPresentation = AgentTargetPresentationValues.DETACHED_SHOWN,
+                    requiredFinalPresentationPolicy = SessionFinalPresentationPolicy.ATTACHED,
+                    latestResult = "Started the stopwatch.",
                     latestError = null,
                 ),
             ),
         )
 
-        assertEquals(AgentSessionStateValues.COMPLETED, rollup.state)
-        assertEquals(
-            "Completed delegated session; com.android.deskclock: Alarm set for 2:07 PM.",
-            rollup.resultMessage,
-        )
-        assertNull(rollup.errorMessage)
+        assertEquals(AgentSessionStateValues.RUNNING, rollup.state)
+        assertEquals(listOf("child-1"), rollup.sessionsToAttach)
+        assertEquals(null, rollup.resultMessage)
+        assertEquals(null, rollup.errorMessage)
     }
 
     @Test
-    fun rollupReturnsWaitingWhenAnyChildWaitsForUser() {
+    fun rollupFailsWhenDetachedShownIsRequiredButTargetIsHidden() {
         val rollup = AgentParentSessionAggregator.rollup(
             listOf(
                 ParentSessionChildSummary(
                     sessionId = "child-1",
                     targetPackage = "com.android.deskclock",
-                    state = AgentSessionStateValues.WAITING_FOR_USER,
-                    latestResult = null,
-                    latestError = null,
-                ),
-                ParentSessionChildSummary(
-                    sessionId = "child-2",
-                    targetPackage = "com.android.settings",
                     state = AgentSessionStateValues.COMPLETED,
-                    latestResult = "Completed task.",
-                    latestError = null,
-                ),
-            ),
-        )
-
-        assertEquals(AgentSessionStateValues.WAITING_FOR_USER, rollup.state)
-        assertNull(rollup.resultMessage)
-        assertNull(rollup.errorMessage)
-    }
-
-    @Test
-    fun rollupReturnsFailedSummaryWhenAnyChildFails() {
-        val rollup = AgentParentSessionAggregator.rollup(
-            listOf(
-                ParentSessionChildSummary(
-                    sessionId = "child-1",
-                    targetPackage = "com.android.deskclock",
-                    state = AgentSessionStateValues.FAILED,
-                    latestResult = null,
-                    latestError = "Permission denied.",
-                ),
-                ParentSessionChildSummary(
-                    sessionId = "child-2",
-                    targetPackage = "com.android.settings",
-                    state = AgentSessionStateValues.COMPLETED,
-                    latestResult = "Completed task.",
+                    targetPresentation = AgentTargetPresentationValues.DETACHED_HIDDEN,
+                    requiredFinalPresentationPolicy = SessionFinalPresentationPolicy.DETACHED_SHOWN,
+                    latestResult = "Started the stopwatch.",
                     latestError = null,
                 ),
             ),
         )
 
         assertEquals(AgentSessionStateValues.FAILED, rollup.state)
-        assertNull(rollup.resultMessage)
+        assertEquals(emptyList<String>(), rollup.sessionsToAttach)
         assertEquals(
-            "Delegated session failed; com.android.deskclock: Permission denied.",
+            "Delegated session completed without the required final presentation; com.android.deskclock: required DETACHED_SHOWN, actual DETACHED_HIDDEN",
             rollup.errorMessage,
+        )
+    }
+
+    @Test
+    fun rollupCompletesWhenRequiredPresentationMatches() {
+        val rollup = AgentParentSessionAggregator.rollup(
+            listOf(
+                ParentSessionChildSummary(
+                    sessionId = "child-1",
+                    targetPackage = "com.android.deskclock",
+                    state = AgentSessionStateValues.COMPLETED,
+                    targetPresentation = AgentTargetPresentationValues.ATTACHED,
+                    requiredFinalPresentationPolicy = SessionFinalPresentationPolicy.ATTACHED,
+                    latestResult = "Started the stopwatch.",
+                    latestError = null,
+                ),
+            ),
+        )
+
+        assertEquals(AgentSessionStateValues.COMPLETED, rollup.state)
+        assertEquals(emptyList<String>(), rollup.sessionsToAttach)
+        assertEquals(
+            "Completed delegated session; com.android.deskclock: Started the stopwatch.",
+            rollup.resultMessage,
         )
     }
 }

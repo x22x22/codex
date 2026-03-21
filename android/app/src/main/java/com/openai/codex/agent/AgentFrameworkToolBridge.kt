@@ -44,10 +44,16 @@ class AgentFrameworkToolBridge(
                         continue
                     }
                     val objective = target.optString("objective").trim().ifEmpty { userObjective }
+                    val finalPresentationPolicy = target.optString("finalPresentationPolicy").trim()
+                    val defaultFinalPresentationPolicy = arguments.optString("finalPresentationPolicy").trim()
                     add(
                         AgentDelegationTarget(
                             packageName = packageName,
                             objective = objective,
+                            finalPresentationPolicy =
+                                SessionFinalPresentationPolicy.fromWireValue(finalPresentationPolicy)
+                                    ?: SessionFinalPresentationPolicy.fromWireValue(defaultFinalPresentationPolicy)
+                                    ?: SessionFinalPresentationPolicy.AGENT_CHOICE,
                         ),
                     )
                 }
@@ -60,6 +66,13 @@ class AgentFrameworkToolBridge(
                 }
                 throw IOException("Framework session tool did not select an eligible target package")
             }
+            val allowDetachedMode = arguments.optBoolean("allowDetachedMode", true)
+            val detachedPolicyTargets = targets.filter { it.finalPresentationPolicy.requiresDetachedMode() }
+            if (!allowDetachedMode && detachedPolicyTargets.isNotEmpty()) {
+                throw IOException(
+                    "Framework session tool selected detached final presentation without allowDetachedMode: ${detachedPolicyTargets.joinToString(", ") { it.packageName }}",
+                )
+            }
             return StartDirectSessionRequest(
                 plan = AgentDelegationPlan(
                     originalObjective = userObjective,
@@ -67,7 +80,7 @@ class AgentFrameworkToolBridge(
                     rationale = arguments.optString("reason").trim().ifEmpty { null },
                     usedOverride = false,
                 ),
-                allowDetachedMode = arguments.optBoolean("allowDetachedMode", true),
+                allowDetachedMode = allowDetachedMode,
             )
         }
     }
@@ -177,9 +190,20 @@ class AgentFrameworkToolBridge(
                                                 "properties",
                                                 JSONObject()
                                                     .put("packageName", stringSchema("Installed target Android package name."))
-                                                    .put("objective", stringSchema("Delegated free-form objective for the child Genie.")),
+                                                    .put("objective", stringSchema("Delegated free-form objective for the child Genie."))
+                                                    .put(
+                                                        "finalPresentationPolicy",
+                                                        stringSchema(
+                                                            "Required final target presentation: ATTACHED, DETACHED_HIDDEN, DETACHED_SHOWN, or AGENT_CHOICE.",
+                                                        ),
+                                                    ),
                                             )
-                                            .put("required", JSONArray().put("packageName"))
+                                            .put(
+                                                "required",
+                                                JSONArray()
+                                                    .put("packageName")
+                                                    .put("finalPresentationPolicy"),
+                                            )
                                             .put("additionalProperties", false),
                                     ),
                             )
@@ -272,7 +296,12 @@ class AgentFrameworkToolBridge(
                     .put("parentSessionId", session.parentSessionId)
                     .put("targetPackage", session.targetPackage)
                     .put("state", session.stateLabel)
-                    .put("targetDetached", session.targetDetached),
+                    .put("targetDetached", session.targetDetached)
+                    .put("targetPresentation", session.targetPresentationLabel)
+                    .put(
+                        "requiredFinalPresentation",
+                        session.requiredFinalPresentationPolicy?.wireValue,
+                    ),
             )
         }
         return JSONObject()

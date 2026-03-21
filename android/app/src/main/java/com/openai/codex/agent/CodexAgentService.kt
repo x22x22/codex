@@ -38,6 +38,7 @@ class CodexAgentService : AgentService() {
 
     private val agentManager by lazy { getSystemService(AgentManager::class.java) }
     private val sessionController by lazy { AgentSessionController(this) }
+    private val presentationPolicyStore by lazy { SessionPresentationPolicyStore(this) }
 
     override fun onCreate() {
         super.onCreate()
@@ -73,6 +74,7 @@ class CodexAgentService : AgentService() {
         Log.i(TAG, "onSessionRemoved sessionId=$sessionId")
         AgentSessionBridgeServer.closeSession(sessionId)
         AgentQuestionNotifier.cancel(this, sessionId)
+        presentationPolicyStore.removePolicy(sessionId)
         handledGenieQuestions.removeIf { it.startsWith("$sessionId:") }
         handledBridgeRequests.removeIf { it.startsWith("$sessionId:") }
         pendingGenieQuestions.removeIf { it.startsWith("$sessionId:") }
@@ -90,9 +92,9 @@ class CodexAgentService : AgentService() {
         thread(name = "CodexAgentParentRollup-$parentSessionId") {
             try {
                 runCatching {
-                    rollUpParentSession(parentSessionId)
-                }.onFailure { err ->
-                    Log.w(TAG, "Parent session roll-up failed for $parentSessionId", err)
+            rollUpParentSession(parentSessionId)
+        }.onFailure { err ->
+            Log.w(TAG, "Parent session roll-up failed for $parentSessionId", err)
                 }
             } finally {
                 pendingParentRollups.remove(parentSessionId)
@@ -118,11 +120,24 @@ class CodexAgentService : AgentService() {
                     sessionId = childSession.sessionId,
                     targetPackage = childSession.targetPackage,
                     state = childSession.state,
+                    targetPresentation = childSession.targetPresentation,
+                    requiredFinalPresentationPolicy = presentationPolicyStore.getPolicy(childSession.sessionId),
                     latestResult = findLastEventMessage(events, AgentSessionEvent.TYPE_RESULT),
                     latestError = findLastEventMessage(events, AgentSessionEvent.TYPE_ERROR),
                 )
             },
         )
+        rollup.sessionsToAttach.forEach { childSessionId ->
+            runCatching {
+                manager.attachTarget(childSessionId)
+                manager.publishTrace(
+                    parentSessionId,
+                    "Requested attach for $childSessionId to satisfy the required final presentation policy.",
+                )
+            }.onFailure { err ->
+                Log.w(TAG, "Failed to attach target for $childSessionId", err)
+            }
+        }
         if (parentSession.state != rollup.state) {
             runCatching {
                 manager.updateSessionState(parentSessionId, rollup.state)
@@ -426,6 +441,7 @@ class CodexAgentService : AgentService() {
             AgentSessionEvent.TYPE_RESULT -> "Result"
             AgentSessionEvent.TYPE_ERROR -> "Error"
             AgentSessionEvent.TYPE_POLICY -> "Policy"
+            AgentSessionEvent.TYPE_DETACHED_ACTION -> "DetachedAction"
             AgentSessionEvent.TYPE_ANSWER -> "Answer"
             else -> "Event($type)"
         }

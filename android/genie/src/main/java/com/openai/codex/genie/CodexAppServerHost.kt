@@ -564,6 +564,7 @@ class CodexAppServerHost(
             The Genie may request detached target launch through the framework callback, and after that it may use supported self-targeted shell commands to drive the target app.
             If a direct intent launch does not fully complete the task, use detached-target tools to show or inspect the target, then continue with supported shell input and inspection surfaces.
             Use Android dynamic tools only for framework-only detached target operations that do not have a working shell equivalent in the paired app sandbox.
+            The delegated objective may include a required final target presentation such as ATTACHED, DETACHED_HIDDEN, or DETACHED_SHOWN. Treat that as a hard completion requirement and do not report success until the framework session actually matches it.
             If you need clarification or a decision from the supervising Agent, call request_user_input with concise free-form question text.
             Do not use hidden control protocols.
             Finish with a normal assistant message describing what you accomplished or what blocked you.

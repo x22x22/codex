@@ -10,6 +10,7 @@ import org.json.JSONTokener
 data class AgentDelegationTarget(
     val packageName: String,
     val objective: String,
+    val finalPresentationPolicy: SessionFinalPresentationPolicy,
 )
 
 data class AgentDelegationPlan(
@@ -37,7 +38,8 @@ object AgentTaskPlanner {
           "targets": [
             {
               "packageName": "installed.package",
-              "objective": "free-form delegated objective for the child Genie"
+              "objective": "free-form delegated objective for the child Genie",
+              "finalPresentationPolicy": "ATTACHED | DETACHED_HIDDEN | DETACHED_SHOWN | AGENT_CHOICE"
             }
           ],
           "reason": "short rationale",
@@ -47,6 +49,11 @@ object AgentTaskPlanner {
         - Choose the fewest packages needed to complete the request.
         - `targets` must be non-empty.
         - Each delegated `objective` should be written for the child Genie, not the user.
+        - Each target must include `finalPresentationPolicy`.
+        - Use `ATTACHED` when the user wants the target left on the main screen or explicitly visible to them.
+        - Use `DETACHED_SHOWN` when the target should remain visible but stay detached.
+        - Use `DETACHED_HIDDEN` when the target should complete in the background without remaining visible.
+        - Use `AGENT_CHOICE` only when the final presentation state does not matter.
         - Stop after at most 6 shell commands.
         - Prefer direct package-manager commands over grepping large package lists.
         - Verify each chosen package by inspecting its package dump or query-activities output before returning it.
@@ -76,9 +83,28 @@ object AgentTaskPlanner {
                                         "properties",
                                         JSONObject()
                                             .put("packageName", JSONObject().put("type", "string"))
-                                            .put("objective", JSONObject().put("type", "string")),
+                                            .put("objective", JSONObject().put("type", "string"))
+                                            .put(
+                                                "finalPresentationPolicy",
+                                                JSONObject()
+                                                    .put("type", "string")
+                                                    .put(
+                                                        "enum",
+                                                        JSONArray()
+                                                            .put(SessionFinalPresentationPolicy.ATTACHED.wireValue)
+                                                            .put(SessionFinalPresentationPolicy.DETACHED_HIDDEN.wireValue)
+                                                            .put(SessionFinalPresentationPolicy.DETACHED_SHOWN.wireValue)
+                                                            .put(SessionFinalPresentationPolicy.AGENT_CHOICE.wireValue),
+                                                    ),
+                                            ),
                                     )
-                                    .put("required", JSONArray().put("packageName").put("objective"))
+                                    .put(
+                                        "required",
+                                        JSONArray()
+                                            .put("packageName")
+                                            .put("objective")
+                                            .put("finalPresentationPolicy"),
+                                    )
                                     .put("additionalProperties", false),
                             ),
                     )
@@ -93,6 +119,7 @@ object AgentTaskPlanner {
         userObjective: String,
         targetPackageOverride: String?,
         allowDetachedMode: Boolean,
+        finalPresentationPolicyOverride: SessionFinalPresentationPolicy? = null,
         sessionController: AgentSessionController,
         requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
     ): SessionStartResult {
@@ -105,6 +132,8 @@ object AgentTaskPlanner {
                         AgentDelegationTarget(
                             packageName = targetPackageOverride,
                             objective = userObjective,
+                            finalPresentationPolicy =
+                                finalPresentationPolicyOverride ?: SessionFinalPresentationPolicy.AGENT_CHOICE,
                         ),
                     ),
                     rationale = "Using explicit target package override.",

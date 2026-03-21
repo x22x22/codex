@@ -21,6 +21,7 @@ class AgentSessionController(context: Context) {
     }
 
     private val agentManager = context.getSystemService(AgentManager::class.java)
+    private val presentationPolicyStore = SessionPresentationPolicyStore(context)
 
     fun isAvailable(): Boolean = agentManager != null
 
@@ -49,7 +50,9 @@ class AgentSessionController(context: Context) {
         val manager = agentManager ?: return AgentSnapshot.unavailable
         val roleHolders = manager.getGenieRoleHolders(currentUserId())
         val selectedGeniePackage = selectGeniePackage(roleHolders)
-        var sessionDetails = manager.getSessions(currentUserId()).map { session ->
+        val sessions = manager.getSessions(currentUserId())
+        presentationPolicyStore.prunePolicies(sessions.map { it.sessionId }.toSet())
+        var sessionDetails = sessions.map { session ->
             AgentSessionDetails(
                 sessionId = session.sessionId,
                 parentSessionId = session.parentSessionId,
@@ -57,7 +60,10 @@ class AgentSessionController(context: Context) {
                 anchor = session.anchor,
                 state = session.state,
                 stateLabel = stateToString(session.state),
+                targetPresentation = session.targetPresentation,
+                targetPresentationLabel = targetPresentationToString(session.targetPresentation),
                 targetDetached = session.isTargetDetached,
+                requiredFinalPresentationPolicy = presentationPolicyStore.getPolicy(session.sessionId),
                 latestQuestion = null,
                 latestResult = null,
                 latestError = null,
@@ -105,6 +111,10 @@ class AgentSessionController(context: Context) {
         allowDetachedMode: Boolean,
     ): SessionStartResult {
         val manager = requireAgentManager()
+        val detachedPolicyTargets = plan.targets.filter { it.finalPresentationPolicy.requiresDetachedMode() }
+        check(allowDetachedMode || detachedPolicyTargets.isEmpty()) {
+            "Detached final presentation requires detached mode for ${detachedPolicyTargets.joinToString(", ") { it.packageName }}"
+        }
         val geniePackage = selectGeniePackage(manager.getGenieRoleHolders(currentUserId()))
             ?: throw IllegalStateException("No GENIE role holder configured")
         val parentSession = manager.createDirectSession(currentUserId())
@@ -120,14 +130,15 @@ class AgentSessionController(context: Context) {
             plan.targets.forEach { target ->
                 val childSession = manager.createChildSession(parentSession.sessionId, target.packageName)
                 childSessionIds += childSession.sessionId
+                presentationPolicyStore.savePolicy(childSession.sessionId, target.finalPresentationPolicy)
                 manager.publishTrace(
                     parentSession.sessionId,
-                    "Created child session ${childSession.sessionId} for ${target.packageName}.",
+                    "Created child session ${childSession.sessionId} for ${target.packageName} with required final presentation ${target.finalPresentationPolicy.wireValue}.",
                 )
                 manager.startGenieSession(
                     childSession.sessionId,
                     geniePackage,
-                    target.objective,
+                    buildDelegatedPrompt(target),
                     allowDetachedMode,
                 )
             }
@@ -140,6 +151,7 @@ class AgentSessionController(context: Context) {
         } catch (err: RuntimeException) {
             childSessionIds.forEach { childSessionId ->
                 runCatching { manager.cancelSession(childSessionId) }
+                presentationPolicyStore.removePolicy(childSessionId)
             }
             runCatching { manager.cancelSession(parentSession.sessionId) }
             throw err
@@ -269,6 +281,15 @@ class AgentSessionController(context: Context) {
         }
     }
 
+    private fun buildDelegatedPrompt(target: AgentDelegationTarget): String {
+        return buildString {
+            appendLine(target.objective)
+            appendLine()
+            appendLine("Required final target presentation: ${target.finalPresentationPolicy.wireValue}")
+            append(target.finalPresentationPolicy.promptGuidance())
+        }.trim()
+    }
+
     private fun findLastEventMessage(events: List<AgentSessionEvent>, type: Int): String? {
         for (index in events.indices.reversed()) {
             val event = events[index]
@@ -353,6 +374,7 @@ class AgentSessionController(context: Context) {
             AgentSessionEvent.TYPE_RESULT -> "Result"
             AgentSessionEvent.TYPE_ERROR -> "Error"
             AgentSessionEvent.TYPE_POLICY -> "Policy"
+            AgentSessionEvent.TYPE_DETACHED_ACTION -> "DetachedAction"
             AgentSessionEvent.TYPE_ANSWER -> "Answer"
             else -> "Event($type)"
         }
@@ -415,7 +437,10 @@ data class AgentSessionDetails(
     val anchor: Int,
     val state: Int,
     val stateLabel: String,
+    val targetPresentation: Int,
+    val targetPresentationLabel: String,
     val targetDetached: Boolean,
+    val requiredFinalPresentationPolicy: SessionFinalPresentationPolicy?,
     val latestQuestion: String?,
     val latestResult: String?,
     val latestError: String?,

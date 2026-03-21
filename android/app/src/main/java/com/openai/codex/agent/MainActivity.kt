@@ -27,6 +27,7 @@ class MainActivity : Activity() {
             "com.openai.codex.agent.action.DEBUG_CANCEL_ALL_AGENT_SESSIONS"
         private const val EXTRA_DEBUG_PROMPT = "prompt"
         private const val EXTRA_DEBUG_TARGET_PACKAGE = "targetPackage"
+        private const val EXTRA_DEBUG_FINAL_PRESENTATION_POLICY = "finalPresentationPolicy"
     }
 
     @Volatile
@@ -153,10 +154,19 @@ class MainActivity : Activity() {
             return
         }
         val targetPackageOverride = intent.getStringExtra(EXTRA_DEBUG_TARGET_PACKAGE)?.trim()
+        val finalPresentationPolicyOverride = SessionFinalPresentationPolicy.fromWireValue(
+            intent.getStringExtra(EXTRA_DEBUG_FINAL_PRESENTATION_POLICY),
+        )
         findViewById<EditText>(R.id.agent_prompt).setText(prompt)
         findViewById<EditText>(R.id.agent_target_package).setText(targetPackageOverride.orEmpty())
-        Log.i(TAG, "Handling debug start intent override=$targetPackageOverride prompt=${prompt.take(160)}")
-        startDirectAgentSession(findViewById(R.id.agent_start_button))
+        Log.i(
+            TAG,
+            "Handling debug start intent override=$targetPackageOverride finalPresentationPolicy=${finalPresentationPolicyOverride?.wireValue} prompt=${prompt.take(160)}",
+        )
+        startDirectAgentSession(
+            view = findViewById(R.id.agent_start_button),
+            finalPresentationPolicyOverride = finalPresentationPolicyOverride,
+        )
         intent.action = null
     }
 
@@ -211,13 +221,23 @@ class MainActivity : Activity() {
     }
 
     fun startDirectAgentSession(@Suppress("UNUSED_PARAMETER") view: View) {
+        startDirectAgentSession(view, null)
+    }
+
+    private fun startDirectAgentSession(
+        @Suppress("UNUSED_PARAMETER") view: View,
+        finalPresentationPolicyOverride: SessionFinalPresentationPolicy?,
+    ) {
         val targetPackageOverride = findViewById<EditText>(R.id.agent_target_package).text.toString().trim()
         val prompt = findViewById<EditText>(R.id.agent_prompt).text.toString().trim()
         if (prompt.isEmpty()) {
             showToast("Enter a prompt")
             return
         }
-        Log.i(TAG, "startDirectAgentSession override=$targetPackageOverride prompt=${prompt.take(160)}")
+        Log.i(
+            TAG,
+            "startDirectAgentSession override=$targetPackageOverride finalPresentationPolicy=${finalPresentationPolicyOverride?.wireValue} prompt=${prompt.take(160)}",
+        )
         thread {
             val result = runCatching {
                 AgentTaskPlanner.startSession(
@@ -225,6 +245,7 @@ class MainActivity : Activity() {
                     userObjective = prompt,
                     targetPackageOverride = targetPackageOverride.ifBlank { null },
                     allowDetachedMode = true,
+                    finalPresentationPolicyOverride = finalPresentationPolicyOverride,
                     sessionController = agentSessionController,
                     requestUserInputHandler = { questions ->
                         AgentUserInputPrompter.promptForAnswers(this, questions)
@@ -493,7 +514,8 @@ class MainActivity : Activity() {
             answerButton.visibility = if (isWaitingForUser) View.VISIBLE else View.GONE
             questionView.text = waitingQuestion ?: ""
 
-            val showAttachButton = selectedSession?.targetDetached == true
+            val showAttachButton =
+                selectedSession?.targetPresentation != AgentSessionInfo.TARGET_PRESENTATION_ATTACHED
             attachButton.visibility = if (showAttachButton) View.VISIBLE else View.GONE
             attachButton.isEnabled = showAttachButton
 
@@ -517,7 +539,10 @@ class MainActivity : Activity() {
             append("Session: ${selectedSession.sessionId}\n")
             append("State: ${selectedSession.stateLabel}\n")
             append("Target: ${selectedSession.targetPackage ?: "direct-agent"}\n")
-            append("Detached target: ${selectedSession.targetDetached}\n")
+            append("Target presentation: ${selectedSession.targetPresentationLabel}\n")
+            selectedSession.requiredFinalPresentationPolicy?.let { policy ->
+                append("Required final presentation: ${policy.wireValue}\n")
+            }
             val parentSessionId = snapshot.parentSession?.sessionId
             if (parentSessionId != null) {
                 append("Parent: $parentSessionId\n")
@@ -545,8 +570,9 @@ class MainActivity : Activity() {
             val detail = session.latestQuestion ?: session.latestResult ?: session.latestError ?: session.latestTrace
             buildString {
                 append("$marker $role ${session.stateLabel} ${session.targetPackage ?: "direct-agent"}")
-                if (session.targetDetached) {
-                    append(" [detached]")
+                append(" [${session.targetPresentationLabel}]")
+                session.requiredFinalPresentationPolicy?.let { policy ->
+                    append(" -> ${policy.wireValue}")
                 }
                 append("\n  ${session.sessionId}")
                 if (!detail.isNullOrEmpty()) {

@@ -59,6 +59,14 @@ The current repo now contains these implementation slices:
   runtime before falling back to notification/UI escalation, and now submits
   those answers through the same framework-session bridge instead of a separate
   Kotlin-only path.
+- The Agent now records an explicit per-child final presentation policy
+  (`ATTACHED`, `DETACHED_HIDDEN`, `DETACHED_SHOWN`, or `AGENT_CHOICE`) and
+  uses the framework-authoritative `AgentSessionInfo.getTargetPresentation()`
+  state to verify whether a completed child actually satisfied it.
+- Parent roll-up now uses the new presentation state. If a child was required
+  to finish `ATTACHED` but completes detached, the Agent requests `attachTarget`
+  before rolling the parent up to success. Detached shown/hidden mismatches are
+  treated as real completion errors instead of silent success.
 - Runtime testing on the emulator showed that direct cross-app `bindService`
   and raw local-socket access from the live Genie runtime are not a stable
   contract because the runtime executes under the paired target sandbox
@@ -151,6 +159,9 @@ the Android Agent/Genie flow.
 - Dedicated framework-session bridge tools for direct Genie-session launch and question resolution
 - Framework session inspection UI in the Agent app
 - Question answering and detached-target attach controls
+- Explicit per-child final target presentation policy in planning/session
+  launch, backed by framework-authoritative presentation state in session
+  observation and diagnostics
 - Framework session bridge request handling in `AgentSessionBridgeServer`
 - Framework session bridge request issuance in `CodexGenieService`
 - Agent-hosted runtime metadata for Genie bootstrap

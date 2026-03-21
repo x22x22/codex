@@ -15,7 +15,8 @@ class AgentFrameworkToolBridgeTest {
                   "targets": [
                     {
                       "packageName": "com.android.deskclock",
-                      "objective": "Start the requested timer in Clock."
+                      "objective": "Start the requested timer in Clock.",
+                      "finalPresentationPolicy": "ATTACHED"
                     }
                   ],
                   "reason": "Clock is the installed timer app.",
@@ -34,6 +35,10 @@ class AgentFrameworkToolBridgeTest {
         assertEquals(1, request.plan.targets.size)
         assertEquals("com.android.deskclock", request.plan.targets.single().packageName)
         assertEquals("Start the requested timer in Clock.", request.plan.targets.single().objective)
+        assertEquals(
+            SessionFinalPresentationPolicy.ATTACHED,
+            request.plan.targets.single().finalPresentationPolicy,
+        )
     }
 
     @Test
@@ -55,6 +60,10 @@ class AgentFrameworkToolBridgeTest {
         )
 
         assertEquals("Start a 5-minute timer.", request.plan.targets.single().objective)
+        assertEquals(
+            SessionFinalPresentationPolicy.AGENT_CHOICE,
+            request.plan.targets.single().finalPresentationPolicy,
+        )
         assertEquals(true, request.allowDetachedMode)
     }
 
@@ -68,7 +77,8 @@ class AgentFrameworkToolBridgeTest {
                       "targets": [
                         {
                           "packageName": "com.unknown.app",
-                          "objective": "Do the task."
+                          "objective": "Do the task.",
+                          "finalPresentationPolicy": "AGENT_CHOICE"
                         }
                       ]
                     }
@@ -86,4 +96,32 @@ class AgentFrameworkToolBridgeTest {
         )
     }
 
+    @Test
+    fun parseStartDirectSessionArgumentsRejectsDetachedPresentationWithoutDetachedMode() {
+        val err = runCatching {
+            AgentFrameworkToolBridge.parseStartDirectSessionArguments(
+                arguments = JSONObject(
+                    """
+                    {
+                      "targets": [
+                        {
+                          "packageName": "com.android.deskclock",
+                          "finalPresentationPolicy": "DETACHED_SHOWN"
+                        }
+                      ],
+                      "allowDetachedMode": false
+                    }
+                    """.trimIndent(),
+                ),
+                userObjective = "Keep Clock visible in detached mode.",
+                isEligibleTargetPackage = linkedSetOf("com.android.deskclock")::contains,
+            )
+        }.exceptionOrNull()
+
+        assertTrue(err is java.io.IOException)
+        assertEquals(
+            "Framework session tool selected detached final presentation without allowDetachedMode: com.android.deskclock",
+            err?.message,
+        )
+    }
 }

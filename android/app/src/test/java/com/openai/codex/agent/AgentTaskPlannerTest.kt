@@ -14,7 +14,8 @@ class AgentTaskPlannerTest {
                   "targets": [
                     {
                       "packageName": "com.android.deskclock",
-                      "objective": "Start the requested timer in Clock."
+                      "objective": "Start the requested timer in Clock.",
+                      "finalPresentationPolicy": "ATTACHED"
                     }
                   ],
                   "reason": "DeskClock is the installed timer handler.",
@@ -30,6 +31,10 @@ class AgentTaskPlannerTest {
         assertEquals(1, request.plan.targets.size)
         assertEquals("com.android.deskclock", request.plan.targets.single().packageName)
         assertEquals("Start the requested timer in Clock.", request.plan.targets.single().objective)
+        assertEquals(
+            SessionFinalPresentationPolicy.ATTACHED,
+            request.plan.targets.single().finalPresentationPolicy,
+        )
     }
 
     @Test
@@ -52,6 +57,10 @@ class AgentTaskPlannerTest {
         )
 
         assertEquals("Start a 5-minute timer.", request.plan.targets.single().objective)
+        assertEquals(
+            SessionFinalPresentationPolicy.AGENT_CHOICE,
+            request.plan.targets.single().finalPresentationPolicy,
+        )
         assertEquals(true, request.allowDetachedMode)
     }
 

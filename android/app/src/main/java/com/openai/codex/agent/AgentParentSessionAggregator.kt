@@ -16,6 +16,8 @@ data class ParentSessionChildSummary(
     val sessionId: String,
     val targetPackage: String?,
     val state: Int,
+    val targetPresentation: Int,
+    val requiredFinalPresentationPolicy: SessionFinalPresentationPolicy?,
     val latestResult: String?,
     val latestError: String?,
 )
@@ -24,26 +26,67 @@ data class ParentSessionRollup(
     val state: Int,
     val resultMessage: String?,
     val errorMessage: String?,
+    val sessionsToAttach: List<String>,
 )
 
 object AgentParentSessionAggregator {
     fun rollup(childSessions: List<ParentSessionChildSummary>): ParentSessionRollup {
-        val state = computeParentState(childSessions.map(ParentSessionChildSummary::state))
-        return when (state) {
+        val baseState = computeParentState(childSessions.map(ParentSessionChildSummary::state))
+        if (
+            baseState == AgentSessionInfo.STATE_CREATED ||
+            baseState == AgentSessionInfo.STATE_RUNNING ||
+            baseState == AgentSessionInfo.STATE_WAITING_FOR_USER ||
+            baseState == AgentSessionInfo.STATE_QUEUED
+        ) {
+            return ParentSessionRollup(
+                state = baseState,
+                resultMessage = null,
+                errorMessage = null,
+                sessionsToAttach = emptyList(),
+            )
+        }
+        val terminalPresentationMismatches = childSessions.mapNotNull { childSession ->
+            childSession.presentationMismatch()
+        }
+        val sessionsToAttach = terminalPresentationMismatches
+            .filter { it.requiredPolicy == SessionFinalPresentationPolicy.ATTACHED }
+            .map(PresentationMismatch::sessionId)
+        val blockingMismatches = terminalPresentationMismatches
+            .filterNot { it.requiredPolicy == SessionFinalPresentationPolicy.ATTACHED }
+        if (sessionsToAttach.isNotEmpty() && baseState == AgentSessionInfo.STATE_COMPLETED) {
+            return ParentSessionRollup(
+                state = AgentSessionInfo.STATE_RUNNING,
+                resultMessage = null,
+                errorMessage = null,
+                sessionsToAttach = sessionsToAttach,
+            )
+        }
+        if (blockingMismatches.isNotEmpty()) {
+            return ParentSessionRollup(
+                state = AgentSessionInfo.STATE_FAILED,
+                resultMessage = null,
+                errorMessage = buildPresentationMismatchError(blockingMismatches),
+                sessionsToAttach = emptyList(),
+            )
+        }
+        return when (baseState) {
             AgentSessionInfo.STATE_COMPLETED -> ParentSessionRollup(
-                state = state,
+                state = baseState,
                 resultMessage = buildParentResult(childSessions),
                 errorMessage = null,
+                sessionsToAttach = emptyList(),
             )
             AgentSessionInfo.STATE_FAILED -> ParentSessionRollup(
-                state = state,
+                state = baseState,
                 resultMessage = null,
                 errorMessage = buildParentError(childSessions),
+                sessionsToAttach = emptyList(),
             )
             else -> ParentSessionRollup(
-                state = state,
+                state = baseState,
                 resultMessage = null,
                 errorMessage = null,
+                sessionsToAttach = emptyList(),
             )
         }
     }
@@ -106,6 +149,20 @@ object AgentParentSessionAggregator {
         }
     }
 
+    private fun buildPresentationMismatchError(mismatches: List<PresentationMismatch>): String {
+        return buildString {
+            append("Delegated session completed without the required final presentation")
+            mismatches.forEach { mismatch ->
+                append("; ")
+                append(mismatch.targetPackage ?: mismatch.sessionId)
+                append(": required ")
+                append(mismatch.requiredPolicy.wireValue)
+                append(", actual ")
+                append(targetPresentationToString(mismatch.actualPresentation))
+            }
+        }
+    }
+
     private fun stateToString(state: Int): String {
         return when (state) {
             AgentSessionInfo.STATE_CREATED -> "CREATED"
@@ -118,4 +175,24 @@ object AgentParentSessionAggregator {
             else -> state.toString()
         }
     }
+
+    private fun ParentSessionChildSummary.presentationMismatch(): PresentationMismatch? {
+        val requiredPolicy = requiredFinalPresentationPolicy ?: return null
+        if (state != AgentSessionInfo.STATE_COMPLETED || requiredPolicy.matches(targetPresentation)) {
+            return null
+        }
+        return PresentationMismatch(
+            sessionId = sessionId,
+            targetPackage = targetPackage,
+            requiredPolicy = requiredPolicy,
+            actualPresentation = targetPresentation,
+        )
+    }
 }
+
+private data class PresentationMismatch(
+    val sessionId: String,
+    val targetPackage: String?,
+    val requiredPolicy: SessionFinalPresentationPolicy,
+    val actualPresentation: Int,
+)
