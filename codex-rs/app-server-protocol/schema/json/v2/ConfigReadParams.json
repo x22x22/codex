@@ -8,6 +8,12 @@
         "null"
       ]
     },
+    "environmentId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "includeLayers": {
       "default": false,
       "type": "boolean"

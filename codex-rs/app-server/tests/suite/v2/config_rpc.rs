@@ -61,6 +61,7 @@ sandbox_mode = "workspace-write"
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: true,
+            environment_id: None,
             cwd: None,
         })
         .await?;
@@ -73,6 +74,7 @@ sandbox_mode = "workspace-write"
         config,
         origins,
         layers,
+        ..
     } = to_response(resp)?;
 
     assert_eq!(config.model.as_deref(), Some("gpt-user"));
@@ -113,6 +115,7 @@ view_image = false
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: true,
+            environment_id: None,
             cwd: None,
         })
         .await?;
@@ -125,6 +128,7 @@ view_image = false
         config,
         origins,
         layers,
+        ..
     } = to_response(resp)?;
 
     let tools = config.tools.expect("tools present");
@@ -191,6 +195,7 @@ location = { country = "US", city = "New York", timezone = "America/New_York" }
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
+            environment_id: None,
             cwd: None,
         })
         .await?;
@@ -235,6 +240,7 @@ web_search = true
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
+            environment_id: None,
             cwd: None,
         })
         .await?;
@@ -271,6 +277,7 @@ default_tools_approval_mode = "prompt"
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: true,
+            environment_id: None,
             cwd: None,
         })
         .await?;
@@ -283,6 +290,7 @@ default_tools_approval_mode = "prompt"
         config,
         origins,
         layers,
+        ..
     } = to_response(resp)?;
 
     assert_eq!(
@@ -356,6 +364,7 @@ model_reasoning_effort = "high"
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: true,
+            environment_id: None,
             cwd: Some(workspace.path().to_string_lossy().into_owned()),
         })
         .await?;
@@ -433,6 +442,7 @@ writable_roots = [{}]
     let request_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: true,
+            environment_id: None,
             cwd: None,
         })
         .await?;
@@ -445,6 +455,7 @@ writable_roots = [{}]
         config,
         origins,
         layers,
+        ..
     } = to_response(resp)?;
 
     assert_eq!(config.model.as_deref(), Some("gpt-system"));
@@ -520,6 +531,7 @@ model = "gpt-old"
     let read_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
+            environment_id: None,
             cwd: None,
         })
         .await?;
@@ -533,6 +545,7 @@ model = "gpt-old"
 
     let write_id = mcp
         .send_config_value_write_request(ConfigValueWriteParams {
+            environment_id: None,
             file_path: None,
             key_path: "model".to_string(),
             value: json!("gpt-new"),
@@ -555,6 +568,7 @@ model = "gpt-old"
     let verify_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
+            environment_id: None,
             cwd: None,
         })
         .await?;
@@ -584,6 +598,7 @@ model = "gpt-old"
 
     let write_id = mcp
         .send_config_value_write_request(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(codex_home.path().join("config.toml").display().to_string()),
             key_path: "model".to_string(),
             value: json!("gpt-new"),
@@ -620,6 +635,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     let writable_root = test_tmp_path_buf();
     let batch_id = mcp
         .send_config_batch_write_request(ConfigBatchWriteParams {
+            environment_id: None,
             file_path: Some(codex_home.join("config.toml").display().to_string()),
             edits: vec![
                 ConfigEdit {
@@ -653,6 +669,7 @@ async fn config_batch_write_applies_multiple_edits() -> Result<()> {
     let read_id = mcp
         .send_config_read_request(ConfigReadParams {
             include_layers: false,
+            environment_id: None,
             cwd: None,
         })
         .await?;

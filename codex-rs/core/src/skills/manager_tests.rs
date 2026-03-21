@@ -413,6 +413,8 @@ enabled = true
         crate::config::AgentRoleConfig {
             description: None,
             config_file: Some(role_path),
+            locked_model: None,
+            locked_reasoning_effort: None,
             nickname_candidates: None,
         },
     );

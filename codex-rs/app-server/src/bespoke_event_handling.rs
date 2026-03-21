@@ -261,6 +261,7 @@ pub(crate) async fn apply_bespoke_event_handling(
     api_version: ApiVersion,
     fallback_model_provider: String,
     codex_home: &Path,
+    default_environment_id: &str,
 ) {
     let Event {
         id: event_turn_id,
@@ -305,7 +306,9 @@ pub(crate) async fn apply_bespoke_event_handling(
             if let ApiVersion::V2 = api_version {
                 outgoing
                     .send_server_notification(ServerNotification::SkillsChanged(
-                        SkillsChangedNotification {},
+                        SkillsChangedNotification {
+                            environment_id: default_environment_id.to_string(),
+                        },
                     ))
                     .await;
             }
@@ -1756,7 +1759,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 .await
                 {
                     Ok(summary) => {
-                        let mut thread = summary_to_thread(summary);
+                        let mut thread = summary_to_thread(summary, default_environment_id);
                         match read_rollout_items_from_rollout(rollout_path.as_path()).await {
                             Ok(items) => {
                                 thread.turns = build_turns_from_rollout_items(&items);

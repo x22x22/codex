@@ -1944,7 +1944,15 @@
       ]
     },
     "SkillsChangedNotification": {
-      "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "description": "Notification emitted when watched skill files change for an execution environment.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+      "properties": {
+        "environmentId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "environmentId"
+      ],
       "type": "object"
     },
     "SubAgentSource": {

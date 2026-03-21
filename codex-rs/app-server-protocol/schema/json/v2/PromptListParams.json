@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "environmentId": {
+      "default": null,
+      "description": "Optional execution environment that owns the custom prompt snapshot.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "PromptListParams",
+  "type": "object"
+}

@@ -3,13 +3,13 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::time::Duration;
 
+use codex_exec_server::ExecutorFileSystem;
 use notify::Event;
 use notify::EventKind;
 use notify::RecommendedWatcher;
@@ -27,11 +27,15 @@ use crate::skills::SkillsManager;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileWatcherEvent {
-    SkillsChanged { paths: Vec<PathBuf> },
+    SkillsChanged {
+        environment_id: String,
+        paths: Vec<PathBuf>,
+    },
 }
 
 struct WatchState {
     skills_root_ref_counts: HashMap<PathBuf, usize>,
+    skills_root_registrations: HashMap<PathBuf, HashMap<String, usize>>,
 }
 
 struct FileWatcherInner {
@@ -43,43 +47,54 @@ const WATCHER_THROTTLE_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Coalesces bursts of paths and emits at most once per interval.
 struct ThrottledPaths {
-    pending: HashSet<PathBuf>,
+    pending: HashMap<String, HashSet<PathBuf>>,
     next_allowed_at: Instant,
 }
 
 impl ThrottledPaths {
     fn new(now: Instant) -> Self {
         Self {
-            pending: HashSet::new(),
+            pending: HashMap::new(),
             next_allowed_at: now,
         }
     }
 
-    fn add(&mut self, paths: Vec<PathBuf>) {
-        self.pending.extend(paths);
+    fn add(&mut self, paths: HashMap<String, Vec<PathBuf>>) {
+        for (environment_id, environment_paths) in paths {
+            self.pending
+                .entry(environment_id)
+                .or_default()
+                .extend(environment_paths);
+        }
     }
 
     fn next_deadline(&self, now: Instant) -> Option<Instant> {
         (!self.pending.is_empty() && now < self.next_allowed_at).then_some(self.next_allowed_at)
     }
 
-    fn take_ready(&mut self, now: Instant) -> Option<Vec<PathBuf>> {
+    fn take_ready(&mut self, now: Instant) -> Option<Vec<(String, Vec<PathBuf>)>> {
         if self.pending.is_empty() || now < self.next_allowed_at {
             return None;
         }
         Some(self.take_with_next_allowed(now))
     }
 
-    fn take_pending(&mut self, now: Instant) -> Option<Vec<PathBuf>> {
+    fn take_pending(&mut self, now: Instant) -> Option<Vec<(String, Vec<PathBuf>)>> {
         if self.pending.is_empty() {
             return None;
         }
         Some(self.take_with_next_allowed(now))
     }
 
-    fn take_with_next_allowed(&mut self, now: Instant) -> Vec<PathBuf> {
-        let mut paths: Vec<PathBuf> = self.pending.drain().collect();
-        paths.sort_unstable_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
+    fn take_with_next_allowed(&mut self, now: Instant) -> Vec<(String, Vec<PathBuf>)> {
+        let mut pending = self.pending.drain().collect::<Vec<_>>();
+        pending.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+        let mut paths = Vec::with_capacity(pending.len());
+        for (environment_id, environment_paths) in pending {
+            let mut environment_paths = environment_paths.into_iter().collect::<Vec<_>>();
+            environment_paths.sort_unstable_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
+            paths.push((environment_id, environment_paths));
+        }
         self.next_allowed_at = now + WATCHER_THROTTLE_INTERVAL;
         paths
     }
@@ -93,13 +108,14 @@ pub(crate) struct FileWatcher {
 
 pub(crate) struct WatchRegistration {
     file_watcher: std::sync::Weak<FileWatcher>,
+    environment_id: String,
     roots: Vec<PathBuf>,
 }
 
 impl Drop for WatchRegistration {
     fn drop(&mut self) {
         if let Some(file_watcher) = self.file_watcher.upgrade() {
-            file_watcher.unregister_roots(&self.roots);
+            file_watcher.unregister_roots(&self.environment_id, &self.roots);
         }
     }
 }
@@ -118,6 +134,7 @@ impl FileWatcher {
         let (tx, _) = broadcast::channel(128);
         let state = Arc::new(RwLock::new(WatchState {
             skills_root_ref_counts: HashMap::new(),
+            skills_root_registrations: HashMap::new(),
         }));
         let file_watcher = Self {
             inner: Some(Mutex::new(inner)),
@@ -134,6 +151,7 @@ impl FileWatcher {
             inner: None,
             state: Arc::new(RwLock::new(WatchState {
                 skills_root_ref_counts: HashMap::new(),
+                skills_root_registrations: HashMap::new(),
             })),
             tx,
         }
@@ -143,24 +161,31 @@ impl FileWatcher {
         self.tx.subscribe()
     }
 
-    pub(crate) fn register_config(
+    pub(crate) async fn register_config_with_filesystem<F>(
         self: &Arc<Self>,
         config: &Config,
+        environment_id: String,
         skills_manager: &SkillsManager,
-    ) -> WatchRegistration {
+        filesystem: &F,
+    ) -> WatchRegistration
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
         let deduped_roots: HashSet<PathBuf> = skills_manager
-            .skill_roots_for_config(config)
+            .skill_roots_for_config_with_filesystem(config, filesystem)
+            .await
             .into_iter()
             .map(|root| root.path)
             .collect();
         let mut registered_roots: Vec<PathBuf> = deduped_roots.into_iter().collect();
         registered_roots.sort_unstable_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
         for root in &registered_roots {
-            self.register_skills_root(root.clone());
+            self.register_skills_root(root.clone(), &environment_id);
         }
 
         WatchRegistration {
             file_watcher: Arc::downgrade(self),
+            environment_id,
             roots: registered_roots,
         }
     }
@@ -194,8 +219,13 @@ impl FileWatcher {
                                     let now = Instant::now();
                                     skills.add(skills_paths);
 
-                                    if let Some(paths) = skills.take_ready(now) {
-                                        let _ = tx.send(FileWatcherEvent::SkillsChanged { paths });
+                                    if let Some(changes) = skills.take_ready(now) {
+                                        for (environment_id, paths) in changes {
+                                            let _ = tx.send(FileWatcherEvent::SkillsChanged {
+                                                environment_id,
+                                                paths,
+                                            });
+                                        }
                                     }
                                 }
                                 Some(Err(err)) => {
@@ -205,8 +235,13 @@ impl FileWatcher {
                                     // Flush any pending changes before shutdown so subscribers
                                     // see the latest state.
                                     let now = Instant::now();
-                                    if let Some(paths) = skills.take_pending(now) {
-                                        let _ = tx.send(FileWatcherEvent::SkillsChanged { paths });
+                                    if let Some(changes) = skills.take_pending(now) {
+                                        for (environment_id, paths) in changes {
+                                            let _ = tx.send(FileWatcherEvent::SkillsChanged {
+                                                environment_id,
+                                                paths,
+                                            });
+                                        }
                                     }
                                     break;
                                 }
@@ -214,8 +249,13 @@ impl FileWatcher {
                         }
                         _ = &mut timer => {
                             let now = Instant::now();
-                            if let Some(paths) = skills.take_ready(now) {
-                                let _ = tx.send(FileWatcherEvent::SkillsChanged { paths });
+                            if let Some(changes) = skills.take_ready(now) {
+                                for (environment_id, paths) in changes {
+                                    let _ = tx.send(FileWatcherEvent::SkillsChanged {
+                                        environment_id,
+                                        paths,
+                                    });
+                                }
                             }
                         }
                     }
@@ -226,11 +266,17 @@ impl FileWatcher {
         }
     }
 
-    fn register_skills_root(&self, root: PathBuf) {
+    fn register_skills_root(&self, root: PathBuf, environment_id: &str) {
         let mut state = self
             .state
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *state
+            .skills_root_registrations
+            .entry(root.clone())
+            .or_default()
+            .entry(environment_id.to_string())
+            .or_insert(0) += 1;
         let count = state
             .skills_root_ref_counts
             .entry(root.clone())
@@ -241,7 +287,7 @@ impl FileWatcher {
         }
     }
 
-    fn unregister_roots(&self, roots: &[PathBuf]) {
+    fn unregister_roots(&self, environment_id: &str, roots: &[PathBuf]) {
         let mut state = self
             .state
             .write()
@@ -250,6 +296,18 @@ impl FileWatcher {
 
         for root in roots {
             let mut should_unwatch = false;
+            if let Some(environment_counts) = state.skills_root_registrations.get_mut(root) {
+                if let Some(count) = environment_counts.get_mut(environment_id) {
+                    if *count > 1 {
+                        *count -= 1;
+                    } else {
+                        environment_counts.remove(environment_id);
+                    }
+                }
+                if environment_counts.is_empty() {
+                    state.skills_root_registrations.remove(root);
+                }
+            }
             if let Some(count) = state.skills_root_ref_counts.get_mut(root) {
                 if *count > 1 {
                     *count -= 1;
@@ -311,42 +369,37 @@ impl FileWatcher {
     }
 }
 
-fn classify_event(event: &Event, state: &RwLock<WatchState>) -> Vec<PathBuf> {
+fn classify_event(event: &Event, state: &RwLock<WatchState>) -> HashMap<String, Vec<PathBuf>> {
     if !matches!(
         event.kind,
         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
     ) {
-        return Vec::new();
+        return HashMap::new();
     }
 
-    let mut skills_paths = Vec::new();
-    let skills_roots = match state.read() {
-        Ok(state) => state
-            .skills_root_ref_counts
-            .keys()
-            .cloned()
-            .collect::<HashSet<_>>(),
-        Err(err) => {
-            let state = err.into_inner();
-            state
-                .skills_root_ref_counts
-                .keys()
-                .cloned()
-                .collect::<HashSet<_>>()
-        }
+    let registrations = match state.read() {
+        Ok(state) => state.skills_root_registrations.clone(),
+        Err(err) => err.into_inner().skills_root_registrations.clone(),
     };
+    let mut skills_paths = HashMap::<String, HashSet<PathBuf>>::new();
 
     for path in &event.paths {
-        if is_skills_path(path, &skills_roots) {
-            skills_paths.push(path.clone());
+        for (root, environments) in &registrations {
+            if path.starts_with(root) {
+                for environment_id in environments.keys() {
+                    skills_paths
+                        .entry(environment_id.clone())
+                        .or_default()
+                        .insert(path.clone());
+                }
+            }
         }
     }
 
     skills_paths
-}
-
-fn is_skills_path(path: &Path, roots: &HashSet<PathBuf>) -> bool {
-    roots.iter().any(|root| path.starts_with(root))
+        .into_iter()
+        .map(|(environment_id, paths)| (environment_id, paths.into_iter().collect()))
+        .collect()
 }
 
 #[cfg(test)]

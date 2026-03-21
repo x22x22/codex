@@ -1,7 +1,7 @@
 use super::*;
 use crate::agent::control::SpawnAgentOptions;
 use crate::agent::role::DEFAULT_ROLE_NAME;
-use crate::agent::role::apply_role_to_config;
+use crate::agent::role::apply_role_to_config_with_filesystem;
 
 use crate::agent::exceeds_thread_spawn_depth_limit;
 use crate::agent::next_thread_spawn_depth;
@@ -68,7 +68,8 @@ impl ToolHandler for Handler {
             args.reasoning_effort,
         )
         .await?;
-        apply_role_to_config(&mut config, role_name)
+        let environment_filesystem = turn.environment.get_filesystem();
+        apply_role_to_config_with_filesystem(&mut config, role_name, &environment_filesystem)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
         apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;

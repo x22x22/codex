@@ -512,6 +512,7 @@ async fn thread_resume_and_read_interrupt_incomplete_rollout_turn_when_thread_is
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id: resumed_again.id,
             include_turns: true,
         })

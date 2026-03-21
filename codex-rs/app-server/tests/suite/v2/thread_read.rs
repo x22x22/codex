@@ -65,6 +65,7 @@ async fn thread_read_returns_summary_without_turns() -> Result<()> {
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id: conversation_id.clone(),
             include_turns: false,
         })
@@ -120,6 +121,7 @@ async fn thread_read_can_include_turns() -> Result<()> {
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id: conversation_id.clone(),
             include_turns: true,
         })
@@ -182,6 +184,7 @@ async fn thread_read_loaded_thread_returns_precomputed_path_before_materializati
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id: thread.id.clone(),
             include_turns: false,
         })
@@ -249,6 +252,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
     // Read should now surface `thread.name`, and the wire payload must include `name`.
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id: conversation_id.clone(),
             include_turns: false,
         })
@@ -280,6 +284,7 @@ async fn thread_name_set_is_reflected_in_read_list_and_resume() -> Result<()> {
     // List should also surface the name.
     let list_id = mcp
         .send_thread_list_request(ThreadListParams {
+            environment_id: None,
             cursor: None,
             limit: Some(50),
             sort_key: None,
@@ -388,6 +393,7 @@ async fn thread_read_include_turns_rejects_unmaterialized_loaded_thread() -> Res
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id: thread.id.clone(),
             include_turns: true,
         })
@@ -462,6 +468,7 @@ async fn thread_read_reports_system_error_idle_flag_after_failed_turn() -> Resul
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id: thread.id,
             include_turns: false,
         })

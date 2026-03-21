@@ -1,3 +1,4 @@
+use codex_exec_server::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
@@ -118,7 +119,29 @@ pub(crate) fn load_plugin_manifest(plugin_root: &Path) -> Option<PluginManifest>
         return None;
     }
     let contents = fs::read_to_string(&manifest_path).ok()?;
-    match serde_json::from_str::<RawPluginManifest>(&contents) {
+    parse_plugin_manifest_contents(plugin_root, &manifest_path, &contents)
+}
+
+pub(crate) async fn load_plugin_manifest_with_filesystem<F>(
+    plugin_root: &Path,
+    filesystem: &F,
+) -> Option<PluginManifest>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let manifest_path = plugin_root.join(PLUGIN_MANIFEST_PATH);
+    let manifest_path = AbsolutePathBuf::from_absolute_path(&manifest_path).ok()?;
+    let contents = filesystem.read_file(&manifest_path).await.ok()?;
+    let contents = String::from_utf8(contents).ok()?;
+    parse_plugin_manifest_contents(plugin_root, manifest_path.as_path(), &contents)
+}
+
+fn parse_plugin_manifest_contents(
+    plugin_root: &Path,
+    manifest_path: &Path,
+    contents: &str,
+) -> Option<PluginManifest> {
+    match serde_json::from_str::<RawPluginManifest>(contents) {
         Ok(manifest) => {
             let RawPluginManifest {
                 name: raw_name,

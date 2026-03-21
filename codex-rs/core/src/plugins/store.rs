@@ -1,5 +1,10 @@
 use super::load_plugin_manifest;
+use super::load_plugin_manifest_with_filesystem;
 use super::manifest::PLUGIN_MANIFEST_PATH;
+use codex_exec_server::CopyOptions;
+use codex_exec_server::CreateDirectoryOptions;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::RemoveOptions;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::fs;
 use std::io;
@@ -122,8 +127,68 @@ impl PluginStore {
             .map(|plugin_version| self.plugin_root(plugin_id, &plugin_version))
     }
 
+    pub async fn active_plugin_version_with_filesystem<F>(
+        &self,
+        plugin_id: &PluginId,
+        filesystem: &F,
+    ) -> io::Result<Option<String>>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let mut discovered_versions = match filesystem
+            .read_directory(&self.plugin_base_root(plugin_id))
+            .await
+        {
+            Ok(entries) => entries
+                .into_iter()
+                .filter(|entry| entry.is_directory)
+                .filter_map(|entry| {
+                    validate_plugin_segment(&entry.file_name, "plugin version")
+                        .ok()
+                        .map(|_| entry.file_name)
+                })
+                .collect::<Vec<_>>(),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        discovered_versions.sort_unstable();
+        Ok(if discovered_versions.len() == 1 {
+            discovered_versions.pop()
+        } else {
+            None
+        })
+    }
+
+    pub async fn active_plugin_root_with_filesystem<F>(
+        &self,
+        plugin_id: &PluginId,
+        filesystem: &F,
+    ) -> io::Result<Option<AbsolutePathBuf>>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        Ok(self
+            .active_plugin_version_with_filesystem(plugin_id, filesystem)
+            .await?
+            .map(|plugin_version| self.plugin_root(plugin_id, &plugin_version)))
+    }
+
     pub fn is_installed(&self, plugin_id: &PluginId) -> bool {
         self.active_plugin_version(plugin_id).is_some()
+    }
+
+    pub async fn is_installed_with_filesystem<F>(
+        &self,
+        plugin_id: &PluginId,
+        filesystem: &F,
+    ) -> io::Result<bool>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        Ok(self
+            .active_plugin_version_with_filesystem(plugin_id, filesystem)
+            .await?
+            .is_some())
     }
 
     pub fn install(
@@ -173,6 +238,104 @@ impl PluginStore {
     pub fn uninstall(&self, plugin_id: &PluginId) -> Result<(), PluginStoreError> {
         remove_existing_target(self.plugin_base_root(plugin_id).as_path())
     }
+
+    pub async fn install_with_version_with_filesystem<F>(
+        &self,
+        source_path: AbsolutePathBuf,
+        plugin_id: PluginId,
+        plugin_version: String,
+        filesystem: &F,
+    ) -> Result<PluginInstallResult, PluginStoreError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let source_metadata = filesystem
+            .get_metadata(&source_path)
+            .await
+            .map_err(|err| PluginStoreError::io("failed to inspect plugin source path", err))?;
+        if !source_metadata.is_directory {
+            return Err(PluginStoreError::Invalid(format!(
+                "plugin source path is not a directory: {}",
+                source_path.display()
+            )));
+        }
+
+        let plugin_name =
+            plugin_name_for_source_with_filesystem(source_path.as_path(), filesystem).await?;
+        if plugin_name != plugin_id.plugin_name {
+            return Err(PluginStoreError::Invalid(format!(
+                "plugin manifest name `{plugin_name}` does not match marketplace plugin name `{}`",
+                plugin_id.plugin_name
+            )));
+        }
+        validate_plugin_segment(&plugin_version, "plugin version")
+            .map_err(PluginStoreError::Invalid)?;
+
+        let target_root = self.plugin_base_root(&plugin_id);
+        let Some(parent) = target_root.as_path().parent() else {
+            return Err(PluginStoreError::Invalid(format!(
+                "plugin cache path has no parent: {}",
+                target_root.display()
+            )));
+        };
+        let parent = AbsolutePathBuf::from_absolute_path(parent).map_err(|err| {
+            PluginStoreError::Invalid(format!("plugin cache parent should be absolute: {err}"))
+        })?;
+        filesystem
+            .create_directory(&parent, CreateDirectoryOptions { recursive: true })
+            .await
+            .map_err(|err| PluginStoreError::io("failed to create plugin cache directory", err))?;
+        filesystem
+            .remove(
+                &target_root,
+                RemoveOptions {
+                    recursive: true,
+                    force: true,
+                },
+            )
+            .await
+            .map_err(|err| {
+                PluginStoreError::io("failed to remove existing plugin cache entry", err)
+            })?;
+
+        let installed_path = self.plugin_root(&plugin_id, &plugin_version);
+        filesystem
+            .copy(
+                &source_path,
+                &installed_path,
+                CopyOptions { recursive: true },
+            )
+            .await
+            .map_err(|err| PluginStoreError::io("failed to copy plugin into cache", err))?;
+
+        Ok(PluginInstallResult {
+            plugin_id,
+            plugin_version,
+            installed_path,
+        })
+    }
+
+    pub async fn uninstall_with_filesystem<F>(
+        &self,
+        plugin_id: &PluginId,
+        filesystem: &F,
+    ) -> Result<(), PluginStoreError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        filesystem
+            .remove(
+                &self.plugin_base_root(plugin_id),
+                RemoveOptions {
+                    recursive: true,
+                    force: true,
+                },
+            )
+            .await
+            .map_err(|err| {
+                PluginStoreError::io("failed to remove existing plugin cache entry", err)
+            })
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -189,7 +352,7 @@ pub enum PluginStoreError {
 }
 
 impl PluginStoreError {
-    fn io(context: &'static str, source: io::Error) -> Self {
+    pub(crate) fn io(context: &'static str, source: io::Error) -> Self {
         Self::Io { context, source }
     }
 }
@@ -209,6 +372,27 @@ fn plugin_name_for_source(source_path: &Path) -> Result<String, PluginStoreError
             manifest_path.display()
         ))
     })?;
+
+    let plugin_name = manifest.name;
+    validate_plugin_segment(&plugin_name, "plugin name")
+        .map_err(PluginStoreError::Invalid)
+        .map(|_| plugin_name)
+}
+
+async fn plugin_name_for_source_with_filesystem<F>(
+    source_path: &Path,
+    filesystem: &F,
+) -> Result<String, PluginStoreError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let manifest_path = source_path.join(PLUGIN_MANIFEST_PATH);
+    let Some(manifest) = load_plugin_manifest_with_filesystem(source_path, filesystem).await else {
+        return Err(PluginStoreError::Invalid(format!(
+            "missing or invalid plugin manifest: {}",
+            manifest_path.display()
+        )));
+    };
 
     let plugin_name = manifest.name;
     validate_plugin_segment(&plugin_name, "plugin name")

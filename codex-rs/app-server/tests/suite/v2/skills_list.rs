@@ -11,6 +11,7 @@ use codex_app_server_protocol::SkillsListExtraRootsForCwd;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::ThreadStartParams;
+use codex_exec_server::Environment;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -300,6 +301,11 @@ async fn skills_changed_notification_is_emitted_after_skill_change() -> Result<(
         .context("skills/changed params must be present")?;
     let notification: SkillsChangedNotification = serde_json::from_value(params)?;
 
-    assert_eq!(notification, SkillsChangedNotification {});
+    assert_eq!(
+        notification,
+        SkillsChangedNotification {
+            environment_id: Environment::default_environment_id(None),
+        }
+    );
     Ok(())
 }

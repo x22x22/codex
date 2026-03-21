@@ -15,61 +15,11 @@ use codex_otel::SessionTelemetry;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::user_input::UserInput;
 use codex_utils_absolute_path::AbsolutePathBuf;
-use tokio::fs;
 
 #[derive(Debug, Default)]
 pub(crate) struct SkillInjections {
     pub(crate) items: Vec<ResponseItem>,
     pub(crate) warnings: Vec<String>,
-}
-
-pub(crate) async fn build_skill_injections(
-    mentioned_skills: &[SkillMetadata],
-    otel: Option<&SessionTelemetry>,
-    analytics_client: &AnalyticsEventsClient,
-    tracking: TrackEventsContext,
-) -> SkillInjections {
-    if mentioned_skills.is_empty() {
-        return SkillInjections::default();
-    }
-
-    let mut result = SkillInjections {
-        items: Vec::with_capacity(mentioned_skills.len()),
-        warnings: Vec::new(),
-    };
-    let mut invocations = Vec::new();
-
-    for skill in mentioned_skills {
-        match fs::read_to_string(&skill.path_to_skills_md).await {
-            Ok(contents) => {
-                emit_skill_injected_metric(otel, skill, "ok");
-                invocations.push(SkillInvocation {
-                    skill_name: skill.name.clone(),
-                    skill_scope: skill.scope,
-                    skill_path: skill.path_to_skills_md.clone(),
-                    invocation_type: InvocationType::Explicit,
-                });
-                result.items.push(ResponseItem::from(SkillInstructions {
-                    name: skill.name.clone(),
-                    path: skill.path_to_skills_md.to_string_lossy().into_owned(),
-                    contents,
-                }));
-            }
-            Err(err) => {
-                emit_skill_injected_metric(otel, skill, "error");
-                let message = format!(
-                    "Failed to load skill {name} at {path}: {err:#}",
-                    name = skill.name,
-                    path = skill.path_to_skills_md.display()
-                );
-                result.warnings.push(message);
-            }
-        }
-    }
-
-    analytics_client.track_skill_invocations(tracking, invocations);
-
-    result
 }
 
 pub(crate) async fn build_skill_injections_with_filesystem<F>(

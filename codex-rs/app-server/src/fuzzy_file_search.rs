@@ -10,7 +10,10 @@ use codex_app_server_protocol::FuzzyFileSearchResult;
 use codex_app_server_protocol::FuzzyFileSearchSessionCompletedNotification;
 use codex_app_server_protocol::FuzzyFileSearchSessionUpdatedNotification;
 use codex_app_server_protocol::ServerNotification;
+use codex_exec_server::ExecutorFileSystem;
 use codex_file_search as file_search;
+use codex_file_search::SearchCandidate;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use tracing::warn;
 
 use crate::outgoing_message::OutgoingMessageSender;
@@ -88,6 +91,123 @@ pub(crate) async fn run_fuzzy_file_search(
     >(|f| f.score, |f| f.path.as_str()));
 
     files
+}
+
+pub(crate) async fn run_fuzzy_file_search_with_filesystem<F>(
+    query: String,
+    roots: Vec<String>,
+    filesystem: &F,
+    cancellation_flag: Arc<AtomicBool>,
+) -> Vec<FuzzyFileSearchResult>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    if roots.is_empty() || cancellation_flag.load(Ordering::Relaxed) {
+        return Vec::new();
+    }
+
+    #[expect(clippy::expect_used)]
+    let limit = NonZero::new(MATCH_LIMIT).expect("MATCH_LIMIT should be a valid non-zero usize");
+
+    let mut candidates = Vec::new();
+    for root in roots {
+        if cancellation_flag.load(Ordering::Relaxed) {
+            break;
+        }
+        let root_path = PathBuf::from(&root);
+        let Ok(root) = AbsolutePathBuf::from_absolute_path(root_path.as_path()) else {
+            continue;
+        };
+        collect_search_candidates(&root, filesystem, &cancellation_flag, &mut candidates).await;
+    }
+
+    let results = match file_search::run_with_candidates(
+        &query,
+        candidates,
+        file_search::FileSearchOptions {
+            limit,
+            compute_indices: true,
+            ..Default::default()
+        },
+        Some(cancellation_flag),
+    ) {
+        Ok(results) => results,
+        Err(err) => {
+            warn!("environment fuzzy-file-search failed: {err}");
+            return Vec::new();
+        }
+    };
+
+    let mut files = results
+        .matches
+        .into_iter()
+        .map(|m| {
+            let file_name = m.path.file_name().unwrap_or_default();
+            FuzzyFileSearchResult {
+                root: m.root.to_string_lossy().to_string(),
+                path: m.path.to_string_lossy().to_string(),
+                match_type: match m.match_type {
+                    file_search::MatchType::File => FuzzyFileSearchMatchType::File,
+                    file_search::MatchType::Directory => FuzzyFileSearchMatchType::Directory,
+                },
+                file_name: file_name.to_string_lossy().to_string(),
+                score: m.score,
+                indices: m.indices,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    files.sort_by(file_search::cmp_by_score_desc_then_path_asc::<
+        FuzzyFileSearchResult,
+        _,
+        _,
+    >(|f| f.score, |f| f.path.as_str()));
+    files
+}
+
+async fn collect_search_candidates<F>(
+    root: &AbsolutePathBuf,
+    filesystem: &F,
+    cancellation_flag: &AtomicBool,
+    out: &mut Vec<SearchCandidate>,
+) where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut pending = vec![root.clone()];
+    while let Some(current) = pending.pop() {
+        if cancellation_flag.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok(entries) = filesystem.read_directory(&current).await else {
+            continue;
+        };
+        for entry in entries {
+            if cancellation_flag.load(Ordering::Relaxed) {
+                return;
+            }
+            let path = current.as_path().join(&entry.file_name);
+            let Ok(path) = AbsolutePathBuf::try_from(path) else {
+                continue;
+            };
+            let Ok(relative_path) = path.as_path().strip_prefix(root.as_path()) else {
+                continue;
+            };
+            if entry.is_file || entry.is_directory {
+                out.push(SearchCandidate {
+                    root: root.clone().into_path_buf(),
+                    path: relative_path.to_path_buf(),
+                    match_type: if entry.is_directory {
+                        file_search::MatchType::Directory
+                    } else {
+                        file_search::MatchType::File
+                    },
+                });
+            }
+            if entry.is_directory {
+                pending.push(path);
+            }
+        }
+    }
 }
 
 pub(crate) struct FuzzyFileSearchSession {

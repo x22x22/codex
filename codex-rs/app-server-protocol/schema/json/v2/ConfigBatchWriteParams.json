@@ -33,6 +33,12 @@
       },
       "type": "array"
     },
+    "environmentId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "expectedVersion": {
       "type": [
         "string",

@@ -88,6 +88,7 @@ async fn plugin_install_returns_invalid_request_for_missing_marketplace_file() -
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
+            environment_id: None,
             marketplace_path: AbsolutePathBuf::try_from(
                 codex_home.path().join("missing-marketplace.json"),
             )?,
@@ -129,6 +130,7 @@ async fn plugin_install_returns_invalid_request_for_not_available_plugin() -> Re
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
+            environment_id: None,
             marketplace_path,
             plugin_name: "sample-plugin".to_string(),
             force_remote_sync: false,
@@ -179,6 +181,7 @@ async fn plugin_install_returns_invalid_request_for_disallowed_product_plugin() 
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
+            environment_id: None,
             marketplace_path,
             plugin_name: "sample-plugin".to_string(),
             force_remote_sync: false,
@@ -241,6 +244,7 @@ async fn plugin_install_force_remote_sync_enables_remote_plugin_before_local_ins
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
+            environment_id: None,
             marketplace_path,
             plugin_name: "sample-plugin".to_string(),
             force_remote_sync: true,
@@ -298,6 +302,7 @@ async fn plugin_install_tracks_analytics_event() -> Result<()> {
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
+            environment_id: None,
             marketplace_path,
             plugin_name: "sample-plugin".to_string(),
             force_remote_sync: false,
@@ -413,6 +418,7 @@ async fn plugin_install_returns_apps_needing_auth() -> Result<()> {
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
+            environment_id: None,
             marketplace_path,
             plugin_name: "sample-plugin".to_string(),
             force_remote_sync: false,
@@ -496,6 +502,7 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
 
     let request_id = mcp
         .send_plugin_install_request(PluginInstallParams {
+            environment_id: None,
             marketplace_path,
             plugin_name: "sample-plugin".to_string(),
             force_remote_sync: false,
@@ -524,6 +531,48 @@ async fn plugin_install_filters_disallowed_apps_needing_auth() -> Result<()> {
 
     server_handle.abort();
     let _ = server_handle.await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_install_rejects_unsupported_environment_id() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let repo_root = TempDir::new()?;
+    write_plugin_marketplace(
+        repo_root.path(),
+        "debug",
+        "sample-plugin",
+        "./sample-plugin",
+        None,
+        None,
+    )?;
+    write_plugin_source(repo_root.path(), "sample-plugin", &[])?;
+    let marketplace_path =
+        AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_install_request(PluginInstallParams {
+            environment_id: Some("remote".to_string()),
+            marketplace_path,
+            plugin_name: "sample-plugin".to_string(),
+            force_remote_sync: false,
+        })
+        .await?;
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert_eq!(
+        err.error.message,
+        "unsupported environmentId `remote`; configured environment is `local`"
+    );
+
     Ok(())
 }
 

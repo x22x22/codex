@@ -11,6 +11,8 @@ use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::Model as ApiModel;
 use codex_app_server_protocol::ModelListParams;
 use codex_app_server_protocol::ModelListResponse;
+use codex_app_server_protocol::PromptListParams;
+use codex_app_server_protocol::PromptListResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
@@ -104,6 +106,7 @@ pub(crate) struct AppServerSession {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ThreadSessionState {
     pub(crate) thread_id: ThreadId,
+    pub(crate) environment_id: String,
     pub(crate) forked_from_id: Option<ThreadId>,
     pub(crate) thread_name: Option<String>,
     pub(crate) model: String,
@@ -287,6 +290,7 @@ impl AppServerSession {
         &mut self,
         config: Config,
         thread_id: ThreadId,
+        environment_id: Option<String>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadResumeResponse = self
@@ -296,6 +300,7 @@ impl AppServerSession {
                 params: thread_resume_params_from_config(
                     config.clone(),
                     thread_id,
+                    environment_id,
                     self.thread_params_mode(),
                 ),
             })
@@ -308,6 +313,7 @@ impl AppServerSession {
         &mut self,
         config: Config,
         thread_id: ThreadId,
+        environment_id: Option<String>,
     ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let response: ThreadForkResponse = self
@@ -317,6 +323,7 @@ impl AppServerSession {
                 params: thread_fork_params_from_config(
                     config.clone(),
                     thread_id,
+                    environment_id,
                     self.thread_params_mode(),
                 ),
             })
@@ -346,6 +353,7 @@ impl AppServerSession {
     pub(crate) async fn thread_read(
         &mut self,
         thread_id: ThreadId,
+        environment_id: Option<String>,
         include_turns: bool,
     ) -> Result<Thread> {
         let request_id = self.next_request_id();
@@ -354,6 +362,7 @@ impl AppServerSession {
             .request_typed(ClientRequest::ThreadRead {
                 request_id,
                 params: ThreadReadParams {
+                    environment_id,
                     thread_id: thread_id.to_string(),
                     include_turns,
                 },
@@ -578,6 +587,17 @@ impl AppServerSession {
             .request_typed(ClientRequest::SkillsList { request_id, params })
             .await
             .wrap_err("skills/list failed in app-server TUI")
+    }
+
+    pub(crate) async fn prompt_list(
+        &mut self,
+        params: PromptListParams,
+    ) -> Result<PromptListResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::PromptList { request_id, params })
+            .await
+            .wrap_err("prompt/list failed in app-server TUI")
     }
 
     pub(crate) async fn thread_realtime_start(
@@ -824,10 +844,11 @@ fn thread_start_params_from_config(
 fn thread_resume_params_from_config(
     config: Config,
     thread_id: ThreadId,
+    environment_id: Option<String>,
     thread_params_mode: ThreadParamsMode,
 ) -> ThreadResumeParams {
     ThreadResumeParams {
-        environment_id: None,
+        environment_id,
         thread_id: thread_id.to_string(),
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(&config),
@@ -844,10 +865,11 @@ fn thread_resume_params_from_config(
 fn thread_fork_params_from_config(
     config: Config,
     thread_id: ThreadId,
+    environment_id: Option<String>,
     thread_params_mode: ThreadParamsMode,
 ) -> ThreadForkParams {
     ThreadForkParams {
-        environment_id: None,
+        environment_id,
         thread_id: thread_id.to_string(),
         model: config.model.clone(),
         model_provider: thread_params_mode.model_provider_from_config(&config),
@@ -914,6 +936,7 @@ async fn thread_session_state_from_thread_start_response(
 ) -> Result<ThreadSessionState, String> {
     thread_session_state_from_thread_response(
         &response.thread.id,
+        &response.environment_id,
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -935,6 +958,7 @@ async fn thread_session_state_from_thread_resume_response(
 ) -> Result<ThreadSessionState, String> {
     thread_session_state_from_thread_response(
         &response.thread.id,
+        &response.environment_id,
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -956,6 +980,7 @@ async fn thread_session_state_from_thread_fork_response(
 ) -> Result<ThreadSessionState, String> {
     thread_session_state_from_thread_response(
         &response.thread.id,
+        &response.environment_id,
         response.thread.name.clone(),
         response.thread.path.clone(),
         response.model.clone(),
@@ -996,6 +1021,7 @@ fn review_target_to_app_server(
 )]
 async fn thread_session_state_from_thread_response(
     thread_id: &str,
+    environment_id: &str,
     thread_name: Option<String>,
     rollout_path: Option<PathBuf>,
     model: String,
@@ -1015,6 +1041,7 @@ async fn thread_session_state_from_thread_response(
 
     Ok(ThreadSessionState {
         thread_id,
+        environment_id: environment_id.to_string(),
         forked_from_id: None,
         thread_name,
         model,
@@ -1116,13 +1143,24 @@ mod tests {
         let thread_id = ThreadId::new();
 
         let start = thread_start_params_from_config(&config, ThreadParamsMode::Remote);
-        let resume =
-            thread_resume_params_from_config(config.clone(), thread_id, ThreadParamsMode::Remote);
-        let fork = thread_fork_params_from_config(config, thread_id, ThreadParamsMode::Remote);
+        let resume = thread_resume_params_from_config(
+            config.clone(),
+            thread_id,
+            Some("env-remote".to_string()),
+            ThreadParamsMode::Remote,
+        );
+        let fork = thread_fork_params_from_config(
+            config,
+            thread_id,
+            Some("env-remote".to_string()),
+            ThreadParamsMode::Remote,
+        );
 
         assert_eq!(start.cwd, None);
         assert_eq!(resume.cwd, None);
         assert_eq!(fork.cwd, None);
+        assert_eq!(resume.environment_id.as_deref(), Some("env-remote"));
+        assert_eq!(fork.environment_id.as_deref(), Some("env-remote"));
         assert_eq!(start.model_provider, None);
         assert_eq!(resume.model_provider, None);
         assert_eq!(fork.model_provider, None);
@@ -1136,6 +1174,7 @@ mod tests {
         let response = ThreadResumeResponse {
             thread: codex_app_server_protocol::Thread {
                 id: thread_id.to_string(),
+                environment_id: "local".to_string(),
                 preview: "hello".to_string(),
                 ephemeral: false,
                 model_provider: "openai".to_string(),
@@ -1204,6 +1243,7 @@ mod tests {
 
         let session = thread_session_state_from_thread_response(
             &thread_id.to_string(),
+            "local",
             Some("restore".to_string()),
             None,
             "gpt-5.4".to_string(),
@@ -1221,5 +1261,6 @@ mod tests {
 
         assert_ne!(session.history_log_id, 0);
         assert_eq!(session.history_entry_count, 2);
+        assert_eq!(session.environment_id, "local");
     }
 }

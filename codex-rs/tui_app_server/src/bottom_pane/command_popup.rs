@@ -79,7 +79,6 @@ impl CommandPopup {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn set_prompts(&mut self, mut prompts: Vec<CustomPrompt>) {
         let exclude: HashSet<String> = self
             .builtins

@@ -5,10 +5,12 @@ use crate::path_utils::resolve_symlink_write_paths;
 use crate::path_utils::write_atomically;
 use anyhow::Context;
 use codex_config::CONFIG_TOML_FILE;
+use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::config_types::Personality;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
@@ -753,6 +755,40 @@ pub fn apply_blocking(
     Ok(())
 }
 
+pub fn apply_to_serialized(
+    existing_contents: &str,
+    profile: Option<&str>,
+    edits: &[ConfigEdit],
+) -> anyhow::Result<Option<String>> {
+    if edits.is_empty() {
+        return Ok(None);
+    }
+
+    let doc = if existing_contents.is_empty() {
+        DocumentMut::new()
+    } else {
+        existing_contents.parse::<DocumentMut>()?
+    };
+
+    let profile = profile.map(ToOwned::to_owned).or_else(|| {
+        doc.get("profile")
+            .and_then(|item| item.as_str())
+            .map(ToOwned::to_owned)
+    });
+
+    let mut document = ConfigDocument::new(doc, profile);
+    let mut mutated = false;
+    for edit in edits {
+        mutated |= document.apply(edit)?;
+    }
+
+    if !mutated {
+        return Ok(None);
+    }
+
+    Ok(Some(document.doc.to_string()))
+}
+
 /// Persist edits asynchronously by offloading the blocking writer.
 pub async fn apply(
     codex_home: &Path,
@@ -764,6 +800,37 @@ pub async fn apply(
     task::spawn_blocking(move || apply_blocking(&codex_home, profile.as_deref(), &edits))
         .await
         .context("config persistence task panicked")?
+}
+
+pub async fn apply_with_filesystem<F>(
+    codex_home: &Path,
+    profile: Option<&str>,
+    edits: &[ConfigEdit],
+    filesystem: &F,
+) -> anyhow::Result<()>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    if edits.is_empty() {
+        return Ok(());
+    }
+
+    let config_path = AbsolutePathBuf::try_from(codex_home.join(CONFIG_TOML_FILE))
+        .context("resolve config.toml path")?;
+    let serialized = match filesystem.read_file(&config_path).await {
+        Ok(contents) => String::from_utf8(contents).context("config.toml was not valid UTF-8")?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+    let Some(updated) = apply_to_serialized(&serialized, profile, edits)? else {
+        return Ok(());
+    };
+
+    filesystem
+        .write_file(&config_path, updated.into_bytes())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+    Ok(())
 }
 
 /// Fluent builder to batch config edits and apply them atomically.
@@ -987,6 +1054,19 @@ impl ConfigEditsBuilder {
         })
         .await
         .context("config persistence task panicked")?
+    }
+
+    pub async fn apply_with_filesystem<F>(self, filesystem: &F) -> anyhow::Result<()>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        apply_with_filesystem(
+            &self.codex_home,
+            self.profile.as_deref(),
+            &self.edits,
+            filesystem,
+        )
+        .await
     }
 }
 

@@ -62,6 +62,7 @@ pub struct ExecParams {
     pub cwd: PathBuf,
     pub env: HashMap<String, String>,
     pub tty: bool,
+    pub stdin: bool,
     pub arg0: Option<String>,
 }
 
@@ -134,6 +135,7 @@ pub struct ReadResponse {
 pub struct WriteParams {
     pub process_id: String,
     pub chunk: ByteChunk,
+    pub close_stdin: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

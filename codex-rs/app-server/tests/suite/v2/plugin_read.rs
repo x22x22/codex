@@ -146,6 +146,7 @@ enabled = true
         AbsolutePathBuf::try_from(repo_root.path().join(".agents/plugins/marketplace.json"))?;
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
+            environment_id: None,
             marketplace_path: marketplace_path.clone(),
             plugin_name: "demo-plugin".to_string(),
         })
@@ -266,6 +267,7 @@ async fn plugin_read_accepts_legacy_string_default_prompt() -> Result<()> {
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
+            environment_id: None,
             marketplace_path: AbsolutePathBuf::try_from(
                 repo_root.path().join(".agents/plugins/marketplace.json"),
             )?,
@@ -320,6 +322,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_is_missing() -> Result<
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
+            environment_id: None,
             marketplace_path: AbsolutePathBuf::try_from(
                 repo_root.path().join(".agents/plugins/marketplace.json"),
             )?,
@@ -372,6 +375,7 @@ async fn plugin_read_returns_invalid_request_when_plugin_manifest_is_missing() -
 
     let request_id = mcp
         .send_plugin_read_request(PluginReadParams {
+            environment_id: None,
             marketplace_path: AbsolutePathBuf::try_from(
                 repo_root.path().join(".agents/plugins/marketplace.json"),
             )?,

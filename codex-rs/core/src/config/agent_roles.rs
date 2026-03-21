@@ -4,6 +4,7 @@ use super::AgentsToml;
 use super::ConfigToml;
 use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
+use codex_exec_server::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use serde::Deserialize;
@@ -107,6 +108,125 @@ pub(crate) fn load_agent_roles(
     Ok(roles)
 }
 
+pub(crate) async fn load_agent_roles_with_filesystem<F>(
+    config_layer_stack: &ConfigLayerStack,
+    startup_warnings: &mut Vec<String>,
+    filesystem: &F,
+) -> std::io::Result<BTreeMap<String, AgentRoleConfig>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let layers = config_layer_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    );
+    if layers.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let mut roles: BTreeMap<String, AgentRoleConfig> = BTreeMap::new();
+    for layer in layers {
+        let mut layer_roles: BTreeMap<String, AgentRoleConfig> = BTreeMap::new();
+        let mut declared_role_files = BTreeSet::new();
+        let agents_toml = match agents_toml_from_layer(&layer.config) {
+            Ok(agents_toml) => agents_toml,
+            Err(err) => {
+                push_agent_role_warning(startup_warnings, err);
+                None
+            }
+        };
+        if let Some(agents_toml) = agents_toml {
+            for (declared_role_name, role_toml) in &agents_toml.roles {
+                let (role_name, role) = match read_declared_role_with_filesystem(
+                    declared_role_name,
+                    role_toml,
+                    filesystem,
+                )
+                .await
+                {
+                    Ok(role) => role,
+                    Err(err) => {
+                        push_agent_role_warning(startup_warnings, err);
+                        continue;
+                    }
+                };
+                if let Some(config_file) = role.config_file.clone() {
+                    declared_role_files.insert(config_file);
+                }
+                if layer_roles.contains_key(&role_name) {
+                    push_agent_role_warning(
+                        startup_warnings,
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "duplicate agent role name `{role_name}` declared in the same config layer"
+                            ),
+                        ),
+                    );
+                    continue;
+                }
+                layer_roles.insert(role_name, role);
+            }
+        }
+
+        if let Some(config_folder) = layer.config_folder() {
+            for (role_name, role) in discover_agent_roles_in_dir_with_filesystem(
+                config_folder.as_path().join("agents").as_path(),
+                &declared_role_files,
+                startup_warnings,
+                filesystem,
+            )
+            .await?
+            {
+                if layer_roles.contains_key(&role_name) {
+                    push_agent_role_warning(
+                        startup_warnings,
+                        std::io::Error::new(
+                            std::io::ErrorKind::InvalidInput,
+                            format!(
+                                "duplicate agent role name `{role_name}` declared in the same config layer"
+                            ),
+                        ),
+                    );
+                    continue;
+                }
+                layer_roles.insert(role_name, role);
+            }
+        }
+
+        for (role_name, role) in layer_roles {
+            let mut merged_role = role;
+            if let Some(existing_role) = roles.get(&role_name) {
+                merge_missing_role_fields(&mut merged_role, existing_role);
+            }
+            if let Err(err) = validate_required_agent_role_description(
+                &role_name,
+                merged_role.description.as_deref(),
+            ) {
+                push_agent_role_warning(startup_warnings, err);
+                continue;
+            }
+            roles.insert(role_name, merged_role);
+        }
+    }
+
+    Ok(roles)
+}
+
+pub(crate) fn merge_loaded_agent_roles(
+    existing_roles: &BTreeMap<String, AgentRoleConfig>,
+    loaded_roles: BTreeMap<String, AgentRoleConfig>,
+) -> BTreeMap<String, AgentRoleConfig> {
+    let mut merged_roles = existing_roles.clone();
+    for (role_name, mut loaded_role) in loaded_roles {
+        if let Some(existing_role) = merged_roles.get(&role_name) {
+            merge_missing_role_fields(&mut loaded_role, existing_role);
+        }
+        merged_roles.insert(role_name, loaded_role);
+    }
+    merged_roles
+}
+
 fn push_agent_role_warning(startup_warnings: &mut Vec<String>, err: std::io::Error) {
     let message = format!("Ignoring malformed agent role definition: {err}");
     tracing::warn!("{message}");
@@ -144,6 +264,41 @@ fn read_declared_role(
         let parsed_file = read_resolved_agent_role_file(config_file, Some(declared_role_name))?;
         role_name = parsed_file.role_name;
         role.description = parsed_file.description.or(role.description);
+        role.locked_model = parsed_file.locked_model.or(role.locked_model);
+        role.locked_reasoning_effort = parsed_file
+            .locked_reasoning_effort
+            .or(role.locked_reasoning_effort);
+        role.nickname_candidates = parsed_file.nickname_candidates.or(role.nickname_candidates);
+    }
+
+    Ok((role_name, role))
+}
+
+async fn read_declared_role_with_filesystem<F>(
+    declared_role_name: &str,
+    role_toml: &AgentRoleToml,
+    filesystem: &F,
+) -> std::io::Result<(String, AgentRoleConfig)>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut role =
+        agent_role_config_from_toml_with_filesystem(declared_role_name, role_toml, filesystem)
+            .await?;
+    let mut role_name = declared_role_name.to_string();
+    if let Some(config_file) = role.config_file.clone() {
+        let parsed_file = read_resolved_agent_role_file_with_filesystem(
+            &config_file,
+            Some(declared_role_name),
+            filesystem,
+        )
+        .await?;
+        role_name = parsed_file.role_name;
+        role.description = parsed_file.description.or(role.description);
+        role.locked_model = parsed_file.locked_model.or(role.locked_model);
+        role.locked_reasoning_effort = parsed_file
+            .locked_reasoning_effort
+            .or(role.locked_reasoning_effort);
         role.nickname_candidates = parsed_file.nickname_candidates.or(role.nickname_candidates);
     }
 
@@ -153,6 +308,11 @@ fn read_declared_role(
 fn merge_missing_role_fields(role: &mut AgentRoleConfig, fallback: &AgentRoleConfig) {
     role.description = role.description.clone().or(fallback.description.clone());
     role.config_file = role.config_file.clone().or(fallback.config_file.clone());
+    role.locked_model = role.locked_model.clone().or(fallback.locked_model.clone());
+    role.locked_reasoning_effort = role
+        .locked_reasoning_effort
+        .clone()
+        .or(fallback.locked_reasoning_effort.clone());
     role.nickname_candidates = role
         .nickname_candidates
         .clone()
@@ -189,6 +349,37 @@ fn agent_role_config_from_toml(
     Ok(AgentRoleConfig {
         description,
         config_file,
+        locked_model: None,
+        locked_reasoning_effort: None,
+        nickname_candidates,
+    })
+}
+
+async fn agent_role_config_from_toml_with_filesystem<F>(
+    role_name: &str,
+    role: &AgentRoleToml,
+    filesystem: &F,
+) -> std::io::Result<AgentRoleConfig>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let config_file = role.config_file.as_ref().map(AbsolutePathBuf::to_path_buf);
+    validate_agent_role_config_file_with_filesystem(role_name, config_file.as_deref(), filesystem)
+        .await?;
+    let description = normalize_agent_role_description(
+        &format!("agents.{role_name}.description"),
+        role.description.as_deref(),
+    )?;
+    let nickname_candidates = normalize_agent_role_nickname_candidates(
+        &format!("agents.{role_name}.nickname_candidates"),
+        role.nickname_candidates.as_deref(),
+    )?;
+
+    Ok(AgentRoleConfig {
+        description,
+        config_file,
+        locked_model: None,
+        locked_reasoning_effort: None,
         nickname_candidates,
     })
 }
@@ -207,6 +398,8 @@ struct RawAgentRoleFileToml {
 pub(crate) struct ResolvedAgentRoleFile {
     pub(crate) role_name: String,
     pub(crate) description: Option<String>,
+    pub(crate) locked_model: Option<String>,
+    pub(crate) locked_reasoning_effort: Option<String>,
     pub(crate) nickname_candidates: Option<Vec<String>>,
     pub(crate) config: TomlValue,
 }
@@ -284,10 +477,20 @@ pub(crate) fn parse_agent_role_file_contents(
     config_table.remove("name");
     config_table.remove("description");
     config_table.remove("nickname_candidates");
+    let locked_model = config
+        .get("model")
+        .and_then(TomlValue::as_str)
+        .map(str::to_owned);
+    let locked_reasoning_effort = config
+        .get("model_reasoning_effort")
+        .and_then(TomlValue::as_str)
+        .map(str::to_owned);
 
     Ok(ResolvedAgentRoleFile {
         role_name,
         description,
+        locked_model,
+        locked_reasoning_effort,
         nickname_candidates,
         config,
     })
@@ -298,6 +501,38 @@ fn read_resolved_agent_role_file(
     role_name_hint: Option<&str>,
 ) -> std::io::Result<ResolvedAgentRoleFile> {
     let contents = std::fs::read_to_string(path)?;
+    parse_agent_role_file_contents(
+        &contents,
+        path,
+        path.parent().unwrap_or(path),
+        role_name_hint,
+    )
+}
+
+async fn read_resolved_agent_role_file_with_filesystem<F>(
+    path: &Path,
+    role_name_hint: Option<&str>,
+    filesystem: &F,
+) -> std::io::Result<ResolvedAgentRoleFile>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let absolute_path = AbsolutePathBuf::from_absolute_path(path).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("agent role path must be absolute: {err}"),
+        )
+    })?;
+    let contents = filesystem.read_file(&absolute_path).await?;
+    let contents = String::from_utf8(contents).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "agent role file at {} is not valid UTF-8: {err}",
+                path.display()
+            ),
+        )
+    })?;
     parse_agent_role_file_contents(
         &contents,
         path,
@@ -377,6 +612,49 @@ fn validate_agent_role_config_file(
         )
     })?;
     if metadata.is_file() {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "agents.{role_name}.config_file must point to a file: {}",
+                config_file.display()
+            ),
+        ))
+    }
+}
+
+async fn validate_agent_role_config_file_with_filesystem<F>(
+    role_name: &str,
+    config_file: Option<&Path>,
+    filesystem: &F,
+) -> std::io::Result<()>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let Some(config_file) = config_file else {
+        return Ok(());
+    };
+
+    let absolute_path = AbsolutePathBuf::from_absolute_path(config_file).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "agents.{role_name}.config_file must point to an absolute file path at {}: {err}",
+                config_file.display()
+            ),
+        )
+    })?;
+    let metadata = filesystem.get_metadata(&absolute_path).await.map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "agents.{role_name}.config_file must point to an existing file at {}: {e}",
+                config_file.display()
+            ),
+        )
+    })?;
+    if metadata.is_file {
         Ok(())
     } else {
         Err(std::io::Error::new(
@@ -479,6 +757,65 @@ fn discover_agent_roles_in_dir(
             AgentRoleConfig {
                 description: parsed_file.description,
                 config_file: Some(agent_file),
+                locked_model: parsed_file.locked_model,
+                locked_reasoning_effort: parsed_file.locked_reasoning_effort,
+                nickname_candidates: parsed_file.nickname_candidates,
+            },
+        );
+    }
+
+    Ok(roles)
+}
+
+async fn discover_agent_roles_in_dir_with_filesystem<F>(
+    agents_dir: &Path,
+    declared_role_files: &BTreeSet<PathBuf>,
+    startup_warnings: &mut Vec<String>,
+    filesystem: &F,
+) -> std::io::Result<BTreeMap<String, AgentRoleConfig>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut roles = BTreeMap::new();
+
+    for agent_file in collect_agent_role_files_with_filesystem(agents_dir, filesystem).await? {
+        if declared_role_files.contains(&agent_file) {
+            continue;
+        }
+        let parsed_file = match read_resolved_agent_role_file_with_filesystem(
+            &agent_file,
+            /*role_name_hint*/ None,
+            filesystem,
+        )
+        .await
+        {
+            Ok(parsed_file) => parsed_file,
+            Err(err) => {
+                push_agent_role_warning(startup_warnings, err);
+                continue;
+            }
+        };
+        let role_name = parsed_file.role_name;
+        if roles.contains_key(&role_name) {
+            push_agent_role_warning(
+                startup_warnings,
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!(
+                        "duplicate agent role name `{role_name}` discovered in {}",
+                        agents_dir.display()
+                    ),
+                ),
+            );
+            continue;
+        }
+        roles.insert(
+            role_name,
+            AgentRoleConfig {
+                description: parsed_file.description,
+                config_file: Some(agent_file),
+                locked_model: parsed_file.locked_model,
+                locked_reasoning_effort: parsed_file.locked_reasoning_effort,
                 nickname_candidates: parsed_file.nickname_candidates,
             },
         );
@@ -490,6 +827,47 @@ fn discover_agent_roles_in_dir(
 fn collect_agent_role_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     collect_agent_role_files_recursive(dir, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+async fn collect_agent_role_files_with_filesystem<F>(
+    dir: &Path,
+    filesystem: &F,
+) -> std::io::Result<Vec<PathBuf>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut files = Vec::new();
+    let mut pending_dirs = vec![dir.to_path_buf()];
+
+    while let Some(dir) = pending_dirs.pop() {
+        let absolute_dir = match AbsolutePathBuf::from_absolute_path(&dir) {
+            Ok(dir) => dir,
+            Err(_) => continue,
+        };
+        let entries = match filesystem.read_directory(&absolute_dir).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+
+        for entry in entries {
+            let path = dir.join(&entry.file_name);
+            if entry.is_directory {
+                pending_dirs.push(path);
+                continue;
+            }
+            if entry.is_file
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == "toml")
+            {
+                files.push(path);
+            }
+        }
+    }
+
     files.sort();
     Ok(files)
 }

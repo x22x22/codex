@@ -122,6 +122,7 @@ async fn thread_shell_command_runs_as_standalone_turn_and_persists_history() -> 
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id: thread.id,
             include_turns: true,
         })
@@ -292,6 +293,7 @@ async fn thread_shell_command_uses_existing_active_turn() -> Result<()> {
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id: thread.id,
             include_turns: true,
         })

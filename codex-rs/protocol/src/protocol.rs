@@ -2946,6 +2946,7 @@ pub struct ListCustomPromptsResponseEvent {
 /// Response payload for `Op::ListSkills`.
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
 pub struct ListSkillsResponseEvent {
+    pub environment_id: String,
     pub skills: Vec<SkillsListEntry>,
 }
 

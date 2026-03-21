@@ -5,6 +5,7 @@ use super::macos::ManagedAdminConfigLayer;
 use super::macos::load_managed_admin_config_layer;
 use codex_config::config_error_from_toml;
 use codex_config::io_error_from_config_error;
+use codex_exec_server::ExecutorFileSystem;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use std::io;
 use std::path::Path;
@@ -79,6 +80,57 @@ pub(super) async fn load_config_layers_internal(
     })
 }
 
+pub(super) async fn load_config_layers_internal_with_filesystem<F>(
+    codex_home: &Path,
+    overrides: LoaderOverrides,
+    filesystem: &F,
+) -> io::Result<LoadedConfigLayers>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    #[cfg(target_os = "macos")]
+    let LoaderOverrides {
+        managed_config_path,
+        managed_preferences_base64,
+        ..
+    } = overrides;
+
+    #[cfg(not(target_os = "macos"))]
+    let LoaderOverrides {
+        managed_config_path,
+        ..
+    } = overrides;
+
+    let managed_config_path = AbsolutePathBuf::from_absolute_path(
+        managed_config_path.unwrap_or_else(|| managed_config_default_path(codex_home)),
+    )?;
+
+    let managed_config = read_config_from_path_with_filesystem(
+        &managed_config_path,
+        /*log_missing_as_info*/ false,
+        filesystem,
+    )
+    .await?
+    .map(|managed_config| MangedConfigFromFile {
+        managed_config,
+        file: managed_config_path.clone(),
+    });
+
+    #[cfg(target_os = "macos")]
+    let managed_preferences =
+        load_managed_admin_config_layer(managed_preferences_base64.as_deref())
+            .await?
+            .map(map_managed_admin_layer);
+
+    #[cfg(not(target_os = "macos"))]
+    let managed_preferences = None;
+
+    Ok(LoadedConfigLayers {
+        managed_config,
+        managed_config_from_mdm: managed_preferences,
+    })
+}
+
 #[cfg(target_os = "macos")]
 fn map_managed_admin_layer(layer: ManagedAdminConfigLayer) -> ManagedConfigFromMdm {
     let ManagedAdminConfigLayer { config, raw_toml } = layer;
@@ -115,6 +167,54 @@ pub(super) async fn read_config_from_path(
         }
         Err(err) => {
             tracing::error!("Failed to read {}: {err}", path.as_ref().display());
+            Err(err)
+        }
+    }
+}
+
+pub(super) async fn read_config_from_path_with_filesystem<F>(
+    path: &AbsolutePathBuf,
+    log_missing_as_info: bool,
+    filesystem: &F,
+) -> io::Result<Option<TomlValue>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    match filesystem.read_file(path).await {
+        Ok(contents) => {
+            let contents = String::from_utf8(contents).map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Failed to decode {} as UTF-8: {err}",
+                        path.as_path().display()
+                    ),
+                )
+            })?;
+            match toml::from_str::<TomlValue>(&contents) {
+                Ok(value) => Ok(Some(value)),
+                Err(err) => {
+                    tracing::error!("Failed to parse {}: {err}", path.as_path().display());
+                    let config_error =
+                        config_error_from_toml(path.as_path(), &contents, err.clone());
+                    Err(io_error_from_config_error(
+                        io::ErrorKind::InvalidData,
+                        config_error,
+                        Some(err),
+                    ))
+                }
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            if log_missing_as_info {
+                tracing::info!("{} not found, using defaults", path.as_path().display());
+            } else {
+                tracing::debug!("{} not found", path.as_path().display());
+            }
+            Ok(None)
+        }
+        Err(err) => {
+            tracing::error!("Failed to read {}: {err}", path.as_path().display());
             Err(err)
         }
     }

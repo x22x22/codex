@@ -17,6 +17,9 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::resolve_relative_paths_in_config_toml;
 use anyhow::anyhow;
 use codex_app_server_protocol::ConfigLayerSource;
+use codex_exec_server::ExecutorFileSystem;
+use codex_exec_server::LocalFileSystem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -27,25 +30,21 @@ use toml::Value as TomlValue;
 pub const DEFAULT_ROLE_NAME: &str = "default";
 const AGENT_TYPE_UNAVAILABLE_ERROR: &str = "agent type is currently not available";
 
-/// Applies a named role layer to `config` while preserving caller-owned model selection.
-///
-/// The role layer is inserted at session-flag precedence so it can override persisted config, but
-/// the caller's current `profile` and `model_provider` remain sticky runtime choices unless the
-/// role explicitly sets `profile`, explicitly sets `model_provider`, or rewrites the active
-/// profile's `model_provider` in place. Rebuilding the config without those overrides would make a
-/// spawned agent silently fall back to the default provider, which is the bug this preservation
-/// logic avoids.
-pub(crate) async fn apply_role_to_config(
+pub(crate) async fn apply_role_to_config_with_filesystem<F>(
     config: &mut Config,
     role_name: Option<&str>,
-) -> Result<(), String> {
+    filesystem: &F,
+) -> Result<(), String>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
     let role_name = role_name.unwrap_or(DEFAULT_ROLE_NAME);
 
     let role = resolve_role_config(config, role_name)
         .cloned()
         .ok_or_else(|| format!("unknown agent_type '{role_name}'"))?;
 
-    apply_role_to_config_inner(config, role_name, &role)
+    apply_role_to_config_inner_with_filesystem(config, role_name, &role, filesystem)
         .await
         .map_err(|err| {
             tracing::warn!("failed to apply role to config: {err}");
@@ -53,16 +52,34 @@ pub(crate) async fn apply_role_to_config(
         })
 }
 
-async fn apply_role_to_config_inner(
+pub(crate) async fn apply_role_to_config(
+    config: &mut Config,
+    role_name: Option<&str>,
+) -> Result<(), String> {
+    apply_role_to_config_with_filesystem(config, role_name, &LocalFileSystem).await
+}
+
+async fn apply_role_to_config_inner_with_filesystem<F>(
     config: &mut Config,
     role_name: &str,
     role: &AgentRoleConfig,
-) -> anyhow::Result<()> {
+    filesystem: &F,
+) -> anyhow::Result<()>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
     let is_built_in = !config.agent_roles.contains_key(role_name);
     let Some(config_file) = role.config_file.as_ref() else {
         return Ok(());
     };
-    let role_layer_toml = load_role_layer_toml(config, config_file, is_built_in, role_name).await?;
+    let role_layer_toml = load_role_layer_toml_with_filesystem(
+        config,
+        config_file,
+        is_built_in,
+        role_name,
+        filesystem,
+    )
+    .await?;
     let (preserve_current_profile, preserve_current_provider) =
         preservation_policy(config, &role_layer_toml);
 
@@ -75,20 +92,28 @@ async fn apply_role_to_config_inner(
     Ok(())
 }
 
-async fn load_role_layer_toml(
+async fn load_role_layer_toml_with_filesystem<F>(
     config: &Config,
     config_file: &Path,
     is_built_in: bool,
     role_name: &str,
-) -> anyhow::Result<TomlValue> {
-    let (role_config_toml, role_config_base) = if is_built_in {
+    filesystem: &F,
+) -> anyhow::Result<TomlValue>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let (role_config_toml, role_config_base): (TomlValue, &Path) = if is_built_in {
         let role_config_contents = built_in::config_file_contents(config_file)
             .map(str::to_owned)
             .ok_or(anyhow!("No corresponding config content"))?;
         let role_config_toml: TomlValue = toml::from_str(&role_config_contents)?;
         (role_config_toml, config.codex_home.as_path())
     } else {
-        let role_config_contents = tokio::fs::read_to_string(config_file).await?;
+        let absolute_path = AbsolutePathBuf::from_absolute_path(config_file)
+            .map_err(|err| anyhow!("role config path must be absolute: {err}"))?;
+        let role_config_contents =
+            String::from_utf8(filesystem.read_file(&absolute_path).await?)
+                .map_err(|err| anyhow!("role config file is not valid UTF-8: {err}"))?;
         let role_config_base = config_file
             .parent()
             .ok_or(anyhow!("No corresponding config content"))?;
@@ -297,41 +322,23 @@ pub(crate) mod spawn_tool_spec {
 
     fn format_role(name: &str, declaration: &AgentRoleConfig) -> String {
         if let Some(description) = &declaration.description {
-            let locked_settings_note = declaration
-                .config_file
-                .as_ref()
-                .and_then(|config_file| {
-                    built_in::config_file_contents(config_file)
-                        .map(str::to_owned)
-                        .or_else(|| std::fs::read_to_string(config_file).ok())
-                })
-                .and_then(|contents| toml::from_str::<TomlValue>(&contents).ok())
-                .map(|role_toml| {
-                    let model = role_toml
-                        .get("model")
-                        .and_then(TomlValue::as_str);
-                    let reasoning_effort = role_toml
-                        .get("model_reasoning_effort")
-                        .and_then(TomlValue::as_str);
-
-                    match (model, reasoning_effort) {
-                        (Some(model), Some(reasoning_effort)) => format!(
-                            "\n- This role's model is set to `{model}` and its reasoning effort is set to `{reasoning_effort}`. These settings cannot be changed."
-                        ),
-                        (Some(model), None) => {
-                            format!(
-                                "\n- This role's model is set to `{model}` and cannot be changed."
-                            )
-                        }
-                        (None, Some(reasoning_effort)) => {
-                            format!(
-                                "\n- This role's reasoning effort is set to `{reasoning_effort}` and cannot be changed."
-                            )
-                        }
-                        (None, None) => String::new(),
-                    }
-                })
-                .unwrap_or_default();
+            let locked_settings_note = match (
+                declaration.locked_model.as_deref(),
+                declaration.locked_reasoning_effort.as_deref(),
+            ) {
+                (Some(model), Some(reasoning_effort)) => format!(
+                    "\n- This role's model is set to `{model}` and its reasoning effort is set to `{reasoning_effort}`. These settings cannot be changed."
+                ),
+                (Some(model), None) => {
+                    format!("\n- This role's model is set to `{model}` and cannot be changed.")
+                }
+                (None, Some(reasoning_effort)) => {
+                    format!(
+                        "\n- This role's reasoning effort is set to `{reasoning_effort}` and cannot be changed."
+                    )
+                }
+                (None, None) => String::new(),
+            };
             format!("{name}: {{\n{description}{locked_settings_note}\n}}")
         } else {
             format!("{name}: no description")
@@ -351,6 +358,8 @@ mod built_in {
                     AgentRoleConfig {
                         description: Some("Default agent.".to_string()),
                         config_file: None,
+                        locked_model: None,
+                        locked_reasoning_effort: None,
                         nickname_candidates: None,
                     }
                 ),
@@ -365,6 +374,8 @@ Rules:
 - You are encouraged to spawn up multiple explorers in parallel when you have multiple distinct questions to ask about the codebase that can be answered independently. This allows you to get more information faster without waiting for one question to finish before asking the next. While waiting for the explorer results, you can continue working on other local tasks that do not depend on those results. This parallelism is a key advantage of delegation, so use it whenever you have multiple questions to ask.
 - Reuse existing explorers for related questions."#.to_string()),
                         config_file: Some("explorer.toml".to_string().parse().unwrap_or_default()),
+                        locked_model: None,
+                        locked_reasoning_effort: None,
                         nickname_candidates: None,
                     }
                 ),
@@ -380,6 +391,8 @@ Rules:
 - Explicitly assign **ownership** of the task (files / responsibility). When the subtask involves code changes, you should clearly specify which files or modules the worker is responsible for. This helps avoid merge conflicts and ensures accountability. For example, you can say "Worker 1 is responsible for updating the authentication module, while Worker 2 will handle the database layer." By defining clear ownership, you can delegate more effectively and reduce coordination overhead.
 - Always tell workers they are **not alone in the codebase**, and they should not revert the edits made by others, and they should adjust their implementation to accommodate the changes made by others. This is important because there may be multiple workers making changes in parallel, and they need to be aware of each other's work to avoid conflicts and ensure a cohesive final product."#.to_string()),
                         config_file: None,
+                        locked_model: None,
+                        locked_reasoning_effort: None,
                         nickname_candidates: None,
                     }
                 ),

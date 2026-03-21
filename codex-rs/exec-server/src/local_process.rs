@@ -185,6 +185,15 @@ impl LocalProcess {
                 TerminalSize::default(),
             )
             .await
+        } else if params.stdin {
+            codex_utils_pty::spawn_pipe_process(
+                program,
+                args,
+                params.cwd.as_path(),
+                &params.env,
+                &params.arg0,
+            )
+            .await
         } else {
             codex_utils_pty::spawn_pipe_process_no_stdin(
                 program,
@@ -472,17 +481,8 @@ impl ExecProcess for LocalProcess {
         self.exec_read(params).await.map_err(map_handler_error)
     }
 
-    async fn write(
-        &self,
-        process_id: &str,
-        chunk: Vec<u8>,
-    ) -> Result<WriteResponse, ExecServerError> {
-        self.exec_write(WriteParams {
-            process_id: process_id.to_string(),
-            chunk: chunk.into(),
-        })
-        .await
-        .map_err(map_handler_error)
+    async fn write(&self, params: WriteParams) -> Result<WriteResponse, ExecServerError> {
+        self.exec_write(params).await.map_err(map_handler_error)
     }
 
     async fn resize(

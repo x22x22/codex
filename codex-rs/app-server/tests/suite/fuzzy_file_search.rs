@@ -46,6 +46,35 @@ async fn initialized_mcp(codex_home: &TempDir) -> Result<McpProcess> {
     Ok(mcp)
 }
 
+#[tokio::test]
+async fn test_fuzzy_file_search_rejects_unsupported_environment_id() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mut mcp = initialized_mcp(&codex_home).await?;
+
+    let request_id = mcp
+        .send_raw_request(
+            "fuzzyFileSearch",
+            Some(json!({
+                "environmentId": "remote",
+                "query": "alp",
+                "roots": [],
+            })),
+        )
+        .await?;
+    let err = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+    assert_eq!(err.error.code, -32600);
+    assert_eq!(
+        err.error.message,
+        "unsupported environmentId `remote`; configured environment is `local`"
+    );
+
+    Ok(())
+}
+
 async fn wait_for_session_updated(
     mcp: &mut McpProcess,
     session_id: &str,

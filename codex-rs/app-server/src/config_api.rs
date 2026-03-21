@@ -24,6 +24,7 @@ use codex_core::config_loader::SandboxModeRequirement as CoreSandboxModeRequirem
 use codex_core::plugins::PluginId;
 use codex_core::plugins::collect_plugin_enabled_candidates;
 use codex_core::plugins::installed_plugin_telemetry_metadata;
+use codex_exec_server::Environment;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::protocol::Op;
 use serde_json::json;
@@ -56,6 +57,8 @@ impl UserConfigReloader for ThreadManager {
 #[derive(Clone)]
 pub(crate) struct ConfigApi {
     codex_home: PathBuf,
+    cwd: PathBuf,
+    experimental_exec_server_url: Option<String>,
     cli_overrides: Vec<(String, TomlValue)>,
     loader_overrides: LoaderOverrides,
     cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
@@ -66,6 +69,8 @@ pub(crate) struct ConfigApi {
 impl ConfigApi {
     pub(crate) fn new(
         codex_home: PathBuf,
+        cwd: PathBuf,
+        experimental_exec_server_url: Option<String>,
         cli_overrides: Vec<(String, TomlValue)>,
         loader_overrides: LoaderOverrides,
         cloud_requirements: Arc<RwLock<CloudRequirementsLoader>>,
@@ -74,6 +79,8 @@ impl ConfigApi {
     ) -> Self {
         Self {
             codex_home,
+            cwd,
+            experimental_exec_server_url,
             cli_overrides,
             loader_overrides,
             cloud_requirements,
@@ -100,15 +107,52 @@ impl ConfigApi {
         &self,
         params: ConfigReadParams,
     ) -> Result<ConfigReadResponse, JSONRPCErrorError> {
-        self.config_service().read(params).await.map_err(map_error)
+        let configured_environment_id =
+            Environment::default_environment_id(self.experimental_exec_server_url.as_deref());
+        if let Some(environment_id) = params.environment_id.as_deref()
+            && environment_id != configured_environment_id
+        {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+                data: None,
+            });
+        }
+
+        let environment = Environment::create(self.experimental_exec_server_url.clone())
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to bind environment for config/read: {err}"),
+                data: None,
+            })?;
+        let filesystem = environment.get_filesystem();
+        let params = ConfigReadParams {
+            cwd: params.cwd.or_else(|| Some(self.cwd.display().to_string())),
+            ..params
+        };
+        self.config_service()
+            .read_with_filesystem(params, &configured_environment_id, &filesystem)
+            .await
+            .map_err(map_error)
     }
 
     pub(crate) async fn config_requirements_read(
         &self,
     ) -> Result<ConfigRequirementsReadResponse, JSONRPCErrorError> {
+        let environment = Environment::create(self.experimental_exec_server_url.clone())
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to bind environment for config/requirements/read: {err}"),
+                data: None,
+            })?;
+        let filesystem = environment.get_filesystem();
         let requirements = self
             .config_service()
-            .read_requirements()
+            .read_requirements_with_filesystem(&filesystem)
             .await
             .map_err(map_error)?
             .map(map_requirements_toml_to_api);
@@ -120,11 +164,32 @@ impl ConfigApi {
         &self,
         params: ConfigValueWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
+        let configured_environment_id =
+            Environment::default_environment_id(self.experimental_exec_server_url.as_deref());
+        if let Some(environment_id) = params.environment_id.as_deref()
+            && environment_id != configured_environment_id
+        {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+                data: None,
+            });
+        }
+        let environment = Environment::create(self.experimental_exec_server_url.clone())
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to bind environment for config/value/write: {err}"),
+                data: None,
+            })?;
+        let filesystem = environment.get_filesystem();
         let pending_changes =
             collect_plugin_enabled_candidates([(&params.key_path, &params.value)].into_iter());
         let response = self
             .config_service()
-            .write_value(params)
+            .write_value_with_filesystem(params, &filesystem)
             .await
             .map_err(map_error)?;
         self.emit_plugin_toggle_events(pending_changes);
@@ -135,6 +200,27 @@ impl ConfigApi {
         &self,
         params: ConfigBatchWriteParams,
     ) -> Result<ConfigWriteResponse, JSONRPCErrorError> {
+        let configured_environment_id =
+            Environment::default_environment_id(self.experimental_exec_server_url.as_deref());
+        if let Some(environment_id) = params.environment_id.as_deref()
+            && environment_id != configured_environment_id
+        {
+            return Err(JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+                data: None,
+            });
+        }
+        let environment = Environment::create(self.experimental_exec_server_url.clone())
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to bind environment for config/batchWrite: {err}"),
+                data: None,
+            })?;
+        let filesystem = environment.get_filesystem();
         let reload_user_config = params.reload_user_config;
         let pending_changes = collect_plugin_enabled_candidates(
             params
@@ -144,7 +230,7 @@ impl ConfigApi {
         );
         let response = self
             .config_service()
-            .batch_write(params)
+            .batch_write_with_filesystem(params, &filesystem)
             .await
             .map_err(map_error)?;
         self.emit_plugin_toggle_events(pending_changes);
@@ -406,6 +492,8 @@ mod tests {
         );
         let config_api = ConfigApi::new(
             codex_home.path().to_path_buf(),
+            std::env::current_dir().expect("current dir"),
+            None,
             Vec::new(),
             LoaderOverrides::default(),
             Arc::new(RwLock::new(CloudRequirementsLoader::default())),
@@ -420,6 +508,7 @@ mod tests {
 
         let response = config_api
             .batch_write(ConfigBatchWriteParams {
+                environment_id: None,
                 edits: vec![codex_app_server_protocol::ConfigEdit {
                     key_path: "model".to_string(),
                     value: json!("gpt-5"),

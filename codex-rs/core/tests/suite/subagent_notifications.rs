@@ -460,6 +460,8 @@ async fn spawn_agent_role_overrides_requested_model_and_reasoning_settings() -> 
                     AgentRoleConfig {
                         description: Some("Custom role".to_string()),
                         config_file: Some(role_path),
+                        locked_model: None,
+                        locked_reasoning_effort: None,
                         nickname_candidates: None,
                     },
                 );
@@ -508,6 +510,8 @@ async fn spawn_agent_tool_description_mentions_role_locked_settings() -> Result<
             AgentRoleConfig {
                 description: Some("Custom role".to_string()),
                 config_file: Some(role_path),
+                locked_model: Some(ROLE_MODEL.to_string()),
+                locked_reasoning_effort: Some(ROLE_REASONING_EFFORT.to_string()),
                 nickname_candidates: None,
             },
         );

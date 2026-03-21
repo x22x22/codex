@@ -71,6 +71,7 @@ async fn list_threads_with_sort(
 ) -> Result<ThreadListResponse> {
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            environment_id: None,
             cursor,
             limit,
             sort_key,
@@ -486,6 +487,7 @@ async fn thread_list_respects_cwd_filter() -> Result<()> {
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            environment_id: None,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -565,6 +567,7 @@ sqlite = true
     let mut mcp = init_mcp(codex_home.path()).await?;
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            environment_id: None,
             cursor: None,
             limit: Some(10),
             sort_key: None,
@@ -1408,6 +1411,7 @@ async fn thread_list_invalid_cursor_returns_error() -> Result<()> {
 
     let request_id = mcp
         .send_thread_list_request(codex_app_server_protocol::ThreadListParams {
+            environment_id: None,
             cursor: Some("not-a-cursor".to_string()),
             limit: Some(2),
             sort_key: None,

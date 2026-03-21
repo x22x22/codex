@@ -1,6 +1,7 @@
 use super::PluginManifestPaths;
 use super::curated_plugins_repo_path;
 use super::load_plugin_manifest;
+use super::load_plugin_manifest_with_filesystem;
 use super::manifest::PluginManifestInterface;
 use super::marketplace::MarketplaceError;
 use super::marketplace::MarketplaceInterface;
@@ -9,9 +10,13 @@ use super::marketplace::MarketplacePluginPolicy;
 use super::marketplace::MarketplacePluginSource;
 use super::marketplace::ResolvedMarketplacePlugin;
 use super::marketplace::list_marketplaces;
+use super::marketplace::list_marketplaces_with_home_with_filesystem;
 use super::marketplace::load_marketplace;
+use super::marketplace::load_marketplace_with_filesystem;
 use super::marketplace::resolve_marketplace_plugin;
+use super::marketplace::resolve_marketplace_plugin_with_filesystem;
 use super::read_curated_plugins_sha;
+use super::read_curated_plugins_sha_with_filesystem;
 use super::remote::RemotePluginFetchError;
 use super::remote::RemotePluginMutationError;
 use super::remote::enable_remote_plugin;
@@ -40,11 +45,16 @@ use crate::features::Feature;
 use crate::skills::SkillMetadata;
 use crate::skills::loader::SkillRoot;
 use crate::skills::loader::load_skills_from_roots;
+use crate::skills::loader::load_skills_from_roots_with_filesystem;
+use codex_app_server_protocol::ConfigBatchWriteParams;
+use codex_app_server_protocol::ConfigEdit as ProtocolConfigEdit;
 use codex_app_server_protocol::ConfigValueWriteParams;
 use codex_app_server_protocol::MergeStrategy;
+use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_protocol::protocol::SkillScope;
 use codex_utils_absolute_path::AbsolutePathBuf;
+use dirs::home_dir;
 use serde::Deserialize;
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
@@ -107,6 +117,68 @@ fn featured_plugin_ids_cache_key(
         chatgpt_user_id,
         is_workspace_account,
     }
+}
+
+fn plugin_config_edit_to_key_value_edit(edit: ConfigEdit) -> Option<ProtocolConfigEdit> {
+    match edit {
+        ConfigEdit::SetPath { segments, value } => Some(ProtocolConfigEdit {
+            key_path: segments.join("."),
+            value: match value {
+                toml_edit::Item::Value(toml_edit::Value::String(value)) => {
+                    JsonValue::String(value.value().to_string())
+                }
+                toml_edit::Item::Value(toml_edit::Value::Integer(value)) => {
+                    JsonValue::Number((*value.value()).into())
+                }
+                toml_edit::Item::Value(toml_edit::Value::Float(value)) => {
+                    serde_json::Number::from_f64(*value.value()).map(JsonValue::Number)?
+                }
+                toml_edit::Item::Value(toml_edit::Value::Boolean(value)) => {
+                    JsonValue::Bool(*value.value())
+                }
+                _ => return None,
+            },
+            merge_strategy: MergeStrategy::Replace,
+        }),
+        ConfigEdit::ClearPath { segments } => Some(ProtocolConfigEdit {
+            key_path: segments.join("."),
+            value: JsonValue::Null,
+            merge_strategy: MergeStrategy::Replace,
+        }),
+        _ => None,
+    }
+}
+
+async fn write_plugin_config_edits_with_filesystem<F, I>(
+    codex_home: &Path,
+    edits: I,
+    filesystem: &F,
+) -> Result<(), ConfigServiceError>
+where
+    F: ExecutorFileSystem + ?Sized,
+    I: IntoIterator<Item = ConfigEdit>,
+{
+    let edits = edits
+        .into_iter()
+        .filter_map(plugin_config_edit_to_key_value_edit)
+        .collect::<Vec<_>>();
+    if edits.is_empty() {
+        return Ok(());
+    }
+
+    ConfigService::new_with_defaults(codex_home.to_path_buf())
+        .batch_write_with_filesystem(
+            ConfigBatchWriteParams {
+                environment_id: None,
+                edits,
+                file_path: None,
+                expected_version: None,
+                reload_user_config: false,
+            },
+            filesystem,
+        )
+        .await
+        .map(|_| ())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -511,6 +583,29 @@ impl PluginsManager {
         self.plugins_for_config_with_force_reload(config, /*force_reload*/ false)
     }
 
+    pub async fn plugins_for_config_with_filesystem<F>(
+        &self,
+        config: &Config,
+        _force_reload: bool,
+        filesystem: &F,
+    ) -> PluginLoadOutcome
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        if !config.features.enabled(Feature::Plugins) {
+            return PluginLoadOutcome::default();
+        }
+
+        let outcome = load_plugins_from_layer_stack_with_filesystem(
+            &config.config_layer_stack,
+            &self.store,
+            filesystem,
+        )
+        .await;
+        log_plugin_load_errors(&outcome);
+        outcome
+    }
+
     pub(crate) fn plugins_for_config_with_force_reload(
         &self,
         config: &Config,
@@ -653,6 +748,50 @@ impl PluginsManager {
         self.install_resolved_plugin(resolved).await
     }
 
+    pub async fn install_plugin_with_filesystem<F>(
+        &self,
+        request: PluginInstallRequest,
+        filesystem: &F,
+    ) -> Result<PluginInstallOutcome, PluginInstallError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let resolved = resolve_marketplace_plugin_with_filesystem(
+            &request.marketplace_path,
+            &request.plugin_name,
+            self.restriction_product,
+            filesystem,
+        )
+        .await?;
+        self.install_resolved_plugin_with_filesystem(resolved, filesystem)
+            .await
+    }
+
+    pub async fn install_plugin_with_remote_sync_with_filesystem<F>(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+        request: PluginInstallRequest,
+        filesystem: &F,
+    ) -> Result<PluginInstallOutcome, PluginInstallError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let resolved = resolve_marketplace_plugin_with_filesystem(
+            &request.marketplace_path,
+            &request.plugin_name,
+            self.restriction_product,
+            filesystem,
+        )
+        .await?;
+        let plugin_id = resolved.plugin_id.as_key();
+        enable_remote_plugin(config, auth, &plugin_id)
+            .await
+            .map_err(PluginInstallError::from)?;
+        self.install_resolved_plugin_with_filesystem(resolved, filesystem)
+            .await
+    }
+
     async fn install_resolved_plugin(
         &self,
         resolved: ResolvedMarketplacePlugin,
@@ -683,6 +822,7 @@ impl PluginsManager {
 
         ConfigService::new_with_defaults(self.codex_home.clone())
             .write_value(ConfigValueWriteParams {
+                environment_id: None,
                 key_path: format!("plugins.{}", result.plugin_id.as_key()),
                 value: json!({
                     "enabled": true,
@@ -691,6 +831,77 @@ impl PluginsManager {
                 file_path: None,
                 expected_version: None,
             })
+            .await
+            .map(|_| ())
+            .map_err(PluginInstallError::from)?;
+
+        let analytics_events_client = match self.analytics_events_client.read() {
+            Ok(client) => client.clone(),
+            Err(err) => err.into_inner().clone(),
+        };
+        if let Some(analytics_events_client) = analytics_events_client {
+            analytics_events_client.track_plugin_installed(plugin_telemetry_metadata_from_root(
+                &result.plugin_id,
+                result.installed_path.as_path(),
+            ));
+        }
+
+        Ok(PluginInstallOutcome {
+            plugin_id: result.plugin_id,
+            plugin_version: result.plugin_version,
+            installed_path: result.installed_path,
+            auth_policy,
+        })
+    }
+
+    async fn install_resolved_plugin_with_filesystem<F>(
+        &self,
+        resolved: ResolvedMarketplacePlugin,
+        filesystem: &F,
+    ) -> Result<PluginInstallOutcome, PluginInstallError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let auth_policy = resolved.auth_policy;
+        let plugin_version =
+            if resolved.plugin_id.marketplace_name == OPENAI_CURATED_MARKETPLACE_NAME {
+                Some(
+                    read_curated_plugins_sha_with_filesystem(self.codex_home.as_path(), filesystem)
+                        .await
+                        .ok_or_else(|| {
+                            PluginStoreError::Invalid(
+                                "local curated marketplace sha is not available".to_string(),
+                            )
+                        })?,
+                )
+            } else {
+                None
+            };
+        let store = self.store.clone();
+        let result: StorePluginInstallResult = tokio::task::spawn_blocking(move || {
+            if let Some(plugin_version) = plugin_version {
+                store.install_with_version(resolved.source_path, resolved.plugin_id, plugin_version)
+            } else {
+                store.install(resolved.source_path, resolved.plugin_id)
+            }
+        })
+        .await
+        .map_err(PluginInstallError::join)??;
+
+        ConfigService::new_with_defaults(self.codex_home.clone())
+            .write_value_with_filesystem(
+                ConfigValueWriteParams {
+                    environment_id: None,
+                    key_path: format!("plugins.{}", result.plugin_id.as_key()),
+                    value: json!({
+                        "enabled": true,
+                    }),
+                    merge_strategy: MergeStrategy::Replace,
+                    file_path: None,
+                    expected_version: None,
+                },
+                filesystem,
+            )
             .await
             .map(|_| ())
             .map_err(PluginInstallError::from)?;
@@ -736,6 +947,38 @@ impl PluginsManager {
         self.uninstall_plugin_id(plugin_id).await
     }
 
+    pub async fn uninstall_plugin_with_filesystem<F>(
+        &self,
+        plugin_id: String,
+        filesystem: &F,
+    ) -> Result<(), PluginUninstallError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let plugin_id = PluginId::parse(&plugin_id)?;
+        self.uninstall_plugin_id_with_filesystem(plugin_id, filesystem)
+            .await
+    }
+
+    pub async fn uninstall_plugin_with_remote_sync_with_filesystem<F>(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+        plugin_id: String,
+        filesystem: &F,
+    ) -> Result<(), PluginUninstallError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let plugin_id = PluginId::parse(&plugin_id)?;
+        let plugin_key = plugin_id.as_key();
+        uninstall_remote_plugin(config, auth, &plugin_key)
+            .await
+            .map_err(PluginUninstallError::from)?;
+        self.uninstall_plugin_id_with_filesystem(plugin_id, filesystem)
+            .await
+    }
+
     async fn uninstall_plugin_id(&self, plugin_id: PluginId) -> Result<(), PluginUninstallError> {
         let plugin_telemetry = self
             .store
@@ -753,6 +996,51 @@ impl PluginsManager {
             }])
             .apply()
             .await?;
+
+        let analytics_events_client = match self.analytics_events_client.read() {
+            Ok(client) => client.clone(),
+            Err(err) => err.into_inner().clone(),
+        };
+        if let Some(plugin_telemetry) = plugin_telemetry
+            && let Some(analytics_events_client) = analytics_events_client
+        {
+            analytics_events_client.track_plugin_uninstalled(plugin_telemetry);
+        }
+
+        Ok(())
+    }
+
+    async fn uninstall_plugin_id_with_filesystem<F>(
+        &self,
+        plugin_id: PluginId,
+        filesystem: &F,
+    ) -> Result<(), PluginUninstallError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let plugin_telemetry = self
+            .store
+            .active_plugin_root_with_filesystem(&plugin_id, filesystem)
+            .await
+            .ok()
+            .flatten()
+            .map(|plugin_root| {
+                plugin_telemetry_metadata_from_root(&plugin_id, plugin_root.as_path())
+            });
+        self.store
+            .uninstall_with_filesystem(&plugin_id, filesystem)
+            .await?;
+
+        write_plugin_config_edits_with_filesystem(
+            self.codex_home.as_path(),
+            [ConfigEdit::ClearPath {
+                segments: vec!["plugins".to_string(), plugin_id.as_key()],
+            }],
+            filesystem,
+        )
+        .await
+        .map_err(anyhow::Error::from)
+        .map_err(PluginUninstallError::Config)?;
 
         let analytics_events_client = match self.analytics_events_client.read() {
             Ok(client) => client.clone(),
@@ -966,6 +1254,226 @@ impl PluginsManager {
         Ok(result)
     }
 
+    pub async fn sync_plugins_from_remote_with_filesystem<F>(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+        filesystem: &F,
+    ) -> Result<RemotePluginSyncResult, PluginRemoteSyncError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        if !config.features.enabled(Feature::Plugins) {
+            return Ok(RemotePluginSyncResult::default());
+        }
+
+        info!("starting remote plugin sync");
+        let remote_plugins = fetch_remote_plugin_status(config, auth)
+            .await
+            .map_err(PluginRemoteSyncError::from)?;
+        let configured_plugins = configured_plugins_from_stack(&config.config_layer_stack);
+        let curated_marketplace_root = curated_plugins_repo_path(self.codex_home.as_path());
+        let curated_marketplace_path = AbsolutePathBuf::try_from(
+            curated_marketplace_root.join(".agents/plugins/marketplace.json"),
+        )
+        .map_err(|_| PluginRemoteSyncError::LocalMarketplaceNotFound)?;
+        let curated_marketplace =
+            match load_marketplace_with_filesystem(&curated_marketplace_path, filesystem).await {
+                Ok(marketplace) => marketplace,
+                Err(MarketplaceError::MarketplaceNotFound { .. }) => {
+                    return Err(PluginRemoteSyncError::LocalMarketplaceNotFound);
+                }
+                Err(err) => return Err(err.into()),
+            };
+
+        let marketplace_name = curated_marketplace.name.clone();
+        let curated_plugin_version =
+            read_curated_plugins_sha_with_filesystem(self.codex_home.as_path(), filesystem)
+                .await
+                .ok_or_else(|| {
+                    PluginStoreError::Invalid(
+                        "local curated marketplace sha is not available".to_string(),
+                    )
+                })?;
+        let mut local_plugins = Vec::<(
+            String,
+            PluginId,
+            AbsolutePathBuf,
+            Option<bool>,
+            Option<String>,
+            bool,
+        )>::new();
+        let mut local_plugin_names = HashSet::new();
+        for plugin in curated_marketplace.plugins {
+            let plugin_name = plugin.name;
+            if !local_plugin_names.insert(plugin_name.clone()) {
+                warn!(
+                    plugin = plugin_name,
+                    marketplace = %marketplace_name,
+                    "ignoring duplicate local plugin entry during remote sync"
+                );
+                continue;
+            }
+
+            let plugin_id = PluginId::new(plugin_name.clone(), marketplace_name.clone())?;
+            let plugin_key = plugin_id.as_key();
+            let source_path = match plugin.source {
+                MarketplacePluginSource::Local { path } => path,
+            };
+            let current_enabled = configured_plugins
+                .get(&plugin_key)
+                .map(|plugin| plugin.enabled);
+            let installed_version = self
+                .store
+                .active_plugin_version_with_filesystem(&plugin_id, filesystem)
+                .await
+                .map_err(|err| PluginStoreError::io("failed to inspect plugin cache entry", err))?;
+            let product_allowed = self.restriction_product_matches(&plugin.policy.products);
+            local_plugins.push((
+                plugin_name,
+                plugin_id,
+                source_path,
+                current_enabled,
+                installed_version,
+                product_allowed,
+            ));
+        }
+
+        let mut remote_installed_plugin_names = HashSet::<String>::new();
+        for plugin in remote_plugins {
+            if plugin.marketplace_name != marketplace_name {
+                return Err(PluginRemoteSyncError::UnknownRemoteMarketplace {
+                    marketplace_name: plugin.marketplace_name,
+                });
+            }
+            if !local_plugin_names.contains(&plugin.name) {
+                warn!(
+                    plugin = plugin.name,
+                    marketplace = %marketplace_name,
+                    "ignoring remote plugin missing from local marketplace during sync"
+                );
+                continue;
+            }
+            if !plugin.enabled {
+                continue;
+            }
+            if !remote_installed_plugin_names.insert(plugin.name.clone()) {
+                return Err(PluginRemoteSyncError::DuplicateRemotePlugin {
+                    plugin_name: plugin.name,
+                });
+            }
+        }
+
+        let mut config_edits = Vec::new();
+        let mut installs = Vec::new();
+        let mut uninstalls = Vec::new();
+        let mut result = RemotePluginSyncResult::default();
+        let remote_plugin_count = remote_installed_plugin_names.len();
+        let local_plugin_count = local_plugins.len();
+
+        for (
+            plugin_name,
+            plugin_id,
+            source_path,
+            current_enabled,
+            installed_version,
+            product_allowed,
+        ) in local_plugins
+        {
+            let plugin_key = plugin_id.as_key();
+            let is_installed = installed_version.is_some();
+            if !product_allowed {
+                continue;
+            }
+            if remote_installed_plugin_names.contains(&plugin_name) {
+                if !is_installed {
+                    installs.push((
+                        source_path,
+                        plugin_id.clone(),
+                        curated_plugin_version.clone(),
+                    ));
+                }
+                if !is_installed {
+                    result.installed_plugin_ids.push(plugin_key.clone());
+                }
+
+                if current_enabled != Some(true) {
+                    result.enabled_plugin_ids.push(plugin_key.clone());
+                    config_edits.push(ConfigEdit::SetPath {
+                        segments: vec!["plugins".to_string(), plugin_key, "enabled".to_string()],
+                        value: value(true),
+                    });
+                }
+            } else {
+                if is_installed {
+                    uninstalls.push(plugin_id);
+                }
+                if is_installed || current_enabled.is_some() {
+                    result.uninstalled_plugin_ids.push(plugin_key.clone());
+                }
+                if current_enabled.is_some() {
+                    config_edits.push(ConfigEdit::ClearPath {
+                        segments: vec!["plugins".to_string(), plugin_key],
+                    });
+                }
+            }
+        }
+
+        for (source_path, plugin_id, plugin_version) in installs {
+            if let Err(err) = self
+                .store
+                .install_with_version_with_filesystem(
+                    source_path,
+                    plugin_id,
+                    plugin_version,
+                    filesystem,
+                )
+                .await
+            {
+                self.clear_cache();
+                return Err(err.into());
+            }
+        }
+        for plugin_id in uninstalls {
+            if let Err(err) = self
+                .store
+                .uninstall_with_filesystem(&plugin_id, filesystem)
+                .await
+            {
+                self.clear_cache();
+                return Err(err.into());
+            }
+        }
+
+        let config_result = if config_edits.is_empty() {
+            Ok(())
+        } else {
+            write_plugin_config_edits_with_filesystem(
+                self.codex_home.as_path(),
+                config_edits,
+                filesystem,
+            )
+            .await
+        };
+        self.clear_cache();
+        config_result
+            .map_err(anyhow::Error::from)
+            .map_err(PluginRemoteSyncError::Config)?;
+
+        info!(
+            marketplace = %marketplace_name,
+            remote_plugin_count,
+            local_plugin_count,
+            installed_plugin_ids = ?result.installed_plugin_ids,
+            enabled_plugin_ids = ?result.enabled_plugin_ids,
+            disabled_plugin_ids = ?result.disabled_plugin_ids,
+            uninstalled_plugin_ids = ?result.uninstalled_plugin_ids,
+            "completed remote plugin sync"
+        );
+
+        Ok(result)
+    }
+
     pub fn list_marketplaces_for_config(
         &self,
         config: &Config,
@@ -999,6 +1507,66 @@ impl PluginsManager {
                             // Enabled state is keyed by `<plugin>@<marketplace>`, so duplicate
                             // plugin entries from duplicate marketplace files intentionally
                             // resolve to the first discovered source.
+                            id: plugin_key.clone(),
+                            installed: installed_plugins.contains(&plugin_key),
+                            enabled: enabled_plugins.contains(&plugin_key),
+                            name: plugin.name,
+                            source: plugin.source,
+                            policy: plugin.policy,
+                            interface: plugin.interface,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+
+                (!plugins.is_empty()).then_some(ConfiguredMarketplace {
+                    name: marketplace.name,
+                    path: marketplace.path,
+                    interface: marketplace.interface,
+                    plugins,
+                })
+            })
+            .collect())
+    }
+
+    pub async fn list_marketplaces_for_config_with_filesystem<F>(
+        &self,
+        config: &Config,
+        additional_roots: &[AbsolutePathBuf],
+        filesystem: &F,
+    ) -> Result<Vec<ConfiguredMarketplace>, MarketplaceError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        if !config.features.enabled(Feature::Plugins) {
+            return Ok(Vec::new());
+        }
+
+        let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
+        let marketplaces = list_marketplaces_with_home_with_filesystem(
+            &self.marketplace_roots(additional_roots),
+            home_dir().as_deref(),
+            filesystem,
+        )
+        .await?;
+        let mut seen_plugin_keys = HashSet::new();
+
+        Ok(marketplaces
+            .into_iter()
+            .filter_map(|marketplace| {
+                let marketplace_name = marketplace.name.clone();
+                let plugins = marketplace
+                    .plugins
+                    .into_iter()
+                    .filter_map(|plugin| {
+                        let plugin_key = format!("{}@{marketplace_name}", plugin.name);
+                        if !seen_plugin_keys.insert(plugin_key.clone()) {
+                            return None;
+                        }
+                        if !self.restriction_product_matches(&plugin.policy.products) {
+                            return None;
+                        }
+
+                        Some(ConfiguredMarketplacePlugin {
                             id: plugin_key.clone(),
                             installed: installed_plugins.contains(&plugin_key),
                             enabled: enabled_plugins.contains(&plugin_key),
@@ -1082,6 +1650,115 @@ impl PluginsManager {
                 load_mcp_servers_from_file(source_path.as_path(), &mcp_config_path)
                     .mcp_servers
                     .into_keys(),
+            );
+        }
+        mcp_server_names.sort_unstable();
+        mcp_server_names.dedup();
+
+        Ok(PluginReadOutcome {
+            marketplace_name: marketplace.name,
+            marketplace_path: marketplace.path,
+            plugin: PluginDetail {
+                id: plugin_key.clone(),
+                name: plugin.name,
+                description,
+                source: plugin.source,
+                policy: plugin.policy,
+                interface: plugin.interface,
+                installed: installed_plugins.contains(&plugin_key),
+                enabled: enabled_plugins.contains(&plugin_key),
+                skills,
+                apps,
+                mcp_server_names,
+            },
+        })
+    }
+
+    pub async fn read_plugin_for_config_with_filesystem<F>(
+        &self,
+        config: &Config,
+        request: &PluginReadRequest,
+        filesystem: &F,
+    ) -> Result<PluginReadOutcome, MarketplaceError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        if !config.features.enabled(Feature::Plugins) {
+            return Err(MarketplaceError::PluginsDisabled);
+        }
+
+        let marketplace =
+            load_marketplace_with_filesystem(&request.marketplace_path, filesystem).await?;
+        let marketplace_name = marketplace.name.clone();
+        let plugin = marketplace
+            .plugins
+            .into_iter()
+            .find(|plugin| plugin.name == request.plugin_name);
+        let Some(plugin) = plugin else {
+            return Err(MarketplaceError::PluginNotFound {
+                plugin_name: request.plugin_name.clone(),
+                marketplace_name,
+            });
+        };
+        if !self.restriction_product_matches(&plugin.policy.products) {
+            return Err(MarketplaceError::PluginNotFound {
+                plugin_name: request.plugin_name.clone(),
+                marketplace_name,
+            });
+        }
+
+        let plugin_id = PluginId::new(plugin.name.clone(), marketplace.name.clone()).map_err(
+            |err| match err {
+                PluginIdError::Invalid(message) => MarketplaceError::InvalidPlugin(message),
+            },
+        )?;
+        let plugin_key = plugin_id.as_key();
+        let (installed_plugins, enabled_plugins) = self.configured_plugin_states(config);
+        let source_path = match &plugin.source {
+            MarketplacePluginSource::Local { path } => path.clone(),
+        };
+        let manifest = load_plugin_manifest_with_filesystem(source_path.as_path(), filesystem)
+            .await
+            .ok_or_else(|| {
+                MarketplaceError::InvalidPlugin(
+                    "missing or invalid .codex-plugin/plugin.json".to_string(),
+                )
+            })?;
+        let description = manifest.description.clone();
+        let manifest_paths = &manifest.paths;
+        let skill_roots =
+            plugin_skill_roots_with_filesystem(source_path.as_path(), manifest_paths, filesystem)
+                .await;
+        let skills = load_skills_from_roots_with_filesystem(
+            skill_roots.into_iter().map(|path| SkillRoot {
+                path,
+                scope: SkillScope::User,
+            }),
+            filesystem,
+        )
+        .await
+        .skills
+        .into_iter()
+        .filter(|skill| skill.matches_product_restriction_for_product(self.restriction_product))
+        .collect();
+        let apps = load_plugin_apps_with_filesystem(source_path.as_path(), filesystem).await;
+        let mcp_config_paths = plugin_mcp_config_paths_with_filesystem(
+            source_path.as_path(),
+            manifest_paths,
+            filesystem,
+        )
+        .await;
+        let mut mcp_server_names = Vec::new();
+        for mcp_config_path in mcp_config_paths {
+            mcp_server_names.extend(
+                load_mcp_servers_from_file_with_filesystem(
+                    source_path.as_path(),
+                    &mcp_config_path,
+                    filesystem,
+                )
+                .await
+                .mcp_servers
+                .into_keys(),
             );
         }
         mcp_server_names.sort_unstable();
@@ -1357,9 +2034,61 @@ pub(crate) fn load_plugins_from_layer_stack(
     PluginLoadOutcome::from_plugins(plugins)
 }
 
+async fn load_plugins_from_layer_stack_with_filesystem<F>(
+    config_layer_stack: &ConfigLayerStack,
+    store: &PluginStore,
+    filesystem: &F,
+) -> PluginLoadOutcome
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut configured_plugins: Vec<_> = configured_plugins_from_stack(config_layer_stack)
+        .into_iter()
+        .collect();
+    configured_plugins.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+
+    let mut plugins = Vec::with_capacity(configured_plugins.len());
+    let mut seen_mcp_server_names = HashMap::<String, String>::new();
+    for (configured_name, plugin) in configured_plugins {
+        let loaded_plugin =
+            load_plugin_with_filesystem(configured_name.clone(), &plugin, store, filesystem).await;
+        for name in loaded_plugin.mcp_servers.keys() {
+            if let Some(previous_plugin) =
+                seen_mcp_server_names.insert(name.clone(), configured_name.clone())
+            {
+                warn!(
+                    plugin = configured_name,
+                    previous_plugin,
+                    server = name,
+                    "skipping duplicate plugin MCP server name"
+                );
+            }
+        }
+        plugins.push(loaded_plugin);
+    }
+
+    PluginLoadOutcome::from_plugins(plugins)
+}
+
 pub(crate) fn plugin_namespace_for_skill_path(path: &Path) -> Option<String> {
     for ancestor in path.ancestors() {
         if let Some(manifest) = load_plugin_manifest(ancestor) {
+            return Some(manifest.name);
+        }
+    }
+
+    None
+}
+
+async fn plugin_namespace_for_skill_path_with_filesystem<F>(
+    path: &Path,
+    filesystem: &F,
+) -> Option<String>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    for ancestor in path.ancestors() {
+        if let Some(manifest) = load_plugin_manifest_with_filesystem(ancestor, filesystem).await {
             return Some(manifest.name);
         }
     }
@@ -1512,8 +2241,120 @@ fn load_plugin(config_name: String, plugin: &PluginConfig, store: &PluginStore) 
     loaded_plugin
 }
 
+async fn load_plugin_with_filesystem<F>(
+    config_name: String,
+    plugin: &PluginConfig,
+    store: &PluginStore,
+    filesystem: &F,
+) -> LoadedPlugin
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let plugin_root = match PluginId::parse(&config_name) {
+        Ok(plugin_id) => match store
+            .active_plugin_root_with_filesystem(&plugin_id, filesystem)
+            .await
+        {
+            Ok(Some(plugin_root)) => Ok(plugin_root),
+            Ok(None) | Err(_) => Ok(store.plugin_root(&plugin_id, DEFAULT_PLUGIN_VERSION)),
+        },
+        Err(err) => Err(err),
+    };
+    let root = match &plugin_root {
+        Ok(plugin_root) => plugin_root.clone(),
+        Err(_) => store.root().clone(),
+    };
+    let mut loaded_plugin = LoadedPlugin {
+        config_name,
+        manifest_name: None,
+        manifest_description: None,
+        root,
+        enabled: plugin.enabled,
+        skill_roots: Vec::new(),
+        mcp_servers: HashMap::new(),
+        apps: Vec::new(),
+        error: None,
+    };
+
+    if !plugin.enabled {
+        return loaded_plugin;
+    }
+
+    let plugin_root = match plugin_root {
+        Ok(plugin_root) => plugin_root,
+        Err(err) => {
+            loaded_plugin.error = Some(err.to_string());
+            return loaded_plugin;
+        }
+    };
+
+    if filesystem
+        .get_metadata(&plugin_root)
+        .await
+        .map_or(true, |metadata| !metadata.is_directory)
+    {
+        loaded_plugin.error = Some("path does not exist or is not a directory".to_string());
+        return loaded_plugin;
+    }
+
+    let Some(manifest) =
+        load_plugin_manifest_with_filesystem(plugin_root.as_path(), filesystem).await
+    else {
+        loaded_plugin.error = Some("missing or invalid .codex-plugin/plugin.json".to_string());
+        return loaded_plugin;
+    };
+
+    let manifest_paths = &manifest.paths;
+    loaded_plugin.manifest_name = Some(manifest.name.clone());
+    loaded_plugin.manifest_description = manifest.description.clone();
+    loaded_plugin.skill_roots =
+        plugin_skill_roots_with_filesystem(plugin_root.as_path(), manifest_paths, filesystem).await;
+    let mut mcp_servers = HashMap::new();
+    for mcp_config_path in
+        plugin_mcp_config_paths_with_filesystem(plugin_root.as_path(), manifest_paths, filesystem)
+            .await
+    {
+        let plugin_mcp = load_mcp_servers_from_file_with_filesystem(
+            plugin_root.as_path(),
+            &mcp_config_path,
+            filesystem,
+        )
+        .await;
+        for (name, config) in plugin_mcp.mcp_servers {
+            if mcp_servers.insert(name.clone(), config).is_some() {
+                warn!(
+                    plugin = %plugin_root.display(),
+                    path = %mcp_config_path.display(),
+                    server = name,
+                    "plugin MCP file overwrote an earlier server definition"
+                );
+            }
+        }
+    }
+    loaded_plugin.mcp_servers = mcp_servers;
+    loaded_plugin.apps = load_plugin_apps_with_filesystem(plugin_root.as_path(), filesystem).await;
+    loaded_plugin
+}
+
 fn plugin_skill_roots(plugin_root: &Path, manifest_paths: &PluginManifestPaths) -> Vec<PathBuf> {
     let mut paths = default_skill_roots(plugin_root);
+    if let Some(path) = &manifest_paths.skills {
+        paths.push(path.to_path_buf());
+    }
+    paths.sort_unstable();
+    paths.dedup();
+    paths
+}
+
+async fn plugin_skill_roots_with_filesystem<F>(
+    plugin_root: &Path,
+    manifest_paths: &PluginManifestPaths,
+    filesystem: &F,
+) -> Vec<PathBuf>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut paths = default_skill_roots_with_filesystem(plugin_root, filesystem).await;
     if let Some(path) = &manifest_paths.skills {
         paths.push(path.to_path_buf());
     }
@@ -1531,6 +2372,20 @@ fn default_skill_roots(plugin_root: &Path) -> Vec<PathBuf> {
     }
 }
 
+async fn default_skill_roots_with_filesystem<F>(plugin_root: &Path, filesystem: &F) -> Vec<PathBuf>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let skills_dir = plugin_root.join(DEFAULT_SKILLS_DIR_NAME);
+    let Ok(skills_dir) = AbsolutePathBuf::from_absolute_path(&skills_dir) else {
+        return Vec::new();
+    };
+    match filesystem.get_metadata(&skills_dir).await {
+        Ok(metadata) if metadata.is_directory => vec![skills_dir.to_path_buf()],
+        _ => Vec::new(),
+    }
+}
+
 fn plugin_mcp_config_paths(
     plugin_root: &Path,
     manifest_paths: &PluginManifestPaths,
@@ -1539,6 +2394,20 @@ fn plugin_mcp_config_paths(
         return vec![path.clone()];
     }
     default_mcp_config_paths(plugin_root)
+}
+
+async fn plugin_mcp_config_paths_with_filesystem<F>(
+    plugin_root: &Path,
+    manifest_paths: &PluginManifestPaths,
+    filesystem: &F,
+) -> Vec<AbsolutePathBuf>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    if let Some(path) = &manifest_paths.mcp_servers {
+        return vec![path.clone()];
+    }
+    default_mcp_config_paths_with_filesystem(plugin_root, filesystem).await
 }
 
 fn default_mcp_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
@@ -1554,6 +2423,24 @@ fn default_mcp_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
     paths
 }
 
+async fn default_mcp_config_paths_with_filesystem<F>(
+    plugin_root: &Path,
+    filesystem: &F,
+) -> Vec<AbsolutePathBuf>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let default_path = plugin_root.join(DEFAULT_MCP_CONFIG_FILE);
+    let Ok(default_path) = AbsolutePathBuf::from_absolute_path(&default_path) else {
+        return Vec::new();
+    };
+    if filesystem.get_metadata(&default_path).await.is_ok() {
+        vec![default_path]
+    } else {
+        Vec::new()
+    }
+}
+
 pub fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
     if let Some(manifest) = load_plugin_manifest(plugin_root) {
         return load_apps_from_paths(
@@ -1564,6 +2451,29 @@ pub fn load_plugin_apps(plugin_root: &Path) -> Vec<AppConnectorId> {
     load_apps_from_paths(plugin_root, default_app_config_paths(plugin_root))
 }
 
+async fn load_plugin_apps_with_filesystem<F>(
+    plugin_root: &Path,
+    filesystem: &F,
+) -> Vec<AppConnectorId>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    if let Some(manifest) = load_plugin_manifest_with_filesystem(plugin_root, filesystem).await {
+        return load_apps_from_paths_with_filesystem(
+            plugin_root,
+            plugin_app_config_paths_with_filesystem(plugin_root, &manifest.paths, filesystem).await,
+            filesystem,
+        )
+        .await;
+    }
+    load_apps_from_paths_with_filesystem(
+        plugin_root,
+        default_app_config_paths_with_filesystem(plugin_root, filesystem).await,
+        filesystem,
+    )
+    .await
+}
+
 fn plugin_app_config_paths(
     plugin_root: &Path,
     manifest_paths: &PluginManifestPaths,
@@ -1572,6 +2482,20 @@ fn plugin_app_config_paths(
         return vec![path.clone()];
     }
     default_app_config_paths(plugin_root)
+}
+
+async fn plugin_app_config_paths_with_filesystem<F>(
+    plugin_root: &Path,
+    manifest_paths: &PluginManifestPaths,
+    filesystem: &F,
+) -> Vec<AbsolutePathBuf>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    if let Some(path) = &manifest_paths.apps {
+        return vec![path.clone()];
+    }
+    default_app_config_paths_with_filesystem(plugin_root, filesystem).await
 }
 
 fn default_app_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
@@ -1587,6 +2511,24 @@ fn default_app_config_paths(plugin_root: &Path) -> Vec<AbsolutePathBuf> {
     paths
 }
 
+async fn default_app_config_paths_with_filesystem<F>(
+    plugin_root: &Path,
+    filesystem: &F,
+) -> Vec<AbsolutePathBuf>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let default_path = plugin_root.join(DEFAULT_APP_CONFIG_FILE);
+    let Ok(default_path) = AbsolutePathBuf::from_absolute_path(&default_path) else {
+        return Vec::new();
+    };
+    if filesystem.get_metadata(&default_path).await.is_ok() {
+        vec![default_path]
+    } else {
+        Vec::new()
+    }
+}
+
 fn load_apps_from_paths(
     plugin_root: &Path,
     app_config_paths: Vec<AbsolutePathBuf>,
@@ -1597,6 +2539,50 @@ fn load_apps_from_paths(
             continue;
         };
         let parsed = match serde_json::from_str::<PluginAppFile>(&contents) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                warn!(
+                    path = %app_config_path.display(),
+                    "failed to parse plugin app config: {err}"
+                );
+                continue;
+            }
+        };
+
+        let mut apps: Vec<PluginAppConfig> = parsed.apps.into_values().collect();
+        apps.sort_unstable_by(|left, right| left.id.cmp(&right.id));
+
+        connector_ids.extend(apps.into_iter().filter_map(|app| {
+            if app.id.trim().is_empty() {
+                warn!(
+                    plugin = %plugin_root.display(),
+                    "plugin app config is missing an app id"
+                );
+                None
+            } else {
+                Some(AppConnectorId(app.id))
+            }
+        }));
+    }
+    connector_ids.dedup();
+    connector_ids
+}
+
+async fn load_apps_from_paths_with_filesystem<F>(
+    plugin_root: &Path,
+    app_config_paths: Vec<AbsolutePathBuf>,
+    filesystem: &F,
+) -> Vec<AppConnectorId>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut connector_ids = Vec::new();
+    for app_config_path in app_config_paths {
+        let contents = match filesystem.read_file(&app_config_path).await {
+            Ok(contents) => contents,
+            Err(_) => continue,
+        };
+        let parsed = match serde_json::from_slice::<PluginAppFile>(&contents) {
             Ok(parsed) => parsed,
             Err(err) => {
                 warn!(
@@ -1680,6 +2666,35 @@ fn load_mcp_servers_from_file(
         return PluginMcpDiscovery::default();
     };
     let parsed = match serde_json::from_str::<PluginMcpFile>(&contents) {
+        Ok(parsed) => parsed,
+        Err(err) => {
+            warn!(
+                path = %mcp_config_path.display(),
+                "failed to parse plugin MCP config: {err}"
+            );
+            return PluginMcpDiscovery::default();
+        }
+    };
+    normalize_plugin_mcp_servers(
+        plugin_root,
+        parsed.mcp_servers,
+        mcp_config_path.to_string_lossy().as_ref(),
+    )
+}
+
+async fn load_mcp_servers_from_file_with_filesystem<F>(
+    plugin_root: &Path,
+    mcp_config_path: &AbsolutePathBuf,
+    filesystem: &F,
+) -> PluginMcpDiscovery
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let contents = match filesystem.read_file(mcp_config_path).await {
+        Ok(contents) => contents,
+        Err(_) => return PluginMcpDiscovery::default(),
+    };
+    let parsed = match serde_json::from_slice::<PluginMcpFile>(&contents) {
         Ok(parsed) => parsed,
         Err(err) => {
             warn!(

@@ -876,6 +876,9 @@
     "config": {
       "$ref": "#/definitions/Config"
     },
+    "environmentId": {
+      "type": "string"
+    },
     "layers": {
       "items": {
         "$ref": "#/definitions/ConfigLayer"
@@ -894,6 +897,7 @@
   },
   "required": [
     "config",
+    "environmentId",
     "origins"
   ],
   "title": "ConfigReadResponse",

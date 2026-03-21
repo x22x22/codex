@@ -459,6 +459,7 @@ fn session_target_from_app_server_thread(
         Ok(thread_id) => Some(resume_picker::SessionTarget {
             path: thread.path,
             thread_id,
+            environment_id: Some(thread.environment_id),
         }),
         Err(err) => {
             warn!(
@@ -479,6 +480,7 @@ async fn lookup_session_target_by_name_with_app_server(
     loop {
         let response = app_server
             .thread_list(ThreadListParams {
+                environment_id: None,
                 cursor: cursor.clone(),
                 limit: Some(100),
                 sort_key: Some(AppServerThreadSortKey::UpdatedAt),
@@ -520,7 +522,9 @@ async fn lookup_session_target_with_app_server(
             }
         };
         return match app_server
-            .thread_read(thread_id, /*include_turns*/ false)
+            .thread_read(
+                thread_id, /*environment_id*/ None, /*include_turns*/ false,
+            )
             .await
         {
             Ok(thread) => Ok(session_target_from_app_server_thread(thread)),
@@ -562,6 +566,7 @@ fn latest_session_lookup_params(
     cwd_filter: Option<&Path>,
 ) -> ThreadListParams {
     ThreadListParams {
+        environment_id: None,
         cursor: None,
         limit: Some(1),
         sort_key: Some(AppServerThreadSortKey::UpdatedAt),
@@ -1625,6 +1630,7 @@ mod tests {
         let target = crate::resume_picker::SessionTarget {
             path: None,
             thread_id,
+            environment_id: None,
         };
 
         assert_eq!(target.display_label(), format!("thread {thread_id}"));

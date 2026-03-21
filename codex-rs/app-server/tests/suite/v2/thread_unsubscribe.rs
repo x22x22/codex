@@ -267,6 +267,7 @@ async fn thread_unsubscribe_clears_cached_status_before_resume() -> Result<()> {
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id: thread_id.clone(),
             include_turns: false,
         })

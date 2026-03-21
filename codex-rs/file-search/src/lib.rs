@@ -67,6 +67,13 @@ pub enum MatchType {
     Directory,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchCandidate {
+    pub root: PathBuf,
+    pub path: PathBuf,
+    pub match_type: MatchType,
+}
+
 impl FileMatch {
     pub fn full_path(&self) -> PathBuf {
         self.root.join(&self.path)
@@ -303,6 +310,93 @@ pub fn run(
     Ok(FileSearchResults {
         matches: snapshot.matches,
         total_match_count: snapshot.total_match_count,
+    })
+}
+
+pub fn run_with_candidates(
+    pattern_text: &str,
+    candidates: Vec<SearchCandidate>,
+    options: FileSearchOptions,
+    cancel_flag: Option<Arc<AtomicBool>>,
+) -> anyhow::Result<FileSearchResults> {
+    if candidates.is_empty() {
+        return Ok(FileSearchResults {
+            matches: Vec::new(),
+            total_match_count: 0,
+        });
+    }
+
+    let cancel_flag = cancel_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+    let config = Config::DEFAULT.match_paths();
+    let mut indices_matcher = options
+        .compute_indices
+        .then(|| Matcher::new(config.clone()));
+    let notify = Arc::new(|| {});
+    let mut nucleo = Nucleo::new(config, notify, Some(options.threads.get()), 1);
+    let injector = nucleo.injector();
+
+    for candidate in candidates {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+        injector.push(candidate, |candidate, cols| {
+            cols[0] = Utf32String::from(candidate.path.to_string_lossy().as_ref());
+        });
+    }
+
+    nucleo.pattern.reparse(
+        0,
+        pattern_text,
+        CaseMatching::Smart,
+        Normalization::Smart,
+        false,
+    );
+
+    loop {
+        if cancel_flag.load(Ordering::Relaxed) {
+            break;
+        }
+        let status = nucleo.tick(10);
+        if !status.running {
+            break;
+        }
+    }
+
+    let snapshot = nucleo.snapshot();
+    let limit = options
+        .limit
+        .get()
+        .min(snapshot.matched_item_count() as usize);
+    let pattern = snapshot.pattern().column_pattern(0);
+    let matches = snapshot
+        .matches()
+        .iter()
+        .take(limit)
+        .filter_map(|match_| {
+            let item = snapshot.get_item(match_.idx)?;
+            let indices = if let Some(indices_matcher) = indices_matcher.as_mut() {
+                let mut idx_vec = Vec::<u32>::new();
+                let haystack = item.matcher_columns[0].slice(..);
+                let _ = pattern.indices(haystack, indices_matcher, &mut idx_vec);
+                idx_vec.sort_unstable();
+                idx_vec.dedup();
+                Some(idx_vec)
+            } else {
+                None
+            };
+            Some(FileMatch {
+                score: match_.score,
+                path: item.data.path.clone(),
+                match_type: item.data.match_type,
+                root: item.data.root.clone(),
+                indices,
+            })
+        })
+        .collect();
+
+    Ok(FileSearchResults {
+        matches,
+        total_match_count: snapshot.matched_item_count() as usize,
     })
 }
 

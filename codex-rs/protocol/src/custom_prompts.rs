@@ -10,7 +10,7 @@ use ts_rs::TS;
 /// - Full slash prefix: `"/{PROMPTS_CMD_PREFIX}:"`
 pub const PROMPTS_CMD_PREFIX: &str = "prompts";
 
-#[derive(Serialize, Deserialize, Debug, Clone, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
 pub struct CustomPrompt {
     pub name: String,
     pub path: PathBuf,

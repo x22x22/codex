@@ -43,6 +43,7 @@ enabled = true
     timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
 
     let params = PluginUninstallParams {
+        environment_id: None,
         plugin_id: "sample-plugin@debug".to_string(),
         force_remote_sync: false,
     };
@@ -73,6 +74,36 @@ enabled = true
     .await??;
     let response: PluginUninstallResponse = to_response(response)?;
     assert_eq!(response, PluginUninstallResponse {});
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn plugin_uninstall_rejects_unsupported_environment_id() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    write_installed_plugin(&codex_home, "debug", "sample-plugin")?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    let request_id = mcp
+        .send_plugin_uninstall_request(PluginUninstallParams {
+            environment_id: Some("remote".to_string()),
+            plugin_id: "sample-plugin@debug".to_string(),
+            force_remote_sync: false,
+        })
+        .await?;
+    let err = timeout(
+        DEFAULT_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(request_id)),
+    )
+    .await??;
+
+    assert_eq!(err.error.code, -32600);
+    assert_eq!(
+        err.error.message,
+        "unsupported environmentId `remote`; configured environment is `local`"
+    );
 
     Ok(())
 }
@@ -122,6 +153,7 @@ enabled = true
 
     let request_id = mcp
         .send_plugin_uninstall_request(PluginUninstallParams {
+            environment_id: None,
             plugin_id: "sample-plugin@debug".to_string(),
             force_remote_sync: true,
         })
@@ -171,6 +203,7 @@ async fn plugin_uninstall_tracks_analytics_event() -> Result<()> {
 
     let request_id = mcp
         .send_plugin_uninstall_request(PluginUninstallParams {
+            environment_id: None,
             plugin_id: "sample-plugin@debug".to_string(),
             force_remote_sync: false,
         })

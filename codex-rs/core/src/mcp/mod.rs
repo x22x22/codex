@@ -15,6 +15,7 @@ use codex_protocol::mcp::Tool;
 use codex_protocol::protocol::McpListToolsResponseEvent;
 use codex_protocol::protocol::SandboxPolicy;
 use serde_json::Value;
+use tracing::warn;
 
 use crate::AuthManager;
 use crate::CodexAuth;
@@ -27,6 +28,7 @@ use crate::mcp_connection_manager::SandboxState;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::plugins::PluginCapabilitySummary;
 use crate::plugins::PluginsManager;
+use codex_exec_server::ExecutorFileSystem;
 
 const MCP_TOOL_NAME_PREFIX: &str = "mcp";
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
@@ -221,6 +223,39 @@ impl McpManager {
         let loaded_plugins = self.plugins_manager.plugins_for_config(config);
         ToolPluginProvenance::from_capability_summaries(loaded_plugins.capability_summaries())
     }
+
+    pub async fn effective_servers_with_filesystem<F>(
+        &self,
+        config: &Config,
+        auth: Option<&CodexAuth>,
+        filesystem: &F,
+    ) -> HashMap<String, McpServerConfig>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        effective_mcp_servers_with_filesystem(
+            config,
+            auth,
+            self.plugins_manager.as_ref(),
+            filesystem,
+        )
+        .await
+    }
+
+    pub async fn tool_plugin_provenance_with_filesystem<F>(
+        &self,
+        config: &Config,
+        filesystem: &F,
+    ) -> ToolPluginProvenance
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let loaded_plugins = self
+            .plugins_manager
+            .plugins_for_config_with_filesystem(config, /*force_reload*/ false, filesystem)
+            .await;
+        ToolPluginProvenance::from_capability_summaries(loaded_plugins.capability_summaries())
+    }
 }
 
 fn configured_mcp_servers(
@@ -249,6 +284,42 @@ fn effective_mcp_servers(
     )
 }
 
+async fn configured_mcp_servers_with_filesystem<F>(
+    config: &Config,
+    plugins_manager: &PluginsManager,
+    filesystem: &F,
+) -> HashMap<String, McpServerConfig>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let loaded_plugins = plugins_manager
+        .plugins_for_config_with_filesystem(config, /*force_reload*/ false, filesystem)
+        .await;
+    let mut servers = config.mcp_servers.get().clone();
+    for (name, plugin_server) in loaded_plugins.effective_mcp_servers() {
+        servers.entry(name).or_insert(plugin_server);
+    }
+    servers
+}
+
+async fn effective_mcp_servers_with_filesystem<F>(
+    config: &Config,
+    auth: Option<&CodexAuth>,
+    plugins_manager: &PluginsManager,
+    filesystem: &F,
+) -> HashMap<String, McpServerConfig>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let servers = configured_mcp_servers_with_filesystem(config, plugins_manager, filesystem).await;
+    with_codex_apps_mcp(
+        servers,
+        config.features.apps_enabled_for_auth(auth),
+        auth,
+        config,
+    )
+}
+
 pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent {
     let auth_manager = AuthManager::shared(
         config.codex_home.clone(),
@@ -257,8 +328,27 @@ pub async fn collect_mcp_snapshot(config: &Config) -> McpListToolsResponseEvent 
     );
     let auth = auth_manager.auth().await;
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
-    let mcp_servers = mcp_manager.effective_servers(config, auth.as_ref());
-    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
+    let environment =
+        match codex_exec_server::Environment::create(config.experimental_exec_server_url.clone())
+            .await
+        {
+            Ok(environment) => environment,
+            Err(err) => {
+                warn!("failed to bind environment for MCP snapshot collection: {err}");
+                return McpListToolsResponseEvent {
+                    tools: HashMap::new(),
+                    resources: HashMap::new(),
+                    resource_templates: HashMap::new(),
+                    auth_statuses: HashMap::new(),
+                };
+            }
+        };
+    let mcp_servers = mcp_manager
+        .effective_servers_with_filesystem(config, auth.as_ref(), &environment.get_filesystem())
+        .await;
+    let tool_plugin_provenance = mcp_manager
+        .tool_plugin_provenance_with_filesystem(config, &environment.get_filesystem())
+        .await;
     if mcp_servers.is_empty() {
         return McpListToolsResponseEvent {
             tools: HashMap::new(),

@@ -64,6 +64,7 @@ async fn fs_get_metadata_returns_only_used_fields() -> Result<()> {
     let mut mcp = initialized_mcp(&codex_home).await?;
     let request_id = mcp
         .send_fs_get_metadata_request(codex_app_server_protocol::FsGetMetadataParams {
+            environment_id: None,
             path: absolute_path(file_path.clone()),
         })
         .await?;
@@ -121,6 +122,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
 
     let create_directory_request_id = mcp
         .send_fs_create_directory_request(codex_app_server_protocol::FsCreateDirectoryParams {
+            environment_id: None,
             path: absolute_path(nested_dir.clone()),
             recursive: None,
         })
@@ -133,6 +135,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
 
     let write_request_id = mcp
         .send_fs_write_file_request(FsWriteFileParams {
+            environment_id: None,
             path: absolute_path(nested_file.clone()),
             data_base64: STANDARD.encode("hello from app-server"),
         })
@@ -145,6 +148,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
 
     let root_write_request_id = mcp
         .send_fs_write_file_request(FsWriteFileParams {
+            environment_id: None,
             path: absolute_path(source_file.clone()),
             data_base64: STANDARD.encode("hello from source root"),
         })
@@ -157,6 +161,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
 
     let read_request_id = mcp
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
+            environment_id: None,
             path: absolute_path(nested_file.clone()),
         })
         .await?;
@@ -176,6 +181,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
 
     let copy_file_request_id = mcp
         .send_fs_copy_request(FsCopyParams {
+            environment_id: None,
             source_path: absolute_path(nested_file.clone()),
             destination_path: absolute_path(copy_file_path.clone()),
             recursive: false,
@@ -193,6 +199,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
 
     let copy_dir_request_id = mcp
         .send_fs_copy_request(FsCopyParams {
+            environment_id: None,
             source_path: absolute_path(source_dir.clone()),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
@@ -210,6 +217,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
 
     let read_directory_request_id = mcp
         .send_fs_read_directory_request(codex_app_server_protocol::FsReadDirectoryParams {
+            environment_id: None,
             path: absolute_path(source_dir.clone()),
         })
         .await?;
@@ -240,6 +248,7 @@ async fn fs_methods_cover_current_fs_utils_surface() -> Result<()> {
 
     let remove_request_id = mcp
         .send_fs_remove_request(codex_app_server_protocol::FsRemoveParams {
+            environment_id: None,
             path: absolute_path(copied_dir.clone()),
             recursive: None,
             force: None,
@@ -267,6 +276,7 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
     let mut mcp = initialized_mcp(&codex_home).await?;
     let write_request_id = mcp
         .send_fs_write_file_request(FsWriteFileParams {
+            environment_id: None,
             path: absolute_path(file_path.clone()),
             data_base64: STANDARD.encode(bytes),
         })
@@ -280,6 +290,7 @@ async fn fs_write_file_accepts_base64_bytes() -> Result<()> {
 
     let read_request_id = mcp
         .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
+            environment_id: None,
             path: absolute_path(file_path),
         })
         .await?;
@@ -308,6 +319,7 @@ async fn fs_write_file_rejects_invalid_base64() -> Result<()> {
     let mut mcp = initialized_mcp(&codex_home).await?;
     let request_id = mcp
         .send_fs_write_file_request(FsWriteFileParams {
+            environment_id: None,
             path: absolute_path(file_path),
             data_base64: "%%%".to_string(),
         })
@@ -462,6 +474,7 @@ async fn fs_copy_rejects_directory_without_recursive() -> Result<()> {
     let mut mcp = initialized_mcp(&codex_home).await?;
     let request_id = mcp
         .send_fs_copy_request(FsCopyParams {
+            environment_id: None,
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(codex_home.path().join("dest")),
             recursive: false,
@@ -489,6 +502,7 @@ async fn fs_copy_rejects_copying_directory_into_descendant() -> Result<()> {
     let mut mcp = initialized_mcp(&codex_home).await?;
     let request_id = mcp
         .send_fs_copy_request(FsCopyParams {
+            environment_id: None,
             source_path: absolute_path(source_dir.clone()),
             destination_path: absolute_path(source_dir.join("nested").join("copy")),
             recursive: true,
@@ -520,6 +534,7 @@ async fn fs_copy_preserves_symlinks_in_recursive_copy() -> Result<()> {
     let mut mcp = initialized_mcp(&codex_home).await?;
     let request_id = mcp
         .send_fs_copy_request(FsCopyParams {
+            environment_id: None,
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
@@ -560,6 +575,7 @@ async fn fs_copy_ignores_unknown_special_files_in_recursive_copy() -> Result<()>
     let mut mcp = initialized_mcp(&codex_home).await?;
     let request_id = mcp
         .send_fs_copy_request(FsCopyParams {
+            environment_id: None,
             source_path: absolute_path(source_dir),
             destination_path: absolute_path(copied_dir.clone()),
             recursive: true,
@@ -597,6 +613,7 @@ async fn fs_copy_rejects_standalone_fifo_source() -> Result<()> {
     let mut mcp = initialized_mcp(&codex_home).await?;
     let request_id = mcp
         .send_fs_copy_request(FsCopyParams {
+            environment_id: None,
             source_path: absolute_path(fifo_path),
             destination_path: absolute_path(codex_home.path().join("copied")),
             recursive: false,
@@ -606,6 +623,30 @@ async fn fs_copy_rejects_standalone_fifo_source() -> Result<()> {
         &mut mcp,
         request_id,
         "fs/copy only supports regular files, directories, and symlinks",
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fs_read_file_rejects_unsupported_environment_id() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let file_path = codex_home.path().join("note.txt");
+    std::fs::write(&file_path, "hello")?;
+
+    let mut mcp = initialized_mcp(&codex_home).await?;
+    let request_id = mcp
+        .send_fs_read_file_request(codex_app_server_protocol::FsReadFileParams {
+            environment_id: Some("remote".to_string()),
+            path: absolute_path(file_path),
+        })
+        .await?;
+
+    expect_error_message(
+        &mut mcp,
+        request_id,
+        "fs/readFile does not support environmentId `remote`; configured environment is `local`",
     )
     .await?;
 

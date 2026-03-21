@@ -205,10 +205,14 @@
         "$ref": "#/definitions/SkillsListEntry"
       },
       "type": "array"
+    },
+    "environmentId": {
+      "type": "string"
     }
   },
   "required": [
-    "data"
+    "data",
+    "environmentId"
   ],
   "title": "SkillsListResponse",
   "type": "object"

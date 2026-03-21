@@ -50,6 +50,7 @@ use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginUninstallParams;
+use codex_app_server_protocol::PromptListParams;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ServerRequest;
@@ -478,6 +479,15 @@ impl McpProcess {
         self.send_request("skills/list", params).await
     }
 
+    /// Send a `prompt/list` JSON-RPC request.
+    pub async fn send_prompt_list_request(
+        &mut self,
+        params: PromptListParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("prompt/list", params).await
+    }
+
     /// Send a `plugin/install` JSON-RPC request.
     pub async fn send_plugin_install_request(
         &mut self,
@@ -832,6 +842,7 @@ impl McpProcess {
         cancellation_token: Option<String>,
     ) -> anyhow::Result<i64> {
         let mut params = serde_json::json!({
+            "environmentId": null,
             "query": query,
             "roots": roots,
         });
@@ -847,6 +858,7 @@ impl McpProcess {
         roots: Vec<String>,
     ) -> anyhow::Result<i64> {
         let params = serde_json::json!({
+            "environmentId": null,
             "sessionId": session_id,
             "roots": roots,
         });
@@ -872,6 +884,7 @@ impl McpProcess {
         query: &str,
     ) -> anyhow::Result<i64> {
         let params = serde_json::json!({
+            "environmentId": null,
             "sessionId": session_id,
             "query": query,
         });
@@ -896,6 +909,7 @@ impl McpProcess {
         session_id: &str,
     ) -> anyhow::Result<i64> {
         let params = serde_json::json!({
+            "environmentId": null,
             "sessionId": session_id,
         });
         self.send_request("fuzzyFileSearch/sessionStop", Some(params))

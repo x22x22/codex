@@ -19,6 +19,7 @@ use crate::config_loader::CloudRequirementsLoader;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::LoaderOverrides;
 use crate::config_loader::load_config_layers_state;
+use crate::config_loader::load_config_layers_state_with_filesystem;
 use crate::plugins::PluginsManager;
 use crate::skills::SkillLoadOutcome;
 use crate::skills::build_implicit_skill_path_indexes;
@@ -29,13 +30,14 @@ use crate::skills::loader::skill_roots;
 use crate::skills::loader::skill_roots_with_filesystem;
 use crate::skills::system::install_system_skills;
 use crate::skills::system::uninstall_system_skills;
+use codex_exec_server::Environment;
 use codex_exec_server::ExecutorFileSystem;
 
 pub struct SkillsManager {
     codex_home: PathBuf,
     plugins_manager: Arc<PluginsManager>,
     restriction_product: Option<Product>,
-    cache_by_cwd: RwLock<HashMap<PathBuf, SkillLoadOutcome>>,
+    cache_by_cwd: RwLock<HashMap<CwdSkillsCacheKey, SkillLoadOutcome>>,
     cache_by_config: RwLock<HashMap<ConfigSkillsCacheKey, SkillLoadOutcome>>,
 }
 
@@ -84,7 +86,12 @@ impl SkillsManager {
     /// to share a directory.
     pub fn skills_for_config(&self, config: &Config) -> SkillLoadOutcome {
         let roots = self.skill_roots_for_config(config);
-        let cache_key = config_skills_cache_key(&roots, &config.config_layer_stack);
+        let local_environment_id = Environment::default_environment_id(None);
+        let cache_key = config_skills_cache_key(
+            Some(local_environment_id.as_str()),
+            &roots,
+            &config.config_layer_stack,
+        );
         if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
             return outcome;
         }
@@ -104,6 +111,7 @@ impl SkillsManager {
     pub async fn skills_for_config_with_filesystem<F>(
         &self,
         config: &Config,
+        environment_id: &str,
         filesystem: &F,
     ) -> SkillLoadOutcome
     where
@@ -112,7 +120,8 @@ impl SkillsManager {
         let roots = self
             .skill_roots_for_config_with_filesystem(config, filesystem)
             .await;
-        let cache_key = config_skills_cache_key(&roots, &config.config_layer_stack);
+        let cache_key =
+            config_skills_cache_key(Some(environment_id), &roots, &config.config_layer_stack);
         if let Some(outcome) = self.cached_outcome_for_config(&cache_key) {
             return outcome;
         }
@@ -140,7 +149,10 @@ impl SkillsManager {
     where
         F: ExecutorFileSystem + ?Sized,
     {
-        let loaded_plugins = self.plugins_manager.plugins_for_config(config);
+        let loaded_plugins = self
+            .plugins_manager
+            .plugins_for_config_with_filesystem(config, /*force_reload*/ false, filesystem)
+            .await;
         let mut roots = skill_roots_with_filesystem(
             &config.config_layer_stack,
             &config.cwd,
@@ -173,10 +185,6 @@ impl SkillsManager {
         config: &Config,
         force_reload: bool,
     ) -> SkillLoadOutcome {
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
-            return outcome;
-        }
-
         self.skills_for_cwd_with_extra_user_roots(cwd, config, force_reload, &[])
             .await
     }
@@ -186,6 +194,7 @@ impl SkillsManager {
         cwd: &Path,
         config: &Config,
         force_reload: bool,
+        environment_id: &str,
         filesystem: &F,
     ) -> SkillLoadOutcome
     where
@@ -196,6 +205,7 @@ impl SkillsManager {
             config,
             force_reload,
             &[],
+            environment_id,
             filesystem,
         )
         .await
@@ -208,7 +218,11 @@ impl SkillsManager {
         force_reload: bool,
         extra_user_roots: &[PathBuf],
     ) -> SkillLoadOutcome {
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+        let cache_key = CwdSkillsCacheKey {
+            environment_id: Some(Environment::default_environment_id(None)),
+            cwd: cwd.to_path_buf(),
+        };
+        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(&cache_key) {
             return outcome;
         }
         let normalized_extra_user_roots = normalize_extra_user_roots(extra_user_roots);
@@ -273,7 +287,7 @@ impl SkillsManager {
             .cache_by_cwd
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.insert(cwd.to_path_buf(), outcome.clone());
+        cache.insert(cache_key, outcome.clone());
         outcome
     }
 
@@ -283,12 +297,17 @@ impl SkillsManager {
         config: &Config,
         force_reload: bool,
         extra_user_roots: &[PathBuf],
+        environment_id: &str,
         filesystem: &F,
     ) -> SkillLoadOutcome
     where
         F: ExecutorFileSystem + ?Sized,
     {
-        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(cwd) {
+        let cache_key = CwdSkillsCacheKey {
+            environment_id: Some(environment_id.to_string()),
+            cwd: cwd.to_path_buf(),
+        };
+        if !force_reload && let Some(outcome) = self.cached_outcome_for_cwd(&cache_key) {
             return outcome;
         }
         let normalized_extra_user_roots = normalize_extra_user_roots(extra_user_roots);
@@ -307,12 +326,13 @@ impl SkillsManager {
         };
 
         let cli_overrides: Vec<(String, TomlValue)> = Vec::new();
-        let config_layer_stack = match load_config_layers_state(
+        let config_layer_stack = match load_config_layers_state_with_filesystem(
             &self.codex_home,
             Some(cwd_abs),
             &cli_overrides,
             LoaderOverrides::default(),
             CloudRequirementsLoader::default(),
+            filesystem,
         )
         .await
         {
@@ -330,7 +350,8 @@ impl SkillsManager {
 
         let loaded_plugins = self
             .plugins_manager
-            .plugins_for_config_with_force_reload(config, force_reload);
+            .plugins_for_config_with_filesystem(config, force_reload, filesystem)
+            .await;
         let mut roots = skill_roots_with_filesystem(
             &config_layer_stack,
             cwd,
@@ -361,7 +382,7 @@ impl SkillsManager {
             .cache_by_cwd
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.insert(cwd.to_path_buf(), outcome.clone());
+        cache.insert(cache_key, outcome.clone());
         outcome
     }
 
@@ -399,10 +420,33 @@ impl SkillsManager {
         info!("skills cache cleared ({cleared} entries)");
     }
 
-    fn cached_outcome_for_cwd(&self, cwd: &Path) -> Option<SkillLoadOutcome> {
+    pub fn clear_cache_for_environment(&self, environment_id: &str) {
+        let cleared_cwd = {
+            let mut cache = self
+                .cache_by_cwd
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let before = cache.len();
+            cache.retain(|key, _| key.environment_id.as_deref() != Some(environment_id));
+            before.saturating_sub(cache.len())
+        };
+        let cleared_config = {
+            let mut cache = self
+                .cache_by_config
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let before = cache.len();
+            cache.retain(|key, _| key.environment_id.as_deref() != Some(environment_id));
+            before.saturating_sub(cache.len())
+        };
+        let cleared = cleared_cwd + cleared_config;
+        info!("skills cache cleared for environment `{environment_id}` ({cleared} entries)");
+    }
+
+    fn cached_outcome_for_cwd(&self, cache_key: &CwdSkillsCacheKey) -> Option<SkillLoadOutcome> {
         match self.cache_by_cwd.read() {
-            Ok(cache) => cache.get(cwd).cloned(),
-            Err(err) => err.into_inner().get(cwd).cloned(),
+            Ok(cache) => cache.get(cache_key).cloned(),
+            Err(err) => err.into_inner().get(cache_key).cloned(),
         }
     }
 
@@ -418,7 +462,14 @@ impl SkillsManager {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CwdSkillsCacheKey {
+    environment_id: Option<String>,
+    cwd: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ConfigSkillsCacheKey {
+    environment_id: Option<String>,
     roots: Vec<(PathBuf, u8)>,
     disabled_paths: Vec<PathBuf>,
 }
@@ -484,6 +535,7 @@ fn disabled_paths_from_stack(
 }
 
 fn config_skills_cache_key(
+    environment_id: Option<&str>,
     roots: &[SkillRoot],
     config_layer_stack: &crate::config_loader::ConfigLayerStack,
 ) -> ConfigSkillsCacheKey {
@@ -493,6 +545,7 @@ fn config_skills_cache_key(
     disabled_paths.sort_unstable();
 
     ConfigSkillsCacheKey {
+        environment_id: environment_id.map(str::to_owned),
         roots: roots
             .iter()
             .map(|root| {

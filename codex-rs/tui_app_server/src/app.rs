@@ -53,6 +53,7 @@ use codex_app_server_protocol::ConfigLayerSource;
 use codex_app_server_protocol::ListMcpServerStatusParams;
 use codex_app_server_protocol::ListMcpServerStatusResponse;
 use codex_app_server_protocol::McpServerStatus;
+use codex_app_server_protocol::PromptListResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ServerNotification;
 use codex_app_server_protocol::ServerRequest;
@@ -297,6 +298,7 @@ fn errors_for_cwd(cwd: &Path, response: &ListSkillsResponseEvent) -> Vec<SkillEr
 
 fn list_skills_response_to_core(response: SkillsListResponse) -> ListSkillsResponseEvent {
     ListSkillsResponseEvent {
+        environment_id: response.environment_id,
         skills: response
             .data
             .into_iter()
@@ -977,6 +979,8 @@ pub(crate) struct App {
     primary_session_configured: Option<ThreadSessionState>,
     pending_primary_events: VecDeque<ThreadBufferedEvent>,
     pending_app_server_requests: PendingAppServerRequests,
+    skills_environment_id: Option<String>,
+    prompts_environment_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -1639,6 +1643,15 @@ impl App {
         store.session.as_ref().map(|session| session.cwd.clone())
     }
 
+    async fn thread_environment_id(&self, thread_id: ThreadId) -> Option<String> {
+        let channel = self.thread_event_channels.get(&thread_id)?;
+        let store = channel.store.lock().await;
+        store
+            .session
+            .as_ref()
+            .map(|session| session.environment_id.clone())
+    }
+
     async fn interactive_request_for_thread_request(
         &self,
         thread_id: ThreadId,
@@ -1983,9 +1996,19 @@ impl App {
                 }
                 Ok(true)
             }
+            AppCommandView::ListCustomPrompts => {
+                let response = app_server
+                    .prompt_list(codex_app_server_protocol::PromptListParams {
+                        environment_id: self.prompts_environment_id.clone(),
+                    })
+                    .await?;
+                self.handle_custom_prompts_list_response(response);
+                Ok(true)
+            }
             AppCommandView::ListSkills { cwds, force_reload } => {
                 let response = app_server
                     .skills_list(codex_app_server_protocol::SkillsListParams {
+                        environment_id: self.skills_environment_id.clone(),
                         cwds: cwds.to_vec(),
                         force_reload,
                         per_cwd_extra_user_roots: None,
@@ -2177,6 +2200,7 @@ impl App {
         };
         let mut session = self.primary_session_configured.clone()?;
         session.thread_id = thread_id;
+        session.environment_id = notification.thread.environment_id.clone();
         session.thread_name = notification.thread.name.clone();
         session.model_provider_id = notification.thread.model_provider.clone();
         session.cwd = notification.thread.cwd.clone();
@@ -2403,6 +2427,8 @@ impl App {
         turns: Vec<Turn>,
     ) -> Result<()> {
         let thread_id = session.thread_id;
+        self.skills_environment_id = Some(session.environment_id.clone());
+        self.prompts_environment_id = Some(session.environment_id.clone());
         self.primary_thread_id = Some(thread_id);
         self.primary_session_configured = Some(session.clone());
         self.upsert_agent_picker_thread(
@@ -2489,7 +2515,14 @@ impl App {
         }
 
         match app_server
-            .resume_thread(self.config.clone(), thread_id)
+            .resume_thread(
+                self.config.clone(),
+                thread_id,
+                snapshot
+                    .session
+                    .as_ref()
+                    .map(|session| session.environment_id.clone()),
+            )
             .await
         {
             Ok(started) => {
@@ -3014,7 +3047,11 @@ impl App {
             }
             SessionSelection::Resume(target_session) => {
                 let resumed = app_server
-                    .resume_thread(config.clone(), target_session.thread_id)
+                    .resume_thread(
+                        config.clone(),
+                        target_session.thread_id,
+                        target_session.environment_id.clone(),
+                    )
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
@@ -3052,7 +3089,11 @@ impl App {
                     &[("source", "cli_subcommand")],
                 );
                 let forked = app_server
-                    .fork_thread(config.clone(), target_session.thread_id)
+                    .fork_thread(
+                        config.clone(),
+                        target_session.thread_id,
+                        target_session.environment_id.clone(),
+                    )
                     .await
                     .wrap_err_with(|| {
                         let target_label = target_session.display_label();
@@ -3131,6 +3172,8 @@ impl App {
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            skills_environment_id: None,
+            prompts_environment_id: None,
         };
         if let Some(started) = initial_started_thread {
             app.enqueue_primary_thread_session(started.session, started.turns)
@@ -3424,7 +3467,11 @@ impl App {
                             self.chat_widget.thread_name(),
                         );
                         match app_server
-                            .resume_thread(resume_config.clone(), target_session.thread_id)
+                            .resume_thread(
+                                resume_config.clone(),
+                                target_session.thread_id,
+                                target_session.environment_id.clone(),
+                            )
                             .await
                         {
                             Ok(resumed) => {
@@ -3489,7 +3536,14 @@ impl App {
                 if let Some(thread_id) = self.chat_widget.thread_id() {
                     self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
                         .await;
-                    match app_server.fork_thread(self.config.clone(), thread_id).await {
+                    match app_server
+                        .fork_thread(
+                            self.config.clone(),
+                            thread_id,
+                            self.thread_environment_id(thread_id).await,
+                        )
+                        .await
+                    {
                         Ok(forked) => {
                             self.shutdown_current_thread(app_server).await;
                             match self
@@ -4701,11 +4755,42 @@ impl App {
     }
 
     fn handle_skills_list_response(&mut self, response: SkillsListResponse) {
+        if self
+            .skills_environment_id
+            .as_deref()
+            .is_some_and(|environment_id| environment_id != response.environment_id)
+        {
+            tracing::debug!(
+                current_environment_id = ?self.skills_environment_id,
+                response_environment_id = response.environment_id,
+                "ignoring stale skills/list response for non-active environment"
+            );
+            return;
+        }
+        self.skills_environment_id = Some(response.environment_id.clone());
         let response = list_skills_response_to_core(response);
         let cwd = self.chat_widget.config_ref().cwd.clone();
         let errors = errors_for_cwd(&cwd, &response);
         emit_skill_load_warnings(&self.app_event_tx, &errors);
         self.chat_widget.handle_skills_list_response(response);
+    }
+
+    fn handle_custom_prompts_list_response(&mut self, response: PromptListResponse) {
+        if self
+            .prompts_environment_id
+            .as_deref()
+            .is_some_and(|environment_id| environment_id != response.environment_id)
+        {
+            tracing::debug!(
+                current_environment_id = ?self.prompts_environment_id,
+                response_environment_id = response.environment_id,
+                "ignoring stale prompt/list response for non-active environment"
+            );
+            return;
+        }
+        self.prompts_environment_id = Some(response.environment_id.clone());
+        self.chat_widget
+            .handle_custom_prompts_list_response(response.prompts);
     }
 
     async fn handle_thread_rollback_response(
@@ -4752,6 +4837,9 @@ impl App {
         );
         match event {
             ThreadBufferedEvent::Notification(notification) => {
+                if !self.should_forward_notification(&notification) {
+                    return;
+                }
                 self.chat_widget
                     .handle_server_notification(notification, /*replay_kind*/ None);
             }
@@ -4777,9 +4865,13 @@ impl App {
 
     fn handle_thread_event_replay(&mut self, event: ThreadBufferedEvent) {
         match event {
-            ThreadBufferedEvent::Notification(notification) => self
-                .chat_widget
-                .handle_server_notification(notification, Some(ReplayKind::ThreadSnapshot)),
+            ThreadBufferedEvent::Notification(notification) => {
+                if !self.should_forward_notification(&notification) {
+                    return;
+                }
+                self.chat_widget
+                    .handle_server_notification(notification, Some(ReplayKind::ThreadSnapshot))
+            }
             ThreadBufferedEvent::Request(request) => self
                 .chat_widget
                 .handle_server_request(request, Some(ReplayKind::ThreadSnapshot)),
@@ -4793,6 +4885,16 @@ impl App {
                 self.handle_backtrack_rollback_succeeded(num_turns);
                 self.chat_widget.handle_thread_rolled_back();
             }
+        }
+    }
+
+    fn should_forward_notification(&self, notification: &ServerNotification) -> bool {
+        match notification {
+            ServerNotification::SkillsChanged(notification) => self
+                .skills_environment_id
+                .as_deref()
+                .is_none_or(|environment_id| environment_id == notification.environment_id),
+            _ => true,
         }
     }
 
@@ -5413,6 +5515,7 @@ mod tests {
                 crate::resume_picker::SessionTarget {
                     path: Some(PathBuf::from("/tmp/restore")),
                     thread_id: ThreadId::new(),
+                    environment_id: None,
                 }
             )),
             false
@@ -5422,6 +5525,7 @@ mod tests {
                 crate::resume_picker::SessionTarget {
                     path: Some(PathBuf::from("/tmp/fork")),
                     thread_id: ThreadId::new(),
+                    environment_id: None,
                 }
             )),
             false
@@ -5462,6 +5566,7 @@ mod tests {
             crate::resume_picker::SessionTarget {
                 path: Some(PathBuf::from("/tmp/restore")),
                 thread_id: ThreadId::new(),
+                environment_id: None,
             },
         ));
         assert_eq!(
@@ -5472,6 +5577,7 @@ mod tests {
             crate::resume_picker::SessionTarget {
                 path: Some(PathBuf::from("/tmp/fork")),
                 thread_id: ThreadId::new(),
+                environment_id: None,
             },
         ));
         assert_eq!(
@@ -7364,6 +7470,7 @@ guardian_approval = true
             ServerNotification::ThreadStarted(ThreadStartedNotification {
                 thread: Thread {
                     id: agent_thread_id.to_string(),
+                    environment_id: "local".to_string(),
                     preview: "agent thread".to_string(),
                     ephemeral: false,
                     model_provider: "agent-provider".to_string(),
@@ -7440,6 +7547,7 @@ guardian_approval = true
             ServerNotification::ThreadStarted(ThreadStartedNotification {
                 thread: Thread {
                     id: agent_thread_id.to_string(),
+                    environment_id: "local".to_string(),
                     preview: "agent thread".to_string(),
                     ephemeral: false,
                     model_provider: "agent-provider".to_string(),
@@ -7518,10 +7626,63 @@ guardian_approval = true
 
         assert_eq!(
             app.active_non_primary_shutdown_target(&ServerNotification::SkillsChanged(
-                codex_app_server_protocol::SkillsChangedNotification {},
+                codex_app_server_protocol::SkillsChangedNotification {
+                    environment_id: "local".to_string(),
+                },
             )),
             None
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skills_changed_notifications_only_forward_for_matching_environment() -> Result<()> {
+        let mut app = make_test_app().await;
+        app.skills_environment_id = Some("env-a".to_string());
+
+        assert!(
+            app.should_forward_notification(&ServerNotification::SkillsChanged(
+                codex_app_server_protocol::SkillsChangedNotification {
+                    environment_id: "env-a".to_string(),
+                },
+            ))
+        );
+        assert!(
+            !app.should_forward_notification(&ServerNotification::SkillsChanged(
+                codex_app_server_protocol::SkillsChangedNotification {
+                    environment_id: "env-b".to_string(),
+                },
+            ))
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn skills_list_response_ignores_stale_environment() -> Result<()> {
+        let mut app = make_test_app().await;
+        app.skills_environment_id = Some("env-a".to_string());
+
+        app.handle_skills_list_response(SkillsListResponse {
+            environment_id: "env-b".to_string(),
+            data: Vec::new(),
+        });
+
+        assert_eq!(app.skills_environment_id.as_deref(), Some("env-a"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn prompt_list_response_ignores_stale_environment() -> Result<()> {
+        let mut app = make_test_app().await;
+        app.prompts_environment_id = Some("env-a".to_string());
+
+        app.handle_custom_prompts_list_response(PromptListResponse {
+            environment_id: "env-b".to_string(),
+            prompts: Vec::new(),
+        });
+
+        assert_eq!(app.prompts_environment_id.as_deref(), Some("env-a"));
         Ok(())
     }
 
@@ -7783,6 +7944,8 @@ guardian_approval = true
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
             pending_app_server_requests: PendingAppServerRequests::default(),
+            skills_environment_id: None,
+            prompts_environment_id: None,
         }
     }
 
@@ -7834,6 +7997,8 @@ guardian_approval = true
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
                 pending_app_server_requests: PendingAppServerRequests::default(),
+                skills_environment_id: None,
+                prompts_environment_id: None,
             },
             rx,
             op_rx,
@@ -7843,6 +8008,7 @@ guardian_approval = true
     fn test_thread_session(thread_id: ThreadId, cwd: PathBuf) -> ThreadSessionState {
         ThreadSessionState {
             thread_id,
+            environment_id: "local".to_string(),
             forked_from_id: None,
             thread_name: None,
             model: "gpt-test".to_string(),
@@ -9007,6 +9173,7 @@ guardian_approval = true
             &ThreadRollbackResponse {
                 thread: Thread {
                     id: thread_id.to_string(),
+                    environment_id: "local".to_string(),
                     preview: String::new(),
                     ephemeral: false,
                     model_provider: "openai".to_string(),
@@ -9054,6 +9221,7 @@ guardian_approval = true
             &ThreadRollbackResponse {
                 thread: Thread {
                     id: thread_id.to_string(),
+                    environment_id: "local".to_string(),
                     preview: String::new(),
                     ephemeral: false,
                     model_provider: "openai".to_string(),

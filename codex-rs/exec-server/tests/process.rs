@@ -42,6 +42,7 @@ async fn exec_server_starts_process_over_websocket() -> anyhow::Result<()> {
                 "cwd": std::env::current_dir()?,
                 "env": {},
                 "tty": false,
+                "stdin": false,
                 "arg0": null
             }),
         )

@@ -1,6 +1,7 @@
 use crate::auth::AuthCredentialsStoreMode;
 use crate::config::edit::ConfigEdit;
 use crate::config::edit::ConfigEditsBuilder;
+use crate::config::edit::apply_to_serialized;
 use crate::config::types::AppsConfigToml;
 use crate::config::types::DEFAULT_OTEL_ENVIRONMENT;
 use crate::config::types::History;
@@ -39,6 +40,8 @@ use crate::config_loader::McpServerRequirement;
 use crate::config_loader::ResidencyRequirement;
 use crate::config_loader::Sourced;
 use crate::config_loader::load_config_layers_state;
+use crate::config_loader::load_config_layers_state_with_filesystem;
+use crate::config_loader::resolve_root_git_project_for_trust_with_filesystem;
 use crate::features::Feature;
 use crate::features::FeatureOverrides;
 use crate::features::Features;
@@ -99,6 +102,7 @@ use std::path::PathBuf;
 use crate::config::permissions::compile_permission_profile;
 use crate::config::permissions::network_proxy_config_from_profile_network;
 use crate::config::profile::ConfigProfile;
+use codex_exec_server::ExecutorFileSystem;
 use codex_network_proxy::NetworkProxyConfig;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
@@ -698,6 +702,141 @@ impl ConfigBuilder {
             config_layer_stack,
         )
     }
+
+    pub async fn build_with_filesystem<F>(self, filesystem: &F) -> std::io::Result<Config>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let Self {
+            codex_home,
+            cli_overrides,
+            harness_overrides,
+            loader_overrides,
+            cloud_requirements,
+            fallback_cwd,
+        } = self;
+        let codex_home = codex_home.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "ConfigBuilder::build_with_filesystem requires an explicit codex_home",
+            )
+        })?;
+        if let Err(err) =
+            maybe_migrate_smart_approvals_alias_with_filesystem(&codex_home, filesystem).await
+        {
+            tracing::warn!(error = %err, "failed to migrate smart_approvals feature alias");
+        }
+        let cli_overrides = cli_overrides.unwrap_or_default();
+        let mut harness_overrides = harness_overrides.unwrap_or_default();
+        let loader_overrides = loader_overrides.unwrap_or_default();
+        let cwd_override = harness_overrides.cwd.as_deref().or(fallback_cwd.as_deref());
+        let cwd = cwd_override.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "ConfigBuilder::build_with_filesystem requires an explicit cwd",
+            )
+        })?;
+        let cwd = AbsolutePathBuf::try_from(cwd)?;
+        harness_overrides.cwd = Some(cwd.to_path_buf());
+        let config_layer_stack = load_config_layers_state_with_filesystem(
+            &codex_home,
+            Some(cwd.clone()),
+            &cli_overrides,
+            loader_overrides,
+            cloud_requirements,
+            filesystem,
+        )
+        .await?;
+        let merged_toml = config_layer_stack.effective_config();
+
+        let config_toml: ConfigToml = match merged_toml.try_into() {
+            Ok(config_toml) => config_toml,
+            Err(err) => {
+                if let Some(config_error) =
+                    crate::config_loader::first_layer_config_error(&config_layer_stack).await
+                {
+                    return Err(crate::config_loader::io_error_from_config_error(
+                        std::io::ErrorKind::InvalidData,
+                        config_error,
+                        Some(err),
+                    ));
+                }
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err));
+            }
+        };
+        let active_profile_name = harness_overrides
+            .config_profile
+            .as_ref()
+            .or(config_toml.profile.as_ref())
+            .cloned();
+        let config_profile = match active_profile_name.as_ref() {
+            Some(key) => config_toml
+                .profiles
+                .get(key)
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("config profile `{key}` not found"),
+                    )
+                })?
+                .clone(),
+            None => ConfigProfile::default(),
+        };
+        let user_instructions =
+            Config::load_instructions_with_filesystem(Some(&codex_home), filesystem).await?;
+        let model_instructions_path = config_profile
+            .model_instructions_file
+            .as_ref()
+            .or(config_toml.model_instructions_file.as_ref());
+        let file_base_instructions = Config::try_read_non_empty_file_with_filesystem(
+            model_instructions_path,
+            "model instructions file",
+            filesystem,
+        )
+        .await?;
+        let experimental_compact_prompt_path = config_profile
+            .experimental_compact_prompt_file
+            .as_ref()
+            .or(config_toml.experimental_compact_prompt_file.as_ref());
+        let file_compact_prompt = Config::try_read_non_empty_file_with_filesystem(
+            experimental_compact_prompt_path,
+            "experimental compact prompt file",
+            filesystem,
+        )
+        .await?;
+        let active_project = config_toml
+            .get_active_project_with_filesystem(cwd.as_path(), filesystem)
+            .await?
+            .unwrap_or(ProjectConfig { trust_level: None });
+        let mut config = Config::load_config_with_layer_stack_internal(
+            config_toml,
+            harness_overrides,
+            codex_home,
+            config_layer_stack,
+            Some(active_project),
+            /*create_memories_root*/ false,
+            Some(user_instructions),
+            Some(file_base_instructions),
+            Some(file_compact_prompt),
+        )?;
+        let memories_root = AbsolutePathBuf::from_absolute_path(&memory_root(&config.codex_home))?;
+        filesystem
+            .create_directory(
+                &memories_root,
+                codex_exec_server::CreateDirectoryOptions { recursive: true },
+            )
+            .await?;
+        config.agent_roles = agent_roles::merge_loaded_agent_roles(
+            &config.agent_roles,
+            agent_roles::load_agent_roles_with_filesystem(
+                &config.config_layer_stack,
+                &mut config.startup_warnings,
+                filesystem,
+            )
+            .await?,
+        );
+        Ok(config)
+    }
 }
 
 fn config_scope_segments(scope: &[String], key: &str) -> Vec<String> {
@@ -767,6 +906,78 @@ async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Resu
         return Ok(false);
     };
 
+    let edits = smart_approvals_alias_migration_edits(&config_toml);
+
+    if edits.is_empty() {
+        return Ok(false);
+    }
+
+    ConfigEditsBuilder::new(codex_home)
+        .with_edits(edits)
+        .apply()
+        .await
+        .map_err(|err| {
+            std::io::Error::other(format!("failed to migrate guardian_approval alias: {err}"))
+        })?;
+    Ok(true)
+}
+
+async fn maybe_migrate_smart_approvals_alias_with_filesystem<F>(
+    codex_home: &Path,
+    filesystem: &F,
+) -> std::io::Result<bool>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let config_path = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
+    let config_contents = match filesystem.read_file(&config_path).await {
+        Ok(bytes) => match String::from_utf8(bytes) {
+            Ok(contents) => contents,
+            Err(_) => return Ok(false),
+        },
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err),
+    };
+    let Ok(config_toml) = toml::from_str::<ConfigToml>(&config_contents) else {
+        return Ok(false);
+    };
+
+    let edits = smart_approvals_alias_migration_edits(&config_toml);
+    if edits.is_empty() {
+        return Ok(false);
+    }
+
+    let Some(updated) =
+        apply_to_serialized(&config_contents, /*profile*/ None, &edits).map_err(|err| {
+            std::io::Error::other(format!("failed to migrate guardian_approval alias: {err}"))
+        })?
+    else {
+        return Ok(false);
+    };
+
+    let parent = config_path.as_path().parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "config path {} has no parent directory",
+                config_path.as_path().display()
+            ),
+        )
+    })?;
+    let parent = AbsolutePathBuf::from_absolute_path(parent)?;
+    filesystem
+        .create_directory(
+            &parent,
+            codex_exec_server::CreateDirectoryOptions { recursive: true },
+        )
+        .await?;
+    filesystem
+        .write_file(&config_path, updated.into_bytes())
+        .await?;
+    Ok(true)
+}
+
+fn smart_approvals_alias_migration_edits(config_toml: &ConfigToml) -> Vec<ConfigEdit> {
     let mut edits = Vec::new();
 
     let root_scope = Vec::new();
@@ -791,18 +1002,7 @@ async fn maybe_migrate_smart_approvals_alias(codex_home: &Path) -> std::io::Resu
         }
     }
 
-    if edits.is_empty() {
-        return Ok(false);
-    }
-
-    ConfigEditsBuilder::new(codex_home)
-        .with_edits(edits)
-        .apply()
-        .await
-        .map_err(|err| {
-            std::io::Error::other(format!("failed to migrate guardian_approval alias: {err}"))
-        })?;
-    Ok(true)
+    edits
 }
 
 impl Config {
@@ -1699,6 +1899,10 @@ pub struct AgentRoleConfig {
     pub description: Option<String>,
     /// Path to a role-specific config layer.
     pub config_file: Option<PathBuf>,
+    /// If present, the role locks the model to this value.
+    pub locked_model: Option<String>,
+    /// If present, the role locks the reasoning effort to this value.
+    pub locked_reasoning_effort: Option<String>,
     /// Candidate nicknames for agents spawned with this role.
     pub nickname_candidates: Option<Vec<String>>,
 }
@@ -1751,6 +1955,24 @@ impl ConfigToml {
         resolved_cwd: &Path,
         sandbox_policy_constraint: Option<&Constrained<SandboxPolicy>>,
     ) -> SandboxPolicy {
+        let active_project = self.get_active_project(resolved_cwd);
+        self.derive_sandbox_policy_for_active_project(
+            sandbox_mode_override,
+            profile_sandbox_mode,
+            windows_sandbox_level,
+            active_project.as_ref(),
+            sandbox_policy_constraint,
+        )
+    }
+
+    fn derive_sandbox_policy_for_active_project(
+        &self,
+        sandbox_mode_override: Option<SandboxMode>,
+        profile_sandbox_mode: Option<SandboxMode>,
+        windows_sandbox_level: WindowsSandboxLevel,
+        active_project: Option<&ProjectConfig>,
+        sandbox_policy_constraint: Option<&Constrained<SandboxPolicy>>,
+    ) -> SandboxPolicy {
         let sandbox_mode_was_explicit = sandbox_mode_override.is_some()
             || profile_sandbox_mode.is_some()
             || self.sandbox_mode.is_some();
@@ -1761,7 +1983,7 @@ impl ConfigToml {
                 // If no sandbox_mode is set but this directory has a trust decision,
                 // default to workspace-write except on unsandboxed Windows where we
                 // default to read-only.
-                self.get_active_project(resolved_cwd).and_then(|p| {
+                active_project.and_then(|p| {
                     if p.is_trusted() || p.is_untrusted() {
                         if cfg!(target_os = "windows")
                             && windows_sandbox_level
@@ -1821,6 +2043,32 @@ impl ConfigToml {
             downgrade_workspace_write_if_unsupported(&mut sandbox_policy);
         }
         sandbox_policy
+    }
+
+    async fn get_active_project_with_filesystem<F>(
+        &self,
+        resolved_cwd: &Path,
+        filesystem: &F,
+    ) -> std::io::Result<Option<ProjectConfig>>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let projects = self.projects.clone().unwrap_or_default();
+
+        if let Some(project_config) = projects.get(&resolved_cwd.to_string_lossy().to_string()) {
+            return Ok(Some(project_config.clone()));
+        }
+
+        let resolved_cwd = AbsolutePathBuf::from_absolute_path(resolved_cwd)?;
+        if let Some(repo_root) =
+            resolve_root_git_project_for_trust_with_filesystem(&resolved_cwd, filesystem).await?
+            && let Some(project_config_for_root) =
+                projects.get(&repo_root.to_string_lossy().to_string())
+        {
+            return Ok(Some(project_config_for_root.clone()));
+        }
+
+        Ok(None)
     }
 
     /// Resolves the cwd to an existing project, or returns None if ConfigToml
@@ -2121,6 +2369,30 @@ impl Config {
         codex_home: PathBuf,
         config_layer_stack: ConfigLayerStack,
     ) -> std::io::Result<Self> {
+        Self::load_config_with_layer_stack_internal(
+            cfg,
+            overrides,
+            codex_home,
+            config_layer_stack,
+            /*active_project_override*/ None,
+            /*create_memories_root*/ true,
+            /*user_instructions_override*/ None,
+            /*file_base_instructions_override*/ None,
+            /*file_compact_prompt_override*/ None,
+        )
+    }
+
+    pub(crate) fn load_config_with_layer_stack_internal(
+        cfg: ConfigToml,
+        overrides: ConfigOverrides,
+        codex_home: PathBuf,
+        config_layer_stack: ConfigLayerStack,
+        active_project_override: Option<ProjectConfig>,
+        create_memories_root: bool,
+        user_instructions_override: Option<Option<String>>,
+        file_base_instructions_override: Option<Option<String>>,
+        file_compact_prompt_override: Option<Option<String>>,
+    ) -> std::io::Result<Self> {
         validate_reserved_model_provider_ids(&cfg.model_providers)
             .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidInput, message))?;
         // Ensure that every field of ConfigRequirements is applied to the final
@@ -2136,7 +2408,8 @@ impl Config {
             network: network_requirements,
         } = config_layer_stack.requirements().clone();
 
-        let user_instructions = Self::load_instructions(Some(&codex_home));
+        let user_instructions = user_instructions_override
+            .unwrap_or_else(|| Self::load_instructions(Some(&codex_home)));
         let mut startup_warnings = Vec::new();
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -2216,8 +2489,8 @@ impl Config {
             .into_iter()
             .map(|path| AbsolutePathBuf::resolve_path_against_base(path, &resolved_cwd))
             .collect::<Result<Vec<_>, _>>()?;
-        let active_project = cfg
-            .get_active_project(&resolved_cwd)
+        let active_project = active_project_override
+            .or_else(|| cfg.get_active_project(&resolved_cwd))
             .unwrap_or(ProjectConfig { trust_level: None });
         let permission_config_syntax = resolve_permission_config_syntax(
             &config_layer_stack,
@@ -2248,7 +2521,9 @@ impl Config {
             None => WindowsSandboxLevel::from_features(&features),
         };
         let memories_root = memory_root(&codex_home);
-        std::fs::create_dir_all(&memories_root)?;
+        if create_memories_root {
+            std::fs::create_dir_all(&memories_root)?;
+        }
         let memories_root = AbsolutePathBuf::from_absolute_path(&memories_root)?;
         if !additional_writable_roots
             .iter()
@@ -2307,11 +2582,11 @@ impl Config {
             )
         } else {
             let configured_network_proxy_config = NetworkProxyConfig::default();
-            let mut sandbox_policy = cfg.derive_sandbox_policy(
+            let mut sandbox_policy = cfg.derive_sandbox_policy_for_active_project(
                 sandbox_mode,
                 config_profile.sandbox_mode,
                 windows_sandbox_level,
-                &resolved_cwd,
+                Some(&active_project),
                 Some(&constrained_sandbox_policy),
             );
             if let SandboxPolicy::WorkspaceWrite { writable_roots, .. } = &mut sandbox_policy {
@@ -2529,8 +2804,12 @@ impl Config {
             .model_instructions_file
             .as_ref()
             .or(cfg.model_instructions_file.as_ref());
-        let file_base_instructions =
-            Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?;
+        let file_base_instructions = match file_base_instructions_override {
+            Some(file_base_instructions) => file_base_instructions,
+            None => {
+                Self::try_read_non_empty_file(model_instructions_path, "model instructions file")?
+            }
+        };
         let base_instructions = base_instructions.or(file_base_instructions);
         let developer_instructions = developer_instructions.or(cfg.developer_instructions);
         let guardian_developer_instructions = guardian_developer_instructions_from_requirements(
@@ -2549,10 +2828,13 @@ impl Config {
             .experimental_compact_prompt_file
             .as_ref()
             .or(cfg.experimental_compact_prompt_file.as_ref());
-        let file_compact_prompt = Self::try_read_non_empty_file(
-            experimental_compact_prompt_path,
-            "experimental compact prompt file",
-        )?;
+        let file_compact_prompt = match file_compact_prompt_override {
+            Some(file_compact_prompt) => file_compact_prompt,
+            None => Self::try_read_non_empty_file(
+                experimental_compact_prompt_path,
+                "experimental compact prompt file",
+            )?,
+        };
         let compact_prompt = compact_prompt.or(file_compact_prompt);
         let js_repl_node_path = js_repl_node_path_override
             .or(config_profile.js_repl_node_path.map(Into::into))
@@ -2866,6 +3148,39 @@ impl Config {
         None
     }
 
+    async fn load_instructions_with_filesystem<F>(
+        codex_dir: Option<&Path>,
+        filesystem: &F,
+    ) -> std::io::Result<Option<String>>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let Some(base) = codex_dir else {
+            return Ok(None);
+        };
+
+        for candidate in [LOCAL_PROJECT_DOC_FILENAME, DEFAULT_PROJECT_DOC_FILENAME] {
+            let path = AbsolutePathBuf::from_absolute_path(&base.join(candidate))?;
+            let contents = match filesystem.read_file(&path).await {
+                Ok(contents) => contents,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err),
+            };
+            let contents = String::from_utf8(contents).map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("failed to decode {} as UTF-8: {err}", path.display()),
+                )
+            })?;
+            let trimmed = contents.trim();
+            if !trimmed.is_empty() {
+                return Ok(Some(trimmed.to_string()));
+            }
+        }
+
+        Ok(None)
+    }
+
     /// If `path` is `Some`, attempts to read the file at the given path and
     /// returns its contents as a trimmed `String`. If the file is empty, or
     /// is `Some` but cannot be read, returns an `Err`.
@@ -2881,6 +3196,45 @@ impl Config {
             std::io::Error::new(
                 e.kind(),
                 format!("failed to read {context} {}: {e}", path.display()),
+            )
+        })?;
+
+        let s = contents.trim().to_string();
+        if s.is_empty() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{context} is empty: {}", path.display()),
+            ))
+        } else {
+            Ok(Some(s))
+        }
+    }
+
+    async fn try_read_non_empty_file_with_filesystem<F>(
+        path: Option<&AbsolutePathBuf>,
+        context: &str,
+        filesystem: &F,
+    ) -> std::io::Result<Option<String>>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let Some(path) = path else {
+            return Ok(None);
+        };
+
+        let contents = filesystem.read_file(path).await.map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("failed to read {context} {}: {e}", path.display()),
+            )
+        })?;
+        let contents = String::from_utf8(contents).map_err(|err| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "failed to decode {context} {} as UTF-8: {err}",
+                    path.display()
+                ),
             )
         })?;
 

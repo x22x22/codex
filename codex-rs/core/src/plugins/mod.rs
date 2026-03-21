@@ -13,8 +13,9 @@ mod toggles;
 
 pub(crate) use curated_repo::curated_plugins_repo_path;
 pub(crate) use curated_repo::read_curated_plugins_sha;
+pub(crate) use curated_repo::read_curated_plugins_sha_with_filesystem;
 pub(crate) use curated_repo::sync_openai_plugins_repo;
-pub(crate) use discoverable::list_tool_suggest_discoverable_plugins;
+pub(crate) use discoverable::list_tool_suggest_discoverable_plugins_with_filesystem;
 pub(crate) use injection::build_plugin_injections;
 pub use manager::AppConnectorId;
 pub use manager::ConfiguredMarketplace;
@@ -41,6 +42,7 @@ pub use manager::plugin_telemetry_metadata_from_root;
 pub use manifest::PluginManifestInterface;
 pub(crate) use manifest::PluginManifestPaths;
 pub(crate) use manifest::load_plugin_manifest;
+pub(crate) use manifest::load_plugin_manifest_with_filesystem;
 pub use marketplace::MarketplaceError;
 pub use marketplace::MarketplacePluginAuthPolicy;
 pub use marketplace::MarketplacePluginInstallPolicy;

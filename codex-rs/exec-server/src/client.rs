@@ -229,20 +229,10 @@ impl ExecServerClient {
             .map_err(Into::into)
     }
 
-    pub async fn write(
-        &self,
-        process_id: &str,
-        chunk: Vec<u8>,
-    ) -> Result<WriteResponse, ExecServerError> {
+    pub async fn write(&self, params: WriteParams) -> Result<WriteResponse, ExecServerError> {
         self.inner
             .client
-            .call(
-                EXEC_WRITE_METHOD,
-                &WriteParams {
-                    process_id: process_id.to_string(),
-                    chunk: chunk.into(),
-                },
-            )
+            .call(EXEC_WRITE_METHOD, &params)
             .await
             .map_err(Into::into)
     }

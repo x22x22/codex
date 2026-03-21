@@ -7,6 +7,7 @@ use crate::error_code::INVALID_PARAMS_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::fuzzy_file_search::FuzzyFileSearchSession;
 use crate::fuzzy_file_search::run_fuzzy_file_search;
+use crate::fuzzy_file_search::run_fuzzy_file_search_with_filesystem;
 use crate::fuzzy_file_search::start_fuzzy_file_search_session;
 use crate::models::supported_models;
 use crate::outgoing_message::ConnectionId;
@@ -62,6 +63,7 @@ use codex_app_server_protocol::GetAuthStatusParams;
 use codex_app_server_protocol::GetAuthStatusResponse;
 use codex_app_server_protocol::GetConversationSummaryParams;
 use codex_app_server_protocol::GetConversationSummaryResponse;
+use codex_app_server_protocol::GitDiffToRemoteParams;
 use codex_app_server_protocol::GitDiffToRemoteResponse;
 use codex_app_server_protocol::GitInfo as ApiGitInfo;
 use codex_app_server_protocol::JSONRPCErrorError;
@@ -94,6 +96,8 @@ use codex_app_server_protocol::PluginSource;
 use codex_app_server_protocol::PluginSummary;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::PromptListParams;
+use codex_app_server_protocol::PromptListResponse;
 use codex_app_server_protocol::RequestId;
 use codex_app_server_protocol::ReviewDelivery as ApiReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
@@ -278,6 +282,7 @@ use codex_state::StateRuntime;
 use codex_state::ThreadMetadata;
 use codex_state::ThreadMetadataBuilder;
 use codex_state::log_db::LogDbLayer;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_json_to_toml::json_to_toml;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
 use std::collections::HashMap;
@@ -397,6 +402,9 @@ struct ListenerTaskContext {
     thread_watch_manager: ThreadWatchManager,
     fallback_model_provider: String,
     codex_home: PathBuf,
+    default_cwd: PathBuf,
+    experimental_exec_server_url: Option<String>,
+    default_environment_id: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -505,11 +513,22 @@ impl CodexMessageProcessor {
         fallback_cwd: Option<PathBuf>,
     ) -> Result<Config, JSONRPCErrorError> {
         let cloud_requirements = self.current_cloud_requirements();
+        let environment = Environment::create(self.config.experimental_exec_server_url.clone())
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to bind environment for config reload: {err}"),
+                data: None,
+            })?;
+        let filesystem = environment.get_filesystem();
         let mut config = codex_core::config::ConfigBuilder::default()
+            .codex_home(self.config.codex_home.clone())
             .cli_overrides(self.cli_overrides.clone())
-            .fallback_cwd(fallback_cwd)
+            .fallback_cwd(Some(
+                fallback_cwd.unwrap_or_else(|| self.config.cwd.clone()),
+            ))
             .cloud_requirements(cloud_requirements)
-            .build()
+            .build_with_filesystem(&filesystem)
             .await
             .map_err(|err| JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
@@ -698,6 +717,10 @@ impl CodexMessageProcessor {
                 self.thread_read(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::PromptList { request_id, params } => {
+                self.prompt_list(to_connection_request_id(request_id), params)
+                    .await;
+            }
             ClientRequest::ThreadShellCommand { request_id, params } => {
                 self.thread_shell_command(to_connection_request_id(request_id), params)
                     .await;
@@ -832,7 +855,7 @@ impl CodexMessageProcessor {
                     .await;
             }
             ClientRequest::GitDiffToRemote { request_id, params } => {
-                self.git_diff_to_origin(to_connection_request_id(request_id), params.cwd)
+                self.git_diff_to_origin(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::GetAuthStatus { request_id, params } => {
@@ -1072,6 +1095,9 @@ impl CodexMessageProcessor {
                     let cloud_requirements = self.cloud_requirements.clone();
                     let chatgpt_base_url = self.config.chatgpt_base_url.clone();
                     let codex_home = self.config.codex_home.clone();
+                    let config_cwd = self.config.cwd.clone();
+                    let experimental_exec_server_url =
+                        self.config.experimental_exec_server_url.clone();
                     let cli_overrides = self.cli_overrides.clone();
                     let auth_url = server.auth_url.clone();
                     tokio::spawn(async move {
@@ -1106,11 +1132,14 @@ impl CodexMessageProcessor {
                                 cloud_requirements.as_ref(),
                                 auth_manager.clone(),
                                 chatgpt_base_url,
-                                codex_home,
+                                codex_home.clone(),
                             );
                             sync_default_client_residency_requirement(
                                 &cli_overrides,
                                 cloud_requirements.as_ref(),
+                                config_cwd,
+                                codex_home.clone(),
+                                experimental_exec_server_url,
                             )
                             .await;
 
@@ -1263,6 +1292,9 @@ impl CodexMessageProcessor {
         sync_default_client_residency_requirement(
             &self.cli_overrides,
             self.cloud_requirements.as_ref(),
+            self.config.cwd.clone(),
+            self.config.codex_home.clone(),
+            self.config.experimental_exec_server_url.clone(),
         )
         .await;
 
@@ -1771,6 +1803,10 @@ impl CodexMessageProcessor {
                     .start(StartCommandExecParams {
                         outgoing,
                         request_id: request_for_task,
+                        experimental_exec_server_url: self
+                            .config
+                            .experimental_exec_server_url
+                            .clone(),
                         environment_id,
                         process_id,
                         exec_request,
@@ -1905,6 +1941,11 @@ impl CodexMessageProcessor {
             thread_watch_manager: self.thread_watch_manager.clone(),
             fallback_model_provider: self.config.model_provider_id.clone(),
             codex_home: self.config.codex_home.clone(),
+            default_cwd: self.config.cwd.clone(),
+            experimental_exec_server_url: self.config.experimental_exec_server_url.clone(),
+            default_environment_id: Environment::default_environment_id(
+                self.config.experimental_exec_server_url.as_deref(),
+            ),
         };
         let request_trace = request_context.request_trace();
         let thread_start_task = async move {
@@ -1990,8 +2031,10 @@ impl CodexMessageProcessor {
             &cli_overrides,
             config_overrides,
             typesafe_overrides,
+            Some(listener_task_context.default_cwd.clone()),
             &cloud_requirements,
             &listener_task_context.codex_home,
+            listener_task_context.experimental_exec_server_url.clone(),
         )
         .await
         {
@@ -2069,6 +2112,7 @@ impl CodexMessageProcessor {
                     thread_id,
                     &config_snapshot,
                     session_configured.rollout_path.clone(),
+                    &config_snapshot.environment_id,
                 );
 
                 // Auto-attach a thread listener when starting a thread.
@@ -2553,7 +2597,10 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let mut thread = summary_to_thread(summary);
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        let mut thread = summary_to_thread(summary, &configured_environment_id);
         self.attach_thread_name(thread_uuid, &mut thread).await;
         thread.status = resolve_thread_status(
             self.thread_watch_manager
@@ -2861,7 +2908,10 @@ impl CodexMessageProcessor {
                         message: format!("failed to read unarchived thread: {err}"),
                         data: None,
                     })?;
-            Ok(summary_to_thread(summary))
+            let configured_environment_id = Environment::default_environment_id(
+                self.config.experimental_exec_server_url.as_deref(),
+            );
+            Ok(summary_to_thread(summary, &configured_environment_id))
         }
         .await;
 
@@ -3072,6 +3122,7 @@ impl CodexMessageProcessor {
 
     async fn thread_list(&self, request_id: ConnectionRequestId, params: ThreadListParams) {
         let ThreadListParams {
+            environment_id,
             cursor,
             limit,
             sort_key,
@@ -3081,6 +3132,21 @@ impl CodexMessageProcessor {
             cwd,
             search_term,
         } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
 
         let requested_page_size = limit
             .map(|value| value as usize)
@@ -3119,7 +3185,7 @@ impl CodexMessageProcessor {
             let conversation_id = summary.conversation_id;
             thread_ids.insert(conversation_id);
 
-            let thread = summary_to_thread(summary);
+            let thread = summary_to_thread(summary, &configured_environment_id);
             status_ids.push(thread.id.clone());
             threads.push((conversation_id, thread));
         }
@@ -3156,14 +3222,37 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: ThreadLoadedListParams,
     ) {
-        let ThreadLoadedListParams { cursor, limit } = params;
-        let mut data = self
-            .thread_manager
-            .list_thread_ids()
-            .await
-            .into_iter()
-            .map(|thread_id| thread_id.to_string())
-            .collect::<Vec<_>>();
+        let ThreadLoadedListParams {
+            environment_id,
+            cursor,
+            limit,
+        } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        let environment_id = match environment_id {
+            Some(environment_id) if environment_id != configured_environment_id => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!(
+                        "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                    ),
+                )
+                .await;
+                return;
+            }
+            Some(environment_id) => environment_id,
+            None => configured_environment_id,
+        };
+        let mut data = Vec::new();
+        for thread_id in self.thread_manager.list_thread_ids().await {
+            let Ok(thread) = self.thread_manager.get_thread(thread_id).await else {
+                continue;
+            };
+            if thread.config_snapshot().await.environment_id == environment_id {
+                data.push(thread_id.to_string());
+            }
+        }
 
         if data.is_empty() {
             let response = ThreadLoadedListResponse {
@@ -3212,9 +3301,25 @@ impl CodexMessageProcessor {
 
     async fn thread_read(&mut self, request_id: ConnectionRequestId, params: ThreadReadParams) {
         let ThreadReadParams {
+            environment_id,
             thread_id,
             include_turns,
         } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
 
         let thread_uuid = match ThreadId::from_string(&thread_id) {
             Ok(id) => id,
@@ -3267,11 +3372,11 @@ impl CodexMessageProcessor {
         }
 
         let mut thread = if let Some(summary) = db_summary {
-            summary_to_thread(summary)
+            summary_to_thread(summary, &configured_environment_id)
         } else if let Some(rollout_path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
             match read_summary_from_rollout(rollout_path, fallback_provider).await {
-                Ok(summary) => summary_to_thread(summary),
+                Ok(summary) => summary_to_thread(summary, &configured_environment_id),
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
@@ -3306,7 +3411,12 @@ impl CodexMessageProcessor {
             if include_turns {
                 rollout_path = loaded_rollout_path.clone();
             }
-            build_thread_from_snapshot(thread_uuid, &config_snapshot, loaded_rollout_path)
+            build_thread_from_snapshot(
+                thread_uuid,
+                &config_snapshot,
+                loaded_rollout_path,
+                &configured_environment_id,
+            )
         };
         self.attach_thread_name(thread_uuid, &mut thread).await;
 
@@ -3390,8 +3500,12 @@ impl CodexMessageProcessor {
     ) {
         if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
             let config_snapshot = thread.config_snapshot().await;
-            let loaded_thread =
-                build_thread_from_snapshot(thread_id, &config_snapshot, thread.rollout_path());
+            let loaded_thread = build_thread_from_snapshot(
+                thread_id,
+                &config_snapshot,
+                thread.rollout_path(),
+                &config_snapshot.environment_id,
+            );
             self.thread_watch_manager.upsert_thread(loaded_thread).await;
         }
 
@@ -3518,6 +3632,7 @@ impl CodexMessageProcessor {
             history_cwd,
             &cloud_requirements,
             &self.config.codex_home,
+            self.config.experimental_exec_server_url.clone(),
         )
         .await
         {
@@ -3765,6 +3880,7 @@ impl CodexMessageProcessor {
                 rollout_path.as_path(),
                 config_snapshot.model_provider_id.as_str(),
                 /*persisted_metadata*/ None,
+                &config_snapshot.environment_id,
             )
             .await
             {
@@ -3903,6 +4019,7 @@ impl CodexMessageProcessor {
         fallback_provider: &str,
         persisted_resume_metadata: Option<&ThreadMetadata>,
     ) -> std::result::Result<Thread, String> {
+        let environment_id = thread.config_snapshot().await.environment_id;
         let thread = match thread_history {
             InitialHistory::Resumed(resumed) => {
                 load_thread_summary_for_rollout(
@@ -3911,6 +4028,7 @@ impl CodexMessageProcessor {
                     resumed.rollout_path.as_path(),
                     fallback_provider,
                     persisted_resume_metadata,
+                    &environment_id,
                 )
                 .await
             }
@@ -3920,6 +4038,7 @@ impl CodexMessageProcessor {
                     thread_id,
                     &config_snapshot,
                     Some(rollout_path.into()),
+                    &config_snapshot.environment_id,
                 );
                 thread.preview = preview_from_rollout_items(items);
                 Ok(thread)
@@ -4076,6 +4195,7 @@ impl CodexMessageProcessor {
             history_cwd,
             &cloud_requirements,
             &self.config.codex_home,
+            self.config.experimental_exec_server_url.clone(),
         )
         .await
         {
@@ -4154,7 +4274,7 @@ impl CodexMessageProcessor {
             )
             .await
             {
-                Ok(summary) => summary_to_thread(summary),
+                Ok(summary) => summary_to_thread(summary, &configured_environment_id),
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
@@ -4170,8 +4290,12 @@ impl CodexMessageProcessor {
         } else {
             let config_snapshot = forked_thread.config_snapshot().await;
             // forked thread names do not inherit the source thread name
-            let mut thread =
-                build_thread_from_snapshot(thread_id, &config_snapshot, /*path*/ None);
+            let mut thread = build_thread_from_snapshot(
+                thread_id,
+                &config_snapshot,
+                /*path*/ None,
+                &configured_environment_id,
+            );
             let history_items = match read_rollout_items_from_rollout(rollout_path.as_path()).await
             {
                 Ok(items) => items,
@@ -5545,6 +5669,7 @@ impl CodexMessageProcessor {
                     &config,
                     force_reload,
                     extra_roots,
+                    &configured_environment_id,
                     &environment_filesystem,
                 )
                 .await;
@@ -5567,12 +5692,96 @@ impl CodexMessageProcessor {
             .await;
     }
 
+    async fn prompt_list(&self, request_id: ConnectionRequestId, params: PromptListParams) {
+        let PromptListParams { environment_id } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
+
+        let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
+            Ok(config) => config,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let environment =
+            match Environment::create(self.config.experimental_exec_server_url.clone()).await {
+                Ok(environment) => environment,
+                Err(error) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to bind environment for prompt/list: {error}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+        let prompts_dir = match AbsolutePathBuf::try_from(codex_core::custom_prompts::prompts_dir(
+            &config.codex_home,
+        )) {
+            Ok(prompts_dir) => prompts_dir,
+            Err(error) => {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("failed to resolve prompts directory: {error}"),
+                )
+                .await;
+                return;
+            }
+        };
+        let environment_filesystem = environment.get_filesystem();
+        let prompts = codex_core::custom_prompts::discover_prompts_in_with_filesystem(
+            &prompts_dir,
+            &environment_filesystem,
+        )
+        .await;
+
+        self.outgoing
+            .send_response(
+                request_id,
+                PromptListResponse {
+                    environment_id: configured_environment_id,
+                    prompts,
+                },
+            )
+            .await;
+    }
+
     async fn plugin_list(&self, request_id: ConnectionRequestId, params: PluginListParams) {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams {
+            environment_id,
             cwds,
             force_remote_sync,
         } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
         let roots = cwds.unwrap_or_default();
 
         let mut config = match self.load_latest_config(/*fallback_cwd*/ None).await {
@@ -5584,10 +5793,27 @@ impl CodexMessageProcessor {
         };
         let mut remote_sync_error = None;
         let auth = self.auth_manager.auth().await;
+        let environment =
+            match Environment::create(self.config.experimental_exec_server_url.clone()).await {
+                Ok(environment) => environment,
+                Err(error) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to bind environment for plugin/list: {error}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+        let environment_filesystem = environment.get_filesystem();
 
         if force_remote_sync {
             match plugins_manager
-                .sync_plugins_from_remote(&config, auth.as_ref())
+                .sync_plugins_from_remote_with_filesystem(
+                    &config,
+                    auth.as_ref(),
+                    &environment_filesystem,
+                )
                 .await
             {
                 Ok(sync_result) => {
@@ -5617,52 +5843,37 @@ impl CodexMessageProcessor {
             };
         }
 
-        let config_for_marketplace_listing = config.clone();
-        let plugins_manager_for_marketplace_listing = plugins_manager.clone();
-        let data = match tokio::task::spawn_blocking(move || {
-            let marketplaces = plugins_manager_for_marketplace_listing
-                .list_marketplaces_for_config(&config_for_marketplace_listing, &roots)?;
-            Ok::<Vec<PluginMarketplaceEntry>, MarketplaceError>(
-                marketplaces
-                    .into_iter()
-                    .map(|marketplace| PluginMarketplaceEntry {
-                        name: marketplace.name,
-                        path: marketplace.path,
-                        interface: marketplace.interface.map(|interface| MarketplaceInterface {
-                            display_name: interface.display_name,
-                        }),
-                        plugins: marketplace
-                            .plugins
-                            .into_iter()
-                            .map(|plugin| PluginSummary {
-                                id: plugin.id,
-                                installed: plugin.installed,
-                                enabled: plugin.enabled,
-                                name: plugin.name,
-                                source: marketplace_plugin_source_to_info(plugin.source),
-                                install_policy: plugin.policy.installation.into(),
-                                auth_policy: plugin.policy.authentication.into(),
-                                interface: plugin.interface.map(plugin_interface_to_info),
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-            )
-        })
-        .await
+        let data: Vec<PluginMarketplaceEntry> = match plugins_manager
+            .list_marketplaces_for_config_with_filesystem(&config, &roots, &environment_filesystem)
+            .await
         {
-            Ok(Ok(data)) => data,
-            Ok(Err(err)) => {
+            Ok(marketplaces) => marketplaces
+                .into_iter()
+                .map(|marketplace| PluginMarketplaceEntry {
+                    name: marketplace.name,
+                    path: marketplace.path,
+                    interface: marketplace.interface.map(|interface| MarketplaceInterface {
+                        display_name: interface.display_name,
+                    }),
+                    plugins: marketplace
+                        .plugins
+                        .into_iter()
+                        .map(|plugin| PluginSummary {
+                            id: plugin.id,
+                            installed: plugin.installed,
+                            enabled: plugin.enabled,
+                            name: plugin.name,
+                            source: marketplace_plugin_source_to_info(plugin.source),
+                            install_policy: plugin.policy.installation.into(),
+                            auth_policy: plugin.policy.authentication.into(),
+                            interface: plugin.interface.map(plugin_interface_to_info),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            Err(err) => {
                 self.send_marketplace_error(request_id, err, "list marketplace plugins")
                     .await;
-                return;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to list marketplace plugins: {err}"),
-                )
-                .await;
                 return;
             }
         };
@@ -5703,9 +5914,25 @@ impl CodexMessageProcessor {
     async fn plugin_read(&self, request_id: ConnectionRequestId, params: PluginReadParams) {
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginReadParams {
+            environment_id,
             marketplace_path,
             plugin_name,
         } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
 
         let config = match self.load_latest_config(config_cwd).await {
@@ -5716,28 +5943,34 @@ impl CodexMessageProcessor {
             }
         };
 
+        let environment =
+            match Environment::create(self.config.experimental_exec_server_url.clone()).await {
+                Ok(environment) => environment,
+                Err(error) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to bind environment for plugin/read: {error}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
         let request = PluginReadRequest {
             plugin_name,
             marketplace_path,
         };
-        let config_for_read = config.clone();
-        let outcome = match tokio::task::spawn_blocking(move || {
-            plugins_manager.read_plugin_for_config(&config_for_read, &request)
-        })
-        .await
+        let outcome = match plugins_manager
+            .read_plugin_for_config_with_filesystem(
+                &config,
+                &request,
+                &environment.get_filesystem(),
+            )
+            .await
         {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(err)) => {
+            Ok(outcome) => outcome,
+            Err(err) => {
                 self.send_marketplace_error(request_id, err, "read plugin details")
                     .await;
-                return;
-            }
-            Err(err) => {
-                self.send_internal_error(
-                    request_id,
-                    format!("failed to read plugin details: {err}"),
-                )
-                .await;
                 return;
             }
         };
@@ -5785,9 +6018,21 @@ impl CodexMessageProcessor {
     ) {
         let SkillsConfigWriteParams { path, enabled } = params;
         let edits = vec![ConfigEdit::SetSkillConfig { path, enabled }];
+        let environment =
+            match Environment::create(self.config.experimental_exec_server_url.clone()).await {
+                Ok(environment) => environment,
+                Err(error) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to bind environment for skills/configWrite: {error}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
         let result = ConfigEditsBuilder::new(&self.config.codex_home)
             .with_edits(edits)
-            .apply()
+            .apply_with_filesystem(&environment.get_filesystem())
             .await;
 
         match result {
@@ -5815,11 +6060,40 @@ impl CodexMessageProcessor {
 
     async fn plugin_install(&self, request_id: ConnectionRequestId, params: PluginInstallParams) {
         let PluginInstallParams {
+            environment_id,
             marketplace_path,
             plugin_name,
             force_remote_sync,
         } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
         let config_cwd = marketplace_path.as_path().parent().map(Path::to_path_buf);
+        let environment =
+            match Environment::create(self.config.experimental_exec_server_url.clone()).await {
+                Ok(environment) => environment,
+                Err(error) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to bind environment for plugin/install: {error}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+        let environment_filesystem = environment.get_filesystem();
 
         let plugins_manager = self.thread_manager.plugins_manager();
         let request = PluginInstallRequest {
@@ -5837,10 +6111,17 @@ impl CodexMessageProcessor {
             };
             let auth = self.auth_manager.auth().await;
             plugins_manager
-                .install_plugin_with_remote_sync(&config, auth.as_ref(), request)
+                .install_plugin_with_remote_sync_with_filesystem(
+                    &config,
+                    auth.as_ref(),
+                    request,
+                    &environment_filesystem,
+                )
                 .await
         } else {
-            plugins_manager.install_plugin(request).await
+            plugins_manager
+                .install_plugin_with_filesystem(request, &environment_filesystem)
+                .await
         };
 
         match install_result {
@@ -5976,10 +6257,39 @@ impl CodexMessageProcessor {
         params: PluginUninstallParams,
     ) {
         let PluginUninstallParams {
+            environment_id,
             plugin_id,
             force_remote_sync,
         } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
         let plugins_manager = self.thread_manager.plugins_manager();
+        let environment =
+            match Environment::create(self.config.experimental_exec_server_url.clone()).await {
+                Ok(environment) => environment,
+                Err(error) => {
+                    self.send_invalid_request_error(
+                        request_id,
+                        format!("failed to bind environment for plugin/uninstall: {error}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+        let environment_filesystem = environment.get_filesystem();
 
         let uninstall_result = if force_remote_sync {
             let config = match self.load_latest_config(/*fallback_cwd*/ None).await {
@@ -5991,10 +6301,17 @@ impl CodexMessageProcessor {
             };
             let auth = self.auth_manager.auth().await;
             plugins_manager
-                .uninstall_plugin_with_remote_sync(&config, auth.as_ref(), plugin_id)
+                .uninstall_plugin_with_remote_sync_with_filesystem(
+                    &config,
+                    auth.as_ref(),
+                    plugin_id,
+                    &environment_filesystem,
+                )
                 .await
         } else {
-            plugins_manager.uninstall_plugin(plugin_id).await
+            plugins_manager
+                .uninstall_plugin_with_filesystem(plugin_id, &environment_filesystem)
+                .await
         };
 
         match uninstall_result {
@@ -6563,7 +6880,10 @@ impl CodexMessageProcessor {
         if let Some(rollout_path) = review_thread.rollout_path() {
             match read_summary_from_rollout(rollout_path.as_path(), fallback_provider).await {
                 Ok(summary) => {
-                    let mut thread = summary_to_thread(summary);
+                    let configured_environment_id = Environment::default_environment_id(
+                        self.config.experimental_exec_server_url.as_deref(),
+                    );
+                    let mut thread = summary_to_thread(summary, &configured_environment_id);
                     self.thread_watch_manager
                         .upsert_thread_silently(thread.clone())
                         .await;
@@ -6719,6 +7039,11 @@ impl CodexMessageProcessor {
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
+                default_cwd: self.config.cwd.clone(),
+                experimental_exec_server_url: self.config.experimental_exec_server_url.clone(),
+                default_environment_id: Environment::default_environment_id(
+                    self.config.experimental_exec_server_url.as_deref(),
+                ),
             },
             conversation_id,
             connection_id,
@@ -6806,6 +7131,11 @@ impl CodexMessageProcessor {
                 thread_watch_manager: self.thread_watch_manager.clone(),
                 fallback_model_provider: self.config.model_provider_id.clone(),
                 codex_home: self.config.codex_home.clone(),
+                default_cwd: self.config.cwd.clone(),
+                experimental_exec_server_url: self.config.experimental_exec_server_url.clone(),
+                default_environment_id: Environment::default_environment_id(
+                    self.config.experimental_exec_server_url.as_deref(),
+                ),
             },
             conversation_id,
             conversation,
@@ -6837,6 +7167,9 @@ impl CodexMessageProcessor {
             thread_watch_manager,
             fallback_model_provider,
             codex_home,
+            default_cwd: _default_cwd,
+            experimental_exec_server_url: _experimental_exec_server_url,
+            default_environment_id,
         } = listener_task_context;
         let outgoing_for_task = Arc::clone(&outgoing);
         tokio::spawn(async move {
@@ -6932,6 +7265,7 @@ impl CodexMessageProcessor {
                             api_version,
                             fallback_model_provider.clone(),
                             codex_home.as_path(),
+                            &default_environment_id,
                         )
                         .await;
                     }
@@ -6960,8 +7294,47 @@ impl CodexMessageProcessor {
             }
         });
     }
-    async fn git_diff_to_origin(&self, request_id: ConnectionRequestId, cwd: PathBuf) {
-        let diff = git_diff_to_remote(&cwd).await;
+    async fn git_diff_to_origin(
+        &self,
+        request_id: ConnectionRequestId,
+        params: GitDiffToRemoteParams,
+    ) {
+        let GitDiffToRemoteParams {
+            environment_id,
+            cwd,
+        } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
+        let diff = if self.config.experimental_exec_server_url.is_some() {
+            let environment =
+                match Environment::create(self.config.experimental_exec_server_url.clone()).await {
+                    Ok(environment) => environment,
+                    Err(error) => {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("failed to bind environment for git/diffToRemote: {error}"),
+                        )
+                        .await;
+                        return;
+                    }
+                };
+            git_diff_to_remote_with_environment(&environment, &cwd).await
+        } else {
+            git_diff_to_remote(&cwd).await
+        };
         match diff {
             Some(value) => {
                 let response = GitDiffToRemoteResponse {
@@ -6987,11 +7360,26 @@ impl CodexMessageProcessor {
         params: FuzzyFileSearchParams,
     ) {
         let FuzzyFileSearchParams {
+            environment_id,
             query,
             roots,
             cancellation_token,
         } = params;
-
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
         let cancel_flag = match cancellation_token.clone() {
             Some(token) => {
                 let mut pending_fuzzy_searches = self.pending_fuzzy_searches.lock().await;
@@ -7009,6 +7397,24 @@ impl CodexMessageProcessor {
 
         let results = match query.as_str() {
             "" => vec![],
+            _ if self.config.experimental_exec_server_url.is_some() => {
+                let environment =
+                    match Environment::create(self.config.experimental_exec_server_url.clone()).await
+                    {
+                        Ok(environment) => environment,
+                        Err(error) => {
+                            self.send_invalid_request_error(
+                                request_id,
+                                format!("failed to bind environment for fuzzy file search: {error}"),
+                            )
+                            .await;
+                            return;
+                        }
+                    };
+                let filesystem = environment.get_filesystem();
+                run_fuzzy_file_search_with_filesystem(query, roots, &filesystem, cancel_flag.clone())
+                    .await
+            }
             _ => run_fuzzy_file_search(query, roots, cancel_flag.clone()).await,
         };
 
@@ -7030,7 +7436,35 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: FuzzyFileSearchSessionStartParams,
     ) {
-        let FuzzyFileSearchSessionStartParams { session_id, roots } = params;
+        let FuzzyFileSearchSessionStartParams {
+            environment_id,
+            session_id,
+            roots,
+        } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
+        if self.config.experimental_exec_server_url.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "fuzzy file search sessions are still host-local and are not yet supported for remote environments"
+                    .to_string(),
+            )
+            .await;
+            return;
+        }
         if session_id.is_empty() {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -7067,7 +7501,35 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: FuzzyFileSearchSessionUpdateParams,
     ) {
-        let FuzzyFileSearchSessionUpdateParams { session_id, query } = params;
+        let FuzzyFileSearchSessionUpdateParams {
+            environment_id,
+            session_id,
+            query,
+        } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
+        if self.config.experimental_exec_server_url.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "fuzzy file search sessions are still host-local and are not yet supported for remote environments"
+                    .to_string(),
+            )
+            .await;
+            return;
+        }
         let found = {
             let sessions = self.fuzzy_search_sessions.lock().await;
             if let Some(session) = sessions.get(&session_id) {
@@ -7097,7 +7559,34 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: FuzzyFileSearchSessionStopParams,
     ) {
-        let FuzzyFileSearchSessionStopParams { session_id } = params;
+        let FuzzyFileSearchSessionStopParams {
+            environment_id,
+            session_id,
+        } = params;
+        let configured_environment_id = Environment::default_environment_id(
+            self.config.experimental_exec_server_url.as_deref(),
+        );
+        if let Some(environment_id) = environment_id
+            && environment_id != configured_environment_id
+        {
+            self.send_invalid_request_error(
+                request_id,
+                format!(
+                    "unsupported environmentId `{environment_id}`; configured environment is `{configured_environment_id}`"
+                ),
+            )
+            .await;
+            return;
+        }
+        if self.config.experimental_exec_server_url.is_some() {
+            self.send_invalid_request_error(
+                request_id,
+                "fuzzy file search sessions are still host-local and are not yet supported for remote environments"
+                    .to_string(),
+            )
+            .await;
+            return;
+        }
         {
             let mut sessions = self.fuzzy_search_sessions.lock().await;
             sessions.remove(&session_id);
@@ -7270,6 +7759,7 @@ impl CodexMessageProcessor {
                 Some(command_cwd.clone()),
                 &cloud_requirements,
                 &config.codex_home,
+                config.experimental_exec_server_url.clone(),
             )
             .await;
             let setup_result = match derived_config {
@@ -7862,15 +8352,31 @@ fn replace_cloud_requirements_loader(
 async fn sync_default_client_residency_requirement(
     cli_overrides: &[(String, TomlValue)],
     cloud_requirements: &RwLock<CloudRequirementsLoader>,
+    cwd: PathBuf,
+    codex_home: PathBuf,
+    experimental_exec_server_url: Option<String>,
 ) {
     let loader = cloud_requirements
         .read()
         .map(|guard| guard.clone())
         .unwrap_or_default();
+    let environment = match Environment::create(experimental_exec_server_url).await {
+        Ok(environment) => environment,
+        Err(err) => {
+            warn!(
+                error = %err,
+                "failed to bind environment while syncing default client residency requirement"
+            );
+            return;
+        }
+    };
+    let filesystem = environment.get_filesystem();
     match codex_core::config::ConfigBuilder::default()
+        .codex_home(codex_home)
         .cli_overrides(cli_overrides.to_vec())
+        .fallback_cwd(Some(cwd))
         .cloud_requirements(loader)
-        .build()
+        .build_with_filesystem(&filesystem)
         .await
     {
         Ok(config) => set_default_client_residency_requirement(config.enforce_residency.value()),
@@ -7895,8 +8401,10 @@ async fn derive_config_from_params(
     cli_overrides: &[(String, TomlValue)],
     request_overrides: Option<HashMap<String, serde_json::Value>>,
     typesafe_overrides: ConfigOverrides,
+    fallback_cwd: Option<PathBuf>,
     cloud_requirements: &CloudRequirementsLoader,
     codex_home: &Path,
+    experimental_exec_server_url: Option<String>,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
         .iter()
@@ -7909,12 +8417,17 @@ async fn derive_config_from_params(
         )
         .collect::<Vec<_>>();
 
+    let environment = Environment::create(experimental_exec_server_url)
+        .await
+        .map_err(|err| std::io::Error::other(format!("failed to bind environment: {err}")))?;
+    let filesystem = environment.get_filesystem();
     codex_core::config::ConfigBuilder::default()
         .codex_home(codex_home.to_path_buf())
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
+        .fallback_cwd(fallback_cwd)
         .cloud_requirements(cloud_requirements.clone())
-        .build()
+        .build_with_filesystem(&filesystem)
         .await
 }
 
@@ -7925,6 +8438,7 @@ async fn derive_config_for_cwd(
     cwd: Option<PathBuf>,
     cloud_requirements: &CloudRequirementsLoader,
     codex_home: &Path,
+    experimental_exec_server_url: Option<String>,
 ) -> std::io::Result<Config> {
     let merged_cli_overrides = cli_overrides
         .iter()
@@ -7937,13 +8451,17 @@ async fn derive_config_for_cwd(
         )
         .collect::<Vec<_>>();
 
+    let environment = Environment::create(experimental_exec_server_url)
+        .await
+        .map_err(|err| std::io::Error::other(format!("failed to bind environment: {err}")))?;
+    let filesystem = environment.get_filesystem();
     codex_core::config::ConfigBuilder::default()
         .codex_home(codex_home.to_path_buf())
         .cli_overrides(merged_cli_overrides)
         .harness_overrides(typesafe_overrides)
         .fallback_cwd(cwd)
         .cloud_requirements(cloud_requirements.clone())
-        .build()
+        .build_with_filesystem(&filesystem)
         .await
 }
 
@@ -8269,10 +8787,11 @@ async fn load_thread_summary_for_rollout(
     rollout_path: &Path,
     fallback_provider: &str,
     persisted_metadata: Option<&ThreadMetadata>,
+    environment_id: &str,
 ) -> std::result::Result<Thread, String> {
     let mut thread = read_summary_from_rollout(rollout_path, fallback_provider)
         .await
-        .map(summary_to_thread)
+        .map(|summary| summary_to_thread(summary, environment_id))
         .map_err(|err| {
             format!(
                 "failed to load rollout `{}` for thread {thread_id}: {err}",
@@ -8282,10 +8801,13 @@ async fn load_thread_summary_for_rollout(
     if let Some(persisted_metadata) = persisted_metadata {
         merge_mutable_thread_metadata(
             &mut thread,
-            summary_to_thread(summary_from_thread_metadata(persisted_metadata)),
+            summary_to_thread(
+                summary_from_thread_metadata(persisted_metadata),
+                environment_id,
+            ),
         );
     } else if let Some(summary) = read_summary_from_state_db_by_thread_id(config, thread_id).await {
-        merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary));
+        merge_mutable_thread_metadata(&mut thread, summary_to_thread(summary, environment_id));
     }
     Ok(thread)
 }
@@ -8364,10 +8886,12 @@ fn build_thread_from_snapshot(
     thread_id: ThreadId,
     config_snapshot: &ThreadConfigSnapshot,
     path: Option<PathBuf>,
+    environment_id: &str,
 ) -> Thread {
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     Thread {
         id: thread_id.to_string(),
+        environment_id: environment_id.to_string(),
         preview: String::new(),
         ephemeral: config_snapshot.ephemeral,
         model_provider: config_snapshot.model_provider_id.clone(),
@@ -8386,7 +8910,7 @@ fn build_thread_from_snapshot(
     }
 }
 
-pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
+pub(crate) fn summary_to_thread(summary: ConversationSummary, environment_id: &str) -> Thread {
     let ConversationSummary {
         conversation_id,
         path,
@@ -8410,6 +8934,7 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
 
     Thread {
         id: conversation_id.to_string(),
+        environment_id: environment_id.to_string(),
         preview,
         ephemeral: false,
         model_provider,
@@ -8426,6 +8951,195 @@ pub(crate) fn summary_to_thread(summary: ConversationSummary) -> Thread {
         name: None,
         turns: Vec::new(),
     }
+}
+
+const GIT_EXEC_TIMEOUT_MS: u64 = 5_000;
+
+struct EnvironmentCommandOutput {
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+async fn run_environment_command(
+    environment: &Environment,
+    cwd: &Path,
+    argv: Vec<String>,
+) -> Option<EnvironmentCommandOutput> {
+    let executor = environment.get_executor();
+    let process_id = format!("app-server-{}", Uuid::new_v4());
+    executor
+        .start(codex_exec_server::ExecParams {
+            process_id: process_id.clone(),
+            argv,
+            cwd: cwd.to_path_buf(),
+            env: HashMap::from([("GIT_OPTIONAL_LOCKS".to_string(), "0".to_string())]),
+            tty: false,
+            stdin: false,
+            arg0: None,
+        })
+        .await
+        .ok()?;
+
+    let wait = executor
+        .wait(codex_exec_server::ExecWaitParams {
+            process_id: process_id.clone(),
+            wait_ms: Some(GIT_EXEC_TIMEOUT_MS),
+        })
+        .await
+        .ok()?;
+    if !wait.exited {
+        let _ = executor.terminate(&process_id).await;
+        return None;
+    }
+
+    let read = executor
+        .read(codex_exec_server::ReadParams {
+            process_id,
+            after_seq: None,
+            max_bytes: None,
+            wait_ms: Some(0),
+        })
+        .await
+        .ok()?;
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    for chunk in read.chunks {
+        match chunk.stream {
+            codex_exec_server::ExecOutputStream::Stdout
+            | codex_exec_server::ExecOutputStream::Pty => stdout.extend(chunk.chunk.into_inner()),
+            codex_exec_server::ExecOutputStream::Stderr => stderr.extend(chunk.chunk.into_inner()),
+        }
+    }
+
+    Some(EnvironmentCommandOutput {
+        exit_code: wait.exit_code.or(read.exit_code).unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&stdout).to_string(),
+        stderr: String::from_utf8_lossy(&stderr).to_string(),
+    })
+}
+
+async fn git_diff_to_remote_with_environment(
+    environment: &Environment,
+    cwd: &Path,
+) -> Option<codex_core::git_info::GitDiffToRemote> {
+    let repo_check = run_environment_command(
+        environment,
+        cwd,
+        vec!["git".into(), "rev-parse".into(), "--git-dir".into()],
+    )
+    .await?;
+    if repo_check.exit_code != 0 {
+        return None;
+    }
+
+    let upstream = {
+        let upstream = run_environment_command(
+            environment,
+            cwd,
+            vec![
+                "git".into(),
+                "rev-parse".into(),
+                "--abbrev-ref".into(),
+                "--symbolic-full-name".into(),
+                "@{upstream}".into(),
+            ],
+        )
+        .await;
+        if let Some(upstream) = upstream
+            && upstream.exit_code == 0
+        {
+            let trimmed = upstream.stdout.trim();
+            if !trimmed.is_empty() {
+                Some(trimmed.to_string())
+            } else {
+                None
+            }
+        } else {
+            let origin_head = run_environment_command(
+                environment,
+                cwd,
+                vec![
+                    "git".into(),
+                    "symbolic-ref".into(),
+                    "--quiet".into(),
+                    "refs/remotes/origin/HEAD".into(),
+                ],
+            )
+            .await?;
+            if origin_head.exit_code != 0 {
+                None
+            } else {
+                let trimmed = origin_head.stdout.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+        }
+    }?;
+
+    let base = {
+        let fork_point = run_environment_command(
+            environment,
+            cwd,
+            vec![
+                "git".into(),
+                "merge-base".into(),
+                "--fork-point".into(),
+                upstream.clone(),
+                "HEAD".into(),
+            ],
+        )
+        .await;
+        if let Some(fork_point) = fork_point
+            && fork_point.exit_code == 0
+        {
+            let trimmed = fork_point.stdout.trim();
+            if !trimmed.is_empty() {
+                Some(trimmed.to_string())
+            } else {
+                None
+            }
+        } else {
+            let merge_base = run_environment_command(
+                environment,
+                cwd,
+                vec!["git".into(), "merge-base".into(), upstream, "HEAD".into()],
+            )
+            .await?;
+            if merge_base.exit_code != 0 {
+                None
+            } else {
+                let trimmed = merge_base.stdout.trim();
+                (!trimmed.is_empty()).then(|| trimmed.to_string())
+            }
+        }
+    }?;
+
+    let diff = run_environment_command(
+        environment,
+        cwd,
+        vec![
+            "git".into(),
+            "diff".into(),
+            "--no-textconv".into(),
+            "--no-ext-diff".into(),
+            base.clone(),
+        ],
+    )
+    .await?;
+    if diff.exit_code != 0 {
+        tracing::debug!(
+            cwd = %cwd.display(),
+            stderr = diff.stderr,
+            "git diff to remote failed in bound environment"
+        );
+        return None;
+    }
+
+    Some(codex_core::git_info::GitDiffToRemote {
+        sha: codex_app_server_protocol::GitSha(base),
+        diff: diff.stdout,
+    })
 }
 
 #[cfg(test)]
@@ -8899,7 +9613,7 @@ mod tests {
         fs::write(&path, format!("{}\n", serde_json::to_string(&line)?))?;
 
         let summary = read_summary_from_rollout(path.as_path(), "fallback").await?;
-        let thread = summary_to_thread(summary);
+        let thread = summary_to_thread(summary, "local");
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));
@@ -8993,7 +9707,7 @@ mod tests {
             None,
         );
 
-        let thread = summary_to_thread(summary);
+        let thread = summary_to_thread(summary, "local");
 
         assert_eq!(thread.agent_nickname, Some("atlas".to_string()));
         assert_eq!(thread.agent_role, Some("explorer".to_string()));

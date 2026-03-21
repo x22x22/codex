@@ -215,6 +215,8 @@ export type { PluginSummary } from "./PluginSummary";
 export type { PluginUninstallParams } from "./PluginUninstallParams";
 export type { PluginUninstallResponse } from "./PluginUninstallResponse";
 export type { ProfileV2 } from "./ProfileV2";
+export type { PromptListParams } from "./PromptListParams";
+export type { PromptListResponse } from "./PromptListResponse";
 export type { RateLimitSnapshot } from "./RateLimitSnapshot";
 export type { RateLimitWindow } from "./RateLimitWindow";
 export type { RawResponseItemCompletedNotification } from "./RawResponseItemCompletedNotification";

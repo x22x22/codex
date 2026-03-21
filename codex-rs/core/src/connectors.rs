@@ -16,6 +16,7 @@ pub use codex_app_server_protocol::AppInfo;
 pub use codex_app_server_protocol::AppMetadata;
 use codex_connectors::AllConnectorsCacheKey;
 use codex_connectors::DirectoryListResponse;
+use codex_exec_server::Environment;
 use codex_protocol::protocol::SandboxPolicy;
 use rmcp::model::ToolAnnotations;
 use serde::Deserialize;
@@ -43,10 +44,11 @@ use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_connection_manager::codex_apps_tools_cache_key;
 use crate::plugins::AppConnectorId;
 use crate::plugins::PluginsManager;
-use crate::plugins::list_tool_suggest_discoverable_plugins;
+use crate::plugins::list_tool_suggest_discoverable_plugins_with_filesystem;
 use crate::token_data::TokenData;
 use crate::tools::discoverable::DiscoverablePluginInfo;
 use crate::tools::discoverable::DiscoverableTool;
+use codex_exec_server::ExecutorFileSystem;
 
 pub use codex_connectors::CONNECTORS_CACHE_TTL;
 const CONNECTORS_READY_TIMEOUT_ON_EMPTY_TOOLS: Duration = Duration::from_secs(30);
@@ -103,14 +105,18 @@ pub async fn list_accessible_connectors_from_mcp_tools(
     )
 }
 
-pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
+pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth_with_filesystem<F>(
     config: &Config,
     auth: Option<&CodexAuth>,
     accessible_connectors: &[AppInfo],
-) -> anyhow::Result<Vec<DiscoverableTool>> {
+    filesystem: &F,
+) -> anyhow::Result<Vec<DiscoverableTool>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
     let directory_connectors =
         list_directory_connectors_for_tool_suggest_with_auth(config, auth).await?;
-    let connector_ids = tool_suggest_connector_ids(config);
+    let connector_ids = tool_suggest_connector_ids_with_filesystem(config, filesystem).await?;
     let discoverable_connectors = filter_tool_suggest_discoverable_connectors(
         directory_connectors,
         accessible_connectors,
@@ -118,10 +124,12 @@ pub(crate) async fn list_tool_suggest_discoverable_tools_with_auth(
     )
     .into_iter()
     .map(DiscoverableTool::from);
-    let discoverable_plugins = list_tool_suggest_discoverable_plugins(config)?
-        .into_iter()
-        .map(DiscoverablePluginInfo::from)
-        .map(DiscoverableTool::from);
+    let discoverable_plugins =
+        list_tool_suggest_discoverable_plugins_with_filesystem(config, filesystem)
+            .await?
+            .into_iter()
+            .map(DiscoverablePluginInfo::from)
+            .map(DiscoverableTool::from);
     Ok(discoverable_connectors
         .chain(discoverable_plugins)
         .collect())
@@ -179,7 +187,10 @@ pub async fn list_accessible_connectors_from_mcp_tools_with_options_and_status(
     }
     let cache_key = accessible_connectors_cache_key(config, auth.as_ref());
     let mcp_manager = McpManager::new(Arc::new(PluginsManager::new(config.codex_home.clone())));
-    let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config);
+    let environment = Environment::create(config.experimental_exec_server_url.clone()).await?;
+    let tool_plugin_provenance = mcp_manager
+        .tool_plugin_provenance_with_filesystem(config, &environment.get_filesystem())
+        .await;
     if !force_refetch && let Some(cached_connectors) = read_cached_accessible_connectors(&cache_key)
     {
         let cached_connectors = filter_disallowed_connectors(cached_connectors);
@@ -393,6 +404,32 @@ fn tool_suggest_connector_ids(config: &Config) -> HashSet<String> {
             .map(|discoverable| discoverable.id.clone()),
     );
     connector_ids
+}
+
+async fn tool_suggest_connector_ids_with_filesystem<F>(
+    config: &Config,
+    filesystem: &F,
+) -> anyhow::Result<HashSet<String>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut connector_ids = PluginsManager::new(config.codex_home.clone())
+        .plugins_for_config_with_filesystem(config, /*force_reload*/ false, filesystem)
+        .await
+        .capability_summaries()
+        .iter()
+        .flat_map(|plugin| plugin.app_connector_ids.iter())
+        .map(|connector_id| connector_id.0.clone())
+        .collect::<HashSet<_>>();
+    connector_ids.extend(
+        config
+            .tool_suggest
+            .discoverables
+            .iter()
+            .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Connector)
+            .map(|discoverable| discoverable.id.clone()),
+    );
+    Ok(connector_ids)
 }
 
 async fn list_directory_connectors_for_tool_suggest_with_auth(

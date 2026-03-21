@@ -1,4 +1,6 @@
 use crate::default_client::build_reqwest_client;
+use codex_exec_server::ExecutorFileSystem;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use reqwest::Client;
 use serde::Deserialize;
 use std::fs;
@@ -41,6 +43,20 @@ pub(crate) fn curated_plugins_repo_path(codex_home: &Path) -> PathBuf {
 
 pub(crate) fn read_curated_plugins_sha(codex_home: &Path) -> Option<String> {
     read_sha_file(codex_home.join(CURATED_PLUGINS_SHA_FILE).as_path())
+}
+
+pub(crate) async fn read_curated_plugins_sha_with_filesystem<F>(
+    codex_home: &Path,
+    filesystem: &F,
+) -> Option<String>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let sha_path = AbsolutePathBuf::try_from(codex_home.join(CURATED_PLUGINS_SHA_FILE)).ok()?;
+    let contents = filesystem.read_file(&sha_path).await.ok()?;
+    let sha = String::from_utf8(contents).ok()?;
+    let sha = sha.trim();
+    (!sha.is_empty()).then(|| sha.to_string())
 }
 
 pub(crate) fn sync_openai_plugins_repo(codex_home: &Path) -> Result<String, String> {

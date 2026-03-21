@@ -29,36 +29,67 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct FsApi {
     environment_id: String,
-    file_system: Arc<dyn ExecutorFileSystem>,
+    experimental_exec_server_url: Option<String>,
 }
 
 impl Default for FsApi {
     fn default() -> Self {
-        Self::new(Environment::default_environment_id(None))
+        Self::new(Environment::default_environment_id(None), None)
     }
 }
 
 impl FsApi {
-    pub(crate) fn new(environment_id: String) -> Self {
+    pub(crate) fn new(
+        environment_id: String,
+        experimental_exec_server_url: Option<String>,
+    ) -> Self {
         Self {
             environment_id,
-            file_system: Arc::new(Environment::default().get_filesystem()),
+            experimental_exec_server_url,
         }
+    }
+
+    async fn file_system(&self) -> Result<Arc<dyn ExecutorFileSystem>, JSONRPCErrorError> {
+        let environment = Environment::create(self.experimental_exec_server_url.clone())
+            .await
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to bind environment for fs RPC: {err}"),
+                data: None,
+            })?;
+        Ok(environment.filesystem())
     }
 }
 
 impl FsApi {
+    fn validate_environment_id(
+        &self,
+        environment_id: Option<&str>,
+        method: &str,
+    ) -> Result<(), JSONRPCErrorError> {
+        if let Some(environment_id) = environment_id
+            && environment_id != self.environment_id
+        {
+            return Err(invalid_request(format!(
+                "{method} does not support environmentId `{environment_id}`; configured environment is `{}`",
+                self.environment_id
+            )));
+        }
+        Ok(())
+    }
+
     pub(crate) async fn read_file(
         &self,
         params: FsReadFileParams,
     ) -> Result<FsReadFileResponse, JSONRPCErrorError> {
+        self.validate_environment_id(params.environment_id.as_deref(), "fs/readFile")?;
         tracing::debug!(
             environment_id = %self.environment_id,
             path = ?params.path,
             "fs/readFile"
         );
-        let bytes = self
-            .file_system
+        let file_system = self.file_system().await?;
+        let bytes = file_system
             .read_file(&params.path)
             .await
             .map_err(map_fs_error)?;
@@ -71,6 +102,7 @@ impl FsApi {
         &self,
         params: FsWriteFileParams,
     ) -> Result<FsWriteFileResponse, JSONRPCErrorError> {
+        self.validate_environment_id(params.environment_id.as_deref(), "fs/writeFile")?;
         tracing::debug!(
             environment_id = %self.environment_id,
             path = ?params.path,
@@ -81,7 +113,8 @@ impl FsApi {
                 "fs/writeFile requires valid base64 dataBase64: {err}"
             ))
         })?;
-        self.file_system
+        let file_system = self.file_system().await?;
+        file_system
             .write_file(&params.path, bytes)
             .await
             .map_err(map_fs_error)?;
@@ -92,12 +125,14 @@ impl FsApi {
         &self,
         params: FsCreateDirectoryParams,
     ) -> Result<FsCreateDirectoryResponse, JSONRPCErrorError> {
+        self.validate_environment_id(params.environment_id.as_deref(), "fs/createDirectory")?;
         tracing::debug!(
             environment_id = %self.environment_id,
             path = ?params.path,
             "fs/createDirectory"
         );
-        self.file_system
+        let file_system = self.file_system().await?;
+        file_system
             .create_directory(
                 &params.path,
                 CreateDirectoryOptions {
@@ -113,13 +148,14 @@ impl FsApi {
         &self,
         params: FsGetMetadataParams,
     ) -> Result<FsGetMetadataResponse, JSONRPCErrorError> {
+        self.validate_environment_id(params.environment_id.as_deref(), "fs/getMetadata")?;
         tracing::debug!(
             environment_id = %self.environment_id,
             path = ?params.path,
             "fs/getMetadata"
         );
-        let metadata = self
-            .file_system
+        let file_system = self.file_system().await?;
+        let metadata = file_system
             .get_metadata(&params.path)
             .await
             .map_err(map_fs_error)?;
@@ -135,13 +171,14 @@ impl FsApi {
         &self,
         params: FsReadDirectoryParams,
     ) -> Result<FsReadDirectoryResponse, JSONRPCErrorError> {
+        self.validate_environment_id(params.environment_id.as_deref(), "fs/readDirectory")?;
         tracing::debug!(
             environment_id = %self.environment_id,
             path = ?params.path,
             "fs/readDirectory"
         );
-        let entries = self
-            .file_system
+        let file_system = self.file_system().await?;
+        let entries = file_system
             .read_directory(&params.path)
             .await
             .map_err(map_fs_error)?;
@@ -161,12 +198,14 @@ impl FsApi {
         &self,
         params: FsRemoveParams,
     ) -> Result<FsRemoveResponse, JSONRPCErrorError> {
+        self.validate_environment_id(params.environment_id.as_deref(), "fs/remove")?;
         tracing::debug!(
             environment_id = %self.environment_id,
             path = ?params.path,
             "fs/remove"
         );
-        self.file_system
+        let file_system = self.file_system().await?;
+        file_system
             .remove(
                 &params.path,
                 RemoveOptions {
@@ -183,13 +222,15 @@ impl FsApi {
         &self,
         params: FsCopyParams,
     ) -> Result<FsCopyResponse, JSONRPCErrorError> {
+        self.validate_environment_id(params.environment_id.as_deref(), "fs/copy")?;
         tracing::debug!(
             environment_id = %self.environment_id,
             source_path = ?params.source_path,
             destination_path = ?params.destination_path,
             "fs/copy"
         );
-        self.file_system
+        let file_system = self.file_system().await?;
+        file_system
             .copy(
                 &params.source_path,
                 &params.destination_path,

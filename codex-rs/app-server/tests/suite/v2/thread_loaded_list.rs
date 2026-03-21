@@ -27,7 +27,10 @@ async fn thread_loaded_list_returns_loaded_thread_ids() -> Result<()> {
     let thread_id = start_thread(&mut mcp).await?;
 
     let list_id = mcp
-        .send_thread_loaded_list_request(ThreadLoadedListParams::default())
+        .send_thread_loaded_list_request(ThreadLoadedListParams {
+            environment_id: Some("local".to_string()),
+            ..Default::default()
+        })
         .await?;
     let resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
@@ -62,6 +65,7 @@ async fn thread_loaded_list_paginates() -> Result<()> {
 
     let list_id = mcp
         .send_thread_loaded_list_request(ThreadLoadedListParams {
+            environment_id: None,
             cursor: None,
             limit: Some(1),
         })
@@ -80,6 +84,7 @@ async fn thread_loaded_list_paginates() -> Result<()> {
 
     let list_id = mcp
         .send_thread_loaded_list_request(ThreadLoadedListParams {
+            environment_id: None,
             cursor: next_cursor,
             limit: Some(1),
         })
@@ -95,6 +100,37 @@ async fn thread_loaded_list_paginates() -> Result<()> {
     } = to_response::<ThreadLoadedListResponse>(resp)?;
     assert_eq!(second_page, vec![expected[1].clone()]);
     assert_eq!(next_cursor, None);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn thread_loaded_list_rejects_unsupported_environment_id() -> Result<()> {
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let codex_home = TempDir::new()?;
+    create_config_toml(codex_home.path(), &server.uri())?;
+
+    let mut mcp = McpProcess::new(codex_home.path()).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
+    let _thread_id = start_thread(&mut mcp).await?;
+
+    let list_id = mcp
+        .send_thread_loaded_list_request(ThreadLoadedListParams {
+            environment_id: Some("remote".to_string()),
+            cursor: None,
+            limit: None,
+        })
+        .await?;
+    let err = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_error_message(RequestId::Integer(list_id)),
+    )
+    .await??;
+    assert_eq!(err.error.code, -32600);
+    assert_eq!(
+        err.error.message,
+        "unsupported environmentId `remote`; configured environment is `local`"
+    );
 
     Ok(())
 }

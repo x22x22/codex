@@ -9,6 +9,7 @@ use chrono::Datelike;
 use chrono::Local;
 use chrono::Utc;
 use codex_async_utils::CancelErr;
+use codex_exec_server::ExecServerError;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ErrorEvent;
@@ -165,6 +166,9 @@ pub enum CodexErr {
     // Automatic conversions for common external error types
     // -----------------------------------------------------------------
     #[error(transparent)]
+    ExecServer(#[from] ExecServerError),
+
+    #[error(transparent)]
     Io(#[from] io::Error),
 
     #[error(transparent)]
@@ -221,6 +225,7 @@ impl CodexErr {
             | CodexErr::ConnectionFailed(_)
             | CodexErr::InternalServerError
             | CodexErr::InternalAgentDied
+            | CodexErr::ExecServer(_)
             | CodexErr::Io(_)
             | CodexErr::Json(_)
             | CodexErr::TokioJoin(_) => true,

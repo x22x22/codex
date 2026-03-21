@@ -77,6 +77,7 @@ unified_exec = true
     let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
     service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "features.personality".to_string(),
             value: serde_json::json!(true),
@@ -111,6 +112,7 @@ async fn write_value_supports_nested_app_paths() -> Result<()> {
     let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
     service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "apps".to_string(),
             value: serde_json::json!({
@@ -126,6 +128,7 @@ async fn write_value_supports_nested_app_paths() -> Result<()> {
 
     service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "apps.app1.default_tools_approval_mode".to_string(),
             value: serde_json::json!("prompt"),
@@ -138,6 +141,7 @@ async fn write_value_supports_nested_app_paths() -> Result<()> {
     let read = service
         .read(ConfigReadParams {
             include_layers: false,
+            environment_id: None,
             cwd: None,
         })
         .await
@@ -190,6 +194,7 @@ async fn read_includes_origins_and_layers() {
     let response = service
         .read(ConfigReadParams {
             include_layers: true,
+            environment_id: None,
             cwd: None,
         })
         .await
@@ -264,6 +269,7 @@ async fn write_value_reports_override() {
 
     let result = service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "approval_policy".to_string(),
             value: serde_json::json!("never"),
@@ -276,6 +282,7 @@ async fn write_value_reports_override() {
     let read_after = service
         .read(ConfigReadParams {
             include_layers: true,
+            environment_id: None,
             cwd: None,
         })
         .await
@@ -307,6 +314,7 @@ async fn version_conflict_rejected() {
     let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
     let error = service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "model".to_string(),
             value: serde_json::json!("gpt-5"),
@@ -330,6 +338,7 @@ async fn write_value_defaults_to_user_config_path() {
     let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
     service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: None,
             key_path: "model".to_string(),
             value: serde_json::json!("gpt-new"),
@@ -368,6 +377,7 @@ async fn invalid_user_value_rejected_even_if_overridden_by_managed() {
 
     let error = service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "approval_policy".to_string(),
             value: serde_json::json!("bogus"),
@@ -394,6 +404,7 @@ async fn reserved_builtin_provider_override_rejected() {
     let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
     let error = service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "model_providers.openai.name".to_string(),
             value: serde_json::json!("OpenAI Override"),
@@ -440,6 +451,7 @@ async fn write_value_rejects_feature_requirement_conflict() {
 
     let error = service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "features.personality".to_string(),
             value: serde_json::json!(false),
@@ -491,6 +503,7 @@ async fn write_value_rejects_profile_feature_requirement_conflict() {
 
     let error = service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "profiles.enterprise.features.personality".to_string(),
             value: serde_json::json!(false),
@@ -547,6 +560,7 @@ async fn read_reports_managed_overrides_user_and_session_flags() {
     let response = service
         .read(ConfigReadParams {
             include_layers: true,
+            environment_id: None,
             cwd: None,
         })
         .await
@@ -604,6 +618,7 @@ async fn write_value_reports_managed_override() {
 
     let result = service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(tmp.path().join(CONFIG_TOML_FILE).display().to_string()),
             key_path: "approval_policy".to_string(),
             value: serde_json::json!("on-request"),
@@ -653,6 +668,7 @@ alpha = "a"
     let service = ConfigService::new_with_defaults(tmp.path().to_path_buf());
     service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(path.display().to_string()),
             key_path: "mcp_servers.linear".to_string(),
             value: overlay.clone(),
@@ -683,6 +699,7 @@ beta = "b"
 
     service
         .write_value(ConfigValueWriteParams {
+            environment_id: None,
             file_path: Some(path.display().to_string()),
             key_path: "mcp_servers.linear".to_string(),
             value: overlay,

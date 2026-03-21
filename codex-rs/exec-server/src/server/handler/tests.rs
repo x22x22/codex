@@ -34,6 +34,7 @@ fn exec_params(process_id: &str) -> ExecParams {
         cwd: std::env::current_dir().expect("cwd"),
         env,
         tty: false,
+        stdin: false,
         arg0: None,
     }
 }
@@ -41,6 +42,7 @@ fn exec_params(process_id: &str) -> ExecParams {
 fn tty_exec_params(process_id: &str) -> ExecParams {
     let mut params = exec_params(process_id);
     params.tty = true;
+    params.stdin = true;
     params
 }
 

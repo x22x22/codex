@@ -13,6 +13,7 @@ use crate::protocol::ExecWaitResponse;
 use crate::protocol::ReadParams;
 use crate::protocol::ReadResponse;
 use crate::protocol::TerminateResponse;
+use crate::protocol::WriteParams;
 use crate::protocol::WriteResponse;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,11 +28,7 @@ pub trait ExecProcess: Send + Sync {
 
     async fn read(&self, params: ReadParams) -> Result<ReadResponse, ExecServerError>;
 
-    async fn write(
-        &self,
-        process_id: &str,
-        chunk: Vec<u8>,
-    ) -> Result<WriteResponse, ExecServerError>;
+    async fn write(&self, params: WriteParams) -> Result<WriteResponse, ExecServerError>;
 
     async fn resize(&self, params: ExecResizeParams)
     -> Result<ExecResizeResponse, ExecServerError>;

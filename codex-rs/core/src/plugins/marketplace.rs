@@ -1,10 +1,12 @@
 use super::PluginManifestInterface;
 use super::load_plugin_manifest;
+use super::manifest::load_plugin_manifest_with_filesystem;
 use super::store::PluginId;
 use super::store::PluginIdError;
 use crate::git_info::get_git_repo_root;
 use codex_app_server_protocol::PluginAuthPolicy;
 use codex_app_server_protocol::PluginInstallPolicy;
+use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::protocol::Product;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use dirs::home_dir;
@@ -149,6 +151,39 @@ pub fn resolve_marketplace_plugin(
     restriction_product: Option<Product>,
 ) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(marketplace_path)?;
+    resolve_marketplace_plugin_from_manifest(
+        marketplace_path,
+        marketplace,
+        plugin_name,
+        restriction_product,
+    )
+}
+
+pub(crate) async fn resolve_marketplace_plugin_with_filesystem<F>(
+    marketplace_path: &AbsolutePathBuf,
+    plugin_name: &str,
+    restriction_product: Option<Product>,
+    filesystem: &F,
+) -> Result<ResolvedMarketplacePlugin, MarketplaceError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let marketplace =
+        load_raw_marketplace_manifest_with_filesystem(marketplace_path, filesystem).await?;
+    resolve_marketplace_plugin_from_manifest(
+        marketplace_path,
+        marketplace,
+        plugin_name,
+        restriction_product,
+    )
+}
+
+fn resolve_marketplace_plugin_from_manifest(
+    marketplace_path: &AbsolutePathBuf,
+    marketplace: RawMarketplaceManifest,
+    plugin_name: &str,
+    restriction_product: Option<Product>,
+) -> Result<ResolvedMarketplacePlugin, MarketplaceError> {
     let marketplace_name = marketplace.name;
     let plugin = marketplace
         .plugins
@@ -195,6 +230,17 @@ pub fn list_marketplaces(
     list_marketplaces_with_home(additional_roots, home_dir().as_deref())
 }
 
+pub(crate) async fn list_marketplaces_with_home_with_filesystem<F>(
+    additional_roots: &[AbsolutePathBuf],
+    home_dir: Option<&Path>,
+    filesystem: &F,
+) -> Result<Vec<Marketplace>, MarketplaceError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    list_marketplaces_with_home_impl(additional_roots, home_dir, filesystem).await
+}
+
 pub(crate) fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, MarketplaceError> {
     let marketplace = load_raw_marketplace_manifest(path)?;
     let mut plugins = Vec::new();
@@ -239,6 +285,56 @@ pub(crate) fn load_marketplace(path: &AbsolutePathBuf) -> Result<Marketplace, Ma
     })
 }
 
+pub(crate) async fn load_marketplace_with_filesystem<F>(
+    path: &AbsolutePathBuf,
+    filesystem: &F,
+) -> Result<Marketplace, MarketplaceError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let marketplace = load_raw_marketplace_manifest_with_filesystem(path, filesystem).await?;
+    let mut plugins = Vec::new();
+
+    for plugin in marketplace.plugins {
+        let RawMarketplaceManifestPlugin {
+            name,
+            source,
+            policy,
+            category,
+        } = plugin;
+        let source_path = resolve_plugin_source_path(path, source)?;
+        let source = MarketplacePluginSource::Local {
+            path: source_path.clone(),
+        };
+        let mut interface = load_plugin_manifest_with_filesystem(source_path.as_path(), filesystem)
+            .await
+            .and_then(|manifest| manifest.interface);
+        if let Some(category) = category {
+            interface
+                .get_or_insert_with(PluginManifestInterface::default)
+                .category = Some(category);
+        }
+
+        plugins.push(MarketplacePlugin {
+            name,
+            source,
+            policy: MarketplacePluginPolicy {
+                installation: policy.installation,
+                authentication: policy.authentication,
+                products: policy.products,
+            },
+            interface,
+        });
+    }
+
+    Ok(Marketplace {
+        name: marketplace.name,
+        path: path.clone(),
+        interface: resolve_marketplace_interface(marketplace.interface),
+        plugins,
+    })
+}
+
 fn list_marketplaces_with_home(
     additional_roots: &[AbsolutePathBuf],
     home_dir: Option<&Path>,
@@ -247,6 +343,38 @@ fn list_marketplaces_with_home(
 
     for marketplace_path in discover_marketplace_paths_from_roots(additional_roots, home_dir) {
         match load_marketplace(&marketplace_path) {
+            Ok(marketplace) => marketplaces.push(marketplace),
+            Err(err) => {
+                warn!(
+                    path = %marketplace_path.display(),
+                    error = %err,
+                    "skipping marketplace that failed to load"
+                );
+            }
+        }
+    }
+
+    Ok(marketplaces)
+}
+
+async fn list_marketplaces_with_home_impl<F>(
+    additional_roots: &[AbsolutePathBuf],
+    home_dir: Option<&Path>,
+    filesystem: &F,
+) -> Result<Vec<Marketplace>, MarketplaceError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut marketplaces = Vec::new();
+
+    for marketplace_path in discover_marketplace_paths_from_roots_with_filesystem(
+        additional_roots,
+        home_dir,
+        filesystem,
+    )
+    .await?
+    {
+        match load_marketplace_with_filesystem(&marketplace_path, filesystem).await {
             Ok(marketplace) => marketplaces.push(marketplace),
             Err(err) => {
                 warn!(
@@ -299,6 +427,51 @@ fn discover_marketplace_paths_from_roots(
     paths
 }
 
+async fn discover_marketplace_paths_from_roots_with_filesystem<F>(
+    additional_roots: &[AbsolutePathBuf],
+    home_dir: Option<&Path>,
+    filesystem: &F,
+) -> Result<Vec<AbsolutePathBuf>, MarketplaceError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut paths = Vec::new();
+
+    if let Some(home) = home_dir {
+        let path = home.join(MARKETPLACE_RELATIVE_PATH);
+        let path = AbsolutePathBuf::try_from(path).map_err(|err| {
+            MarketplaceError::InvalidMarketplaceFile {
+                path: home.to_path_buf(),
+                message: format!("failed to resolve marketplace path: {err}"),
+            }
+        })?;
+        if path_exists_with_filesystem(path.as_path(), filesystem).await && !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+
+    for root in additional_roots {
+        let root_path = root.join(MARKETPLACE_RELATIVE_PATH);
+        if let Ok(path) = root_path
+            && path_exists_with_filesystem(path.as_path(), filesystem).await
+            && !paths.contains(&path)
+        {
+            paths.push(path);
+            continue;
+        }
+        if let Some(repo_root) = get_git_repo_root(root.as_path())
+            && let Ok(repo_root) = AbsolutePathBuf::try_from(repo_root)
+            && let Ok(path) = repo_root.join(MARKETPLACE_RELATIVE_PATH)
+            && path_exists_with_filesystem(path.as_path(), filesystem).await
+            && !paths.contains(&path)
+        {
+            paths.push(path);
+        }
+    }
+
+    Ok(paths)
+}
+
 fn load_raw_marketplace_manifest(
     path: &AbsolutePathBuf,
 ) -> Result<RawMarketplaceManifest, MarketplaceError> {
@@ -315,6 +488,43 @@ fn load_raw_marketplace_manifest(
         path: path.to_path_buf(),
         message: err.to_string(),
     })
+}
+
+async fn load_raw_marketplace_manifest_with_filesystem<F>(
+    path: &AbsolutePathBuf,
+    filesystem: &F,
+) -> Result<RawMarketplaceManifest, MarketplaceError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let contents = filesystem
+        .read_file(path)
+        .await
+        .map_err(|err| match err.kind() {
+            io::ErrorKind::NotFound => MarketplaceError::MarketplaceNotFound {
+                path: path.to_path_buf(),
+            },
+            _ => MarketplaceError::io("failed to read marketplace file", err),
+        })?;
+    let contents =
+        String::from_utf8(contents).map_err(|err| MarketplaceError::InvalidMarketplaceFile {
+            path: path.to_path_buf(),
+            message: format!("marketplace file is not valid UTF-8: {err}"),
+        })?;
+    serde_json::from_str(&contents).map_err(|err| MarketplaceError::InvalidMarketplaceFile {
+        path: path.to_path_buf(),
+        message: err.to_string(),
+    })
+}
+
+async fn path_exists_with_filesystem<F>(path: &Path, filesystem: &F) -> bool
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let Ok(path) = AbsolutePathBuf::from_absolute_path(path) else {
+        return false;
+    };
+    filesystem.get_metadata(&path).await.is_ok()
 }
 
 fn resolve_plugin_source_path(

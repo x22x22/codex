@@ -100,6 +100,7 @@ async fn thread_metadata_update_patches_git_branch_and_returns_updated_thread() 
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id: thread.id,
             include_turns: false,
         })
@@ -414,6 +415,7 @@ async fn thread_metadata_update_can_clear_stored_git_fields() -> Result<()> {
 
     let read_id = mcp
         .send_thread_read_request(ThreadReadParams {
+            environment_id: None,
             thread_id,
             include_turns: false,
         })

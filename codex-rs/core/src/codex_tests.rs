@@ -2202,6 +2202,8 @@ enabled = false
         crate::config::AgentRoleConfig {
             description: None,
             config_file: Some(role_path),
+            locked_model: None,
+            locked_reasoning_effort: None,
             nickname_candidates: None,
         },
     );
@@ -2344,9 +2346,15 @@ async fn session_new_fails_when_zsh_fork_enabled_without_zsh_path() {
         Arc::clone(&plugins_manager),
         true,
     ));
+    let environment = Arc::new(
+        codex_exec_server::Environment::create(None)
+            .await
+            .expect("create environment"),
+    );
     let result = Session::new(
         session_configuration,
         Arc::clone(&config),
+        environment,
         auth_manager,
         models_manager,
         Arc::new(ExecPolicyManager::default()),

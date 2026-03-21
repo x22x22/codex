@@ -788,6 +788,7 @@ mod tests {
     fn test_thread(thread_id: &str, source: codex_app_server_protocol::SessionSource) -> Thread {
         Thread {
             id: thread_id.to_string(),
+            environment_id: "local".to_string(),
             preview: String::new(),
             ephemeral: false,
             model_provider: "mock-provider".to_string(),

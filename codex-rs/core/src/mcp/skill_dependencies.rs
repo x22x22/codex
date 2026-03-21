@@ -293,7 +293,12 @@ pub(crate) async fn maybe_install_mcp_dependencies(
     let mut refresh_servers = sess
         .services
         .mcp_manager
-        .effective_servers(config, auth.as_ref());
+        .effective_servers_with_filesystem(
+            config,
+            auth.as_ref(),
+            &sess.services.environment.get_filesystem(),
+        )
+        .await;
     for (name, server_config) in &servers {
         refresh_servers
             .entry(name.clone())

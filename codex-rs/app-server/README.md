@@ -163,10 +163,11 @@ Example with notification opt-out:
 - `model/list` — list available models (set `includeHidden: true` to include entries with `hidden: true`), with reasoning effort options, optional legacy `upgrade` model ids, optional `upgradeInfo` metadata (`model`, `upgradeCopy`, `modelLink`, `migrationMarkdown`), and optional `availabilityNux` metadata.
 - `experimentalFeature/list` — list feature flags with stage metadata (`beta`, `underDevelopment`, `stable`, etc.), enabled/default-enabled state, and cursor pagination. For non-beta flags, `displayName`/`description`/`announcement` are `null`.
 - `collaborationMode/list` — list available collaboration mode presets (experimental, no pagination). This response omits built-in developer instructions; clients should either pass `settings.developer_instructions: null` when setting a mode to use Codex's built-in instructions, or provide their own instructions explicitly.
+- `prompt/list` — list custom prompt markdown files from the resolved `$CODEX_HOME/prompts` directory for an optional `environmentId`; the response echoes the resolved `environmentId`.
 - `skills/list` — list skills for one or more `cwd` values (optional `forceReload`) within an optional `environmentId`; the response echoes the resolved `environmentId`.
 - `plugin/list` — list discovered plugin marketplaces and plugin state, including effective marketplace install/auth policy metadata and best-effort `featuredPluginIds` for the official curated marketplace. `interface.category` uses the marketplace category when present; otherwise it falls back to the plugin manifest category. Pass `forceRemoteSync: true` to refresh curated plugin state before listing (**under development; do not call from production clients yet**).
 - `plugin/read` — read one plugin by `marketplacePath` plus `pluginName`, returning marketplace info, a list-style `summary`, manifest descriptions/interface metadata, and bundled skills/apps/MCP server names (**under development; do not call from production clients yet**).
-- `skills/changed` — notification emitted when watched local skill files change.
+- `skills/changed` — notification emitted when watched skill files change for a specific `environmentId`.
 - `app/list` — list available apps.
 - `skills/config/write` — write user-level skill config by path.
 - `plugin/install` — install a plugin from a discovered marketplace entry, rejecting marketplace entries marked unavailable for install, and return the effective plugin auth policy plus any apps that still need auth (**under development; do not call from production clients yet**).
@@ -1097,7 +1098,7 @@ Use `skills/list` to fetch the available skills (optionally scoped by `cwds`, wi
 You can also add `perCwdExtraUserRoots` to scan additional absolute paths as `user` scope for specific `cwd` entries.
 Entries whose `cwd` is not present in `cwds` are ignored.
 `skills/list` might reuse a cached skills result per `cwd`; setting `forceReload` to `true` refreshes the result from disk. The response includes the resolved `environmentId` so clients can cache and invalidate by execution environment.
-The server also emits `skills/changed` notifications when watched local skill files change. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
+The server also emits `skills/changed` notifications when watched skill files change for a specific execution environment. Treat this as an invalidation signal and re-run `skills/list` with your current params when needed.
 
 ```json
 { "method": "skills/list", "id": 25, "params": {
@@ -1138,8 +1139,30 @@ The server also emits `skills/changed` notifications when watched local skill fi
 ```json
 {
   "method": "skills/changed",
-  "params": {}
+  "params": {
+    "environmentId": "local"
+  }
 }
+```
+
+Use `prompt/list` to fetch custom prompt markdown files from `$CODEX_HOME/prompts` for a specific execution environment. The response echoes the resolved `environmentId` so clients can keep prompt caches aligned with the executor environment they are talking to.
+
+```json
+{ "method": "prompt/list", "id": 27, "params": {
+    "environmentId": "local"
+} }
+{ "id": 27, "result": {
+    "environmentId": "local",
+    "prompts": [
+      {
+        "name": "bug-triage",
+        "path": "/Users/me/.codex/prompts/bug-triage.md",
+        "description": "Expand a terse bug note into a triage request",
+        "argumentHint": "<bug-id>",
+        "content": "Investigate bug {{args}} and summarize likely causes."
+      }
+    ]
+} }
 ```
 
 To enable or disable a skill by path:

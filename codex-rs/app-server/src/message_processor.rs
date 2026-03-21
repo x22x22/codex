@@ -249,6 +249,8 @@ impl MessageProcessor {
             .maybe_start_curated_repo_sync_for_config(&config, auth_manager.clone());
         let config_api = ConfigApi::new(
             config.codex_home.clone(),
+            config.cwd.clone(),
+            config.experimental_exec_server_url.clone(),
             cli_overrides,
             loader_overrides,
             cloud_requirements,
@@ -256,9 +258,10 @@ impl MessageProcessor {
             analytics_events_client,
         );
         let external_agent_config_api = ExternalAgentConfigApi::new(config.codex_home.clone());
-        let fs_api = FsApi::new(Environment::default_environment_id(
-            config.experimental_exec_server_url.as_deref(),
-        ));
+        let fs_api = FsApi::new(
+            Environment::default_environment_id(config.experimental_exec_server_url.as_deref()),
+            config.experimental_exec_server_url.clone(),
+        );
 
         Self {
             outgoing,

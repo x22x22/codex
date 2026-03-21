@@ -16,6 +16,7 @@ use crate::config_loader::RequirementSource;
 use crate::features::Feature;
 use assert_matches::assert_matches;
 use codex_config::CONFIG_TOML_FILE;
+use codex_exec_server::LocalFileSystem;
 use codex_protocol::permissions::FileSystemAccessMode;
 use codex_protocol::permissions::FileSystemPath;
 use codex_protocol::permissions::FileSystemSandboxEntry;
@@ -5693,6 +5694,36 @@ smart_approvals = true
 
     assert!(config.features.enabled(Feature::GuardianApproval));
     assert_eq!(config.features.legacy_feature_usages().count(), 0);
+    assert_eq!(
+        config.approvals_reviewer,
+        ApprovalsReviewer::GuardianSubagent
+    );
+
+    let serialized = tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+    assert!(serialized.contains("guardian_approval = true"));
+    assert!(serialized.contains("approvals_reviewer = \"guardian_subagent\""));
+    assert!(!serialized.contains("smart_approvals"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn smart_approvals_alias_is_migrated_with_filesystem_builder() -> std::io::Result<()> {
+    let codex_home = TempDir::new()?;
+    std::fs::write(
+        codex_home.path().join(CONFIG_TOML_FILE),
+        r#"[features]
+smart_approvals = true
+"#,
+    )?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(codex_home.path().to_path_buf()))
+        .build_with_filesystem(&LocalFileSystem)
+        .await?;
+
+    assert!(config.features.enabled(Feature::GuardianApproval));
     assert_eq!(
         config.approvals_reviewer,
         ApprovalsReviewer::GuardianSubagent

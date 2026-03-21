@@ -89,6 +89,7 @@ pub(crate) enum AppCommandView<'a> {
         response: &'a RequestPermissionsResponse,
     },
     ReloadUserConfig,
+    ListCustomPrompts,
     ListSkills {
         cwds: &'a [PathBuf],
         force_reload: bool,
@@ -246,6 +247,10 @@ impl AppCommand {
         Self(Op::ReloadUserConfig)
     }
 
+    pub(crate) fn list_custom_prompts() -> Self {
+        Self(Op::ListCustomPrompts)
+    }
+
     pub(crate) fn list_skills(cwds: Vec<PathBuf>, force_reload: bool) -> Self {
         Self(Op::ListSkills { cwds, force_reload })
     }
@@ -379,6 +384,7 @@ impl AppCommand {
                 AppCommandView::RequestPermissionsResponse { id, response }
             }
             Op::ReloadUserConfig => AppCommandView::ReloadUserConfig,
+            Op::ListCustomPrompts => AppCommandView::ListCustomPrompts,
             Op::ListSkills { cwds, force_reload } => AppCommandView::ListSkills {
                 cwds,
                 force_reload: *force_reload,

@@ -25,10 +25,17 @@ use codex_core::exec::ExecExpiration;
 use codex_core::exec::IO_DRAIN_TIMEOUT_MS;
 use codex_core::exec::SandboxType;
 use codex_core::sandboxing::ExecRequest;
+use codex_exec_server::Environment;
+use codex_exec_server::ExecOutputStream as ExecutorOutputStream;
+use codex_exec_server::ExecParams as ExecutorExecParams;
+use codex_exec_server::ExecProcess;
+use codex_exec_server::ExecResizeParams as ExecutorExecResizeParams;
+use codex_exec_server::ExecWaitParams as ExecutorExecWaitParams;
+use codex_exec_server::ReadParams as ExecutorReadParams;
+use codex_exec_server::WriteParams as ExecutorWriteParams;
 use codex_utils_pty::DEFAULT_OUTPUT_BYTES_CAP;
-use codex_utils_pty::ProcessHandle;
-use codex_utils_pty::SpawnedProcess;
 use codex_utils_pty::TerminalSize;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -89,6 +96,7 @@ struct CommandControlRequest {
 pub(crate) struct StartCommandExecParams {
     pub(crate) outgoing: Arc<OutgoingMessageSender>,
     pub(crate) request_id: ConnectionRequestId,
+    pub(crate) experimental_exec_server_url: Option<String>,
     pub(crate) environment_id: String,
     pub(crate) process_id: Option<String>,
     pub(crate) exec_request: ExecRequest,
@@ -100,12 +108,14 @@ pub(crate) struct StartCommandExecParams {
     pub(crate) size: Option<TerminalSize>,
 }
 
-struct RunCommandParams {
+struct RunExecutorCommandParams {
     outgoing: Arc<OutgoingMessageSender>,
     request_id: ConnectionRequestId,
     process_id: Option<String>,
-    spawned: SpawnedProcess,
+    executor_process_id: String,
+    executor: Arc<dyn ExecProcess>,
     control_rx: mpsc::Receiver<CommandControlRequest>,
+    tty: bool,
     stream_stdin: bool,
     stream_stdout_stderr: bool,
     expiration: ExecExpiration,
@@ -150,6 +160,7 @@ impl CommandExecManager {
         let StartCommandExecParams {
             outgoing,
             request_id,
+            experimental_exec_server_url,
             environment_id,
             process_id,
             exec_request,
@@ -277,46 +288,75 @@ impl CommandExecManager {
             process_id = %process_key.process_id.error_repr(),
             "command/exec start"
         );
-        let spawned = if tty {
-            codex_utils_pty::spawn_pty_process(
-                program,
-                args,
-                cwd.as_path(),
-                &env,
-                &arg0,
-                size.unwrap_or_default(),
-            )
-            .await
-        } else if stream_stdin {
-            codex_utils_pty::spawn_pipe_process(program, args, cwd.as_path(), &env, &arg0).await
-        } else {
-            codex_utils_pty::spawn_pipe_process_no_stdin(program, args, cwd.as_path(), &env, &arg0)
-                .await
-        };
-        let spawned = match spawned {
-            Ok(spawned) => spawned,
+        let environment = match Environment::create(experimental_exec_server_url).await {
+            Ok(environment) => environment,
             Err(err) => {
                 self.sessions.lock().await.remove(&process_key);
-                return Err(internal_error(format!("failed to spawn command: {err}")));
+                return Err(internal_error(format!(
+                    "failed to bind environment for command/exec: {err}"
+                )));
             }
         };
-        tokio::spawn(async move {
-            let _started_network_proxy = started_network_proxy;
-            run_command(RunCommandParams {
-                outgoing,
-                request_id: request_id.clone(),
-                process_id: notification_process_id,
-                spawned,
-                control_rx,
-                stream_stdin,
-                stream_stdout_stderr,
-                expiration,
-                output_bytes_cap,
+        let executor = environment.get_executor();
+        let executor_process_id = process_key.process_id.error_repr();
+        let start_result = executor
+            .start(ExecutorExecParams {
+                process_id: executor_process_id.clone(),
+                argv: {
+                    let mut argv = Vec::with_capacity(1 + args.len());
+                    argv.push(program.to_string());
+                    argv.extend(args.iter().cloned());
+                    argv
+                },
+                cwd,
+                env,
+                tty,
+                stdin: stream_stdin,
+                arg0,
             })
             .await;
-            sessions.lock().await.remove(&process_key);
-        });
-        Ok(())
+        let Err(err) = start_result else {
+            if tty
+                && let Some(size) = size
+                && let Err(err) = executor
+                    .resize(ExecutorExecResizeParams {
+                        process_id: executor_process_id.clone(),
+                        size: codex_exec_server::ExecTerminalSize {
+                            rows: size.rows,
+                            cols: size.cols,
+                        },
+                    })
+                    .await
+            {
+                let _ = executor.terminate(&executor_process_id).await;
+                self.sessions.lock().await.remove(&process_key);
+                return Err(internal_error(format!(
+                    "failed to initialize command PTY size: {err}"
+                )));
+            }
+            let executor = Arc::clone(&executor);
+            tokio::spawn(async move {
+                let _started_network_proxy = started_network_proxy;
+                run_command_with_executor(RunExecutorCommandParams {
+                    outgoing,
+                    request_id: request_id.clone(),
+                    process_id: notification_process_id,
+                    executor_process_id,
+                    executor,
+                    control_rx,
+                    tty,
+                    stream_stdin,
+                    stream_stdout_stderr,
+                    expiration,
+                    output_bytes_cap,
+                })
+                .await;
+                sessions.lock().await.remove(&process_key);
+            });
+            return Ok(());
+        };
+        self.sessions.lock().await.remove(&process_key);
+        return Err(internal_error(format!("failed to spawn command: {err}")));
     }
 
     pub(crate) async fn write(
@@ -484,13 +524,15 @@ impl CommandExecManager {
     }
 }
 
-async fn run_command(params: RunCommandParams) {
-    let RunCommandParams {
+async fn run_command_with_executor(params: RunExecutorCommandParams) {
+    let RunExecutorCommandParams {
         outgoing,
         request_id,
         process_id,
-        spawned,
+        executor_process_id,
+        executor,
         control_rx,
+        tty,
         stream_stdin,
         stream_stdout_stderr,
         expiration,
@@ -510,102 +552,216 @@ async fn run_command(params: RunCommandParams) {
         }
     };
     tokio::pin!(expiration);
-    let SpawnedProcess {
-        session,
-        stdout_rx,
-        stderr_rx,
-        exit_rx,
-    } = spawned;
-    tokio::pin!(exit_rx);
+
+    let mut after_seq = 0_u64;
     let mut timed_out = false;
-    let (stdio_timeout_tx, stdio_timeout_rx) = watch::channel(false);
+    let mut exit_code = -1;
+    let mut exit_deadline: Option<Instant> = None;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut stdout_observed_num_bytes = 0_usize;
+    let mut stderr_observed_num_bytes = 0_usize;
 
-    let stdout_handle = spawn_process_output(SpawnProcessOutputParams {
-        connection_id: request_id.connection_id,
-        process_id: process_id.clone(),
-        output_rx: stdout_rx,
-        stdio_timeout_rx: stdio_timeout_rx.clone(),
-        outgoing: Arc::clone(&outgoing),
-        stream: CommandExecOutputStream::Stdout,
-        stream_output: stream_stdout_stderr,
-        output_bytes_cap,
-    });
-    let stderr_handle = spawn_process_output(SpawnProcessOutputParams {
-        connection_id: request_id.connection_id,
-        process_id,
-        output_rx: stderr_rx,
-        stdio_timeout_rx,
-        outgoing: Arc::clone(&outgoing),
-        stream: CommandExecOutputStream::Stderr,
-        stream_output: stream_stdout_stderr,
-        output_bytes_cap,
-    });
-
-    let exit_code = loop {
+    loop {
         tokio::select! {
             control = control_rx.recv(), if control_open => {
                 match control {
                     Some(CommandControlRequest { control, response_tx }) => {
                         let result = match control {
                             CommandControl::Write { delta, close_stdin } => {
-                                handle_process_write(
-                                    &session,
+                                handle_executor_write(
+                                    &executor,
+                                    &executor_process_id,
                                     stream_stdin,
                                     delta,
                                     close_stdin,
-                                ).await
+                                )
+                                .await
                             }
                             CommandControl::Resize { size } => {
-                                handle_process_resize(&session, size)
+                                handle_executor_resize(&executor, &executor_process_id, tty, size).await
                             }
                             CommandControl::Terminate => {
-                                session.request_terminate();
-                                Ok(())
+                                handle_executor_terminate(&executor, &executor_process_id).await
                             }
                         };
                         if let Some(response_tx) = response_tx {
                             let _ = response_tx.send(result);
                         }
-                    },
+                    }
                     None => {
                         control_open = false;
-                        session.request_terminate();
+                        let _ = handle_executor_terminate(&executor, &executor_process_id).await;
                     }
                 }
             }
             _ = &mut expiration, if !timed_out => {
                 timed_out = true;
-                session.request_terminate();
+                let _ = handle_executor_terminate(&executor, &executor_process_id).await;
             }
-            exit = &mut exit_rx => {
-                if timed_out {
-                    break EXEC_TIMEOUT_EXIT_CODE;
-                } else {
-                    break exit.unwrap_or(-1);
+            read = executor.read(ExecutorReadParams {
+                process_id: executor_process_id.clone(),
+                after_seq: Some(after_seq),
+                max_bytes: None,
+                wait_ms: Some(50),
+            }) => {
+                let read = match read {
+                    Ok(read) => read,
+                    Err(err) => {
+                        outgoing
+                            .send_error(
+                                request_id,
+                                internal_error(format!("failed to read command output: {err}")),
+                            )
+                            .await;
+                        return;
+                    }
+                };
+                after_seq = read.next_seq;
+                for chunk in read.chunks {
+                    let output_stream = match chunk.stream {
+                        ExecutorOutputStream::Stdout | ExecutorOutputStream::Pty => {
+                            CommandExecOutputStream::Stdout
+                        }
+                        ExecutorOutputStream::Stderr => CommandExecOutputStream::Stderr,
+                    };
+                    let chunk = chunk.chunk.into_inner();
+                    let (buffer, observed_num_bytes) = match output_stream {
+                        CommandExecOutputStream::Stdout => {
+                            (&mut stdout, &mut stdout_observed_num_bytes)
+                        }
+                        CommandExecOutputStream::Stderr => {
+                            (&mut stderr, &mut stderr_observed_num_bytes)
+                        }
+                    };
+                    let capped_chunk = match output_bytes_cap {
+                        Some(output_bytes_cap) => {
+                            let capped_chunk_len = output_bytes_cap
+                                .saturating_sub(*observed_num_bytes)
+                                .min(chunk.len());
+                            *observed_num_bytes += capped_chunk_len;
+                            &chunk[0..capped_chunk_len]
+                        }
+                        None => chunk.as_slice(),
+                    };
+                    let cap_reached = Some(*observed_num_bytes) == output_bytes_cap;
+                    if stream_stdout_stderr {
+                        if let Some(process_id) = process_id.as_ref() && !capped_chunk.is_empty() {
+                            outgoing
+                                .send_server_notification_to_connections(
+                                    &[request_id.connection_id],
+                                    ServerNotification::CommandExecOutputDelta(
+                                        CommandExecOutputDeltaNotification {
+                                            process_id: process_id.clone(),
+                                            stream: output_stream,
+                                            delta_base64: STANDARD.encode(capped_chunk),
+                                            cap_reached,
+                                        },
+                                    ),
+                                )
+                                .await;
+                        }
+                    } else {
+                        buffer.extend_from_slice(capped_chunk);
+                    }
+                }
+                if read.exited {
+                    if timed_out {
+                        exit_code = EXEC_TIMEOUT_EXIT_CODE;
+                    } else {
+                        exit_code = read.exit_code.unwrap_or(-1);
+                    }
+                    exit_deadline.get_or_insert_with(|| {
+                        Instant::now() + Duration::from_millis(IO_DRAIN_TIMEOUT_MS)
+                    });
                 }
             }
         }
-    };
 
-    let timeout_handle = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(IO_DRAIN_TIMEOUT_MS)).await;
-        let _ = stdio_timeout_tx.send(true);
-    });
-
-    let stdout = stdout_handle.await.unwrap_or_default();
-    let stderr = stderr_handle.await.unwrap_or_default();
-    timeout_handle.abort();
+        if let Some(deadline) = exit_deadline
+            && Instant::now() >= deadline
+        {
+            break;
+        }
+        if !control_open && exit_deadline.is_none() && !timed_out {
+            continue;
+        }
+        if exit_deadline.is_some() && Instant::now() < exit_deadline.expect("checked above") {
+            continue;
+        }
+        if exit_deadline.is_none() {
+            continue;
+        }
+    }
 
     outgoing
         .send_response(
             request_id,
             CommandExecResponse {
                 exit_code,
-                stdout,
-                stderr,
+                stdout: bytes_to_string_smart(&stdout),
+                stderr: bytes_to_string_smart(&stderr),
             },
         )
         .await;
+}
+
+async fn handle_executor_write(
+    executor: &Arc<dyn ExecProcess>,
+    process_id: &str,
+    stream_stdin: bool,
+    delta: Vec<u8>,
+    close_stdin: bool,
+) -> Result<(), JSONRPCErrorError> {
+    if !stream_stdin {
+        return Err(invalid_request(
+            "stdin streaming is not enabled for this command/exec".to_string(),
+        ));
+    }
+    executor
+        .write(ExecutorWriteParams {
+            process_id: process_id.to_string(),
+            chunk: delta.into(),
+            close_stdin,
+        })
+        .await
+        .map_err(|err| invalid_request(format!("stdin is already closed: {err}")))?;
+    Ok(())
+}
+
+async fn handle_executor_resize(
+    executor: &Arc<dyn ExecProcess>,
+    process_id: &str,
+    tty: bool,
+    size: TerminalSize,
+) -> Result<(), JSONRPCErrorError> {
+    if !tty {
+        return Err(invalid_request(
+            "command/exec resize requires tty: true".to_string(),
+        ));
+    }
+    executor
+        .resize(ExecutorExecResizeParams {
+            process_id: process_id.to_string(),
+            size: codex_exec_server::ExecTerminalSize {
+                rows: size.rows,
+                cols: size.cols,
+            },
+        })
+        .await
+        .map_err(|err| invalid_request(format!("failed to resize PTY: {err}")))?;
+    Ok(())
+}
+
+async fn handle_executor_terminate(
+    executor: &Arc<dyn ExecProcess>,
+    process_id: &str,
+) -> Result<(), JSONRPCErrorError> {
+    executor
+        .terminate(process_id)
+        .await
+        .map_err(|err| invalid_request(format!("failed to terminate command: {err}")))?;
+    Ok(())
 }
 
 fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHandle<String> {
@@ -664,39 +820,6 @@ fn spawn_process_output(params: SpawnProcessOutputParams) -> tokio::task::JoinHa
         }
         bytes_to_string_smart(&buffer)
     })
-}
-
-async fn handle_process_write(
-    session: &ProcessHandle,
-    stream_stdin: bool,
-    delta: Vec<u8>,
-    close_stdin: bool,
-) -> Result<(), JSONRPCErrorError> {
-    if !stream_stdin {
-        return Err(invalid_request(
-            "stdin streaming is not enabled for this command/exec".to_string(),
-        ));
-    }
-    if !delta.is_empty() {
-        session
-            .writer_sender()
-            .send(delta)
-            .await
-            .map_err(|_| invalid_request("stdin is already closed".to_string()))?;
-    }
-    if close_stdin {
-        session.close_stdin();
-    }
-    Ok(())
-}
-
-fn handle_process_resize(
-    session: &ProcessHandle,
-    size: TerminalSize,
-) -> Result<(), JSONRPCErrorError> {
-    session
-        .resize(size)
-        .map_err(|err| invalid_request(format!("failed to resize PTY: {err}")))
 }
 
 pub(crate) fn terminal_size_from_protocol(
@@ -802,6 +925,7 @@ mod tests {
                     connection_id: ConnectionId(1),
                     request_id: codex_app_server_protocol::RequestId::Integer(42),
                 },
+                experimental_exec_server_url: None,
                 environment_id: "test-env".to_string(),
                 process_id: Some("proc-42".to_string()),
                 exec_request: windows_sandbox_exec_request(),
@@ -836,6 +960,7 @@ mod tests {
             .start(StartCommandExecParams {
                 outgoing: Arc::new(OutgoingMessageSender::new(tx)),
                 request_id: request_id.clone(),
+                experimental_exec_server_url: None,
                 environment_id: "test-env".to_string(),
                 process_id: Some("proc-99".to_string()),
                 exec_request: windows_sandbox_exec_request(),
@@ -886,6 +1011,7 @@ mod tests {
             .start(StartCommandExecParams {
                 outgoing: Arc::new(OutgoingMessageSender::new(tx)),
                 request_id: request_id.clone(),
+                experimental_exec_server_url: None,
                 environment_id: "test-env".to_string(),
                 process_id: Some("proc-100".to_string()),
                 exec_request: ExecRequest {

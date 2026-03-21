@@ -1,44 +1,73 @@
+use codex_exec_server::ExecutorFileSystem;
+#[cfg(test)]
+use codex_exec_server::LocalFileSystem;
 use codex_protocol::custom_prompts::CustomPrompt;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
-use tokio::fs;
 
 /// Return the default prompts directory: `$CODEX_HOME/prompts`.
 /// If `CODEX_HOME` cannot be resolved, returns `None`.
 pub fn default_prompts_dir() -> Option<PathBuf> {
     crate::config::find_codex_home()
         .ok()
-        .map(|home| home.join("prompts"))
+        .map(|home| prompts_dir(&home))
+}
+
+pub fn prompts_dir(codex_home: &Path) -> PathBuf {
+    codex_home.join("prompts")
 }
 
 /// Discover prompt files in the given directory, returning entries sorted by name.
 /// Non-files are ignored. If the directory does not exist or cannot be read, returns empty.
+#[cfg(test)]
 pub async fn discover_prompts_in(dir: &Path) -> Vec<CustomPrompt> {
     discover_prompts_in_excluding(dir, &HashSet::new()).await
 }
 
 /// Discover prompt files in the given directory, excluding any with names in `exclude`.
 /// Returns entries sorted by name. Non-files are ignored. Missing/unreadable dir yields empty.
+#[cfg(test)]
 pub async fn discover_prompts_in_excluding(
     dir: &Path,
     exclude: &HashSet<String>,
 ) -> Vec<CustomPrompt> {
+    let Ok(dir) = AbsolutePathBuf::from_absolute_path(dir) else {
+        return Vec::new();
+    };
+    discover_prompts_in_excluding_with_filesystem(&dir, exclude, &LocalFileSystem).await
+}
+
+pub async fn discover_prompts_in_with_filesystem<F>(
+    dir: &AbsolutePathBuf,
+    filesystem: &F,
+) -> Vec<CustomPrompt>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    discover_prompts_in_excluding_with_filesystem(dir, &HashSet::new(), filesystem).await
+}
+
+pub async fn discover_prompts_in_excluding_with_filesystem<F>(
+    dir: &AbsolutePathBuf,
+    exclude: &HashSet<String>,
+    filesystem: &F,
+) -> Vec<CustomPrompt>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
     let mut out: Vec<CustomPrompt> = Vec::new();
-    let mut entries = match fs::read_dir(dir).await {
+    let entries = match filesystem.read_directory(dir).await {
         Ok(entries) => entries,
         Err(_) => return out,
     };
 
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        let is_file_like = fs::metadata(&path)
-            .await
-            .map(|m| m.is_file())
-            .unwrap_or(false);
-        if !is_file_like {
+    for entry in entries {
+        if !entry.is_file {
             continue;
         }
+        let path = dir.as_path().join(&entry.file_name);
         // Only include Markdown files with a .md extension.
         let is_md = path
             .extension()
@@ -58,14 +87,20 @@ pub async fn discover_prompts_in_excluding(
         if exclude.contains(&name) {
             continue;
         }
-        let content = match fs::read_to_string(&path).await {
-            Ok(s) => s,
+        let Ok(path) = AbsolutePathBuf::try_from(path) else {
+            continue;
+        };
+        let content = match filesystem.read_file(&path).await {
+            Ok(contents) => match String::from_utf8(contents) {
+                Ok(contents) => contents,
+                Err(_) => continue,
+            },
             Err(_) => continue,
         };
         let (description, argument_hint, body) = parse_frontmatter(&content);
         out.push(CustomPrompt {
             name,
-            path,
+            path: path.to_path_buf(),
             content: body,
             description,
             argument_hint,

@@ -90,7 +90,10 @@ impl ExecutorFileSystem for RemoteEnvironmentFileSystem {
     async fn read_file(&self, path: &AbsolutePathBuf) -> crate::fs::FileSystemResult<Vec<u8>> {
         let response = self
             .client
-            .fs_read_file(codex_app_server_protocol::FsReadFileParams { path: path.clone() })
+            .fs_read_file(codex_app_server_protocol::FsReadFileParams {
+                environment_id: None,
+                path: path.clone(),
+            })
             .await
             .map_err(exec_server_error_to_io)?;
         base64::engine::general_purpose::STANDARD
@@ -105,6 +108,7 @@ impl ExecutorFileSystem for RemoteEnvironmentFileSystem {
     ) -> crate::fs::FileSystemResult<()> {
         self.client
             .fs_write_file(codex_app_server_protocol::FsWriteFileParams {
+                environment_id: None,
                 path: path.clone(),
                 data_base64: base64::engine::general_purpose::STANDARD.encode(contents),
             })
@@ -120,6 +124,7 @@ impl ExecutorFileSystem for RemoteEnvironmentFileSystem {
     ) -> crate::fs::FileSystemResult<()> {
         self.client
             .fs_create_directory(codex_app_server_protocol::FsCreateDirectoryParams {
+                environment_id: None,
                 path: path.clone(),
                 recursive: Some(options.recursive),
             })
@@ -134,7 +139,10 @@ impl ExecutorFileSystem for RemoteEnvironmentFileSystem {
     ) -> crate::fs::FileSystemResult<crate::fs::FileMetadata> {
         let response = self
             .client
-            .fs_get_metadata(codex_app_server_protocol::FsGetMetadataParams { path: path.clone() })
+            .fs_get_metadata(codex_app_server_protocol::FsGetMetadataParams {
+                environment_id: None,
+                path: path.clone(),
+            })
             .await
             .map_err(exec_server_error_to_io)?;
         Ok(crate::fs::FileMetadata {
@@ -152,6 +160,7 @@ impl ExecutorFileSystem for RemoteEnvironmentFileSystem {
         let response = self
             .client
             .fs_read_directory(codex_app_server_protocol::FsReadDirectoryParams {
+                environment_id: None,
                 path: path.clone(),
             })
             .await
@@ -174,6 +183,7 @@ impl ExecutorFileSystem for RemoteEnvironmentFileSystem {
     ) -> crate::fs::FileSystemResult<()> {
         self.client
             .fs_remove(codex_app_server_protocol::FsRemoveParams {
+                environment_id: None,
                 path: path.clone(),
                 recursive: Some(options.recursive),
                 force: Some(options.force),
@@ -191,6 +201,7 @@ impl ExecutorFileSystem for RemoteEnvironmentFileSystem {
     ) -> crate::fs::FileSystemResult<()> {
         self.client
             .fs_copy(codex_app_server_protocol::FsCopyParams {
+                environment_id: None,
                 source_path: source_path.clone(),
                 destination_path: destination_path.clone(),
                 recursive: options.recursive,

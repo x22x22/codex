@@ -163,6 +163,7 @@ pub struct ExecCommandApprovalResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct GitDiffToRemoteParams {
+    pub environment_id: Option<String>,
     pub cwd: PathBuf,
 }
 

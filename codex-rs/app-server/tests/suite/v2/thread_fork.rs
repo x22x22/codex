@@ -436,6 +436,7 @@ async fn thread_fork_ephemeral_remains_pathless_and_omits_listing() -> Result<()
 
     let list_id = mcp
         .send_thread_list_request(ThreadListParams {
+            environment_id: None,
             cursor: None,
             limit: Some(10),
             sort_key: None,

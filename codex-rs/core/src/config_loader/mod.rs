@@ -7,10 +7,14 @@ mod tests;
 
 use crate::config::ConfigToml;
 use crate::config_loader::layer_io::LoadedConfigLayers;
+use crate::config_loader::layer_io::load_config_layers_internal_with_filesystem;
+use crate::config_loader::layer_io::read_config_from_path_with_filesystem;
 use crate::git_info::resolve_root_git_project_for_trust;
+use crate::util::resolve_path;
 use codex_app_server_protocol::ConfigLayerSource;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigRequirementsWithSources;
+use codex_exec_server::ExecutorFileSystem;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::TrustLevel;
 use codex_protocol::protocol::AskForApproval;
@@ -18,9 +22,9 @@ use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_absolute_path::AbsolutePathBufGuard;
 use dunce::canonicalize as normalize_path;
 use serde::Deserialize;
+use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
-#[cfg(windows)]
 use std::path::PathBuf;
 use toml::Value as TomlValue;
 
@@ -299,6 +303,199 @@ pub async fn load_config_layers_state(
     )
 }
 
+pub async fn load_config_layers_state_with_filesystem<F>(
+    codex_home: &Path,
+    cwd: Option<AbsolutePathBuf>,
+    cli_overrides: &[(String, TomlValue)],
+    overrides: LoaderOverrides,
+    cloud_requirements: CloudRequirementsLoader,
+    filesystem: &F,
+) -> io::Result<ConfigLayerStack>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut config_requirements_toml = ConfigRequirementsWithSources::default();
+
+    if let Some(requirements) = cloud_requirements.get().await.map_err(io::Error::other)? {
+        config_requirements_toml
+            .merge_unset_fields(RequirementSource::CloudRequirements, requirements);
+    }
+
+    #[cfg(target_os = "macos")]
+    macos::load_managed_admin_requirements_toml(
+        &mut config_requirements_toml,
+        overrides
+            .macos_managed_config_requirements_base64
+            .as_deref(),
+    )
+    .await?;
+
+    let requirements_toml_file = system_requirements_toml_file()?;
+    load_requirements_toml_with_filesystem(
+        &mut config_requirements_toml,
+        requirements_toml_file,
+        filesystem,
+    )
+    .await?;
+
+    let loaded_config_layers =
+        load_config_layers_internal_with_filesystem(codex_home, overrides, filesystem).await?;
+    load_requirements_from_legacy_scheme(
+        &mut config_requirements_toml,
+        loaded_config_layers.clone(),
+    )
+    .await?;
+
+    let mut layers = Vec::<ConfigLayerEntry>::new();
+
+    let cli_overrides_layer = if cli_overrides.is_empty() {
+        None
+    } else {
+        let cli_overrides_layer = build_cli_overrides_layer(cli_overrides);
+        let base_dir = cwd
+            .as_ref()
+            .map(AbsolutePathBuf::as_path)
+            .unwrap_or(codex_home);
+        Some(resolve_relative_paths_in_config_toml(
+            cli_overrides_layer,
+            base_dir,
+        )?)
+    };
+
+    let system_config_toml_file = system_config_toml_file()?;
+    let system_layer = load_config_toml_for_required_layer_with_filesystem(
+        &system_config_toml_file,
+        filesystem,
+        |config_toml| {
+            ConfigLayerEntry::new(
+                ConfigLayerSource::System {
+                    file: system_config_toml_file.clone(),
+                },
+                config_toml,
+            )
+        },
+    )
+    .await?;
+    layers.push(system_layer);
+
+    let user_file = AbsolutePathBuf::resolve_path_against_base(CONFIG_TOML_FILE, codex_home)?;
+    let user_layer = load_config_toml_for_required_layer_with_filesystem(
+        &user_file,
+        filesystem,
+        |config_toml| {
+            ConfigLayerEntry::new(
+                ConfigLayerSource::User {
+                    file: user_file.clone(),
+                },
+                config_toml,
+            )
+        },
+    )
+    .await?;
+    layers.push(user_layer);
+
+    if let Some(cwd) = cwd {
+        let mut merged_so_far = TomlValue::Table(toml::map::Map::new());
+        for layer in &layers {
+            merge_toml_values(&mut merged_so_far, &layer.config);
+        }
+        if let Some(cli_overrides_layer) = cli_overrides_layer.as_ref() {
+            merge_toml_values(&mut merged_so_far, cli_overrides_layer);
+        }
+
+        let project_root_markers = match project_root_markers_from_config(&merged_so_far) {
+            Ok(markers) => markers.unwrap_or_else(default_project_root_markers),
+            Err(err) => {
+                if let Some(config_error) = first_layer_config_error_from_entries(&layers).await {
+                    return Err(io_error_from_config_error(
+                        io::ErrorKind::InvalidData,
+                        config_error,
+                        /*source*/ None,
+                    ));
+                }
+                return Err(err);
+            }
+        };
+        let project_trust_context = match project_trust_context_with_filesystem(
+            &merged_so_far,
+            &cwd,
+            &project_root_markers,
+            codex_home,
+            &user_file,
+            filesystem,
+        )
+        .await
+        {
+            Ok(context) => context,
+            Err(err) => {
+                let source = err
+                    .get_ref()
+                    .and_then(|err| err.downcast_ref::<toml::de::Error>())
+                    .cloned();
+                if let Some(config_error) = first_layer_config_error_from_entries(&layers).await {
+                    return Err(io_error_from_config_error(
+                        io::ErrorKind::InvalidData,
+                        config_error,
+                        source,
+                    ));
+                }
+                return Err(err);
+            }
+        };
+        let project_layers = load_project_layers_with_filesystem(
+            &cwd,
+            &project_trust_context.project_root,
+            &project_trust_context,
+            codex_home,
+            filesystem,
+        )
+        .await?;
+        layers.extend(project_layers);
+    }
+
+    if let Some(cli_overrides_layer) = cli_overrides_layer {
+        layers.push(ConfigLayerEntry::new(
+            ConfigLayerSource::SessionFlags,
+            cli_overrides_layer,
+        ));
+    }
+
+    let LoadedConfigLayers {
+        managed_config,
+        managed_config_from_mdm,
+    } = loaded_config_layers;
+    if let Some(config) = managed_config {
+        let managed_parent = config.file.as_path().parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Managed config file {} has no parent directory",
+                    config.file.as_path().display()
+                ),
+            )
+        })?;
+        let managed_config =
+            resolve_relative_paths_in_config_toml(config.managed_config, managed_parent)?;
+        layers.push(ConfigLayerEntry::new(
+            ConfigLayerSource::LegacyManagedConfigTomlFromFile { file: config.file },
+            managed_config,
+        ));
+    }
+    if let Some(config) = managed_config_from_mdm {
+        layers.push(ConfigLayerEntry::new_with_raw_toml(
+            ConfigLayerSource::LegacyManagedConfigTomlFromMdm,
+            config.managed_config,
+            config.raw_toml,
+        ));
+    }
+
+    ConfigLayerStack::new(
+        layers,
+        config_requirements_toml.clone().try_into()?,
+        config_requirements_toml.into_toml(),
+    )
+}
+
 /// Attempts to load a config.toml file from `config_toml`.
 /// - If the file exists and is valid TOML, passes the parsed `toml::Value` to
 ///   `create_entry` and returns the resulting layer entry.
@@ -343,6 +540,39 @@ async fn load_config_toml_for_required_layer(
     Ok(create_entry(toml_value))
 }
 
+async fn load_config_toml_for_required_layer_with_filesystem<F>(
+    config_toml: &AbsolutePathBuf,
+    filesystem: &F,
+    create_entry: impl FnOnce(TomlValue) -> ConfigLayerEntry,
+) -> io::Result<ConfigLayerEntry>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let toml_value = match read_config_from_path_with_filesystem(
+        config_toml,
+        /*log_missing_as_info*/ false,
+        filesystem,
+    )
+    .await?
+    {
+        Some(config) => {
+            let config_parent = config_toml.as_path().parent().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Config file {} has no parent directory",
+                        config_toml.as_path().display()
+                    ),
+                )
+            })?;
+            resolve_relative_paths_in_config_toml(config, config_parent)?
+        }
+        None => TomlValue::Table(toml::map::Map::new()),
+    };
+
+    Ok(create_entry(toml_value))
+}
+
 /// If available, apply requirements from the platform system
 /// `requirements.toml` location to `config_requirements_toml` by filling in
 /// any unset fields.
@@ -381,6 +611,59 @@ async fn load_requirements_toml(
                     ),
                 ));
             }
+        }
+    }
+
+    Ok(())
+}
+
+async fn load_requirements_toml_with_filesystem<F>(
+    config_requirements_toml: &mut ConfigRequirementsWithSources,
+    requirements_toml_file: impl AsRef<Path>,
+    filesystem: &F,
+) -> io::Result<()>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let requirements_toml_file =
+        AbsolutePathBuf::from_absolute_path(requirements_toml_file.as_ref())?;
+    match filesystem.read_file(&requirements_toml_file).await {
+        Ok(contents) => {
+            let contents = String::from_utf8(contents).map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Failed to decode requirements file {} as UTF-8: {err}",
+                        requirements_toml_file.as_ref().display(),
+                    ),
+                )
+            })?;
+            let requirements_config: ConfigRequirementsToml =
+                toml::from_str(&contents).map_err(|e| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "Error parsing requirements file {}: {e}",
+                            requirements_toml_file.as_ref().display(),
+                        ),
+                    )
+                })?;
+            config_requirements_toml.merge_unset_fields(
+                RequirementSource::SystemRequirementsToml {
+                    file: requirements_toml_file.clone(),
+                },
+                requirements_config,
+            );
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(io::Error::new(
+                err.kind(),
+                format!(
+                    "Failed to read requirements file {}: {err}",
+                    requirements_toml_file.as_ref().display(),
+                ),
+            ));
         }
     }
 
@@ -705,6 +988,136 @@ async fn project_trust_context(
     })
 }
 
+async fn project_trust_context_with_filesystem<F>(
+    merged_config: &TomlValue,
+    cwd: &AbsolutePathBuf,
+    project_root_markers: &[String],
+    config_base_dir: &Path,
+    user_config_file: &AbsolutePathBuf,
+    filesystem: &F,
+) -> io::Result<ProjectTrustContext>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let project_trust_config: ProjectTrustConfigToml = {
+        let _guard = AbsolutePathBufGuard::new(config_base_dir);
+        merged_config
+            .clone()
+            .try_into()
+            .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidData, err))?
+    };
+
+    let project_root =
+        find_project_root_with_filesystem(cwd, project_root_markers, filesystem).await?;
+    let projects = project_trust_config.projects.unwrap_or_default();
+
+    let project_root_key = project_root.as_path().to_string_lossy().to_string();
+    let repo_root = resolve_root_git_project_for_trust_with_filesystem(cwd, filesystem).await?;
+    let repo_root_key = repo_root
+        .as_ref()
+        .map(|root| root.to_string_lossy().to_string());
+
+    let projects_trust = projects
+        .into_iter()
+        .filter_map(|(key, project)| project.trust_level.map(|trust_level| (key, trust_level)))
+        .collect();
+
+    Ok(ProjectTrustContext {
+        project_root,
+        project_root_key,
+        repo_root_key,
+        projects_trust,
+        user_config_file: user_config_file.clone(),
+    })
+}
+
+pub(crate) async fn resolve_root_git_project_for_trust_with_filesystem<F>(
+    cwd: &AbsolutePathBuf,
+    filesystem: &F,
+) -> io::Result<Option<PathBuf>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let base = match filesystem.get_metadata(cwd).await {
+        Ok(metadata) if metadata.is_directory => cwd.as_path(),
+        Ok(_) => match cwd.as_path().parent() {
+            Some(parent) => parent,
+            None => return Ok(None),
+        },
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    let Some((repo_root, dot_git)) =
+        find_ancestor_git_entry_with_filesystem(base, filesystem).await?
+    else {
+        return Ok(None);
+    };
+    let dot_git_abs = AbsolutePathBuf::from_absolute_path(&dot_git)?;
+    let dot_git_metadata = filesystem.get_metadata(&dot_git_abs).await?;
+    if dot_git_metadata.is_directory {
+        return Ok(Some(repo_root));
+    }
+
+    let git_dir_s =
+        String::from_utf8(filesystem.read_file(&dot_git_abs).await?).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "Failed to decode git metadata file {}: {err}",
+                    dot_git.display()
+                ),
+            )
+        })?;
+    let Some(git_dir_rel) = git_dir_s.trim().strip_prefix("gitdir:").map(str::trim) else {
+        return Ok(None);
+    };
+    if git_dir_rel.is_empty() {
+        return Ok(None);
+    }
+
+    let git_dir_path = resolve_path(&repo_root, &PathBuf::from(git_dir_rel));
+    let Some(worktrees_dir) = git_dir_path.parent() else {
+        return Ok(None);
+    };
+    if worktrees_dir.file_name() != Some(OsStr::new("worktrees")) {
+        return Ok(None);
+    }
+
+    let Some(common_dir) = worktrees_dir.parent() else {
+        return Ok(None);
+    };
+    let Some(main_repo_root) = common_dir.parent() else {
+        return Ok(None);
+    };
+    Ok(Some(main_repo_root.to_path_buf()))
+}
+
+async fn find_ancestor_git_entry_with_filesystem<F>(
+    base_dir: &Path,
+    filesystem: &F,
+) -> io::Result<Option<(PathBuf, PathBuf)>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut dir = base_dir.to_path_buf();
+
+    loop {
+        let dot_git = dir.join(".git");
+        let dot_git_abs = AbsolutePathBuf::from_absolute_path(&dot_git)?;
+        match filesystem.get_metadata(&dot_git_abs).await {
+            Ok(_) => return Ok(Some((dir, dot_git))),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+
+        if !dir.pop() {
+            break;
+        }
+    }
+
+    Ok(None)
+}
+
 /// Takes a `toml::Value` parsed from a config.toml file and walks through it,
 /// resolving any `AbsolutePathBuf` fields against `base_dir`, returning a new
 /// `toml::Value` with the same shape but with paths resolved.
@@ -778,6 +1191,31 @@ async fn find_project_root(
             let marker_path = ancestor.join(marker);
             if tokio::fs::metadata(&marker_path).await.is_ok() {
                 return AbsolutePathBuf::from_absolute_path(ancestor);
+            }
+        }
+    }
+    Ok(cwd.clone())
+}
+
+async fn find_project_root_with_filesystem<F>(
+    cwd: &AbsolutePathBuf,
+    project_root_markers: &[String],
+    filesystem: &F,
+) -> io::Result<AbsolutePathBuf>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    if project_root_markers.is_empty() {
+        return Ok(cwd.clone());
+    }
+
+    for ancestor in cwd.as_path().ancestors() {
+        for marker in project_root_markers {
+            let marker_path = AbsolutePathBuf::from_absolute_path(&ancestor.join(marker))?;
+            match filesystem.get_metadata(&marker_path).await {
+                Ok(_) => return AbsolutePathBuf::from_absolute_path(ancestor),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err),
             }
         }
     }
@@ -877,6 +1315,121 @@ async fn load_project_layers(
                     layers.push(project_layer_entry(
                         trust_context,
                         &dot_codex_abs,
+                        &layer_dir,
+                        TomlValue::Table(toml::map::Map::new()),
+                        /*config_toml_exists*/ false,
+                    ));
+                } else {
+                    let config_file_display = config_file.as_path().display();
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!("Failed to read project config file {config_file_display}: {err}"),
+                    ));
+                }
+            }
+        }
+    }
+
+    Ok(layers)
+}
+
+async fn load_project_layers_with_filesystem<F>(
+    cwd: &AbsolutePathBuf,
+    project_root: &AbsolutePathBuf,
+    trust_context: &ProjectTrustContext,
+    codex_home: &Path,
+    filesystem: &F,
+) -> io::Result<Vec<ConfigLayerEntry>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let codex_home_abs = AbsolutePathBuf::from_absolute_path(codex_home)?;
+    let codex_home_normalized =
+        normalize_path(codex_home_abs.as_path()).unwrap_or_else(|_| codex_home_abs.to_path_buf());
+    let mut dirs = cwd
+        .as_path()
+        .ancestors()
+        .scan(false, |done, a| {
+            if *done {
+                None
+            } else {
+                if a == project_root.as_path() {
+                    *done = true;
+                }
+                Some(a)
+            }
+        })
+        .collect::<Vec<_>>();
+    dirs.reverse();
+
+    let mut layers = Vec::new();
+    for dir in dirs {
+        let dot_codex = AbsolutePathBuf::from_absolute_path(&dir.join(".codex"))?;
+        let dot_codex_metadata = match filesystem.get_metadata(&dot_codex).await {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        if !dot_codex_metadata.is_directory {
+            continue;
+        }
+
+        let layer_dir = AbsolutePathBuf::from_absolute_path(dir)?;
+        let decision = trust_context.decision_for_dir(&layer_dir);
+        let dot_codex_normalized =
+            normalize_path(dot_codex.as_path()).unwrap_or_else(|_| dot_codex.to_path_buf());
+        if dot_codex == codex_home_abs || dot_codex_normalized == codex_home_normalized {
+            continue;
+        }
+        let config_file = dot_codex.join(CONFIG_TOML_FILE)?;
+        match filesystem.read_file(&config_file).await {
+            Ok(contents) => {
+                let contents = String::from_utf8(contents).map_err(|err| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "Failed to decode project config file {} as UTF-8: {err}",
+                            config_file.as_path().display()
+                        ),
+                    )
+                })?;
+                let config: TomlValue = match toml::from_str(&contents) {
+                    Ok(config) => config,
+                    Err(e) => {
+                        if decision.is_trusted() {
+                            let config_file_display = config_file.as_path().display();
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                format!(
+                                    "Error parsing project config file {config_file_display}: {e}"
+                                ),
+                            ));
+                        }
+                        layers.push(project_layer_entry(
+                            trust_context,
+                            &dot_codex,
+                            &layer_dir,
+                            TomlValue::Table(toml::map::Map::new()),
+                            /*config_toml_exists*/ true,
+                        ));
+                        continue;
+                    }
+                };
+                let config = resolve_relative_paths_in_config_toml(config, dot_codex.as_path())?;
+                let entry = project_layer_entry(
+                    trust_context,
+                    &dot_codex,
+                    &layer_dir,
+                    config,
+                    /*config_toml_exists*/ true,
+                );
+                layers.push(entry);
+            }
+            Err(err) => {
+                if err.kind() == io::ErrorKind::NotFound {
+                    layers.push(project_layer_entry(
+                        trust_context,
+                        &dot_codex,
                         &layer_dir,
                         TomlValue::Table(toml::map::Map::new()),
                         /*config_toml_exists*/ false,

@@ -626,6 +626,30 @@
             },
             "method": {
               "enum": [
+                "prompt/list"
+              ],
+              "title": "Prompt/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/PromptListParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Prompt/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "skills/list"
               ],
               "title": "Skills/listRequestMethod",
@@ -6375,6 +6399,12 @@
             },
             "type": "array"
           },
+          "environmentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "expectedVersion": {
             "type": [
               "string",
@@ -6620,6 +6650,12 @@
               "null"
             ]
           },
+          "environmentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "includeLayers": {
             "default": false,
             "type": "boolean"
@@ -6633,6 +6669,9 @@
         "properties": {
           "config": {
             "$ref": "#/definitions/v2/Config"
+          },
+          "environmentId": {
+            "type": "string"
           },
           "layers": {
             "items": {
@@ -6652,6 +6691,7 @@
         },
         "required": [
           "config",
+          "environmentId",
           "origins"
         ],
         "title": "ConfigReadResponse",
@@ -6729,6 +6769,12 @@
       "ConfigValueWriteParams": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "properties": {
+          "environmentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "expectedVersion": {
             "type": [
               "string",
@@ -6933,6 +6979,37 @@
         "required": [
           "hasCredits",
           "unlimited"
+        ],
+        "type": "object"
+      },
+      "CustomPrompt": {
+        "properties": {
+          "argument_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content",
+          "name",
+          "path"
         ],
         "type": "object"
       },
@@ -9690,6 +9767,41 @@
         },
         "type": "object"
       },
+      "PromptListParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "environmentId": {
+            "default": null,
+            "description": "Optional execution environment that owns the custom prompt snapshot.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "PromptListParams",
+        "type": "object"
+      },
+      "PromptListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "environmentId": {
+            "type": "string"
+          },
+          "prompts": {
+            "items": {
+              "$ref": "#/definitions/v2/CustomPrompt"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "environmentId",
+          "prompts"
+        ],
+        "title": "PromptListResponse",
+        "type": "object"
+      },
       "RateLimitSnapshot": {
         "properties": {
           "credits": {
@@ -11322,7 +11434,15 @@
       },
       "SkillsChangedNotification": {
         "$schema": "http://json-schema.org/draft-07/schema#",
-        "description": "Notification emitted when watched local skill files change.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+        "description": "Notification emitted when watched skill files change for an execution environment.\n\nTreat this as an invalidation signal and re-run `skills/list` with the client's current parameters when refreshed skill metadata is needed.",
+        "properties": {
+          "environmentId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "environmentId"
+        ],
         "title": "SkillsChangedNotification",
         "type": "object"
       },
@@ -11409,6 +11529,14 @@
             },
             "type": "array"
           },
+          "environmentId": {
+            "default": null,
+            "description": "Optional execution environment that owns the skill snapshot.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "forceReload": {
             "description": "When true, bypass the skills cache and re-scan skills from disk.",
             "type": "boolean"
@@ -11436,10 +11564,14 @@
               "$ref": "#/definitions/v2/SkillsListEntry"
             },
             "type": "array"
+          },
+          "environmentId": {
+            "type": "string"
           }
         },
         "required": [
-          "data"
+          "data",
+          "environmentId"
         ],
         "title": "SkillsListResponse",
         "type": "object"

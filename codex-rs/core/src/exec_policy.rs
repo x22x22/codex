@@ -9,6 +9,7 @@ use crate::config_loader::ConfigLayerStack;
 use crate::config_loader::ConfigLayerStackOrdering;
 use crate::is_dangerous_command::command_might_be_dangerous;
 use crate::is_safe_command::is_known_safe_command;
+use codex_exec_server::ExecutorFileSystem;
 use codex_execpolicy::AmendError;
 use codex_execpolicy::Decision;
 use codex_execpolicy::Error as ExecPolicyRuleError;
@@ -211,8 +212,25 @@ impl ExecPolicyManager {
     }
 
     #[instrument(level = "info", skip_all)]
+    #[cfg(test)]
     pub(crate) async fn load(config_stack: &ConfigLayerStack) -> Result<Self, ExecPolicyError> {
         let (policy, warning) = load_exec_policy_with_warning(config_stack).await?;
+        if let Some(err) = warning.as_ref() {
+            tracing::warn!("failed to parse rules: {err}");
+        }
+        Ok(Self::new(Arc::new(policy)))
+    }
+
+    #[instrument(level = "info", skip_all)]
+    pub(crate) async fn load_with_filesystem<F>(
+        config_stack: &ConfigLayerStack,
+        filesystem: &F,
+    ) -> Result<Self, ExecPolicyError>
+    where
+        F: ExecutorFileSystem + ?Sized,
+    {
+        let (policy, warning) =
+            load_exec_policy_with_warning_with_filesystem(config_stack, filesystem).await?;
         if let Some(err) = warning.as_ref() {
             tracing::warn!("failed to parse rules: {err}");
         }
@@ -484,6 +502,20 @@ async fn load_exec_policy_with_warning(
     }
 }
 
+async fn load_exec_policy_with_warning_with_filesystem<F>(
+    config_stack: &ConfigLayerStack,
+    filesystem: &F,
+) -> Result<(Policy, Option<ExecPolicyError>), ExecPolicyError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    match load_exec_policy_with_filesystem(config_stack, filesystem).await {
+        Ok(policy) => Ok((policy, None)),
+        Err(err @ ExecPolicyError::ParsePolicy { .. }) => Ok((Policy::empty(), Some(err))),
+        Err(err) => Err(err),
+    }
+}
+
 pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy, ExecPolicyError> {
     // Iterate the layers in increasing order of precedence, adding the *.rules
     // from each layer, so that higher-precedence layers can override
@@ -514,6 +546,76 @@ pub async fn load_exec_policy(config_stack: &ConfigLayerStack) -> Result<Policy,
                     path: policy_path.clone(),
                     source,
                 })?;
+        let identifier = policy_path.to_string_lossy().to_string();
+        parser
+            .parse(&identifier, &contents)
+            .map_err(|source| ExecPolicyError::ParsePolicy {
+                path: identifier,
+                source,
+            })?;
+    }
+
+    let policy = parser.build();
+    tracing::debug!("loaded rules from {} files", policy_paths.len());
+    tracing::trace!(rules = ?policy, "exec policy rules loaded");
+
+    let Some(requirements_policy) = config_stack.requirements().exec_policy.as_deref() else {
+        return Ok(policy);
+    };
+
+    Ok(policy.merge_overlay(requirements_policy.as_ref()))
+}
+
+pub async fn load_exec_policy_with_filesystem<F>(
+    config_stack: &ConfigLayerStack,
+    filesystem: &F,
+) -> Result<Policy, ExecPolicyError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let mut policy_paths = Vec::new();
+    for layer in config_stack.get_layers(
+        ConfigLayerStackOrdering::LowestPrecedenceFirst,
+        /*include_disabled*/ false,
+    ) {
+        if let Some(config_folder) = layer.config_folder() {
+            #[expect(clippy::expect_used)]
+            let policy_dir = config_folder.join(RULES_DIR_NAME).expect("safe join");
+            let layer_policy_paths =
+                collect_policy_files_with_filesystem(&policy_dir, filesystem).await?;
+            policy_paths.extend(layer_policy_paths);
+        }
+    }
+    tracing::trace!(
+        policy_paths = ?policy_paths,
+        "loaded exec policies"
+    );
+
+    let mut parser = PolicyParser::new();
+    for policy_path in &policy_paths {
+        let absolute_path = AbsolutePathBuf::from_absolute_path(policy_path).map_err(|source| {
+            ExecPolicyError::ReadFile {
+                path: policy_path.clone(),
+                source: std::io::Error::new(
+                    ErrorKind::InvalidInput,
+                    format!("invalid policy path: {source}"),
+                ),
+            }
+        })?;
+        let contents = filesystem
+            .read_file(&absolute_path)
+            .await
+            .map_err(|source| ExecPolicyError::ReadFile {
+                path: policy_path.clone(),
+                source,
+            })?;
+        let contents = String::from_utf8(contents).map_err(|source| ExecPolicyError::ReadFile {
+            path: policy_path.clone(),
+            source: std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!("policy file is not valid UTF-8: {source}"),
+            ),
+        })?;
         let identifier = policy_path.to_string_lossy().to_string();
         parser
             .parse(&identifier, &contents)
@@ -852,6 +954,56 @@ async fn collect_policy_files(dir: impl AsRef<Path>) -> Result<Vec<PathBuf>, Exe
             .and_then(|ext| ext.to_str())
             .is_some_and(|ext| ext == RULE_EXTENSION)
             && file_type.is_file()
+        {
+            policy_paths.push(path);
+        }
+    }
+
+    policy_paths.sort();
+
+    tracing::debug!(
+        "loaded {} .rules files in {}",
+        policy_paths.len(),
+        dir.display()
+    );
+    Ok(policy_paths)
+}
+
+async fn collect_policy_files_with_filesystem<F>(
+    dir: impl AsRef<Path>,
+    filesystem: &F,
+) -> Result<Vec<PathBuf>, ExecPolicyError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let dir = dir.as_ref();
+    let absolute_dir =
+        AbsolutePathBuf::from_absolute_path(dir).map_err(|source| ExecPolicyError::ReadDir {
+            dir: dir.to_path_buf(),
+            source: std::io::Error::new(
+                ErrorKind::InvalidInput,
+                format!("invalid rules directory: {source}"),
+            ),
+        })?;
+    let entries = match filesystem.read_directory(&absolute_dir).await {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(ExecPolicyError::ReadDir {
+                dir: dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+
+    let mut policy_paths = Vec::new();
+    for entry in entries {
+        let path = dir.join(entry.file_name);
+        if path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext == RULE_EXTENSION)
+            && entry.is_file
         {
             policy_paths.push(path);
         }

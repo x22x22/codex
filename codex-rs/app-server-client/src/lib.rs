@@ -1015,6 +1015,7 @@ mod tests {
             .request_typed::<ConfigRequirementsReadResponse>(ClientRequest::ThreadRead {
                 request_id: RequestId::Integer(99),
                 params: codex_app_server_protocol::ThreadReadParams {
+                    environment_id: None,
                     thread_id: "missing-thread".to_string(),
                     include_turns: false,
                 },

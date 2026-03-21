@@ -24,6 +24,7 @@ use crate::rollout::RolloutRecorder;
 use crate::rollout::truncation;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillsManager;
+use codex_exec_server::Environment;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationModeMask;
 use codex_protocol::openai_models::ModelPreset;
@@ -101,8 +102,8 @@ fn build_file_watcher(codex_home: PathBuf, skills_manager: Arc<SkillsManager>) -
         handle.spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(FileWatcherEvent::SkillsChanged { .. }) => {
-                        skills_manager.clear_cache();
+                    Ok(FileWatcherEvent::SkillsChanged { environment_id, .. }) => {
+                        skills_manager.clear_cache_for_environment(&environment_id);
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,
@@ -759,9 +760,17 @@ impl ThreadManagerState {
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
+        let environment = Environment::create(config.experimental_exec_server_url.clone()).await?;
+        let environment_filesystem = environment.get_filesystem();
         let watch_registration = self
             .file_watcher
-            .register_config(&config, self.skills_manager.as_ref());
+            .register_config_with_filesystem(
+                &config,
+                environment.environment_id().to_string(),
+                self.skills_manager.as_ref(),
+                &environment_filesystem,
+            )
+            .await;
         let CodexSpawnOk {
             codex, thread_id, ..
         } = Codex::spawn(CodexSpawnArgs {

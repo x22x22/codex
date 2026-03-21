@@ -51,6 +51,7 @@ use codex_core::config::edit::ConfigEditsBuilder;
 use codex_core::config::types::ApprovalsReviewer;
 use codex_core::config::types::ModelAvailabilityNuxConfig;
 use codex_core::config_loader::ConfigLayerStackOrdering;
+use codex_core::custom_prompts;
 use codex_core::features::Feature;
 use codex_core::models_manager::collaboration_mode_presets::CollaborationModesConfig;
 use codex_core::models_manager::manager::RefreshStrategy;
@@ -58,6 +59,7 @@ use codex_core::models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_
 use codex_core::models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 #[cfg(target_os = "windows")]
 use codex_core::windows_sandbox::WindowsSandboxLevelExt;
+use codex_exec_server::LocalFileSystem;
 use codex_otel::SessionTelemetry;
 use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
@@ -286,10 +288,14 @@ fn emit_missing_system_bwrap_warning(app_event_tx: &AppEventSender) {
 }
 
 async fn emit_custom_prompt_deprecation_notice(app_event_tx: &AppEventSender, codex_home: &Path) {
-    let prompts_dir = codex_home.join("prompts");
-    let prompt_count = codex_core::custom_prompts::discover_prompts_in(&prompts_dir)
-        .await
-        .len();
+    let prompt_count = match AbsolutePathBuf::try_from(custom_prompts::prompts_dir(codex_home)) {
+        Ok(prompts_dir) => {
+            custom_prompts::discover_prompts_in_with_filesystem(&prompts_dir, &LocalFileSystem)
+                .await
+                .len()
+        }
+        Err(_) => 0,
+    };
     if prompt_count == 0 {
         return;
     }

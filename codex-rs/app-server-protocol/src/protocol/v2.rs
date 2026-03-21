@@ -25,6 +25,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::config_types::WebSearchToolConfig;
+use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::items::AgentMessageContent as CoreAgentMessageContent;
 use codex_protocol::items::TurnItem as CoreTurnItem;
 use codex_protocol::mcp::Resource as McpResource;
@@ -799,6 +800,8 @@ pub enum ConfigWriteErrorCode {
 pub struct ConfigReadParams {
     #[serde(default)]
     pub include_layers: bool,
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Optional working directory to resolve project config layers. If specified,
     /// return the effective config as seen from that directory (i.e., including any
     /// project layers between `cwd` and the project/repo root).
@@ -810,6 +813,7 @@ pub struct ConfigReadParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigReadResponse {
+    pub environment_id: String,
     #[experimental(nested)]
     pub config: Config,
     pub origins: HashMap<String, ConfigLayerMetadata>,
@@ -925,6 +929,8 @@ pub struct ExternalAgentConfigImportResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigValueWriteParams {
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     pub key_path: String,
     pub value: JsonValue,
     pub merge_strategy: MergeStrategy,
@@ -939,6 +945,8 @@ pub struct ConfigValueWriteParams {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ConfigBatchWriteParams {
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     pub edits: Vec<ConfigEdit>,
     /// Path to the config file to write; defaults to the user's `config.toml` when omitted.
     #[ts(optional = nullable)]
@@ -2123,6 +2131,8 @@ pub struct FeedbackUploadResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsReadFileParams {
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Absolute path to read.
     pub path: AbsolutePathBuf,
 }
@@ -2141,6 +2151,8 @@ pub struct FsReadFileResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsWriteFileParams {
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Absolute path to write.
     pub path: AbsolutePathBuf,
     /// File contents encoded as base64.
@@ -2158,6 +2170,8 @@ pub struct FsWriteFileResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsCreateDirectoryParams {
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Absolute directory path to create.
     pub path: AbsolutePathBuf,
     /// Whether parent directories should also be created. Defaults to `true`.
@@ -2176,6 +2190,8 @@ pub struct FsCreateDirectoryResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsGetMetadataParams {
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Absolute path to inspect.
     pub path: AbsolutePathBuf,
 }
@@ -2202,6 +2218,8 @@ pub struct FsGetMetadataResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsReadDirectoryParams {
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Absolute directory path to read.
     pub path: AbsolutePathBuf,
 }
@@ -2233,6 +2251,8 @@ pub struct FsReadDirectoryResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsRemoveParams {
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Absolute path to remove.
     pub path: AbsolutePathBuf,
     /// Whether directory removal should recurse. Defaults to `true`.
@@ -2254,6 +2274,8 @@ pub struct FsRemoveResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct FsCopyParams {
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Absolute source path.
     pub source_path: AbsolutePathBuf,
     /// Absolute destination path.
@@ -2948,6 +2970,10 @@ pub struct ThreadRollbackResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadListParams {
+    /// Optional execution environment that owns the thread snapshot.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Opaque pagination cursor returned by a previous call.
     #[ts(optional = nullable)]
     pub cursor: Option<String>,
@@ -3018,6 +3044,10 @@ pub struct ThreadListResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadLoadedListParams {
+    /// Optional execution environment that owns the loaded thread sessions.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Opaque pagination cursor returned by a previous call.
     #[ts(optional = nullable)]
     pub cursor: Option<String>,
@@ -3064,6 +3094,10 @@ pub enum ThreadActiveFlag {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct ThreadReadParams {
+    /// Optional execution environment that owns the thread snapshot.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     pub thread_id: String,
     /// When true, include turns and their items from rollout history.
     #[serde(default)]
@@ -3075,6 +3109,24 @@ pub struct ThreadReadParams {
 #[ts(export_to = "v2/")]
 pub struct ThreadReadResponse {
     pub thread: Thread,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PromptListParams {
+    /// Optional execution environment that owns the custom prompt snapshot.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct PromptListResponse {
+    pub environment_id: String,
+    pub prompts: Vec<CustomPrompt>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
@@ -3120,6 +3172,10 @@ pub struct SkillsListResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginListParams {
+    /// Optional execution environment that owns plugin discovery.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     /// Optional working directories used to discover repo marketplaces. When omitted,
     /// only home-scoped marketplaces and the official curated marketplace are considered.
     #[ts(optional = nullable)]
@@ -3144,6 +3200,10 @@ pub struct PluginListResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginReadParams {
+    /// Optional execution environment that owns plugin discovery.
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     pub marketplace_path: AbsolutePathBuf,
     pub plugin_name: String,
 }
@@ -3382,6 +3442,9 @@ pub struct SkillsConfigWriteResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginInstallParams {
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     pub marketplace_path: AbsolutePathBuf,
     pub plugin_name: String,
     /// When true, apply the remote plugin change before the local install flow.
@@ -3401,6 +3464,9 @@ pub struct PluginInstallResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct PluginUninstallParams {
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub environment_id: Option<String>,
     pub plugin_id: String,
     /// When true, apply the remote plugin change before the local uninstall flow.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -3498,6 +3564,8 @@ impl From<CoreSkillErrorInfo> for SkillErrorInfo {
 #[ts(export_to = "v2/")]
 pub struct Thread {
     pub id: String,
+    /// Execution environment that owns this thread snapshot.
+    pub environment_id: String,
     /// Usually the first user message in the thread, if available.
     pub preview: String,
     /// Whether the thread is ephemeral and should not be materialized on disk.
@@ -4705,11 +4773,13 @@ pub struct ThreadClosedNotification {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
-/// Notification emitted when watched local skill files change.
+/// Notification emitted when watched skill files change for an execution environment.
 ///
 /// Treat this as an invalidation signal and re-run `skills/list` with the
 /// client's current parameters when refreshed skill metadata is needed.
-pub struct SkillsChangedNotification {}
+pub struct SkillsChangedNotification {
+    pub environment_id: String,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
@@ -5943,6 +6013,7 @@ mod tests {
     fn thread_fixture() -> Thread {
         Thread {
             id: "thr_123".to_string(),
+            environment_id: "env-1".to_string(),
             preview: "Preview".to_string(),
             ephemeral: false,
             model_provider: "openai".to_string(),
@@ -6342,6 +6413,7 @@ mod tests {
     #[test]
     fn fs_read_file_params_round_trip() {
         let params = FsReadFileParams {
+            environment_id: None,
             path: absolute_path("tmp/example.txt"),
         };
 
@@ -6349,6 +6421,7 @@ mod tests {
         assert_eq!(
             value,
             json!({
+                "environmentId": null,
                 "path": absolute_path_string("tmp/example.txt"),
             })
         );
@@ -6361,6 +6434,7 @@ mod tests {
     #[test]
     fn fs_create_directory_params_round_trip_with_default_recursive() {
         let params = FsCreateDirectoryParams {
+            environment_id: None,
             path: absolute_path("tmp/example"),
             recursive: None,
         };
@@ -6369,6 +6443,7 @@ mod tests {
         assert_eq!(
             value,
             json!({
+                "environmentId": null,
                 "path": absolute_path_string("tmp/example"),
                 "recursive": null,
             })
@@ -6382,6 +6457,7 @@ mod tests {
     #[test]
     fn fs_write_file_params_round_trip_with_base64_data() {
         let params = FsWriteFileParams {
+            environment_id: None,
             path: absolute_path("tmp/example.bin"),
             data_base64: "AAE=".to_string(),
         };
@@ -6390,6 +6466,7 @@ mod tests {
         assert_eq!(
             value,
             json!({
+                "environmentId": null,
                 "path": absolute_path_string("tmp/example.bin"),
                 "dataBase64": "AAE=",
             })
@@ -6403,6 +6480,7 @@ mod tests {
     #[test]
     fn fs_copy_params_round_trip_with_recursive_directory_copy() {
         let params = FsCopyParams {
+            environment_id: None,
             source_path: absolute_path("tmp/source"),
             destination_path: absolute_path("tmp/destination"),
             recursive: true,
@@ -6412,6 +6490,7 @@ mod tests {
         assert_eq!(
             value,
             json!({
+                "environmentId": null,
                 "sourcePath": absolute_path_string("tmp/source"),
                 "destinationPath": absolute_path_string("tmp/destination"),
                 "recursive": true,
@@ -6835,6 +6914,7 @@ mod tests {
             json!({
                 "thread": {
                     "id": "thr_123",
+                    "environmentId": "env-1",
                     "preview": "Preview",
                     "ephemeral": false,
                     "modelProvider": "openai",
@@ -6896,6 +6976,7 @@ mod tests {
             json!({
                 "thread": {
                     "id": "thr_123",
+                    "environmentId": "env-1",
                     "preview": "Preview",
                     "ephemeral": false,
                     "modelProvider": "openai",
@@ -6957,6 +7038,7 @@ mod tests {
             json!({
                 "thread": {
                     "id": "thr_123",
+                    "environmentId": "env-1",
                     "preview": "Preview",
                     "ephemeral": false,
                     "modelProvider": "openai",
@@ -8059,29 +8141,232 @@ mod tests {
     }
 
     #[test]
+    fn thread_list_params_round_trip_environment_id() {
+        let params = ThreadListParams {
+            environment_id: Some("env-1".to_string()),
+            cursor: Some("cursor-1".to_string()),
+            limit: Some(25),
+            sort_key: Some(ThreadSortKey::UpdatedAt),
+            model_providers: None,
+            source_kinds: None,
+            archived: Some(false),
+            cwd: Some("/repo".to_string()),
+            search_term: Some("agent".to_string()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&params).expect("serialize thread/list params"),
+            json!({
+                "environmentId": "env-1",
+                "cursor": "cursor-1",
+                "limit": 25,
+                "sortKey": "updated_at",
+                "modelProviders": null,
+                "sourceKinds": null,
+                "archived": false,
+                "cwd": "/repo",
+                "searchTerm": "agent",
+            }),
+        );
+
+        let decoded =
+            serde_json::from_value::<ThreadListParams>(serde_json::to_value(&params).unwrap())
+                .expect("deserialize thread/list params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn thread_loaded_list_params_round_trip_environment_id() {
+        let params = ThreadLoadedListParams {
+            environment_id: Some("env-1".to_string()),
+            cursor: Some("cursor-1".to_string()),
+            limit: Some(10),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&params).expect("serialize thread/loaded/list params"),
+            json!({
+                "environmentId": "env-1",
+                "cursor": "cursor-1",
+                "limit": 10,
+            }),
+        );
+
+        let decoded = serde_json::from_value::<ThreadLoadedListParams>(
+            serde_json::to_value(&params).unwrap(),
+        )
+        .expect("deserialize thread/loaded/list params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn thread_read_params_round_trip_environment_id() {
+        let params = ThreadReadParams {
+            environment_id: Some("env-2".to_string()),
+            thread_id: "thread-1".to_string(),
+            include_turns: true,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&params).expect("serialize thread/read params"),
+            json!({
+                "environmentId": "env-2",
+                "threadId": "thread-1",
+                "includeTurns": true,
+            }),
+        );
+
+        let decoded =
+            serde_json::from_value::<ThreadReadParams>(serde_json::to_value(&params).unwrap())
+                .expect("deserialize thread/read params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn thread_serialization_includes_environment_id() {
+        assert_eq!(
+            serde_json::to_value(thread_fixture()).expect("serialize thread"),
+            json!({
+                "id": "thr_123",
+                "environmentId": "env-1",
+                "preview": "Preview",
+                "ephemeral": false,
+                "modelProvider": "openai",
+                "createdAt": 1,
+                "updatedAt": 2,
+                "status": {"type": "idle"},
+                "path": absolute_path_string("tmp/thread"),
+                "cwd": absolute_path_string("tmp"),
+                "cliVersion": "1.0.0",
+                "source": "exec",
+                "agentNickname": null,
+                "agentRole": null,
+                "gitInfo": null,
+                "name": "Example",
+                "turns": [],
+            }),
+        );
+    }
+
+    #[test]
     fn plugin_list_params_serialization_uses_force_remote_sync() {
         assert_eq!(
             serde_json::to_value(PluginListParams {
+                environment_id: None,
                 cwds: None,
                 force_remote_sync: false,
             })
             .unwrap(),
             json!({
+                "environmentId": null,
                 "cwds": null,
             }),
         );
 
         assert_eq!(
             serde_json::to_value(PluginListParams {
+                environment_id: Some("env-1".to_string()),
                 cwds: None,
                 force_remote_sync: true,
             })
             .unwrap(),
             json!({
+                "environmentId": "env-1",
                 "cwds": null,
                 "forceRemoteSync": true,
             }),
         );
+    }
+
+    #[test]
+    fn plugin_read_params_round_trip_environment_id() {
+        let marketplace_path = absolute_path("plugins/marketplace.json");
+        let params = PluginReadParams {
+            environment_id: Some("env-2".to_string()),
+            marketplace_path: marketplace_path.clone(),
+            plugin_name: "gmail".to_string(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&params).expect("serialize plugin/read params"),
+            json!({
+                "environmentId": "env-2",
+                "marketplacePath": marketplace_path.as_path().display().to_string(),
+                "pluginName": "gmail",
+            }),
+        );
+
+        let decoded =
+            serde_json::from_value::<PluginReadParams>(serde_json::to_value(&params).unwrap())
+                .expect("deserialize plugin/read params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn fs_get_metadata_params_round_trip_environment_id() {
+        let params = FsGetMetadataParams {
+            environment_id: Some("env-1".to_string()),
+            path: absolute_path("tmp/example.txt"),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&params).expect("serialize fs/getMetadata params"),
+            json!({
+                "environmentId": "env-1",
+                "path": absolute_path_string("tmp/example.txt"),
+            }),
+        );
+
+        let decoded =
+            serde_json::from_value::<FsGetMetadataParams>(serde_json::to_value(&params).unwrap())
+                .expect("deserialize fs/getMetadata params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn fs_read_directory_params_round_trip_environment_id() {
+        let params = FsReadDirectoryParams {
+            environment_id: Some("env-2".to_string()),
+            path: absolute_path("tmp/example-dir"),
+        };
+
+        assert_eq!(
+            serde_json::to_value(&params).expect("serialize fs/readDirectory params"),
+            json!({
+                "environmentId": "env-2",
+                "path": absolute_path_string("tmp/example-dir"),
+            }),
+        );
+
+        let decoded =
+            serde_json::from_value::<FsReadDirectoryParams>(serde_json::to_value(&params).unwrap())
+                .expect("deserialize fs/readDirectory params");
+        assert_eq!(decoded, params);
+    }
+
+    #[test]
+    fn fs_remove_params_round_trip_environment_id() {
+        let params = FsRemoveParams {
+            environment_id: Some("env-3".to_string()),
+            path: absolute_path("tmp/example-dir"),
+            recursive: None,
+            force: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(&params).expect("serialize fs/remove params"),
+            json!({
+                "environmentId": "env-3",
+                "path": absolute_path_string("tmp/example-dir"),
+                "recursive": null,
+                "force": null,
+            }),
+        );
+
+        let decoded =
+            serde_json::from_value::<FsRemoveParams>(serde_json::to_value(&params).unwrap())
+                .expect("deserialize fs/remove params");
+        assert_eq!(decoded, params);
     }
 
     #[test]
@@ -8095,12 +8380,14 @@ mod tests {
         let marketplace_path_json = marketplace_path.as_path().display().to_string();
         assert_eq!(
             serde_json::to_value(PluginInstallParams {
+                environment_id: None,
                 marketplace_path: marketplace_path.clone(),
                 plugin_name: "gmail".to_string(),
                 force_remote_sync: false,
             })
             .unwrap(),
             json!({
+                "environmentId": null,
                 "marketplacePath": marketplace_path_json,
                 "pluginName": "gmail",
             }),
@@ -8108,12 +8395,14 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(PluginInstallParams {
+                environment_id: Some("env-1".to_string()),
                 marketplace_path,
                 plugin_name: "gmail".to_string(),
                 force_remote_sync: true,
             })
             .unwrap(),
             json!({
+                "environmentId": "env-1",
                 "marketplacePath": marketplace_path_json,
                 "pluginName": "gmail",
                 "forceRemoteSync": true,
@@ -8125,22 +8414,26 @@ mod tests {
     fn plugin_uninstall_params_serialization_uses_force_remote_sync() {
         assert_eq!(
             serde_json::to_value(PluginUninstallParams {
+                environment_id: None,
                 plugin_id: "gmail@openai-curated".to_string(),
                 force_remote_sync: false,
             })
             .unwrap(),
             json!({
+                "environmentId": null,
                 "pluginId": "gmail@openai-curated",
             }),
         );
 
         assert_eq!(
             serde_json::to_value(PluginUninstallParams {
+                environment_id: Some("env-2".to_string()),
                 plugin_id: "gmail@openai-curated".to_string(),
                 force_remote_sync: true,
             })
             .unwrap(),
             json!({
+                "environmentId": "env-2",
                 "pluginId": "gmail@openai-curated",
                 "forceRemoteSync": true,
             }),

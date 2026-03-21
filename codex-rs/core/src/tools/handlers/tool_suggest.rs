@@ -118,23 +118,26 @@ impl ToolHandler for ToolSuggestHandler {
             connectors::accessible_connectors_from_mcp_tools(&mcp_tools),
             &turn.config,
         );
-        let discoverable_tools = connectors::list_tool_suggest_discoverable_tools_with_auth(
-            &turn.config,
-            auth.as_ref(),
-            &accessible_connectors,
-        )
-        .await
-        .map(|discoverable_tools| {
-            filter_tool_suggest_discoverable_tools_for_client(
-                discoverable_tools,
-                turn.app_server_client_name.as_deref(),
+        let environment_filesystem = turn.environment.get_filesystem();
+        let discoverable_tools =
+            connectors::list_tool_suggest_discoverable_tools_with_auth_with_filesystem(
+                &turn.config,
+                auth.as_ref(),
+                &accessible_connectors,
+                &environment_filesystem,
             )
-        })
-        .map_err(|err| {
-            FunctionCallError::RespondToModel(format!(
-                "tool suggestions are unavailable right now: {err}"
-            ))
-        })?;
+            .await
+            .map(|discoverable_tools| {
+                filter_tool_suggest_discoverable_tools_for_client(
+                    discoverable_tools,
+                    turn.app_server_client_name.as_deref(),
+                )
+            })
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "tool suggestions are unavailable right now: {err}"
+                ))
+            })?;
 
         let tool = discoverable_tools
             .into_iter()

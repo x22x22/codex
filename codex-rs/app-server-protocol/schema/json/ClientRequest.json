@@ -361,6 +361,12 @@
           },
           "type": "array"
         },
+        "environmentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "expectedVersion": {
           "type": [
             "string",
@@ -410,6 +416,12 @@
             "null"
           ]
         },
+        "environmentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "includeLayers": {
           "default": false,
           "type": "boolean"
@@ -419,6 +431,12 @@
     },
     "ConfigValueWriteParams": {
       "properties": {
+        "environmentId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "expectedVersion": {
           "type": [
             "string",
@@ -1324,6 +1342,19 @@
       "required": [
         "pluginId"
       ],
+      "type": "object"
+    },
+    "PromptListParams": {
+      "properties": {
+        "environmentId": {
+          "default": null,
+          "description": "Optional execution environment that owns the custom prompt snapshot.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ReadOnlyAccess": {
@@ -2386,6 +2417,14 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "environmentId": {
+          "default": null,
+          "description": "Optional execution environment that owns the skill snapshot.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "forceReload": {
           "description": "When true, bypass the skills cache and re-scan skills from disk.",
@@ -3748,6 +3787,30 @@
         "params"
       ],
       "title": "Thread/readRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
+            "prompt/list"
+          ],
+          "title": "Prompt/listRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "$ref": "#/definitions/PromptListParams"
+        }
+      },
+      "required": [
+        "id",
+        "method",
+        "params"
+      ],
+      "title": "Prompt/listRequest",
       "type": "object"
     },
     {

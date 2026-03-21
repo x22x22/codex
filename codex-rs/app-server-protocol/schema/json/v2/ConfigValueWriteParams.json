@@ -10,6 +10,12 @@
     }
   },
   "properties": {
+    "environmentId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "expectedVersion": {
       "type": [
         "string",

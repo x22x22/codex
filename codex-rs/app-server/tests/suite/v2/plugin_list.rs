@@ -63,6 +63,7 @@ async fn plugin_list_skips_invalid_marketplace_file() -> Result<()> {
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
+            environment_id: None,
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             force_remote_sync: false,
         })
@@ -147,6 +148,7 @@ async fn plugin_list_accepts_omitted_cwds() -> Result<()> {
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
+            environment_id: None,
             cwds: None,
             force_remote_sync: false,
         })
@@ -219,6 +221,7 @@ enabled = false
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
+            environment_id: None,
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             force_remote_sync: false,
         })
@@ -371,6 +374,7 @@ enabled = false
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
+            environment_id: None,
             cwds: Some(vec![
                 AbsolutePathBuf::try_from(workspace_enabled.path())?,
                 AbsolutePathBuf::try_from(workspace_default.path())?,
@@ -458,6 +462,7 @@ async fn plugin_list_returns_plugin_interface_with_absolute_asset_paths() -> Res
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
+            environment_id: None,
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             force_remote_sync: false,
         })
@@ -571,6 +576,7 @@ async fn plugin_list_accepts_legacy_string_default_prompt() -> Result<()> {
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
+            environment_id: None,
             cwds: Some(vec![AbsolutePathBuf::try_from(repo_root.path())?]),
             force_remote_sync: false,
         })
@@ -611,6 +617,7 @@ async fn plugin_list_force_remote_sync_returns_remote_sync_error_on_fail_open() 
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
+            environment_id: None,
             cwds: None,
             force_remote_sync: true,
         })
@@ -691,6 +698,7 @@ async fn plugin_list_force_remote_sync_reconciles_curated_plugin_state() -> Resu
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
+            environment_id: None,
             cwds: None,
             force_remote_sync: true,
         })
@@ -773,6 +781,7 @@ async fn plugin_list_fetches_featured_plugin_ids_without_chatgpt_auth() -> Resul
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
+            environment_id: None,
             cwds: None,
             force_remote_sync: false,
         })
@@ -813,6 +822,7 @@ async fn plugin_list_uses_warmed_featured_plugin_ids_cache_on_first_request() ->
 
     let request_id = mcp
         .send_plugin_list_request(PluginListParams {
+            environment_id: None,
             cwds: None,
             force_remote_sync: false,
         })

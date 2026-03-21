@@ -6,6 +6,7 @@ use notify::event::CreateKind;
 use notify::event::ModifyKind;
 use notify::event::RemoveKind;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use tokio::time::timeout;
 
 fn path(name: &str) -> PathBuf {
@@ -20,39 +21,59 @@ fn notify_event(kind: EventKind, paths: Vec<PathBuf>) -> Event {
     event
 }
 
+fn default_environment_id() -> String {
+    codex_exec_server::Environment::default_environment_id(None)
+}
+
+fn skills_root_registrations(
+    roots: &[(PathBuf, usize)],
+) -> HashMap<PathBuf, HashMap<String, usize>> {
+    let environment_id = default_environment_id();
+    roots
+        .iter()
+        .cloned()
+        .map(|(root, count)| (root, HashMap::from([(environment_id.clone(), count)])))
+        .collect()
+}
+
 #[test]
 fn throttles_and_coalesces_within_interval() {
     let start = Instant::now();
     let mut throttled = ThrottledPaths::new(start);
+    let environment_id = codex_exec_server::Environment::default_environment_id(None);
 
-    throttled.add(vec![path("a")]);
+    throttled.add(HashMap::from([(environment_id.clone(), vec![path("a")])]));
     let first = throttled.take_ready(start).expect("first emit");
-    assert_eq!(first, vec![path("a")]);
+    assert_eq!(first, vec![(environment_id.clone(), vec![path("a")])]);
 
-    throttled.add(vec![path("b"), path("c")]);
+    throttled.add(HashMap::from([(
+        environment_id.clone(),
+        vec![path("b"), path("c")],
+    )]));
     assert_eq!(throttled.take_ready(start), None);
 
     let second = throttled
         .take_ready(start + WATCHER_THROTTLE_INTERVAL)
         .expect("coalesced emit");
-    assert_eq!(second, vec![path("b"), path("c")]);
+    assert_eq!(second, vec![(environment_id, vec![path("b"), path("c")])]);
 }
 
 #[test]
 fn flushes_pending_on_shutdown() {
     let start = Instant::now();
     let mut throttled = ThrottledPaths::new(start);
+    let environment_id = default_environment_id();
 
-    throttled.add(vec![path("a")]);
+    throttled.add(HashMap::from([(environment_id.clone(), vec![path("a")])]));
     let _ = throttled.take_ready(start).expect("first emit");
 
-    throttled.add(vec![path("b")]);
+    throttled.add(HashMap::from([(environment_id.clone(), vec![path("b")])]));
     assert_eq!(throttled.take_ready(start), None);
 
     let flushed = throttled
         .take_pending(start)
         .expect("shutdown flush emits pending paths");
-    assert_eq!(flushed, vec![path("b")]);
+    assert_eq!(flushed, vec![(environment_id, vec![path("b")])]);
 }
 
 #[test]
@@ -60,6 +81,7 @@ fn classify_event_filters_to_skills_roots() {
     let root = path("/tmp/skills");
     let state = RwLock::new(WatchState {
         skills_root_ref_counts: HashMap::from([(root.clone(), 1)]),
+        skills_root_registrations: skills_root_registrations(&[(root.clone(), 1)]),
     });
     let event = notify_event(
         EventKind::Create(CreateKind::Any),
@@ -70,7 +92,10 @@ fn classify_event_filters_to_skills_roots() {
     );
 
     let classified = classify_event(&event, &state);
-    assert_eq!(classified, vec![root.join("demo/SKILL.md")]);
+    assert_eq!(
+        classified,
+        HashMap::from([(default_environment_id(), vec![root.join("demo/SKILL.md")],)])
+    );
 }
 
 #[test]
@@ -79,6 +104,10 @@ fn classify_event_supports_multiple_roots_without_prefix_false_positives() {
     let root_b = path("/tmp/workspace/.codex/skills");
     let state = RwLock::new(WatchState {
         skills_root_ref_counts: HashMap::from([(root_a.clone(), 1), (root_b.clone(), 1)]),
+        skills_root_registrations: skills_root_registrations(&[
+            (root_a.clone(), 1),
+            (root_b.clone(), 1),
+        ]),
     });
     let event = notify_event(
         EventKind::Modify(ModifyKind::Any),
@@ -92,7 +121,10 @@ fn classify_event_supports_multiple_roots_without_prefix_false_positives() {
     let classified = classify_event(&event, &state);
     assert_eq!(
         classified,
-        vec![root_a.join("alpha/SKILL.md"), root_b.join("beta/SKILL.md")]
+        HashMap::from([(
+            default_environment_id(),
+            vec![root_a.join("alpha/SKILL.md"), root_b.join("beta/SKILL.md")],
+        )])
     );
 }
 
@@ -101,6 +133,7 @@ fn classify_event_ignores_non_mutating_event_kinds() {
     let root = path("/tmp/skills");
     let state = RwLock::new(WatchState {
         skills_root_ref_counts: HashMap::from([(root.clone(), 1)]),
+        skills_root_registrations: skills_root_registrations(&[(root.clone(), 1)]),
     });
     let path = root.join("demo/SKILL.md");
 
@@ -108,22 +141,32 @@ fn classify_event_ignores_non_mutating_event_kinds() {
         EventKind::Access(AccessKind::Open(AccessMode::Any)),
         vec![path.clone()],
     );
-    assert_eq!(classify_event(&access_event, &state), Vec::<PathBuf>::new());
+    assert_eq!(
+        classify_event(&access_event, &state),
+        HashMap::<String, Vec<PathBuf>>::new()
+    );
 
     let any_event = notify_event(EventKind::Any, vec![path.clone()]);
-    assert_eq!(classify_event(&any_event, &state), Vec::<PathBuf>::new());
+    assert_eq!(
+        classify_event(&any_event, &state),
+        HashMap::<String, Vec<PathBuf>>::new()
+    );
 
     let other_event = notify_event(EventKind::Other, vec![path]);
-    assert_eq!(classify_event(&other_event, &state), Vec::<PathBuf>::new());
+    assert_eq!(
+        classify_event(&other_event, &state),
+        HashMap::<String, Vec<PathBuf>>::new()
+    );
 }
 
 #[test]
 fn register_skills_root_dedupes_state_entries() {
     let watcher = FileWatcher::noop();
     let root = path("/tmp/skills");
-    watcher.register_skills_root(root.clone());
-    watcher.register_skills_root(root);
-    watcher.register_skills_root(path("/tmp/other-skills"));
+    let environment_id = default_environment_id();
+    watcher.register_skills_root(root.clone(), &environment_id);
+    watcher.register_skills_root(root, &environment_id);
+    watcher.register_skills_root(path("/tmp/other-skills"), &environment_id);
 
     let state = watcher.state.read().expect("state lock");
     assert_eq!(state.skills_root_ref_counts.len(), 2);
@@ -133,9 +176,10 @@ fn register_skills_root_dedupes_state_entries() {
 fn watch_registration_drop_unregisters_roots() {
     let watcher = Arc::new(FileWatcher::noop());
     let root = path("/tmp/skills");
-    watcher.register_skills_root(root.clone());
+    watcher.register_skills_root(root.clone(), &default_environment_id());
     let registration = WatchRegistration {
         file_watcher: Arc::downgrade(&watcher),
+        environment_id: default_environment_id(),
         roots: vec![root],
     };
 
@@ -152,15 +196,17 @@ fn unregister_holds_state_lock_until_unwatch_finishes() {
     std::fs::create_dir(&root).expect("create root");
 
     let watcher = Arc::new(FileWatcher::new(temp_dir.path().to_path_buf()).expect("watcher"));
-    watcher.register_skills_root(root.clone());
+    let environment_id = default_environment_id();
+    watcher.register_skills_root(root.clone(), &environment_id);
 
     let inner = watcher.inner.as_ref().expect("watcher inner");
     let inner_guard = inner.lock().expect("inner lock");
 
     let unregister_watcher = Arc::clone(&watcher);
     let unregister_root = root.clone();
+    let unregister_environment_id = environment_id.clone();
     let unregister_thread = std::thread::spawn(move || {
-        unregister_watcher.unregister_roots(&[unregister_root]);
+        unregister_watcher.unregister_roots(&unregister_environment_id, &[unregister_root]);
     });
 
     let state_lock_observed = (0..100).any(|_| {
@@ -174,8 +220,9 @@ fn unregister_holds_state_lock_until_unwatch_finishes() {
 
     let register_watcher = Arc::clone(&watcher);
     let register_root = root.clone();
+    let register_environment_id = environment_id.clone();
     let register_thread = std::thread::spawn(move || {
-        register_watcher.register_skills_root(register_root);
+        register_watcher.register_skills_root(register_root, &register_environment_id);
     });
 
     drop(inner_guard);
@@ -202,6 +249,7 @@ async fn spawn_event_loop_flushes_pending_changes_on_shutdown() {
     {
         let mut state = watcher.state.write().expect("state lock");
         state.skills_root_ref_counts.insert(root.clone(), 1);
+        state.skills_root_registrations = skills_root_registrations(&[(root.clone(), 1)]);
     }
 
     let (raw_tx, raw_rx) = mpsc::unbounded_channel();
@@ -221,6 +269,7 @@ async fn spawn_event_loop_flushes_pending_changes_on_shutdown() {
     assert_eq!(
         first,
         FileWatcherEvent::SkillsChanged {
+            environment_id: default_environment_id(),
             paths: vec![root.join("a/SKILL.md")]
         }
     );
@@ -240,6 +289,7 @@ async fn spawn_event_loop_flushes_pending_changes_on_shutdown() {
     assert_eq!(
         second,
         FileWatcherEvent::SkillsChanged {
+            environment_id: default_environment_id(),
             paths: vec![root.join("b/SKILL.md")]
         }
     );

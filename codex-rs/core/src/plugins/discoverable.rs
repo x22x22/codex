@@ -9,6 +9,7 @@ use super::PluginsManager;
 use crate::config::Config;
 use crate::config::types::ToolSuggestDiscoverableType;
 use crate::features::Feature;
+use codex_exec_server::ExecutorFileSystem;
 
 const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "github@openai-curated",
@@ -22,6 +23,7 @@ const TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST: &[&str] = &[
     "google-slides@openai-curated",
 ];
 
+#[cfg(test)]
 pub(crate) fn list_tool_suggest_discoverable_plugins(
     config: &Config,
 ) -> anyhow::Result<Vec<PluginCapabilitySummary>> {
@@ -66,6 +68,71 @@ pub(crate) fn list_tool_suggest_discoverable_plugins(
                 marketplace_path: curated_marketplace.path.clone(),
             },
         ) {
+            Ok(plugin) => discoverable_plugins.push(plugin.plugin.into()),
+            Err(err) => warn!("failed to load discoverable plugin suggestion {plugin_id}: {err:#}"),
+        }
+    }
+    discoverable_plugins.sort_by(|left, right| {
+        left.display_name
+            .cmp(&right.display_name)
+            .then_with(|| left.config_name.cmp(&right.config_name))
+    });
+    Ok(discoverable_plugins)
+}
+
+pub(crate) async fn list_tool_suggest_discoverable_plugins_with_filesystem<F>(
+    config: &Config,
+    filesystem: &F,
+) -> anyhow::Result<Vec<PluginCapabilitySummary>>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    if !config.features.enabled(Feature::Plugins) {
+        return Ok(Vec::new());
+    }
+
+    let plugins_manager = PluginsManager::new(config.codex_home.clone());
+    let configured_plugin_ids = config
+        .tool_suggest
+        .discoverables
+        .iter()
+        .filter(|discoverable| discoverable.kind == ToolSuggestDiscoverableType::Plugin)
+        .map(|discoverable| discoverable.id.as_str())
+        .collect::<HashSet<_>>();
+    let marketplaces = plugins_manager
+        .list_marketplaces_for_config_with_filesystem(config, &[], filesystem)
+        .await
+        .context("failed to list plugin marketplaces for tool suggestions")?;
+    let Some(curated_marketplace) = marketplaces
+        .into_iter()
+        .find(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
+    else {
+        return Ok(Vec::new());
+    };
+
+    let mut discoverable_plugins = Vec::<PluginCapabilitySummary>::new();
+    for plugin in curated_marketplace.plugins {
+        if plugin.installed
+            || (!TOOL_SUGGEST_DISCOVERABLE_PLUGIN_ALLOWLIST.contains(&plugin.id.as_str())
+                && !configured_plugin_ids.contains(plugin.id.as_str()))
+        {
+            continue;
+        }
+
+        let plugin_id = plugin.id.clone();
+        let plugin_name = plugin.name.clone();
+
+        match plugins_manager
+            .read_plugin_for_config_with_filesystem(
+                config,
+                &PluginReadRequest {
+                    plugin_name,
+                    marketplace_path: curated_marketplace.path.clone(),
+                },
+                filesystem,
+            )
+            .await
+        {
             Ok(plugin) => discoverable_plugins.push(plugin.plugin.into()),
             Err(err) => warn!("failed to load discoverable plugin suggestion {plugin_id}: {err:#}"),
         }

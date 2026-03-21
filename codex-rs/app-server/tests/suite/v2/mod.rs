@@ -22,6 +22,7 @@ mod plugin_install;
 mod plugin_list;
 mod plugin_read;
 mod plugin_uninstall;
+mod prompt_list;
 mod rate_limits;
 mod realtime_conversation;
 mod request_permissions;

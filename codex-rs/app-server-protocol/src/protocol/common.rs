@@ -292,6 +292,10 @@ client_request_definitions! {
         params: v2::ThreadReadParams,
         response: v2::ThreadReadResponse,
     },
+    PromptList => "prompt/list" {
+        params: v2::PromptListParams,
+        response: v2::PromptListResponse,
+    },
     SkillsList => "skills/list" {
         params: v2::SkillsListParams,
         response: v2::SkillsListResponse,
@@ -793,6 +797,7 @@ server_request_definitions! {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchParams {
+    pub environment_id: Option<String>,
     pub query: String,
     pub roots: Vec<String>,
     // if provided, will cancel any previous request that used the same value
@@ -827,6 +832,7 @@ pub struct FuzzyFileSearchResponse {
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchSessionStartParams {
+    pub environment_id: Option<String>,
     pub session_id: String,
     pub roots: Vec<String>,
 }
@@ -838,6 +844,7 @@ pub struct FuzzyFileSearchSessionStartResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchSessionUpdateParams {
+    pub environment_id: Option<String>,
     pub session_id: String,
     pub query: String,
 }
@@ -849,6 +856,7 @@ pub struct FuzzyFileSearchSessionUpdateResponse {}
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct FuzzyFileSearchSessionStopParams {
+    pub environment_id: Option<String>,
     pub session_id: String,
 }
 
@@ -1469,6 +1477,7 @@ mod tests {
         let request = ClientRequest::FsGetMetadata {
             request_id: RequestId::Integer(9),
             params: v2::FsGetMetadataParams {
+                environment_id: None,
                 path: absolute_path("tmp/example"),
             },
         };
@@ -1477,6 +1486,7 @@ mod tests {
                 "method": "fs/getMetadata",
                 "id": 9,
                 "params": {
+                    "environmentId": null,
                     "path": absolute_path_string("tmp/example")
                 }
             }),

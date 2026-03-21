@@ -2331,25 +2331,15 @@ impl ChatComposer {
                     })
                     .unwrap_or(false);
                 if !is_builtin && !is_known_prompt {
-                    let message = if is_custom_prompt_command && self.custom_prompts.is_empty() {
-                        tracing::warn!(
-                            "custom prompt listing/picker is not available in app-server TUI yet"
-                        );
-                        "Not available in app-server TUI yet.".to_string()
-                    } else {
-                        format!(
-                            r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
-                        )
-                    };
                     if is_custom_prompt_command && self.custom_prompts.is_empty() {
-                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            history_cell::new_error_event(message),
-                        )));
-                    } else {
-                        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
-                            history_cell::new_info_event(message, /*hint*/ None),
-                        )));
+                        tracing::warn!("custom prompt `{name}` not found in app-server TUI");
                     }
+                    let message = format!(
+                        r#"Unrecognized command '/{name}'. Type "/" for a list of supported commands."#
+                    );
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_info_event(message, /*hint*/ None),
+                    )));
                     self.set_text_content_with_mention_bindings(
                         original_input.clone(),
                         original_text_elements,
@@ -3513,7 +3503,6 @@ impl ChatComposer {
             }
         }
     }
-    #[cfg(test)]
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.custom_prompts = prompts.clone();
         if let ActivePopup::Command(popup) = &mut self.active_popup {

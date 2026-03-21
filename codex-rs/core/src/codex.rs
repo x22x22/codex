@@ -25,6 +25,7 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::config::ManagedFeatures;
+use crate::config_loader::ConfigLayerStackOrdering;
 use crate::connectors;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
@@ -440,9 +441,42 @@ impl Codex {
         let environment =
             Arc::new(Environment::create(config.experimental_exec_server_url.clone()).await?);
         let environment_filesystem = environment.get_filesystem();
+        let config_layer_stack = config.config_layer_stack.clone();
+        if !config_layer_stack
+            .get_layers(
+                ConfigLayerStackOrdering::LowestPrecedenceFirst,
+                /*include_disabled*/ false,
+            )
+            .is_empty()
+        {
+            match crate::config::agent_roles::load_agent_roles_with_filesystem(
+                &config_layer_stack,
+                &mut config.startup_warnings,
+                &environment_filesystem,
+            )
+            .await
+            {
+                Ok(agent_roles) => {
+                    config.agent_roles = crate::config::agent_roles::merge_loaded_agent_roles(
+                        &config.agent_roles,
+                        agent_roles,
+                    );
+                }
+                Err(err) => {
+                    let message =
+                        format!("Ignoring environment-backed agent role definitions: {err}");
+                    warn!("{message}");
+                    config.startup_warnings.push(message);
+                }
+            }
+        }
 
         let loaded_skills = skills_manager
-            .skills_for_config_with_filesystem(&config, &environment_filesystem)
+            .skills_for_config_with_filesystem(
+                &config,
+                environment.environment_id(),
+                &environment_filesystem,
+            )
             .await;
 
         for err in &loaded_skills.errors {
@@ -460,7 +494,8 @@ impl Codex {
             let _ = config.features.disable(Feature::Collab);
         }
 
-        if config.features.enabled(Feature::JsRepl)
+        if environment.experimental_exec_server_url().is_none()
+            && config.features.enabled(Feature::JsRepl)
             && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
         {
             let _ = config.features.disable(Feature::JsRepl);
@@ -477,7 +512,8 @@ impl Codex {
             warn!("{message}");
             config.startup_warnings.push(message);
         }
-        if config.features.enabled(Feature::CodeMode)
+        if environment.experimental_exec_server_url().is_none()
+            && config.features.enabled(Feature::CodeMode)
             && let Err(err) = resolve_compatible_node(config.js_repl_node_path.as_deref()).await
         {
             let message = format!(
@@ -500,9 +536,12 @@ impl Codex {
             Arc::clone(exec_policy)
         } else {
             Arc::new(
-                ExecPolicyManager::load(&config.config_layer_stack)
-                    .await
-                    .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
+                ExecPolicyManager::load_with_filesystem(
+                    &config.config_layer_stack,
+                    &environment_filesystem,
+                )
+                .await
+                .map_err(|err| CodexErr::Fatal(format!("failed to load rules: {err}")))?,
             )
         };
 
@@ -607,6 +646,7 @@ impl Codex {
         let session = Session::new(
             session_configuration,
             config.clone(),
+            environment,
             auth_manager.clone(),
             models_manager.clone(),
             exec_policy,
@@ -1405,6 +1445,7 @@ impl Session {
     async fn new(
         mut session_configuration: SessionConfiguration,
         config: Arc<Config>,
+        environment: Arc<Environment>,
         auth_manager: Arc<AuthManager>,
         models_manager: Arc<ModelsManager>,
         exec_policy: Arc<ExecPolicyManager>,
@@ -1520,13 +1561,21 @@ impl Session {
         let mcp_manager_for_mcp = Arc::clone(&mcp_manager);
         let auth_and_mcp_fut = async move {
             let auth = auth_manager_clone.auth().await;
-            let mcp_servers = mcp_manager_for_mcp.effective_servers(&config_for_mcp, auth.as_ref());
+            let environment =
+                Environment::create(config_for_mcp.experimental_exec_server_url.clone()).await?;
+            let mcp_servers = mcp_manager_for_mcp
+                .effective_servers_with_filesystem(
+                    &config_for_mcp,
+                    auth.as_ref(),
+                    &environment.get_filesystem(),
+                )
+                .await;
             let auth_statuses = compute_auth_statuses(
                 mcp_servers.iter(),
                 config_for_mcp.mcp_oauth_credentials_store_mode,
             )
             .await;
-            (auth, mcp_servers, auth_statuses)
+            Ok::<_, anyhow::Error>((auth, mcp_servers, auth_statuses))
         }
         .instrument(info_span!(
             "session_init.auth_mcp",
@@ -1534,14 +1583,15 @@ impl Session {
         ));
 
         // Join all independent futures.
-        let (
-            rollout_recorder_and_state_db,
-            (history_log_id, history_entry_count),
-            (auth, mcp_servers, auth_statuses),
-        ) = tokio::join!(rollout_fut, history_meta_fut, auth_and_mcp_fut);
+        let (rollout_recorder_and_state_db, (history_log_id, history_entry_count), auth_and_mcp) =
+            tokio::join!(rollout_fut, history_meta_fut, auth_and_mcp_fut);
 
         let (rollout_recorder, state_db_ctx) = rollout_recorder_and_state_db.map_err(|e| {
             error!("failed to initialize rollout recorder: {e:#}");
+            e
+        })?;
+        let (auth, mcp_servers, auth_statuses) = auth_and_mcp.map_err(|e| {
+            error!("failed to initialize MCP environment: {e:#}");
             e
         })?;
         let rollout_path = rollout_recorder
@@ -1592,6 +1642,7 @@ impl Session {
 
         let auth = auth.as_ref();
         let auth_mode = auth.map(CodexAuth::auth_mode).map(TelemetryAuthMode::from);
+        let auth_mode_label = auth_mode.clone().map(|mode| mode.to_string());
         let account_id = auth.and_then(CodexAuth::get_account_id);
         let account_email = auth.and_then(CodexAuth::get_account_email);
         let originator = crate::default_client::originator().value;
@@ -1621,7 +1672,7 @@ impl Session {
             conversation_id: Some(conversation_id.to_string()),
             app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             user_account_id: account_id,
-            auth_mode: auth_mode.map(|mode| mode.to_string()),
+            auth_mode: auth_mode_label,
             originator: Some(originator),
             user_email: account_email,
             terminal_type: Some(terminal_type),
@@ -1915,7 +1966,12 @@ impl Session {
         required_mcp_servers.sort();
         let enabled_mcp_server_count = mcp_servers.values().filter(|server| server.enabled).count();
         let required_mcp_server_count = required_mcp_servers.len();
-        let tool_plugin_provenance = mcp_manager.tool_plugin_provenance(config.as_ref());
+        let tool_plugin_provenance = mcp_manager
+            .tool_plugin_provenance_with_filesystem(
+                config.as_ref(),
+                &sess.services.environment.get_filesystem(),
+            )
+            .await;
         {
             let mut cancel_guard = sess.services.mcp_startup_cancellation_token.lock().await;
             cancel_guard.cancel();
@@ -2404,7 +2460,11 @@ impl Session {
         let skills_outcome = Arc::new(
             self.services
                 .skills_manager
-                .skills_for_config_with_filesystem(&per_turn_config, &environment_filesystem)
+                .skills_for_config_with_filesystem(
+                    &per_turn_config,
+                    self.services.environment.environment_id(),
+                    &environment_filesystem,
+                )
                 .await,
         );
         let mut turn_context: TurnContext = Self::make_turn_context(
@@ -2491,28 +2551,34 @@ impl Session {
                 .codex_home
                 .join(CONFIG_TOML_FILE)
         };
-
-        let user_config = match std::fs::read_to_string(&config_toml_path) {
-            Ok(contents) => match toml::from_str::<toml::Value>(&contents) {
-                Ok(config) => config,
-                Err(err) => {
-                    warn!("failed to parse user config while reloading layer: {err}");
-                    return;
-                }
-            },
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                toml::Value::Table(Default::default())
-            }
-            Err(err) => {
-                warn!("failed to read user config while reloading layer: {err}");
-                return;
-            }
-        };
-
+        let filesystem = self.services.environment.filesystem();
         let config_toml_path = match AbsolutePathBuf::try_from(config_toml_path) {
             Ok(path) => path,
             Err(err) => {
                 warn!("failed to resolve user config path while reloading layer: {err}");
+                return;
+            }
+        };
+
+        let user_config = match filesystem.read_file(&config_toml_path).await {
+            Ok(contents) => match String::from_utf8(contents) {
+                Ok(contents) => match toml::from_str::<toml::Value>(&contents) {
+                    Ok(config) => config,
+                    Err(err) => {
+                        warn!("failed to parse user config while reloading layer: {err}");
+                        return;
+                    }
+                },
+                Err(err) => {
+                    warn!("failed to decode user config while reloading layer: {err}");
+                    return;
+                }
+            },
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                toml::Value::Table(toml::map::Map::new())
+            }
+            Err(err) => {
+                warn!("failed to read user config while reloading layer: {err}");
                 return;
             }
         };
@@ -3510,7 +3576,12 @@ impl Session {
         let loaded_plugins = self
             .services
             .plugins_manager
-            .plugins_for_config(&turn_context.config);
+            .plugins_for_config_with_filesystem(
+                &turn_context.config,
+                /*force_reload*/ false,
+                &self.services.environment.get_filesystem(),
+            )
+            .await;
         if let Some(plugin_section) = render_plugins_section(loaded_plugins.capability_summaries())
         {
             developer_sections.push(plugin_section);
@@ -4038,7 +4109,11 @@ impl Session {
         let tool_plugin_provenance = self
             .services
             .mcp_manager
-            .tool_plugin_provenance(config.as_ref());
+            .tool_plugin_provenance_with_filesystem(
+                config.as_ref(),
+                &self.services.environment.get_filesystem(),
+            )
+            .await;
         let mcp_servers = with_codex_apps_mcp(
             mcp_servers,
             self.features.apps_enabled_for_auth(auth.as_ref()),
@@ -4408,7 +4483,6 @@ mod handlers {
     use crate::tasks::UserShellCommandMode;
     use crate::tasks::UserShellCommandTask;
     use crate::tasks::execute_user_shell_command;
-    use codex_protocol::custom_prompts::CustomPrompt;
     use codex_protocol::protocol::CodexErrorInfo;
     use codex_protocol::protocol::ErrorEvent;
     use codex_protocol::protocol::Event;
@@ -4427,6 +4501,7 @@ mod handlers {
     use codex_protocol::protocol::WarningEvent;
     use codex_protocol::request_permissions::RequestPermissionsResponse;
     use codex_protocol::request_user_input::RequestUserInputResponse;
+    use codex_utils_absolute_path::AbsolutePathBuf;
 
     use crate::context_manager::is_user_turn_boundary;
     use codex_protocol::config_types::CollaborationMode;
@@ -4753,7 +4828,12 @@ mod handlers {
         let mcp_servers = sess
             .services
             .mcp_manager
-            .effective_servers(config, auth.as_ref());
+            .effective_servers_with_filesystem(
+                config,
+                auth.as_ref(),
+                &sess.services.environment.get_filesystem(),
+            )
+            .await;
         let snapshot = collect_mcp_snapshot_from_manager(
             &mcp_connection_manager,
             compute_auth_statuses(mcp_servers.iter(), config.mcp_oauth_credentials_store_mode)
@@ -4768,12 +4848,19 @@ mod handlers {
     }
 
     pub async fn list_custom_prompts(sess: &Session, sub_id: String) {
-        let custom_prompts: Vec<CustomPrompt> =
-            if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
-                crate::custom_prompts::discover_prompts_in(&dir).await
-            } else {
-                Vec::new()
-            };
+        let codex_home = sess.codex_home().await;
+        let prompts_dir = crate::custom_prompts::prompts_dir(&codex_home);
+        let custom_prompts = match AbsolutePathBuf::try_from(prompts_dir) {
+            Ok(prompts_dir) => {
+                let filesystem = sess.services.environment.get_filesystem();
+                crate::custom_prompts::discover_prompts_in_with_filesystem(
+                    &prompts_dir,
+                    &filesystem,
+                )
+                .await
+            }
+            Err(_) => Vec::new(),
+        };
 
         let event = Event {
             id: sub_id,
@@ -4807,6 +4894,7 @@ mod handlers {
                     &cwd,
                     config.as_ref(),
                     force_reload,
+                    sess.services.environment.environment_id(),
                     &environment_filesystem,
                 )
                 .await;
@@ -4821,7 +4909,10 @@ mod handlers {
 
         let event = Event {
             id: sub_id,
-            msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent { skills }),
+            msg: EventMsg::ListSkillsResponse(ListSkillsResponseEvent {
+                environment_id: sess.services.environment.environment_id().to_string(),
+                skills,
+            }),
         };
         sess.send_event_raw(event).await;
     }
@@ -5412,7 +5503,12 @@ pub(crate) async fn run_turn(
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config);
+        .plugins_for_config_with_filesystem(
+            &turn_context.config,
+            /*force_reload*/ false,
+            &sess.services.environment.get_filesystem(),
+        )
+        .await;
     // Structured plugin:// mentions are resolved from the current session's
     // enabled plugins, then converted into turn-scoped guidance below.
     let mentioned_plugins =
@@ -6317,7 +6413,12 @@ pub(crate) async fn built_tools(
     let loaded_plugins = sess
         .services
         .plugins_manager
-        .plugins_for_config(&turn_context.config);
+        .plugins_for_config_with_filesystem(
+            &turn_context.config,
+            /*force_reload*/ false,
+            &sess.services.environment.get_filesystem(),
+        )
+        .await;
 
     let mut effective_explicitly_enabled_connectors = explicitly_enabled_connectors.clone();
     effective_explicitly_enabled_connectors.extend(sess.get_connector_selection().await);
@@ -6347,10 +6448,12 @@ pub(crate) async fn built_tools(
         && turn_context.tools_config.tool_suggest
     {
         if let Some(accessible_connectors) = accessible_connectors_with_enabled_state.as_ref() {
-            match connectors::list_tool_suggest_discoverable_tools_with_auth(
+            let environment_filesystem = sess.services.environment.get_filesystem();
+            match connectors::list_tool_suggest_discoverable_tools_with_auth_with_filesystem(
                 &turn_context.config,
                 auth.as_ref(),
                 accessible_connectors.as_slice(),
+                &environment_filesystem,
             )
             .await
             .map(|discoverable_tools| {

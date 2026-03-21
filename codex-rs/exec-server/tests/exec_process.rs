@@ -47,6 +47,7 @@ async fn assert_exec_process_starts_and_exits(use_remote: bool) -> Result<()> {
             cwd: std::env::current_dir()?,
             env: Default::default(),
             tty: false,
+            stdin: false,
             arg0: None,
         })
         .await?;

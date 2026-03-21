@@ -39,10 +39,9 @@ impl ExecProcess for RemoteProcess {
 
     async fn write(
         &self,
-        process_id: &str,
-        chunk: Vec<u8>,
+        params: crate::protocol::WriteParams,
     ) -> Result<WriteResponse, ExecServerError> {
-        self.client.write(process_id, chunk).await
+        self.client.write(params).await
     }
 
     async fn resize(

@@ -3,6 +3,7 @@ use crate::config_loader::ConfigLayerStackOrdering;
 use crate::config_loader::default_project_root_markers;
 use crate::config_loader::merge_toml_values;
 use crate::config_loader::project_root_markers_from_config;
+use crate::plugins::load_plugin_manifest_with_filesystem;
 use crate::plugins::plugin_namespace_for_skill_path;
 use crate::skills::model::SkillDependencies;
 use crate::skills::model::SkillError;
@@ -788,7 +789,14 @@ where
         .map_err(SkillParseError::Read)?;
     let contents = String::from_utf8_lossy(&contents).to_string();
     let loaded_metadata = load_skill_metadata_with_filesystem(path, filesystem).await;
-    parse_skill_file_from_contents(path, scope, &contents, loaded_metadata)
+    parse_skill_file_from_contents_with_filesystem(
+        path,
+        scope,
+        &contents,
+        loaded_metadata,
+        filesystem,
+    )
+    .await
 }
 
 fn parse_skill_file_from_contents(
@@ -854,6 +862,71 @@ fn parse_skill_file_from_contents(
     })
 }
 
+async fn parse_skill_file_from_contents_with_filesystem<F>(
+    path: &Path,
+    scope: SkillScope,
+    contents: &str,
+    loaded_metadata: LoadedSkillMetadata,
+    filesystem: &F,
+) -> Result<SkillMetadata, SkillParseError>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    let frontmatter = extract_frontmatter(contents).ok_or(SkillParseError::MissingFrontmatter)?;
+
+    let parsed: SkillFrontmatter =
+        serde_yaml::from_str(&frontmatter).map_err(SkillParseError::InvalidYaml)?;
+
+    let base_name = parsed
+        .name
+        .as_deref()
+        .map(sanitize_single_line)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| default_skill_name(path));
+    let name = namespaced_skill_name_with_filesystem(path, &base_name, filesystem).await;
+    let description = parsed
+        .description
+        .as_deref()
+        .map(sanitize_single_line)
+        .unwrap_or_default();
+    let short_description = parsed
+        .metadata
+        .short_description
+        .as_deref()
+        .map(sanitize_single_line)
+        .filter(|value| !value.is_empty());
+    let LoadedSkillMetadata {
+        interface,
+        dependencies,
+        policy,
+        permission_profile,
+        managed_network_override,
+    } = loaded_metadata;
+
+    validate_len(&name, MAX_NAME_LEN, "name")?;
+    validate_len(&description, MAX_DESCRIPTION_LEN, "description")?;
+    if let Some(short_description) = short_description.as_deref() {
+        validate_len(
+            short_description,
+            MAX_SHORT_DESCRIPTION_LEN,
+            "metadata.short-description",
+        )?;
+    }
+
+    Ok(SkillMetadata {
+        name,
+        description,
+        short_description,
+        interface,
+        dependencies,
+        policy,
+        permission_profile,
+        managed_network_override,
+        path_to_skills_md: path.to_path_buf(),
+        scope,
+    })
+}
+
 fn default_skill_name(path: &Path) -> String {
     path.parent()
         .and_then(Path::file_name)
@@ -867,6 +940,36 @@ fn namespaced_skill_name(path: &Path, base_name: &str) -> String {
     plugin_namespace_for_skill_path(path)
         .map(|namespace| format!("{namespace}:{base_name}"))
         .unwrap_or_else(|| base_name.to_string())
+}
+
+async fn namespaced_skill_name_with_filesystem<F>(
+    path: &Path,
+    base_name: &str,
+    filesystem: &F,
+) -> String
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    plugin_namespace_for_skill_path_with_filesystem(path, filesystem)
+        .await
+        .map(|namespace| format!("{namespace}:{base_name}"))
+        .unwrap_or_else(|| base_name.to_string())
+}
+
+async fn plugin_namespace_for_skill_path_with_filesystem<F>(
+    path: &Path,
+    filesystem: &F,
+) -> Option<String>
+where
+    F: ExecutorFileSystem + ?Sized,
+{
+    for ancestor in path.ancestors() {
+        if let Some(manifest) = load_plugin_manifest_with_filesystem(ancestor, filesystem).await {
+            return Some(manifest.name);
+        }
+    }
+
+    None
 }
 
 fn load_skill_metadata(skill_path: &Path) -> LoadedSkillMetadata {

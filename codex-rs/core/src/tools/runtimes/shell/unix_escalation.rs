@@ -494,6 +494,7 @@ impl CoreShellActionProvider {
                 &self.turn.cwd,
                 self.turn.config.as_ref(),
                 force_reload,
+                self.turn.environment.environment_id(),
                 &environment_filesystem,
             )
             .await;

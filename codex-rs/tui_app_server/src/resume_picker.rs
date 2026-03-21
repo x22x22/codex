@@ -50,6 +50,7 @@ const LOAD_NEAR_THRESHOLD: usize = 5;
 pub struct SessionTarget {
     pub path: Option<PathBuf>,
     pub thread_id: ThreadId,
+    pub environment_id: Option<String>,
 }
 
 impl SessionTarget {
@@ -90,8 +91,17 @@ impl SessionPickerAction {
         }
     }
 
-    fn selection(self, path: Option<PathBuf>, thread_id: ThreadId) -> SessionSelection {
-        let target_session = SessionTarget { path, thread_id };
+    fn selection(
+        self,
+        path: Option<PathBuf>,
+        thread_id: ThreadId,
+        environment_id: Option<String>,
+    ) -> SessionSelection {
+        let target_session = SessionTarget {
+            path,
+            thread_id,
+            environment_id,
+        };
         match self {
             SessionPickerAction::Resume => SessionSelection::Resume(target_session),
             SessionPickerAction::Fork => SessionSelection::Fork(target_session),
@@ -503,6 +513,7 @@ struct Row {
     path: Option<PathBuf>,
     preview: String,
     thread_id: Option<ThreadId>,
+    environment_id: Option<String>,
     thread_name: Option<String>,
     created_at: Option<DateTime<Utc>>,
     updated_at: Option<DateTime<Utc>>,
@@ -613,7 +624,11 @@ impl PickerState {
                         },
                     };
                     if let Some(thread_id) = thread_id {
-                        return Ok(Some(self.action.selection(path, thread_id)));
+                        return Ok(Some(self.action.selection(
+                            path,
+                            thread_id,
+                            row.environment_id.clone(),
+                        )));
                     }
                     self.inline_error = Some(match path {
                         Some(path) => {
@@ -1055,6 +1070,7 @@ fn head_to_row(item: &ThreadItem) -> Row {
         path: Some(item.path.clone()),
         preview,
         thread_id: item.thread_id,
+        environment_id: None,
         thread_name: None,
         created_at,
         updated_at,
@@ -1080,6 +1096,7 @@ fn row_from_app_server_thread(thread: Thread) -> Option<Row> {
             preview.to_string()
         },
         thread_id: Some(thread_id),
+        environment_id: Some(thread.environment_id),
         thread_name: thread.name,
         created_at: chrono::DateTime::from_timestamp(thread.created_at, 0)
             .map(|dt| dt.with_timezone(&Utc)),
@@ -1096,6 +1113,7 @@ fn thread_list_params(
     sort_key: ThreadSortKey,
 ) -> ThreadListParams {
     ThreadListParams {
+        environment_id: None,
         cursor,
         limit: Some(PAGE_SIZE as u32),
         sort_key: Some(match sort_key {
@@ -1812,6 +1830,7 @@ mod tests {
             path: Some(PathBuf::from("/tmp/a.jsonl")),
             preview: String::from("first message"),
             thread_id: None,
+            environment_id: None,
             thread_name: Some(String::from("My session")),
             created_at: None,
             updated_at: None,
@@ -1854,6 +1873,7 @@ mod tests {
             path: None,
             preview: String::from("remote session"),
             thread_id: Some(ThreadId::new()),
+            environment_id: None,
             thread_name: None,
             created_at: None,
             updated_at: None,
@@ -1888,6 +1908,7 @@ mod tests {
                 path: Some(PathBuf::from("/tmp/a.jsonl")),
                 preview: String::from("Fix resume picker timestamps"),
                 thread_id: None,
+                environment_id: None,
                 thread_name: None,
                 created_at: Some(now - Duration::minutes(16)),
                 updated_at: Some(now - Duration::seconds(42)),
@@ -1898,6 +1919,7 @@ mod tests {
                 path: Some(PathBuf::from("/tmp/b.jsonl")),
                 preview: String::from("Investigate lazy pagination cap"),
                 thread_id: None,
+                environment_id: None,
                 thread_name: None,
                 created_at: Some(now - Duration::hours(1)),
                 updated_at: Some(now - Duration::minutes(35)),
@@ -1908,6 +1930,7 @@ mod tests {
                 path: Some(PathBuf::from("/tmp/c.jsonl")),
                 preview: String::from("Explain the codebase"),
                 thread_id: None,
+                environment_id: None,
                 thread_name: None,
                 created_at: Some(now - Duration::hours(2)),
                 updated_at: Some(now - Duration::hours(2)),
@@ -2202,6 +2225,7 @@ mod tests {
                 path: Some(PathBuf::from("/tmp/a.jsonl")),
                 preview: String::from("First message preview"),
                 thread_id: Some(id1),
+                environment_id: None,
                 thread_name: None,
                 created_at: None,
                 updated_at: Some(now - Duration::days(2)),
@@ -2212,6 +2236,7 @@ mod tests {
                 path: Some(PathBuf::from("/tmp/b.jsonl")),
                 preview: String::from("Second message preview"),
                 thread_id: Some(id2),
+                environment_id: None,
                 thread_name: None,
                 created_at: None,
                 updated_at: Some(now - Duration::days(3)),
@@ -2492,6 +2517,7 @@ mod tests {
             path: Some(PathBuf::from("/tmp/missing.jsonl")),
             preview: String::from("missing metadata"),
             thread_id: None,
+            environment_id: None,
             thread_name: None,
             created_at: None,
             updated_at: None,
@@ -2532,6 +2558,7 @@ mod tests {
             path: None,
             preview: String::from("pathless thread"),
             thread_id: Some(thread_id),
+            environment_id: None,
             thread_name: None,
             created_at: None,
             updated_at: None,
@@ -2550,6 +2577,7 @@ mod tests {
             Some(SessionSelection::Resume(SessionTarget {
                 path: None,
                 thread_id: selected_thread_id,
+                environment_id: None,
             })) => assert_eq!(selected_thread_id, thread_id),
             other => panic!("unexpected selection: {other:?}"),
         }
@@ -2560,6 +2588,7 @@ mod tests {
         let thread_id = ThreadId::new();
         let thread = Thread {
             id: thread_id.to_string(),
+            environment_id: "local".to_string(),
             preview: String::from("remote thread"),
             ephemeral: false,
             model_provider: String::from("openai"),
@@ -2581,6 +2610,7 @@ mod tests {
 
         assert_eq!(row.path, None);
         assert_eq!(row.thread_id, Some(thread_id));
+        assert_eq!(row.environment_id.as_deref(), Some("local"));
         assert_eq!(row.thread_name, Some(String::from("Named thread")));
     }
 

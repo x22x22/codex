@@ -78,6 +78,7 @@ fn render_js_repl_instructions(config: &Config) -> Option<String> {
 
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
+#[cfg(test)]
 pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
     let project_docs = read_project_docs(config).await;
 

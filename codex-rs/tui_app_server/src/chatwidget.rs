@@ -111,6 +111,7 @@ use codex_protocol::config_types::ServiceTier;
 use codex_protocol::config_types::Settings;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
+use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::models::MessagePhase;
@@ -1799,6 +1800,7 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
+        self.submit_op(AppCommand::list_custom_prompts());
         self.submit_op(AppCommand::list_skills(
             Vec::new(),
             /*force_reload*/ true,
@@ -6060,6 +6062,10 @@ impl ChatWidget {
         self.on_list_skills(response);
     }
 
+    pub(crate) fn handle_custom_prompts_list_response(&mut self, prompts: Vec<CustomPrompt>) {
+        self.bottom_pane.set_custom_prompts(prompts);
+    }
+
     pub(crate) fn handle_thread_rolled_back(&mut self) {
         self.last_copyable_output = None;
     }
@@ -6451,11 +6457,7 @@ impl ChatWidget {
             EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.handle_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
-            EventMsg::ListCustomPromptsResponse(_) => {
-                tracing::warn!(
-                    "ignoring unsupported custom prompt list response in app-server TUI"
-                );
-            }
+            EventMsg::ListCustomPromptsResponse(_) => {}
             EventMsg::ListSkillsResponse(ev) => self.on_list_skills(ev),
             EventMsg::SkillsUpdateAvailable => {
                 self.submit_op(AppCommand::list_skills(
