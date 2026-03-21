@@ -9,10 +9,6 @@ use tokio::select;
 use tokio::time::sleep;
 use tokio::time::timeout;
 
-fn is_bare_ctrl_c_exit(exit_code: i32, output: &[u8]) -> bool {
-    exit_code == 1 && String::from_utf8_lossy(output).trim() == "^C"
-}
-
 #[tokio::test]
 async fn resume_startup_does_not_consume_model_availability_nux_count() -> Result<()> {
     // run_codex_cli() does not work on Windows due to PTY limitations.
@@ -181,7 +177,7 @@ trust_level = "trusted"
         }
     };
     anyhow::ensure!(
-        exit_code == 0 || exit_code == 130 || is_bare_ctrl_c_exit(exit_code, &output),
+        exit_code == 0 || exit_code == 130,
         "unexpected exit code from codex resume: {exit_code}; output: {}",
         String::from_utf8_lossy(&output)
     );
