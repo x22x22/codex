@@ -278,6 +278,7 @@ async fn approved_folder_write_request_permissions_unblocks_later_exec_without_s
                 id: approval.effective_approval_id(),
                 turn_id: None,
                 decision: ReviewDecision::Approved,
+                persist_permissions: None,
             })
             .await?;
         wait_for_event(&test.codex, |event| {

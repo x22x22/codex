@@ -378,6 +378,7 @@ async fn with_additional_permissions_requires_approval_under_on_request() -> Res
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Approved,
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -566,6 +567,7 @@ async fn relative_additional_permissions_resolve_against_tool_workdir() -> Resul
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Approved,
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -660,6 +662,7 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_cwd
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Approved,
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -761,6 +764,7 @@ async fn read_only_with_additional_permissions_does_not_widen_to_unrequested_tmp
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Approved,
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -869,6 +873,7 @@ async fn workspace_write_with_additional_permissions_can_write_outside_cwd() -> 
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Approved,
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -971,6 +976,7 @@ async fn with_additional_permissions_denied_approval_blocks_execution() -> Resul
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Denied,
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -1101,6 +1107,7 @@ async fn request_permissions_grants_apply_to_later_exec_command_calls() -> Resul
                 id: approval.effective_approval_id(),
                 turn_id: None,
                 decision: ReviewDecision::Approved,
+                persist_permissions: None,
             })
             .await?;
         wait_for_completion(&test).await;
@@ -1212,6 +1219,7 @@ async fn request_permissions_preapprove_explicit_exec_permissions_outside_on_req
                 id: approval.effective_approval_id(),
                 turn_id: None,
                 decision: ReviewDecision::Approved,
+                persist_permissions: None,
             })
             .await?;
         wait_for_completion(&test).await;
@@ -1326,6 +1334,7 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls() -> Resu
                 id: approval.effective_approval_id(),
                 turn_id: None,
                 decision: ReviewDecision::Approved,
+                persist_permissions: None,
             })
             .await?;
         wait_for_completion(&test).await;
@@ -1436,6 +1445,7 @@ async fn request_permissions_grants_apply_to_later_shell_command_calls_without_i
                 id: approval.effective_approval_id(),
                 turn_id: None,
                 decision: ReviewDecision::Approved,
+                persist_permissions: None,
             })
             .await?;
         wait_for_completion(&test).await;
@@ -1606,6 +1616,7 @@ async fn partial_request_permissions_grants_do_not_preapprove_new_permissions() 
             id: approval.effective_approval_id(),
             turn_id: None,
             decision: ReviewDecision::Approved,
+            persist_permissions: None,
         })
         .await?;
     wait_for_completion(&test).await;
@@ -1853,6 +1864,7 @@ async fn request_permissions_session_grants_carry_across_turns() -> Result<()> {
                 id: approval.effective_approval_id(),
                 turn_id: None,
                 decision: ReviewDecision::Approved,
+                persist_permissions: None,
             })
             .await?;
         wait_for_completion(&test).await;

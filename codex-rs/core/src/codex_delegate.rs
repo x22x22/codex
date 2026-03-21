@@ -493,6 +493,7 @@ async fn handle_exec_approval(
             id: approval_id_for_op,
             turn_id: Some(turn_id),
             decision,
+            persist_permissions: None,
         })
         .await;
 }
@@ -700,6 +701,7 @@ async fn maybe_auto_review_mcp_request_user_input(
             .map(|option| option.label.clone())
             .unwrap_or_else(|| MCP_TOOL_APPROVAL_ACCEPT.to_string()),
         ReviewDecision::Approved
+        | ReviewDecision::ApprovedPersistToProfile
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => MCP_TOOL_APPROVAL_ACCEPT.to_string(),
         ReviewDecision::Denied | ReviewDecision::Abort => {

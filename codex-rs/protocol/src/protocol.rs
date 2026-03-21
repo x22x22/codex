@@ -362,6 +362,9 @@ pub enum Op {
         turn_id: Option<String>,
         /// The user's decision in response to the request.
         decision: ReviewDecision,
+        /// Optional permission-profile mutation to persist alongside approval.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        persist_permissions: Option<PersistPermissionProfileAction>,
     },
 
     /// Approve a code patch
@@ -3178,6 +3181,10 @@ pub enum ReviewDecision {
     /// remainder of the session.
     ApprovedForSession,
 
+    /// User has approved this request and wants the filesystem permissions to
+    /// be persisted into the active named permissions profile.
+    ApprovedPersistToProfile,
+
     /// User chose to persist a network policy rule (allow/deny) for future
     /// requests to the same host.
     NetworkPolicyAmendment {
@@ -3202,6 +3209,7 @@ impl ReviewDecision {
             ReviewDecision::Approved => "approved",
             ReviewDecision::ApprovedExecpolicyAmendment { .. } => "approved_with_amendment",
             ReviewDecision::ApprovedForSession => "approved_for_session",
+            ReviewDecision::ApprovedPersistToProfile => "approved_persist_to_profile",
             ReviewDecision::NetworkPolicyAmendment {
                 network_policy_amendment,
             } => match network_policy_amendment.action {
