@@ -25,6 +25,7 @@ use codex_protocol::permissions::FileSystemSandboxKind;
 use codex_protocol::permissions::FileSystemSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::SandboxPolicy;
+use codex_shell_command::command_safety::windows_safe_commands::try_parse_powershell_command_sequence;
 use thiserror::Error;
 use tokio::fs;
 use tokio::task::spawn_blocking;
@@ -622,6 +623,12 @@ fn default_policy_path(codex_home: &Path) -> PathBuf {
 
 fn commands_for_exec_policy(command: &[String]) -> (Vec<Vec<String>>, bool) {
     if let Some(commands) = parse_shell_lc_plain_commands(command)
+        && !commands.is_empty()
+    {
+        return (commands, false);
+    }
+
+    if let Some(commands) = try_parse_powershell_command_sequence(command)
         && !commands.is_empty()
     {
         return (commands, false);

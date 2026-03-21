@@ -557,6 +557,48 @@ fn commands_for_exec_policy_falls_back_for_whitespace_shell_script() {
 }
 
 #[tokio::test]
+async fn powershell_single_command_prefix_rules_can_bypass_sandbox() {
+    if which::which("pwsh")
+        .or_else(|_| which::which("powershell"))
+        .is_err()
+    {
+        return;
+    }
+
+    let policy_src = r#"prefix_rule(pattern=["git", "add"], decision="allow")"#;
+    let mut parser = PolicyParser::new();
+    parser
+        .parse("test.rules", policy_src)
+        .expect("parse policy");
+
+    let command = vec![
+        "pwsh".to_string(),
+        "-NoProfile".to_string(),
+        "-Command".to_string(),
+        "git add -A".to_string(),
+    ];
+
+    let requirement = ExecPolicyManager::new(Arc::new(parser.build()))
+        .create_exec_approval_requirement_for_command(ExecApprovalRequest {
+            command: &command,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: &SandboxPolicy::new_read_only_policy(),
+            file_system_sandbox_policy: &read_only_file_system_sandbox_policy(),
+            sandbox_permissions: SandboxPermissions::RequireEscalated,
+            prefix_rule: None,
+        })
+        .await;
+
+    assert_eq!(
+        requirement,
+        ExecApprovalRequirement::Skip {
+            bypass_sandbox: true,
+            proposed_execpolicy_amendment: None,
+        }
+    );
+}
+
+#[tokio::test]
 async fn evaluates_heredoc_script_against_prefix_rules() {
     let policy_src = r#"prefix_rule(pattern=["python3"], decision="allow")"#;
     let mut parser = PolicyParser::new();

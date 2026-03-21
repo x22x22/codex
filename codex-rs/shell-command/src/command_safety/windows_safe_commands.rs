@@ -22,7 +22,7 @@ pub fn is_safe_command_windows(command: &[String]) -> bool {
 
 /// Returns each command sequence if the invocation starts with a PowerShell binary.
 /// For example, the tokens from `pwsh Get-ChildItem | Measure-Object` become two sequences.
-fn try_parse_powershell_command_sequence(command: &[String]) -> Option<Vec<Vec<String>>> {
+pub fn try_parse_powershell_command_sequence(command: &[String]) -> Option<Vec<Vec<String>>> {
     let (exe, rest) = command.split_first()?;
     if is_powershell_executable(exe) {
         parse_powershell_invocation(exe, rest)
