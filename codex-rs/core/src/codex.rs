@@ -83,6 +83,7 @@ use codex_protocol::config_types::Settings;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::dynamic_tools::DynamicToolResponse;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
+use codex_protocol::item_metadata::stamp_user_message_type_on_input_item;
 use codex_protocol::items::PlanItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
@@ -90,6 +91,7 @@ use codex_protocol::items::build_hook_prompt_message;
 use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItemMessageMetadata;
 use codex_protocol::models::UserMessageType;
 use codex_protocol::models::format_allow_prefixes;
 use codex_protocol::openai_models::ModelInfo;
@@ -331,7 +333,6 @@ use codex_protocol::models::ContentItem;
 use codex_protocol::models::DeveloperInstructions;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::models::ResponseItemMessageMetadata;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::InitialHistory;
@@ -1000,20 +1001,6 @@ fn local_time_context() -> (String, String) {
             "Etc/UTC".to_string(),
         ),
     }
-}
-
-fn stamp_user_message_type_on_input_item(item: &mut ResponseInputItem, kind: UserMessageType) {
-    let ResponseInputItem::Message { role, metadata, .. } = item else {
-        return;
-    };
-    if role != "user" {
-        return;
-    }
-    let mut metadata_value = metadata
-        .take()
-        .unwrap_or_else(|| ResponseItemMessageMetadata::new(None));
-    metadata_value.user_message_type = Some(kind);
-    *metadata = Some(metadata_value);
 }
 
 #[derive(Clone)]
