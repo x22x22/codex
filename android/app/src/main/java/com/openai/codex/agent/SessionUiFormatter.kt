@@ -94,27 +94,6 @@ object SessionUiFormatter {
         }
     }
 
-    fun relatedSessionsText(
-        context: Context,
-        sessions: List<AgentSessionDetails>,
-        selectedSessionId: String?,
-    ): String {
-        if (sessions.isEmpty()) {
-            return "No related sessions"
-        }
-        return sessions.joinToString("\n") { session ->
-            val marker = if (session.sessionId == selectedSessionId) "*" else "-"
-            buildString {
-                append(marker)
-                append(" ")
-                append(relatedSessionTitle(context, session))
-                append(" [")
-                append(relatedSessionSubtitle(session))
-                append("]")
-            }
-        }
-    }
-
     private fun anchorLabel(anchor: Int): String {
         return when (anchor) {
             AgentSessionInfo.ANCHOR_HOME -> "HOME"

@@ -138,7 +138,7 @@ class CodexAgentService : AgentService() {
                 Log.w(TAG, "Failed to attach target for $childSessionId", err)
             }
         }
-        if (parentSession.state != rollup.state) {
+        if (parentSession.state != rollup.state && !isTerminalSessionState(parentSession.state)) {
             runCatching {
                 manager.updateSessionState(parentSessionId, rollup.state)
             }.onFailure { err ->
@@ -150,14 +150,14 @@ class CodexAgentService : AgentService() {
         } else {
             emptyList()
         }
-        if (rollup.resultMessage != null && findLastEventMessage(parentEvents, AgentSessionEvent.TYPE_RESULT) == null) {
+        if (rollup.resultMessage != null && findLastEventMessage(parentEvents, AgentSessionEvent.TYPE_RESULT) != rollup.resultMessage) {
             runCatching {
                 manager.publishResult(parentSessionId, rollup.resultMessage)
             }.onFailure { err ->
                 Log.w(TAG, "Failed to publish parent result for $parentSessionId", err)
             }
         }
-        if (rollup.errorMessage != null && findLastEventMessage(parentEvents, AgentSessionEvent.TYPE_ERROR) == null) {
+        if (rollup.errorMessage != null && findLastEventMessage(parentEvents, AgentSessionEvent.TYPE_ERROR) != rollup.errorMessage) {
             runCatching {
                 manager.publishError(parentSessionId, rollup.errorMessage)
             }.onFailure { err ->

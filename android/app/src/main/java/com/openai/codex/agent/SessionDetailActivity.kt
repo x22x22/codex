@@ -7,6 +7,7 @@ import android.content.Intent
 import android.graphics.Typeface
 import android.os.Binder
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -17,7 +18,11 @@ import kotlin.concurrent.thread
 
 class SessionDetailActivity : Activity() {
     companion object {
+        private const val TAG = "CodexSessionDetail"
         const val EXTRA_SESSION_ID = "sessionId"
+        private const val ACTION_DEBUG_CONTINUE_SESSION =
+            "com.openai.codex.agent.action.DEBUG_CONTINUE_SESSION"
+        private const val EXTRA_DEBUG_PROMPT = "prompt"
     }
 
     private val sessionController by lazy { AgentSessionController(this) }
@@ -45,6 +50,7 @@ class SessionDetailActivity : Activity() {
         setContentView(R.layout.activity_session_detail)
         focusedSessionId = intent.getStringExtra(EXTRA_SESSION_ID)
         setupViews()
+        maybeHandleDebugIntent(intent)
     }
 
     override fun onResume() {
@@ -57,6 +63,7 @@ class SessionDetailActivity : Activity() {
         super.onNewIntent(intent)
         setIntent(intent)
         focusedSessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+        maybeHandleDebugIntent(intent)
         refreshSnapshot(force = true)
     }
 
@@ -82,6 +89,39 @@ class SessionDetailActivity : Activity() {
         findViewById<Button>(R.id.session_detail_follow_up_button).setOnClickListener {
             sendFollowUpPrompt()
         }
+    }
+
+    private fun maybeHandleDebugIntent(intent: Intent?) {
+        if (intent?.action != ACTION_DEBUG_CONTINUE_SESSION) {
+            return
+        }
+        val prompt = intent.getStringExtra(EXTRA_DEBUG_PROMPT)?.trim().orEmpty()
+        val sessionId = intent.getStringExtra(EXTRA_SESSION_ID)?.trim().orEmpty()
+        if (prompt.isEmpty()) {
+            intent.action = null
+            return
+        }
+        Log.i(TAG, "Handling debug continuation for sessionId=$sessionId")
+        thread {
+            runCatching {
+                val snapshot = sessionController.loadSnapshot(sessionId.ifEmpty { focusedSessionId })
+                Log.i(
+                    TAG,
+                    "Loaded snapshot for continuation selected=${snapshot.selectedSession?.sessionId} parent=${snapshot.parentSession?.sessionId}",
+                )
+                continueSessionInPlaceOnce(prompt, snapshot)
+            }.onFailure { err ->
+                Log.w(TAG, "Debug continuation failed", err)
+                showToast("Failed to continue session: ${err.message}")
+            }.onSuccess { result ->
+                Log.i(TAG, "Debug continuation reused topLevel=${result.parentSessionId}")
+                showToast("Continued session in place")
+                runOnUiThread {
+                    startActivity(intentForSession(result.parentSessionId))
+                }
+            }
+        }
+        intent.action = null
     }
 
     private fun registerSessionListenerIfNeeded() {
@@ -185,6 +225,20 @@ class SessionDetailActivity : Activity() {
         val canAttach = selectedSession.targetPresentation != AgentSessionInfo.TARGET_PRESENTATION_ATTACHED
         findViewById<Button>(R.id.session_detail_attach_button).visibility =
             if (canAttach) View.VISIBLE else View.GONE
+        val supportsInPlaceContinuation = topLevelSession.anchor == AgentSessionInfo.ANCHOR_AGENT
+        val continueVisibility =
+            if (!isTopLevelActive && supportsInPlaceContinuation) View.VISIBLE else View.GONE
+        findViewById<TextView>(R.id.session_detail_follow_up_label).apply {
+            visibility = continueVisibility
+            text = "Continue Direct Session"
+        }
+        findViewById<EditText>(R.id.session_detail_follow_up_prompt).visibility = continueVisibility
+        findViewById<Button>(R.id.session_detail_follow_up_button).apply {
+            visibility = continueVisibility
+            text = "Send In-Place Prompt"
+        }
+        findViewById<TextView>(R.id.session_detail_follow_up_note).visibility =
+            if (!isTopLevelActive && !supportsInPlaceContinuation) View.VISIBLE else View.GONE
 
         updateSessionUiLease(snapshot.parentSession?.sessionId ?: topLevelSession.sessionId)
     }
@@ -319,29 +373,27 @@ class SessionDetailActivity : Activity() {
     }
 
     private fun sendFollowUpPrompt() {
-        val topLevelSession = topLevelSession(latestSnapshot) ?: return
         val promptInput = findViewById<EditText>(R.id.session_detail_follow_up_prompt)
         val prompt = promptInput.text.toString().trim()
         if (prompt.isEmpty()) {
             promptInput.error = "Enter a follow-up prompt"
             return
         }
+        promptInput.text.clear()
+        continueSessionInPlaceAsync(prompt, latestSnapshot)
+    }
+
+    private fun continueSessionInPlaceAsync(
+        prompt: String,
+        snapshot: AgentSnapshot,
+    ) {
         thread {
             runCatching {
-                AgentSessionLauncher.startFollowUpSession(
-                    context = this,
-                    sourceTopLevelSession = topLevelSession,
-                    prompt = prompt,
-                    sessionController = sessionController,
-                    requestUserInputHandler = { questions ->
-                        AgentUserInputPrompter.promptForAnswers(this, questions)
-                    },
-                )
+                continueSessionInPlaceOnce(prompt, snapshot)
             }.onFailure { err ->
                 showToast("Failed to continue session: ${err.message}")
             }.onSuccess { result ->
-                promptInput.post { promptInput.text.clear() }
-                showToast("Started follow-up session")
+                showToast("Continued session in place")
                 runOnUiThread {
                     startActivity(
                         intentForSession(result.parentSessionId),
@@ -349,6 +401,25 @@ class SessionDetailActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun continueSessionInPlaceOnce(
+        prompt: String,
+        snapshot: AgentSnapshot,
+    ): SessionStartResult {
+        val topLevelSession = topLevelSession(snapshot)
+            ?: error("Session not found")
+        val selectedSession = snapshot.selectedSession ?: topLevelSession
+        Log.i(
+            TAG,
+            "Continuing session topLevel=${topLevelSession.sessionId} selected=${selectedSession.sessionId} anchor=${topLevelSession.anchor}",
+        )
+        return AgentSessionLauncher.continueSessionInPlace(
+            sourceTopLevelSession = topLevelSession,
+            selectedSession = selectedSession,
+            prompt = prompt,
+            sessionController = sessionController,
+        )
     }
 
     private fun topLevelSession(snapshot: AgentSnapshot): AgentSessionDetails? {

@@ -6,11 +6,13 @@ import android.app.agent.AgentSessionInfo
 import android.content.Context
 import android.os.Binder
 import android.os.Process
+import android.util.Log
 import com.openai.codex.bridge.SessionExecutionSettings
 import java.util.concurrent.Executor
 
 class AgentSessionController(context: Context) {
     companion object {
+        private const val TAG = "AgentSessionController"
         private const val BRIDGE_REQUEST_PREFIX = "__codex_bridge__ "
         private const val BRIDGE_RESPONSE_PREFIX = "__codex_bridge_result__ "
         private const val DIAGNOSTIC_NOT_LOADED = "Diagnostics not loaded."
@@ -21,7 +23,8 @@ class AgentSessionController(context: Context) {
         private const val QUESTION_ANSWER_RETRY_DELAY_MS = 50L
     }
 
-    private val agentManager = context.getSystemService(AgentManager::class.java)
+    private val appContext = context.applicationContext
+    private val agentManager = appContext.getSystemService(AgentManager::class.java)
     private val presentationPolicyStore = SessionPresentationPolicyStore(context)
     private val executionSettingsStore = SessionExecutionSettingsStore(context)
 
@@ -93,6 +96,7 @@ class AgentSessionController(context: Context) {
         sessionDetails = sessionDetails.map { session ->
             diagnosticsBySessionId[session.sessionId]?.let(session::withDiagnostics) ?: session
         }
+        sessionDetails = deriveDirectParentUiState(sessionDetails)
         val selectedSession = chooseSelectedSession(sessionDetails, focusedSessionId)
         val parentSession = findParentSession(sessionDetails, selectedSession)
         val relatedSessions = if (parentSession == null) {
@@ -220,6 +224,42 @@ class AgentSessionController(context: Context) {
         }
     }
 
+    fun continueDirectSessionInPlace(
+        parentSessionId: String,
+        target: AgentDelegationTarget,
+        executionSettings: SessionExecutionSettings = SessionExecutionSettings.default,
+    ): SessionStartResult {
+        val manager = requireAgentManager()
+        check(canStartSessionForTarget(target.packageName)) {
+            "Target package ${target.packageName} is not eligible for session continuation"
+        }
+        val geniePackage = selectGeniePackage(manager.getGenieRoleHolders(currentUserId()))
+            ?: throw IllegalStateException("No GENIE role holder configured")
+        executionSettingsStore.saveSettings(parentSessionId, executionSettings)
+        Log.i(TAG, "Continuing AGENT session $parentSessionId with target ${target.packageName}")
+        manager.publishTrace(
+            parentSessionId,
+            "Continuing Codex direct session for ${target.packageName} with required final presentation ${target.finalPresentationPolicy.wireValue}.",
+        )
+        val childSession = manager.createChildSession(parentSessionId, target.packageName)
+        AgentSessionBridgeServer.ensureStarted(appContext, manager, childSession.sessionId)
+        presentationPolicyStore.savePolicy(childSession.sessionId, target.finalPresentationPolicy)
+        executionSettingsStore.saveSettings(childSession.sessionId, executionSettings)
+        manager.startGenieSession(
+            childSession.sessionId,
+            geniePackage,
+            buildDelegatedPrompt(target),
+            /* allowDetachedMode = */ true,
+        )
+        return SessionStartResult(
+            parentSessionId = parentSessionId,
+            childSessionIds = listOf(childSession.sessionId),
+            plannedTargets = listOf(target.packageName),
+            geniePackage = geniePackage,
+            anchor = AgentSessionInfo.ANCHOR_AGENT,
+        )
+    }
+
     fun executionSettingsForSession(sessionId: String): SessionExecutionSettings {
         return executionSettingsStore.getSettings(sessionId)
     }
@@ -321,7 +361,10 @@ class AgentSessionController(context: Context) {
                 session.parentSessionId == focusedSession.sessionId &&
                     !isTerminalState(session.state)
             }
-            return childCandidate ?: focusedSession
+            val latestChild = sessions.lastOrNull { session ->
+                session.parentSessionId == focusedSession.sessionId
+            }
+            return childCandidate ?: latestChild ?: focusedSession
         }
         return sessions.firstOrNull { session ->
             session.parentSessionId != null &&
@@ -352,6 +395,47 @@ class AgentSessionController(context: Context) {
         return when {
             roleHolders.contains(PREFERRED_GENIE_PACKAGE) -> PREFERRED_GENIE_PACKAGE
             else -> roleHolders.firstOrNull()
+        }
+    }
+
+    private fun deriveDirectParentUiState(sessions: List<AgentSessionDetails>): List<AgentSessionDetails> {
+        val childrenByParent = sessions
+            .filter { it.parentSessionId != null }
+            .groupBy { it.parentSessionId }
+        return sessions.map { session ->
+            if (!isDirectParentSession(session)) {
+                return@map session
+            }
+            val childSessions = childrenByParent[session.sessionId].orEmpty()
+            if (childSessions.isEmpty()) {
+                return@map session
+            }
+            val rollup = AgentParentSessionAggregator.rollup(
+                childSessions.map { childSession ->
+                    ParentSessionChildSummary(
+                        sessionId = childSession.sessionId,
+                        targetPackage = childSession.targetPackage,
+                        state = childSession.state,
+                        targetPresentation = childSession.targetPresentation,
+                        requiredFinalPresentationPolicy = childSession.requiredFinalPresentationPolicy,
+                        latestResult = childSession.latestResult,
+                        latestError = childSession.latestError,
+                    )
+                },
+            )
+            val isRollupTerminal = isTerminalState(rollup.state)
+            session.copy(
+                state = rollup.state,
+                stateLabel = stateToString(rollup.state),
+                latestResult = rollup.resultMessage ?: session.latestResult.takeIf { isRollupTerminal },
+                latestError = rollup.errorMessage ?: session.latestError.takeIf { isRollupTerminal },
+                latestTrace = when (rollup.state) {
+                    AgentSessionInfo.STATE_RUNNING -> "Child session running."
+                    AgentSessionInfo.STATE_WAITING_FOR_USER -> "Child session waiting for user input."
+                    AgentSessionInfo.STATE_QUEUED -> "Child session queued."
+                    else -> session.latestTrace
+                },
+            )
         }
     }
 

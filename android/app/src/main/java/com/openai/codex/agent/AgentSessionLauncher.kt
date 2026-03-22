@@ -46,38 +46,35 @@ object AgentSessionLauncher {
         }
     }
 
-    fun startFollowUpSession(
-        context: Context,
+    fun continueSessionInPlace(
         sourceTopLevelSession: AgentSessionDetails,
+        selectedSession: AgentSessionDetails,
         prompt: String,
         sessionController: AgentSessionController,
-        requestUserInputHandler: ((JSONArray) -> JSONObject)? = null,
     ): SessionStartResult {
         val executionSettings = sessionController.executionSettingsForSession(sourceTopLevelSession.sessionId)
         return when (sourceTopLevelSession.anchor) {
             AgentSessionInfo.ANCHOR_HOME -> {
-                val targetPackage = checkNotNull(sourceTopLevelSession.targetPackage) {
-                    "HOME-anchored session missing target package"
-                }
-                sessionController.startHomeSession(
-                    targetPackage = targetPackage,
-                    prompt = prompt,
-                    allowDetachedMode = true,
-                    finalPresentationPolicy = sourceTopLevelSession.requiredFinalPresentationPolicy
-                        ?: SessionFinalPresentationPolicy.AGENT_CHOICE,
-                    executionSettings = executionSettings,
+                throw UnsupportedOperationException(
+                    "In-place continuation is not supported for app-scoped HOME sessions on the current framework",
                 )
             }
 
-            else -> AgentTaskPlanner.startSession(
-                context = context,
-                userObjective = prompt,
-                targetPackageOverride = null,
-                allowDetachedMode = true,
-                executionSettings = executionSettings,
-                sessionController = sessionController,
-                requestUserInputHandler = requestUserInputHandler,
-            )
+            else -> {
+                val targetPackage = checkNotNull(selectedSession.targetPackage) {
+                    "Select a target child session to continue"
+                }
+                sessionController.continueDirectSessionInPlace(
+                    parentSessionId = sourceTopLevelSession.sessionId,
+                    target = AgentDelegationTarget(
+                        packageName = targetPackage,
+                        objective = prompt,
+                        finalPresentationPolicy = selectedSession.requiredFinalPresentationPolicy
+                            ?: SessionFinalPresentationPolicy.AGENT_CHOICE,
+                    ),
+                    executionSettings = executionSettings,
+                )
+            }
         }
     }
 }
