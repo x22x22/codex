@@ -1224,7 +1224,12 @@ async fn fork_startup_context_then_first_turn_diff_snapshot() -> anyhow::Result<
         .lines()
         .map(|line| {
             let mut line = line.to_string();
-            for (tag, replacement) in [("cwd", "<CWD>"), ("current_date", "<CURRENT_DATE>")] {
+            for (tag, replacement) in [
+                ("cwd", "<CWD>"),
+                ("shell", "<SHELL>"),
+                ("current_date", "<CURRENT_DATE>"),
+                ("timezone", "<TIMEZONE>"),
+            ] {
                 let open_tag = format!("<{tag}>");
                 let close_tag = format!("</{tag}>");
                 if let (Some(start), Some(end)) = (line.find(&open_tag), line.find(&close_tag)) {
