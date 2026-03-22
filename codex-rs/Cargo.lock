@@ -1672,6 +1672,7 @@ dependencies = [
  "codex-core",
  "codex-exec",
  "codex-execpolicy",
+ "codex-executor",
  "codex-features",
  "codex-login",
  "codex-mcp-server",
@@ -2066,6 +2067,27 @@ dependencies = [
  "serde_with",
  "starlark",
  "tempfile",
+]
+
+[[package]]
+name = "codex-executor"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "codex-executor-protocol",
+ "pretty_assertions",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "codex-executor-protocol"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

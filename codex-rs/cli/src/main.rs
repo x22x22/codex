@@ -21,6 +21,7 @@ use codex_exec::Cli as ExecCli;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
+use codex_executor::Cli as ExecutorCli;
 use codex_responses_api_proxy::Args as ResponsesApiProxyArgs;
 use codex_state::StateRuntime;
 use codex_state::state_db_path;
@@ -108,6 +109,9 @@ enum Subcommand {
 
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
+
+    /// [experimental] Run Codex as an executor.
+    Executor(ExecutorCli),
 
     /// Launch the Codex desktop app (downloads the macOS installer if missing).
     #[cfg(target_os = "macos")]
@@ -682,6 +686,10 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
                 codex_app_server_protocol::generate_internal_json_schema(&gen_cli.out_dir)?;
             }
         },
+        Some(Subcommand::Executor(executor_cli)) => {
+            reject_remote_mode_for_subcommand(root_remote.as_deref(), "executor")?;
+            codex_executor::run_main(executor_cli).await?;
+        }
         #[cfg(target_os = "macos")]
         Some(Subcommand::App(app_cli)) => {
             reject_remote_mode_for_subcommand(root_remote.as_deref(), "app")?;
@@ -1385,6 +1393,14 @@ mod tests {
         app_server
     }
 
+    fn executor_from_args(args: &[&str]) -> ExecutorCli {
+        let cli = MultitoolCli::try_parse_from(args).expect("parse");
+        let Subcommand::Executor(executor) = cli.subcommand.expect("executor present") else {
+            unreachable!()
+        };
+        executor
+    }
+
     fn sample_exit_info(conversation_id: Option<&str>, thread_name: Option<&str>) -> AppExitInfo {
         let token_usage = TokenUsage {
             output_tokens: 2,
@@ -1620,6 +1636,11 @@ mod tests {
         let app_server =
             app_server_from_args(["codex", "app-server", "--analytics-default-enabled"].as_ref());
         assert!(app_server.analytics_default_enabled);
+    }
+
+    #[test]
+    fn executor_subcommand_parses_without_extra_args() {
+        let _executor = executor_from_args(["codex", "executor"].as_ref());
     }
 
     #[test]

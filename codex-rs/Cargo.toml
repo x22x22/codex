@@ -26,6 +26,8 @@ members = [
     "hooks",
     "secrets",
     "exec",
+    "executor",
+    "executor-protocol",
     "exec-server",
     "execpolicy",
     "execpolicy-legacy",
@@ -108,6 +110,8 @@ codex-connectors = { path = "connectors" }
 codex-config = { path = "config" }
 codex-core = { path = "core" }
 codex-exec = { path = "exec" }
+codex-executor = { path = "executor" }
+codex-executor-protocol = { path = "executor-protocol" }
 codex-exec-server = { path = "exec-server" }
 codex-execpolicy = { path = "execpolicy" }
 codex-experimental-api-macros = { path = "codex-experimental-api-macros" }
