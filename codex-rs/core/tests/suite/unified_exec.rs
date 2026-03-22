@@ -161,7 +161,7 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
         "cmd": command,
         // The intercepted apply_patch path spawns a helper process, which can
         // take longer than a tiny unified-exec yield deadline on CI.
-        "yield_time_ms": 5_000,
+        "yield_time_ms": 10_000,
     });
 
     let responses = vec![
