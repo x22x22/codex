@@ -154,19 +154,39 @@ class CreateSessionDialogController(
     }
 
     private fun showInstalledAppPicker(onSelected: (InstalledApp) -> Unit) {
-        val apps = InstalledAppCatalog.listLaunchableApps(activity, sessionController)
+        val apps = InstalledAppCatalog.listInstalledApps(activity, sessionController)
         if (apps.isEmpty()) {
             AlertDialog.Builder(activity)
-                .setMessage("No launchable target apps are available for Agent sessions.")
+                .setMessage("No installed target packages are available.")
                 .setPositiveButton(android.R.string.ok, null)
                 .show()
             return
         }
-        val labels = apps.map { app -> "${app.label} (${app.packageName})" }.toTypedArray()
+        val labels = apps.map { app ->
+            buildString {
+                append(app.label)
+                append(" (")
+                append(app.packageName)
+                append(")")
+                if (!app.eligibleTarget) {
+                    append(" — unavailable")
+                }
+            }
+        }.toTypedArray()
         AlertDialog.Builder(activity)
-            .setTitle("Choose app")
+            .setTitle("Choose package")
             .setItems(labels) { _, which ->
-                onSelected(apps[which])
+                val app = apps[which]
+                if (!app.eligibleTarget) {
+                    AlertDialog.Builder(activity)
+                        .setMessage(
+                            "The current framework rejected ${app.packageName} as a target for Genie sessions on this device.",
+                        )
+                        .setPositiveButton(android.R.string.ok, null)
+                        .show()
+                    return@setItems
+                }
+                onSelected(app)
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
