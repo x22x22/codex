@@ -224,18 +224,7 @@ fn guardian_auto_approval_review_notification(
         risk_level: assessment.risk_level.map(Into::into),
         rationale: assessment.rationale.clone(),
     };
-    let target_item_id = assessment
-        .action
-        .as_ref()
-        .filter(|action| {
-            matches!(
-                action.get("tool").and_then(serde_json::Value::as_str),
-                Some("network_access")
-            )
-        })
-        .and_then(|action| action.get("parent_tool_item_id"))
-        .and_then(serde_json::Value::as_str)
-        .map_or_else(|| assessment.id.clone(), ToString::to_string);
+    let target_item_id = assessment.id.clone();
     match assessment.status {
         codex_protocol::protocol::GuardianAssessmentStatus::InProgress => {
             ServerNotification::ItemGuardianApprovalReviewStarted(
@@ -2997,7 +2986,7 @@ mod tests {
     }
 
     #[test]
-    fn guardian_assessment_aborted_emits_completed_review_payload() {
+    fn guardian_assessment_aborted_keeps_unique_review_id_for_network_access() {
         let conversation_id = ThreadId::new();
         let action = json!({
             "tool": "network_access",
@@ -3022,7 +3011,7 @@ mod tests {
             ServerNotification::ItemGuardianApprovalReviewCompleted(payload) => {
                 assert_eq!(payload.thread_id, conversation_id.to_string());
                 assert_eq!(payload.turn_id, "turn-from-assessment");
-                assert_eq!(payload.target_item_id, "command-3");
+                assert_eq!(payload.target_item_id, "guardian-3");
                 assert_eq!(payload.review.status, GuardianApprovalReviewStatus::Aborted);
                 assert_eq!(payload.review.risk_score, None);
                 assert_eq!(payload.review.risk_level, None);
