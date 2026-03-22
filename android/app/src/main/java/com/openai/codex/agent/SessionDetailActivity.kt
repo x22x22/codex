@@ -4,11 +4,13 @@ import android.app.Activity
 import android.app.agent.AgentManager
 import android.app.agent.AgentSessionInfo
 import android.content.Intent
+import android.graphics.Typeface
 import android.os.Binder
 import android.os.Bundle
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import kotlin.concurrent.thread
@@ -153,8 +155,7 @@ class SessionDetailActivity : Activity() {
             }
         }
         findViewById<TextView>(R.id.session_detail_summary).text = summary.trimEnd()
-        findViewById<TextView>(R.id.session_detail_related_sessions).text =
-            SessionUiFormatter.relatedSessionsText(this, snapshot.relatedSessions, selectedSession.sessionId)
+        renderRelatedSessions(snapshot.relatedSessions, selectedSession.sessionId)
         findViewById<TextView>(R.id.session_detail_timeline).text = renderTimeline(snapshot)
 
         val isWaitingForUser = selectedSession.state == AgentSessionInfo.STATE_WAITING_FOR_USER &&
@@ -186,6 +187,40 @@ class SessionDetailActivity : Activity() {
             if (canAttach) View.VISIBLE else View.GONE
 
         updateSessionUiLease(snapshot.parentSession?.sessionId ?: topLevelSession.sessionId)
+    }
+
+    private fun renderRelatedSessions(
+        sessions: List<AgentSessionDetails>,
+        selectedSessionId: String,
+    ) {
+        val container = findViewById<LinearLayout>(R.id.session_detail_related_sessions_container)
+        val emptyView = findViewById<TextView>(R.id.session_detail_related_sessions_empty)
+        container.removeAllViews()
+        emptyView.visibility = if (sessions.isEmpty()) View.VISIBLE else View.GONE
+        sessions.forEach { session ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(0, dp(8), 0, dp(8))
+                isClickable = true
+                isFocusable = true
+                setBackgroundResource(android.R.drawable.list_selector_background)
+                setOnClickListener {
+                    if (session.sessionId != focusedSessionId) {
+                        startActivity(intentForSession(session.sessionId))
+                    }
+                }
+            }
+            val title = TextView(this).apply {
+                text = SessionUiFormatter.relatedSessionTitle(this@SessionDetailActivity, session)
+                setTypeface(typeface, if (session.sessionId == selectedSessionId) Typeface.BOLD else Typeface.NORMAL)
+            }
+            val subtitle = TextView(this).apply {
+                text = SessionUiFormatter.relatedSessionSubtitle(session)
+            }
+            row.addView(title)
+            row.addView(subtitle)
+            container.addView(row)
+        }
     }
 
     private fun renderTimeline(snapshot: AgentSnapshot): String {
@@ -354,5 +389,9 @@ class SessionDetailActivity : Activity() {
         runOnUiThread {
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
         }
+    }
+
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
     }
 }

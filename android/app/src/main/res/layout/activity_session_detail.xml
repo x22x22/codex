@@ -105,13 +105,20 @@
             android:text="Related Sessions"
             android:textStyle="bold" />
 
+        <LinearLayout
+            android:id="@+id/session_detail_related_sessions_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical" />
+
         <TextView
-            android:id="@+id/session_detail_related_sessions"
+            android:id="@+id/session_detail_related_sessions_empty"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
             android:text="No related sessions"
-            android:textIsSelectable="true" />
+            android:visibility="gone" />
 
         <TextView
             android:layout_width="wrap_content"

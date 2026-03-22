@@ -66,6 +66,34 @@ object SessionUiFormatter {
         }.trimEnd()
     }
 
+    fun relatedSessionTitle(
+        context: Context,
+        session: AgentSessionDetails,
+    ): String {
+        val targetLabel = AppLabelResolver.loadAppLabel(context, session.targetPackage)
+        return buildString {
+            append(anchorLabel(session.anchor))
+            append(" • ")
+            append(session.stateLabel)
+            append(" • ")
+            append(targetLabel)
+            session.targetPackage?.let { append(" ($it)") }
+        }
+    }
+
+    fun relatedSessionSubtitle(session: AgentSessionDetails): String {
+        val detail = summarizeListDetail(
+            session.latestQuestion ?: session.latestResult ?: session.latestError ?: session.latestTrace,
+        )
+        return buildString {
+            append(session.targetPresentationLabel)
+            detail?.let {
+                append(" • ")
+                append(it)
+            }
+        }
+    }
+
     fun relatedSessionsText(
         context: Context,
         sessions: List<AgentSessionDetails>,
@@ -76,15 +104,13 @@ object SessionUiFormatter {
         }
         return sessions.joinToString("\n") { session ->
             val marker = if (session.sessionId == selectedSessionId) "*" else "-"
-            val targetLabel = AppLabelResolver.loadAppLabel(context, session.targetPackage)
-            val detail = session.latestQuestion ?: session.latestResult ?: session.latestError ?: session.latestTrace
             buildString {
-                append("$marker ${anchorLabel(session.anchor)} ${session.stateLabel} $targetLabel")
-                session.targetPackage?.let { append(" ($it)") }
-                append(" [${session.targetPresentationLabel}]")
-                detail?.takeIf(String::isNotBlank)?.let {
-                    append("\n  $it")
-                }
+                append(marker)
+                append(" ")
+                append(relatedSessionTitle(context, session))
+                append(" [")
+                append(relatedSessionSubtitle(session))
+                append("]")
             }
         }
     }
